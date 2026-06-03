@@ -1,9 +1,17 @@
 import cors from 'cors';
 import express, { type ErrorRequestHandler, type Express } from 'express';
 
+import type { BggItemImporter } from './bgg/bggItemImporter.js';
+import type { DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
+import type { DiscoveryOperationsClient } from './discoveryOperationsClient.js';
+import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
+import { createDescriptionGenerationRouter } from './routes/descriptionGeneration.js';
 import { createDiscoveryRouter } from './routes/discovery.js';
 import { createHealthRouter } from './routes/health.js';
+import { createOperationsRouter } from './routes/operations.js';
+import { createTranslationRouter } from './routes/translation.js';
+import type { TranslationService } from './translation/translationService.js';
 
 type HttpError = Error & {
   status?: number;
@@ -11,17 +19,35 @@ type HttpError = Error & {
 };
 
 type CreateAppOptions = {
+  bggItemImporter?: BggItemImporter;
   database: Database;
-  corsOrigin?: string;
+  corsOrigin?: string | string[];
+  descriptionGenerationService?: DescriptionGenerationService;
+  itemMatchingService?: ItemMatchingService;
+  operationsClient?: DiscoveryOperationsClient;
+  translationService?: TranslationService;
 };
 
-export function createApp({ database, corsOrigin }: CreateAppOptions): Express {
+export function createApp({
+  bggItemImporter,
+  database,
+  corsOrigin,
+  descriptionGenerationService,
+  itemMatchingService,
+  operationsClient,
+  translationService
+}: CreateAppOptions): Express {
   const app = express();
 
   app.use(cors({ origin: corsOrigin }));
   app.use(express.json());
   app.use(createHealthRouter());
-  app.use(createDiscoveryRouter(database));
+  app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter));
+  app.use(createDescriptionGenerationRouter(descriptionGenerationService));
+  app.use(createTranslationRouter(translationService));
+  if (operationsClient) {
+    app.use(createOperationsRouter(operationsClient, database));
+  }
   app.use(jsonErrorHandler);
 
   return app;
@@ -38,8 +64,10 @@ const jsonErrorHandler: ErrorRequestHandler = (error, _request, response, _next)
   }
 
   const message = error instanceof Error ? error.message : 'Internal server error';
+  const httpError = error as HttpError;
+  const status = typeof httpError.status === 'number' ? httpError.status : 500;
 
-  response.status(500).json({
+  response.status(status).json({
     error: {
       message
     }

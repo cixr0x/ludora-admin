@@ -1,39 +1,54 @@
-import { Alert, Box, CircularProgress, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
-import { useEffect, useState } from 'react';
+import { Alert, Box, CircularProgress, Stack, Typography } from '@mui/material';
 import { adminApi, type AdminRecord } from '../api/client';
+import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
-type LoadState = 'loading' | 'ready' | 'error';
-
-function read(record: AdminRecord, keys: string[], fallback = '—') {
+function read(record: AdminRecord, keys: string[], fallback = '-') {
   const value = keys.map((key) => record[key]).find((candidate) => candidate !== undefined && candidate !== null && candidate !== '');
   return value === undefined ? fallback : String(value);
 }
 
+const reviewTaskColumns: DataTableColumn<AdminRecord>[] = [
+  {
+    filterValue: (row) => read(row, ['task_type', 'type', 'title']),
+    id: 'task',
+    label: 'Task',
+    minWidth: 180,
+    render: (row) => read(row, ['task_type', 'type', 'title']),
+    sortValue: (row) => read(row, ['task_type', 'type', 'title'])
+  },
+  {
+    filterValue: (row) => read(row, ['entity_type', 'entity_id']),
+    id: 'entity',
+    label: 'Entity',
+    minWidth: 180,
+    render: (row) => read(row, ['entity_type', 'entity_id']),
+    sortValue: (row) => read(row, ['entity_type', 'entity_id'])
+  },
+  {
+    filterValue: (row) => read(row, ['status', 'state']),
+    id: 'status',
+    label: 'Status',
+    minWidth: 130,
+    render: (row) => read(row, ['status', 'state']),
+    sortValue: (row) => read(row, ['status', 'state'])
+  },
+  {
+    filterValue: (row) => read(row, ['updated_at', 'created_at']),
+    id: 'updated',
+    label: 'Updated',
+    minWidth: 190,
+    render: (row) => read(row, ['updated_at', 'created_at']),
+    sortValue: (row) => read(row, ['updated_at', 'created_at'])
+  }
+];
+
 export function ReviewTasksPage() {
-  const [rows, setRows] = useState<AdminRecord[]>([]);
-  const [state, setState] = useState<LoadState>('loading');
-
-  useEffect(() => {
-    let ignore = false;
-
-    adminApi
-      .getReviewTasks()
-      .then((data) => {
-        if (!ignore) {
-          setRows(data);
-          setState('ready');
-        }
-      })
-      .catch(() => {
-        if (!ignore) {
-          setState('error');
-        }
-      });
-
-    return () => {
-      ignore = true;
-    };
-  }, []);
+  const table = useServerTableState('updated', 'desc');
+  const { hasMore, isLoadingMore, loadMore, rows, state, totalRows } = useInfiniteServerRows(
+    table,
+    adminApi.getReviewTasksPage
+  );
 
   return (
     <Stack spacing={2}>
@@ -55,31 +70,24 @@ export function ReviewTasksPage() {
 
       {state === 'error' ? <Alert severity="error">Review tasks could not be loaded.</Alert> : null}
 
-      {state === 'ready' && rows.length === 0 ? <Alert severity="info">No review tasks found.</Alert> : null}
-
-      {state === 'ready' && rows.length > 0 ? (
-        <Paper variant="outlined">
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Task</TableCell>
-                <TableCell>Entity</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Updated</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {rows.map((row, index) => (
-                <TableRow key={read(row, ['id'], String(index))}>
-                  <TableCell>{read(row, ['task_type', 'type', 'title'])}</TableCell>
-                  <TableCell>{read(row, ['entity_type', 'entity_id'])}</TableCell>
-                  <TableCell>{read(row, ['status', 'state'])}</TableCell>
-                  <TableCell>{read(row, ['updated_at', 'created_at'])}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Paper>
+      {state === 'ready' ? (
+        <DataTable
+          ariaLabel="Review tasks"
+          columns={reviewTaskColumns}
+          getRowKey={(row, index) => read(row, ['id'], String(index))}
+          minWidth={680}
+          serverSide
+          tableState={table.tableState}
+          onTableStateChange={table.handleTableStateChange}
+          infiniteScroll={{
+            hasMore,
+            isLoading: isLoadingMore,
+            loadedCount: rows.length,
+            onLoadMore: loadMore,
+            totalCount: totalRows
+          }}
+          rows={rows}
+        />
       ) : null}
     </Stack>
   );

@@ -1,6 +1,6 @@
 import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
+import BuildIcon from '@mui/icons-material/Build';
 import CategoryIcon from '@mui/icons-material/Category';
-import LocalOfferIcon from '@mui/icons-material/LocalOffer';
 import MenuOpenIcon from '@mui/icons-material/MenuOpen';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import ViewListIcon from '@mui/icons-material/ViewList';
@@ -18,7 +18,14 @@ import {
 } from '@mui/material';
 import type { ReactNode } from 'react';
 
-export type AdminSection = 'stores' | 'listings' | 'reviews' | 'items' | 'offers';
+export type AdminSection =
+  | 'store-candidates'
+  | 'stores'
+  | 'listings'
+  | 'reviews'
+  | 'operations'
+  | 'items'
+  | 'offer-reviews';
 
 type NavigationItem = {
   id: AdminSection;
@@ -29,11 +36,13 @@ type NavigationItem = {
 const drawerWidth = 248;
 
 const navigationItems: NavigationItem[] = [
-  { id: 'stores', label: 'Store Candidates', icon: <StorefrontIcon fontSize="small" /> },
-  { id: 'listings', label: 'Listing Candidates', icon: <ViewListIcon fontSize="small" /> },
+  { id: 'store-candidates', label: 'Store Candidates', icon: <StorefrontIcon fontSize="small" /> },
+  { id: 'stores', label: 'Stores', icon: <StorefrontIcon fontSize="small" /> },
+  { id: 'listings', label: 'Store Items', icon: <ViewListIcon fontSize="small" /> },
   { id: 'reviews', label: 'Review Tasks', icon: <AssignmentTurnedInIcon fontSize="small" /> },
+  { id: 'operations', label: 'Operations', icon: <BuildIcon fontSize="small" /> },
   { id: 'items', label: 'Items', icon: <CategoryIcon fontSize="small" /> },
-  { id: 'offers', label: 'Offers', icon: <LocalOfferIcon fontSize="small" /> }
+  { id: 'offer-reviews', label: 'Store Item Review', icon: <ViewListIcon fontSize="small" /> }
 ];
 
 type AdminLayoutProps = {
@@ -98,7 +107,7 @@ export function AdminLayout({ activeSection, children, onNavigate }: AdminLayout
         </List>
       </Drawer>
 
-      <Box component="main" sx={{ flexGrow: 1, p: 3, pt: 9 }}>
+      <Box component="main" sx={{ flexGrow: 1, minWidth: 0, p: 3, pt: 9 }}>
         {children}
       </Box>
     </Box>

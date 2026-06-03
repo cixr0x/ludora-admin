@@ -1,0 +1,153 @@
+import { render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { StoresPage } from './StoresPage';
+
+describe('StoresPage', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('renders clean store table columns and website links', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              canonical_domain: 'example.mx',
+              city: 'Ciudad de Mexico',
+              country: 'Mexico',
+              id: 12,
+              logo_url: 'https://example.mx/logo.png',
+              name: 'Example Juegos',
+              state: 'CDMX',
+              status: 'active',
+              updated_at: '2026-05-25T20:00:00Z',
+              website_url: 'https://example.mx/'
+            }
+          ]
+        }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        }
+      )
+    );
+
+    render(<StoresPage />);
+
+    for (const heading of ['Name', 'Domain', 'Website', 'City', 'State', 'Country', 'Logo', 'Status', 'Updated']) {
+      expect(await screen.findByRole('columnheader', { name: heading })).toBeInTheDocument();
+    }
+    expect(await screen.findByText('Example Juegos')).toBeInTheDocument();
+    expect(screen.getByText('CDMX')).toBeInTheDocument();
+    const link = screen.getByRole('link', { name: 'example.mx' });
+    expect(link).toHaveAttribute('href', 'https://example.mx/');
+    expect(screen.getByRole('img', { name: 'Example Juegos logo' })).toHaveAttribute(
+      'src',
+      'https://example.mx/logo.png'
+    );
+  });
+
+  it('opens a clean store form and saves changes', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/stores' && !init) {
+        return jsonResponse([
+          {
+            canonical_domain: 'example.mx',
+            city: 'Ciudad de Mexico',
+            country: 'Mexico',
+            id: 12,
+            name: 'Example Juegos',
+            state: 'CDMX',
+            status: 'active',
+            website_url: 'https://example.mx/'
+          }
+        ]);
+      }
+      if (url.endsWith('/stores/12') && init?.method === 'PATCH') {
+        return jsonResponse({
+          canonical_domain: 'example.mx',
+          city: 'Ciudad de Mexico',
+          country: 'Mexico',
+          id: 12,
+          name: 'Example Updated',
+          state: 'CDMX',
+          status: 'active',
+          website_url: 'https://example.mx/'
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<StoresPage />);
+
+    await user.dblClick(await screen.findByText('Example Juegos'));
+    expect(screen.getByRole('heading', { name: 'Edit Store' })).toBeInTheDocument();
+
+    await user.clear(screen.getByLabelText('Name'));
+    await user.type(screen.getByLabelText('Name'), 'Example Updated');
+    await user.click(screen.getByRole('button', { name: 'Save Store' }));
+
+    expect(await screen.findByText('Example Updated')).toBeInTheDocument();
+    const patchCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/stores/12') && init?.method === 'PATCH');
+    expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
+      name: 'Example Updated',
+      website_url: 'https://example.mx/'
+    });
+  });
+
+  it('starts item discovery from the clean store form', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/stores' && !init) {
+        return jsonResponse([
+          {
+            canonical_domain: 'example.mx',
+            country: 'Mexico',
+            id: 12,
+            name: 'Example Juegos',
+            status: 'active',
+            website_url: 'https://example.mx/'
+          }
+        ]);
+      }
+      if (url.endsWith('/admin/operations/stores/12/item-discovery-runs') && init?.method === 'POST') {
+        return jsonResponse({
+          completed_at: null,
+          error: null,
+          id: 'run-2',
+          result: null,
+          started_at: '2026-05-25T20:00:00Z',
+          status: 'running',
+          type: 'item_discovery'
+        }, 202);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<StoresPage />);
+
+    await user.dblClick(await screen.findByText('Example Juegos'));
+    await user.click(screen.getByRole('button', { name: 'Run Item Discovery' }));
+
+    expect(await screen.findByText('Item discovery started.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/stores/12/item-discovery-runs', {
+      method: 'POST'
+    });
+  });
+});
+
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify({ data }), {
+    headers: { 'Content-Type': 'application/json' },
+    status
+  });
+}
+
+function pathOf(url: string) {
+  return new URL(url).pathname;
+}

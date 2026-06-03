@@ -1,92 +1,800 @@
-import { Alert, Box, CircularProgress, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from '@mui/material';
-import { useEffect, useState } from 'react';
+import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import AddCircleIcon from '@mui/icons-material/AddCircle';
+import SaveIcon from '@mui/icons-material/Save';
+import {
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  FormControlLabel,
+  Link,
+  Paper,
+  Stack,
+  TextField,
+  Typography
+} from '@mui/material';
+import { type FormEvent, useEffect, useState } from 'react';
 import { adminApi, type AdminRecord } from '../api/client';
+import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 type LoadState = 'loading' | 'ready' | 'error';
+type ViewMode = 'form' | 'table';
+
+type ItemCandidateDetailField = {
+  fieldType?: 'boolean';
+  gridColumn?: { md?: string; xs?: string };
+  key: string;
+  label: string;
+  multiline?: boolean;
+  readOnly?: boolean;
+};
 
 function field(record: AdminRecord, keys: string[], fallback = '-') {
   const value = keys.map((key) => record[key]).find((candidate) => candidate !== undefined && candidate !== null && candidate !== '');
   return value === undefined ? fallback : String(value);
 }
 
-export function ListingCandidatesPage() {
-  const [rows, setRows] = useState<AdminRecord[]>([]);
-  const [state, setState] = useState<LoadState>('loading');
+function numericField(record: AdminRecord, keys: string[]) {
+  const value = field(record, keys, '');
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+}
+
+function playersLabel(record: AdminRecord) {
+  const minPlayers = field(record, ['min_players'], '');
+  const maxPlayers = field(record, ['max_players'], '');
+  if (minPlayers && maxPlayers) {
+    return minPlayers === maxPlayers ? minPlayers : `${minPlayers}-${maxPlayers}`;
+  }
+  return minPlayers || maxPlayers || '-';
+}
+
+function itemUrlLink(record: AdminRecord) {
+  const url = field(record, ['source_url'], '');
+  if (!url) {
+    return '-';
+  }
+
+  return (
+    <Link
+      href={url}
+      rel="noreferrer"
+      sx={{ display: 'block', maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+      target="_blank"
+    >
+      {url}
+    </Link>
+  );
+}
+
+function candidateProductImage(record: AdminRecord) {
+  const imageUrl = field(record, ['image_url'], '');
+  const title = field(record, ['title', 'name'], 'Item candidate');
+  if (!imageUrl) {
+    return '-';
+  }
+
+  return (
+    <Box
+      alt={`${title} product image`}
+      component="img"
+      src={imageUrl}
+      sx={{
+        bgcolor: 'grey.100',
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: 1,
+        display: 'block',
+        height: 44,
+        objectFit: 'contain',
+        width: 44
+      }}
+    />
+  );
+}
+
+function detailValue(record: AdminRecord, key: string) {
+  const value = record[key];
+  if (value === undefined || value === null) {
+    return '';
+  }
+  if (Array.isArray(value) || typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return String(value);
+}
+
+function booleanValue(record: AdminRecord, key: string) {
+  const value = record[key];
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
+  }
+  return false;
+}
+
+const itemCandidateDetailFields: ItemCandidateDetailField[] = [
+  { key: 'id', label: 'ID', readOnly: true },
+  { key: 'store_id', label: 'Store ID' },
+  { gridColumn: { md: 'span 2' }, key: 'source_url', label: 'Source URL' },
+  { gridColumn: { md: 'span 2' }, key: 'source_listing_url', label: 'Source Listing URL' },
+  { gridColumn: { md: 'span 2' }, key: 'title', label: 'Title' },
+  { key: 'publisher', label: 'Publisher' },
+  { key: 'item_id', label: 'Item ID' },
+  { key: 'item_type', label: 'Item Type' },
+  { key: 'min_players', label: 'Min Players' },
+  { key: 'max_players', label: 'Max Players' },
+  { key: 'min_minutes', label: 'Min Minutes' },
+  { key: 'max_minutes', label: 'Max Minutes' },
+  { key: 'min_age', label: 'Min Age' },
+  { key: 'language', label: 'Language' },
+  { key: 'language_source', label: 'Language Source' },
+  { gridColumn: { md: 'span 2' }, key: 'language_evidence', label: 'Language Evidence', multiline: true },
+  { gridColumn: { md: 'span 2' }, key: 'image_url', label: 'Image URL' },
+  { key: 'status', label: 'Status' },
+  { key: 'raw_price', label: 'Raw Price' },
+  { key: 'price', label: 'Price' },
+  { key: 'price_source', label: 'Price Source' },
+  { key: 'currency', label: 'Currency' },
+  { key: 'availability', label: 'Availability' },
+  { key: 'availability_source', label: 'Availability Source' },
+  { key: 'store_sku', label: 'Store SKU' },
+  { fieldType: 'boolean', key: 'is_boardgame', label: 'Is Boardgame' },
+  { fieldType: 'boolean', key: 'is_boardgame_confirmed', label: 'Is Boardgame Confirmed' },
+  { key: 'category_confidence', label: 'Category Confidence' },
+  { key: 'match_source', label: 'Match Source' },
+  { key: 'matched_bgg_id', label: 'Matched BGG ID' },
+  { key: 'matched_name', label: 'Matched Name' },
+  { key: 'match_score', label: 'Match Score' },
+  { key: 'matched_at', label: 'Matched At', readOnly: true },
+  { key: 'processed_at', label: 'Processed At', readOnly: true },
+  { key: 'processing_error', label: 'Processing Error', multiline: true },
+  { key: 'last_seen_at', label: 'Last Seen At', readOnly: true },
+  { key: 'last_updated', label: 'Last Updated', readOnly: true },
+  { gridColumn: { md: '1 / -1' }, key: 'description', label: 'Description', multiline: true },
+  { gridColumn: { md: '1 / -1' }, key: 'classification_reasons', label: 'Classification Reasons', multiline: true },
+  { gridColumn: { md: '1 / -1' }, key: 'match_reasons', label: 'Match Reasons', multiline: true },
+  { gridColumn: { md: '1 / -1' }, key: 'raw_payload', label: 'Raw Payload', multiline: true },
+  { gridColumn: { md: '1 / -1' }, key: 'match_payload', label: 'Match Payload', multiline: true }
+];
+
+const itemCandidateColumns: DataTableColumn<AdminRecord>[] = [
+  {
+    filterable: false,
+    id: 'image_url',
+    label: 'Image',
+    minWidth: 72,
+    render: (row) => candidateProductImage(row),
+    sortable: false
+  },
+  {
+    filterValue: (row) => field(row, ['title', 'name']),
+    id: 'title',
+    label: 'Title',
+    minWidth: 220,
+    render: (row) => field(row, ['title', 'name']),
+    sortValue: (row) => field(row, ['title', 'name'])
+  },
+  {
+    filterValue: (row) => field(row, ['source_url']),
+    id: 'source_url',
+    label: 'Item URL',
+    minWidth: 320,
+    render: (row) => itemUrlLink(row),
+    sortValue: (row) => field(row, ['source_url'])
+  },
+  {
+    filterValue: (row) => field(row, ['store_id']),
+    id: 'store',
+    label: 'Store',
+    minWidth: 90,
+    render: (row) => field(row, ['store_id']),
+    sortValue: (row) => numericField(row, ['store_id']) ?? field(row, ['store_id'])
+  },
+  {
+    filterValue: (row) => field(row, ['publisher']),
+    id: 'publisher',
+    label: 'Publisher',
+    minWidth: 160,
+    render: (row) => field(row, ['publisher']),
+    sortValue: (row) => field(row, ['publisher'])
+  },
+  {
+    filterValue: (row) => field(row, ['is_boardgame']),
+    id: 'is_boardgame',
+    label: 'Boardgame',
+    minWidth: 120,
+    render: (row) => field(row, ['is_boardgame']),
+    sortValue: (row) => field(row, ['is_boardgame'])
+  },
+  {
+    filterValue: (row) => field(row, ['is_boardgame_confirmed']),
+    id: 'is_boardgame_confirmed',
+    label: 'BG Confirmed',
+    minWidth: 140,
+    render: (row) => field(row, ['is_boardgame_confirmed']),
+    sortValue: (row) => field(row, ['is_boardgame_confirmed'])
+  },
+  {
+    filterValue: (row) => playersLabel(row),
+    id: 'players',
+    label: 'Players',
+    minWidth: 100,
+    render: (row) => playersLabel(row),
+    sortValue: (row) => numericField(row, ['min_players']) ?? playersLabel(row)
+  },
+  {
+    filterValue: (row) => field(row, ['language']),
+    id: 'language',
+    label: 'Language',
+    minWidth: 110,
+    render: (row) => field(row, ['language']),
+    sortValue: (row) => field(row, ['language'])
+  },
+  {
+    filterValue: (row) => field(row, ['language_source']),
+    id: 'language_source',
+    label: 'Language Source',
+    minWidth: 180,
+    render: (row) => field(row, ['language_source']),
+    sortValue: (row) => field(row, ['language_source'])
+  },
+  {
+    filterValue: (row) => field(row, ['language_evidence']),
+    id: 'language_evidence',
+    label: 'Language Evidence',
+    minWidth: 280,
+    render: (row) => field(row, ['language_evidence']),
+    sortValue: (row) => field(row, ['language_evidence'])
+  },
+  {
+    filterValue: (row) => field(row, ['raw_price', 'price']),
+    id: 'price',
+    label: 'Price',
+    minWidth: 110,
+    render: (row) => field(row, ['price', 'raw_price']),
+    sortValue: (row) => numericField(row, ['price', 'raw_price']) ?? field(row, ['price', 'raw_price'])
+  },
+  {
+    filterValue: (row) => field(row, ['price_source']),
+    id: 'price_source',
+    label: 'Price Source',
+    minWidth: 170,
+    render: (row) => field(row, ['price_source']),
+    sortValue: (row) => field(row, ['price_source'])
+  },
+  {
+    filterValue: (row) => field(row, ['availability']),
+    id: 'availability',
+    label: 'Availability',
+    minWidth: 150,
+    render: (row) => field(row, ['availability']),
+    sortValue: (row) => field(row, ['availability'])
+  },
+  {
+    filterValue: (row) => field(row, ['availability_source']),
+    id: 'availability_source',
+    label: 'Availability Source',
+    minWidth: 210,
+    render: (row) => field(row, ['availability_source']),
+    sortValue: (row) => field(row, ['availability_source'])
+  },
+  {
+    filterValue: (row) => field(row, ['status']),
+    id: 'status',
+    label: 'Status',
+    minWidth: 130,
+    render: (row) => field(row, ['status']),
+    sortValue: (row) => field(row, ['status'])
+  },
+  {
+    filterValue: (row) => field(row, ['match_source']),
+    id: 'match_source',
+    label: 'Match Source',
+    minWidth: 150,
+    render: (row) => field(row, ['match_source']),
+    sortValue: (row) => field(row, ['match_source'])
+  },
+  {
+    filterValue: (row) => field(row, ['matched_name']),
+    id: 'matched_name',
+    label: 'Matched Name',
+    minWidth: 180,
+    render: (row) => field(row, ['matched_name']),
+    sortValue: (row) => field(row, ['matched_name'])
+  },
+  {
+    filterValue: (row) => field(row, ['match_score']),
+    id: 'match_score',
+    label: 'Match Score',
+    minWidth: 140,
+    render: (row) => field(row, ['match_score']),
+    sortValue: (row) => numericField(row, ['match_score']) ?? field(row, ['match_score'])
+  },
+  {
+    filterValue: (row) => field(row, ['processing_error']),
+    id: 'processing_error',
+    label: 'Processing Error',
+    minWidth: 240,
+    render: (row) => field(row, ['processing_error']),
+    sortValue: (row) => field(row, ['processing_error'])
+  },
+  {
+    filterValue: (row) => field(row, ['last_updated']),
+    id: 'last_updated',
+    label: 'Last Updated',
+    minWidth: 190,
+    render: (row) => field(row, ['last_updated']),
+    sortValue: (row) => field(row, ['last_updated'])
+  }
+];
+
+type ListingCandidatesPageProps = {
+  onClearSelectedCandidateId?: () => void;
+  selectedCandidateId?: string;
+};
+
+export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCandidateId }: ListingCandidatesPageProps = {}) {
+  const [detailState, setDetailState] = useState<LoadState>('ready');
+  const [isCreatingBggItem, setIsCreatingBggItem] = useState(false);
+  const [isCreatingItem, setIsCreatingItem] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [saveMessage, setSaveMessage] = useState('');
+  const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
+  const [viewMode, setViewMode] = useState<ViewMode>('table');
+  const table = useServerTableState('last_updated', 'desc');
+  const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
+    table,
+    adminApi.getItemCandidatesPage
+  );
 
   useEffect(() => {
+    if (!selectedCandidateId) {
+      setDetailState('ready');
+      setSaveError('');
+      setSaveMessage('');
+      setSelectedCandidate(null);
+      setViewMode('table');
+      return;
+    }
+
     let ignore = false;
+    setDetailState('loading');
+    setSaveError('');
+    setSaveMessage('');
+    setViewMode('form');
 
     adminApi
-      .getListingCandidates()
-      .then((data) => {
+      .getItemCandidate(selectedCandidateId)
+      .then((candidate) => {
         if (!ignore) {
-          setRows(data);
-          setState('ready');
+          setSelectedCandidate(candidate);
+          setViewMode('form');
+          setDetailState('ready');
         }
       })
       .catch(() => {
         if (!ignore) {
-          setState('error');
+          setDetailState('error');
         }
       });
 
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [selectedCandidateId]);
+
+  async function handleSaveCandidate(input: AdminRecord) {
+    if (!selectedCandidate) {
+      return;
+    }
+
+    const candidateId = field(selectedCandidate, ['id'], '');
+    setIsSaving(true);
+    setSaveError('');
+    setSaveMessage('');
+
+    try {
+      const savedCandidate = await adminApi.updateItemCandidate(candidateId, input);
+      setRows((currentRows) =>
+        currentRows.map((row, index) => (field(row, ['id'], String(index)) === candidateId ? savedCandidate : row))
+      );
+      setSelectedCandidate(savedCandidate);
+      setSaveMessage('Store item saved.');
+    } catch {
+      setSaveError('Item candidate could not be saved.');
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleCreateItemFromCandidate(input: { bgg_id?: string; implements?: boolean } = {}) {
+    if (!selectedCandidate) {
+      return;
+    }
+
+    const candidateId = field(selectedCandidate, ['id'], '');
+    setIsCreatingItem(true);
+    setSaveError('');
+    setSaveMessage('');
+
+    try {
+      const savedCandidate = await adminApi.createItemFromCandidate(candidateId, input);
+      setRows((currentRows) =>
+        currentRows.map((row, index) => (field(row, ['id'], String(index)) === candidateId ? savedCandidate : row))
+      );
+      setSelectedCandidate(savedCandidate);
+      setSaveMessage('Item created from candidate.');
+    } catch {
+      setSaveError('Item could not be created from candidate.');
+    } finally {
+      setIsCreatingItem(false);
+    }
+  }
+
+  async function handleCreateItemFromBggId(bggId: string) {
+    if (!selectedCandidate) {
+      return;
+    }
+
+    const candidateId = field(selectedCandidate, ['id'], '');
+    setIsCreatingBggItem(true);
+    setSaveError('');
+    setSaveMessage('');
+
+    try {
+      const savedCandidate = await adminApi.createItemFromBggId(candidateId, bggId.trim());
+      setRows((currentRows) =>
+        currentRows.map((row, index) => (field(row, ['id'], String(index)) === candidateId ? savedCandidate : row))
+      );
+      setSelectedCandidate(savedCandidate);
+      setSaveMessage('Item created from BGG ID.');
+    } catch {
+      setSaveError('Item could not be created from BGG ID.');
+    } finally {
+      setIsCreatingBggItem(false);
+    }
+  }
 
   return (
     <Stack spacing={2}>
       <Box>
         <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
-          Listing Candidates
+          Store Items
         </Typography>
         <Typography color="text.secondary" variant="body2">
-          Product and event listings captured from discovery feeds.
+          Discovered store product rows captured from approved store inventories.
         </Typography>
       </Box>
 
-      {state === 'loading' ? (
+      {state === 'loading' && viewMode === 'table' ? (
         <Stack alignItems="center" direction="row" spacing={1.5}>
           <CircularProgress size={18} />
-          <Typography variant="body2">Loading listing candidates</Typography>
+          <Typography variant="body2">Loading store items</Typography>
         </Stack>
       ) : null}
 
-      {state === 'error' ? <Alert severity="error">Listing candidates could not be loaded.</Alert> : null}
+      {detailState === 'loading' && viewMode === 'form' ? (
+        <Stack alignItems="center" direction="row" spacing={1.5}>
+          <CircularProgress size={18} />
+          <Typography variant="body2">Loading store item</Typography>
+        </Stack>
+      ) : null}
 
-      {state === 'ready' && rows.length === 0 ? <Alert severity="info">No listing candidates found.</Alert> : null}
+      {state === 'error' && viewMode === 'table' ? <Alert severity="error">Store items could not be loaded.</Alert> : null}
+      {detailState === 'error' && viewMode === 'form' ? <Alert severity="error">Store item could not be loaded.</Alert> : null}
 
-      {state === 'ready' && rows.length > 0 ? (
-        <Paper variant="outlined">
-          <Table size="small">
-            <TableHead>
-              <TableRow>
-                <TableCell>Title</TableCell>
-                <TableCell>Store</TableCell>
-                <TableCell>Price</TableCell>
-                <TableCell>Availability</TableCell>
-                <TableCell>Confidence</TableCell>
-                <TableCell>Status</TableCell>
-                <TableCell>Last Seen</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {rows.map((row, index) => (
-                <TableRow key={field(row, ['id'], String(index))}>
-                  <TableCell>{field(row, ['raw_title', 'title', 'name'])}</TableCell>
-                  <TableCell>{field(row, ['store_candidate_domain', 'store_name', 'store_id'])}</TableCell>
-                  <TableCell>{field(row, ['raw_price', 'parsed_price_mxn', 'price'])}</TableCell>
-                  <TableCell>{field(row, ['parsed_availability', 'raw_availability', 'availability'])}</TableCell>
-                  <TableCell>{field(row, ['confidence'])}</TableCell>
-                  <TableCell>{field(row, ['status', 'review_status'])}</TableCell>
-                  <TableCell>{field(row, ['last_seen_at', 'updated_at'])}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </Paper>
+      {detailState === 'ready' && viewMode === 'form' && selectedCandidate ? (
+        <ItemCandidateForm
+          candidate={selectedCandidate}
+          isCreatingBggItem={isCreatingBggItem}
+          isCreatingItem={isCreatingItem}
+          isSaving={isSaving}
+          onBack={() => {
+            setSelectedCandidate(null);
+            setDetailState('ready');
+            setSaveError('');
+            setSaveMessage('');
+            setViewMode('table');
+            onClearSelectedCandidateId?.();
+          }}
+          onCreateItemFromBggId={handleCreateItemFromBggId}
+          onSave={handleSaveCandidate}
+          onCreateItem={handleCreateItemFromCandidate}
+          saveError={saveError}
+          saveMessage={saveMessage}
+        />
+      ) : null}
+
+      {state === 'ready' && viewMode === 'table' ? (
+        <DataTable
+          ariaLabel="Store items"
+          columns={itemCandidateColumns}
+          getRowKey={(row, index) => field(row, ['id'], String(index))}
+          minWidth={3562}
+          onRowDoubleClick={(row) => {
+            setDetailState('ready');
+            setSaveError('');
+            setSaveMessage('');
+            setSelectedCandidate(row);
+            setViewMode('form');
+          }}
+          serverSide
+          tableState={table.tableState}
+          onTableStateChange={table.handleTableStateChange}
+          infiniteScroll={{
+            hasMore,
+            isLoading: isLoadingMore,
+            loadedCount: rows.length,
+            onLoadMore: loadMore,
+            totalCount: totalRows
+          }}
+          rows={rows}
+        />
       ) : null}
     </Stack>
+  );
+}
+
+function ItemCandidateForm({
+  candidate,
+  isCreatingBggItem,
+  isCreatingItem,
+  isSaving,
+  onBack,
+  onCreateItemFromBggId,
+  onCreateItem,
+  onSave,
+  saveError,
+  saveMessage
+}: {
+  candidate: AdminRecord;
+  isCreatingBggItem: boolean;
+  isCreatingItem: boolean;
+  isSaving: boolean;
+  onBack: () => void;
+  onCreateItemFromBggId: (bggId: string) => void;
+  onCreateItem: (input?: { bgg_id?: string; implements?: boolean }) => Promise<void>;
+  onSave: (input: AdminRecord) => void;
+  saveError: string;
+  saveMessage: string;
+}) {
+  const title = field(candidate, ['title'], 'Item candidate');
+  const imageUrl = field(candidate, ['image_url'], '');
+  const matchedBggId = field(candidate, ['matched_bgg_id'], '');
+  const sourceUrl = field(candidate, ['source_url'], '');
+  const formKey = itemCandidateDetailFields.map((detailField) => detailValue(candidate, detailField.key)).join('\u001f');
+  const [bggDialogBggId, setBggDialogBggId] = useState(matchedBggId);
+  const [isBggDialogOpen, setIsBggDialogOpen] = useState(false);
+  const [isCandidateDialogOpen, setIsCandidateDialogOpen] = useState(false);
+  const [candidateDialogBggId, setCandidateDialogBggId] = useState(matchedBggId);
+  const [candidateImplements, setCandidateImplements] = useState(false);
+
+  useEffect(() => {
+    setBggDialogBggId(matchedBggId);
+    setCandidateDialogBggId(matchedBggId);
+  }, [matchedBggId]);
+
+  function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    onSave(itemCandidateInputFromForm(new FormData(event.currentTarget)));
+  }
+
+  const canConfirmBggDialog = Boolean(bggDialogBggId.trim()) && !isSaving && !isCreatingBggItem && !isCreatingItem;
+  const canConfirmCandidateDialog =
+    !isSaving && !isCreatingBggItem && !isCreatingItem && (!candidateImplements || Boolean(candidateDialogBggId.trim()));
+
+  async function handleConfirmBggDialog() {
+    await onCreateItemFromBggId(bggDialogBggId);
+    setIsBggDialogOpen(false);
+  }
+
+  async function handleConfirmCandidateDialog() {
+    await onCreateItem({
+      bgg_id: candidateDialogBggId.trim(),
+      implements: candidateImplements
+    });
+    setIsCandidateDialogOpen(false);
+  }
+
+  return (
+    <Paper component="section" variant="outlined" sx={{ p: 2 }}>
+      <Stack component="form" key={formKey} spacing={2} onSubmit={handleSubmit}>
+        <Stack alignItems="flex-start" direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
+          <Box>
+            <Typography variant="h6" sx={{ fontWeight: 700 }}>
+              Store Item Details
+            </Typography>
+            <Typography color="text.secondary" variant="body2">
+              {title}
+            </Typography>
+          </Box>
+          <Stack direction={{ sm: 'row', xs: 'column' }} spacing={1} sx={{ width: { sm: 'auto', xs: '100%' } }}>
+            <Button disabled={isSaving} startIcon={<SaveIcon />} type="submit" variant="contained">
+              {isSaving ? 'Saving...' : 'Save Store Item'}
+            </Button>
+            <Button startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
+              Back to Store Items
+            </Button>
+          </Stack>
+        </Stack>
+
+        <Stack alignItems={{ md: 'center', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={1}>
+          <Button
+            disabled={isSaving || isCreatingBggItem || isCreatingItem}
+            sx={{ minHeight: 40, minWidth: { md: 190 }, textTransform: 'none', whiteSpace: 'nowrap' }}
+            type="button"
+            variant="outlined"
+            onClick={() => {
+              setBggDialogBggId(matchedBggId);
+              setIsBggDialogOpen(true);
+            }}
+          >
+            {isCreatingBggItem ? 'Creating BGG item...' : 'Create item from BGG ID'}
+          </Button>
+          <Button
+            disabled={isSaving || isCreatingItem || isCreatingBggItem}
+            startIcon={<AddCircleIcon />}
+            sx={{ minHeight: 40, minWidth: { md: 230 }, textTransform: 'none', whiteSpace: 'nowrap' }}
+            type="button"
+            variant="outlined"
+            onClick={() => {
+              setCandidateDialogBggId(matchedBggId);
+              setCandidateImplements(false);
+              setIsCandidateDialogOpen(true);
+            }}
+          >
+            {isCreatingItem ? 'Creating Item...' : 'Create Item from Candidate'}
+          </Button>
+        </Stack>
+
+        {saveMessage ? <Alert severity="success">{saveMessage}</Alert> : null}
+        {saveError ? <Alert severity="error">{saveError}</Alert> : null}
+
+        <Stack alignItems={{ md: 'flex-start', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={2}>
+          {imageUrl ? (
+            <Box
+              alt={`${title} candidate image`}
+              component="img"
+              src={imageUrl}
+              sx={{
+                bgcolor: 'grey.100',
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: 1,
+                height: 180,
+                objectFit: 'contain',
+                width: 180
+              }}
+            />
+          ) : null}
+
+          <Stack spacing={1}>
+            {sourceUrl ? (
+              <Link href={sourceUrl} rel="noreferrer" target="_blank">
+                Open product page
+              </Link>
+            ) : null}
+            {imageUrl ? (
+              <Link href={imageUrl} rel="noreferrer" target="_blank">
+                Open image
+              </Link>
+            ) : null}
+          </Stack>
+        </Stack>
+
+        <Box
+          sx={{
+            display: 'grid',
+            gap: 2,
+            gridTemplateColumns: {
+              md: 'repeat(2, minmax(0, 1fr))',
+              xs: '1fr'
+            }
+          }}
+        >
+          {itemCandidateDetailFields.map((detailField) =>
+            detailField.fieldType === 'boolean' ? (
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    defaultChecked={booleanValue(candidate, detailField.key)}
+                    name={detailField.readOnly ? undefined : detailField.key}
+                  />
+                }
+                key={detailField.key}
+                label={detailField.label}
+                sx={{ gridColumn: detailField.gridColumn }}
+              />
+            ) : (
+              <TextField
+                defaultValue={detailValue(candidate, detailField.key)}
+                fullWidth
+                InputProps={{ readOnly: detailField.readOnly }}
+                key={detailField.key}
+                label={detailField.label}
+                minRows={detailField.multiline ? 3 : undefined}
+                multiline={detailField.multiline}
+                name={detailField.readOnly ? undefined : detailField.key}
+                sx={{ gridColumn: detailField.gridColumn }}
+              />
+            )
+          )}
+        </Box>
+      </Stack>
+
+      <Dialog fullWidth maxWidth="xs" open={isBggDialogOpen} onClose={() => setIsBggDialogOpen(false)}>
+        <DialogTitle>Create Item from BGG</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            label="BGG ID"
+            margin="dense"
+            value={bggDialogBggId}
+            onChange={(event) => setBggDialogBggId(event.target.value)}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button type="button" onClick={() => setIsBggDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button disabled={!canConfirmBggDialog} type="button" variant="contained" onClick={handleConfirmBggDialog}>
+            Create BGG Item
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog fullWidth maxWidth="xs" open={isCandidateDialogOpen} onClose={() => setIsCandidateDialogOpen(false)}>
+        <DialogTitle>Create Item from Candidate</DialogTitle>
+        <DialogContent>
+          <Stack spacing={1.5} sx={{ pt: 1 }}>
+            <FormControlLabel
+              control={
+                <Checkbox checked={candidateImplements} onChange={(event) => setCandidateImplements(event.target.checked)} />
+              }
+              label="Implements"
+            />
+            <TextField
+              fullWidth
+              label="BGG ID"
+              value={candidateDialogBggId}
+              onChange={(event) => setCandidateDialogBggId(event.target.value)}
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button type="button" onClick={() => setIsCandidateDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button disabled={!canConfirmCandidateDialog} type="button" variant="contained" onClick={handleConfirmCandidateDialog}>
+            Create Item
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Paper>
+  );
+}
+
+function itemCandidateInputFromForm(formData: FormData): AdminRecord {
+  return Object.fromEntries(
+    itemCandidateDetailFields
+      .filter((detailField) => !detailField.readOnly)
+      .map((detailField) => [
+        detailField.key,
+        detailField.fieldType === 'boolean' ? formData.has(detailField.key) : String(formData.get(detailField.key) ?? '')
+      ])
   );
 }

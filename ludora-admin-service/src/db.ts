@@ -1,4 +1,4 @@
-import pg from 'pg';
+import pg, { type PoolConfig } from 'pg';
 
 export type QueryResult = {
   rows: unknown[];
@@ -10,9 +10,7 @@ export type Database = {
 };
 
 export function createDatabase(databaseUrl: string): Database {
-  const pool = new pg.Pool({
-    connectionString: databaseUrl
-  });
+  const pool = new pg.Pool(databaseConfig(databaseUrl));
 
   return {
     async query(text: string, params?: unknown[]): Promise<QueryResult> {
@@ -21,4 +19,18 @@ export function createDatabase(databaseUrl: string): Database {
     },
     close: () => pool.end()
   };
+}
+
+function databaseConfig(databaseUrl: string): PoolConfig {
+  const config: PoolConfig = {
+    connectionString: databaseUrl
+  };
+
+  if (process.env.PGSSLMODE === 'no-verify') {
+    config.ssl = {
+      rejectUnauthorized: false
+    };
+  }
+
+  return config;
 }
