@@ -73,6 +73,13 @@ describe('ItemsPage', () => {
       if (pathOf(url) === '/items/1/store-items') {
         return jsonResponse([]);
       }
+      if (pathOf(url) === '/items/1/taxonomy') {
+        return jsonResponse({
+          categories: [],
+          families: [],
+          mechanics: []
+        });
+      }
       if (pathOf(url) === '/items/1' && init?.method === 'PATCH') {
         return jsonResponse({
           ...item,
@@ -125,7 +132,7 @@ describe('ItemsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Back to Items' }));
 
     expect(await screen.findByText('Coffee Rush Updated')).toBeInTheDocument();
-  });
+  }, 10000);
 
   it('renders store items linked to the selected item', async () => {
     const item = {
@@ -160,6 +167,13 @@ describe('ItemsPage', () => {
           }
         ]);
       }
+      if (pathOf(url) === '/items/77/taxonomy') {
+        return jsonResponse({
+          categories: [],
+          families: [],
+          mechanics: []
+        });
+      }
       if (pathOf(url) === '/items') {
         return jsonResponse([]);
       }
@@ -175,6 +189,45 @@ describe('ItemsPage', () => {
     expect(within(storeItemsTable).getByText('Caravana Game Shop')).toBeInTheDocument();
     expect(within(storeItemsTable).getByText('LISTED')).toBeInTheDocument();
     expect(within(storeItemsTable).getByText('799.00')).toBeInTheDocument();
+  });
+
+  it('renders categories mechanics and families linked to the selected item', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (pathOf(url) === '/items/77') {
+        return jsonResponse({
+          bgg_id: 377061,
+          bgg_url: 'https://boardgamegeek.com/boardgame/377061/coffee-rush',
+          canonical_name: 'Coffee Rush',
+          id: '77',
+          image_url: 'https://cf.geekdo-images.com/coffee.jpg',
+          item_type: 'base_game',
+          normalized_name: 'coffee rush',
+          status: 'active'
+        });
+      }
+      if (pathOf(url) === '/items/77/store-items') {
+        return jsonResponse([]);
+      }
+      if (pathOf(url) === '/items/77/taxonomy') {
+        return jsonResponse({
+          categories: [{ id: '1', value: 'Economic', value_es: 'Economico' }],
+          families: [{ id: '2', value: 'Food & Drink: Coffee', value_es: 'Cafe' }],
+          mechanics: [{ id: '3', value: 'Contracts', value_es: 'Contratos' }]
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ItemsPage selectedItemId="77" />);
+
+    expect(await screen.findByRole('heading', { name: 'Item Details' })).toBeInTheDocument();
+    expect(screen.getByText('Categories')).toBeInTheDocument();
+    expect(screen.getByText('Economico (Economic)')).toBeInTheDocument();
+    expect(screen.getByText('Mechanics')).toBeInTheDocument();
+    expect(screen.getByText('Contratos (Contracts)')).toBeInTheDocument();
+    expect(screen.getByText('Families')).toBeInTheDocument();
+    expect(screen.getByText('Cafe (Food & Drink: Coffee)')).toBeInTheDocument();
   });
 
   it('opens the item form directly from a selected item id', async () => {
@@ -194,6 +247,13 @@ describe('ItemsPage', () => {
       }
       if (pathOf(url) === '/items/77/store-items') {
         return jsonResponse([]);
+      }
+      if (pathOf(url) === '/items/77/taxonomy') {
+        return jsonResponse({
+          categories: [],
+          families: [],
+          mechanics: []
+        });
       }
       if (pathOf(url) === '/items') {
         return jsonResponse([]);

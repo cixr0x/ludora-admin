@@ -47,6 +47,8 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
     thing.bggId,
     bggUrl(thing),
     thing.yearPublished,
+    thing.rating,
+    thing.weight,
     thing.description,
     thing.minPlayers,
     thing.maxPlayers,
@@ -68,16 +70,18 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
           bgg_url = $6,
           bgg_last_sync_at = now(),
           year_published = $7,
-          description = $8,
-          min_players = $9,
-          max_players = $10,
-          min_minutes = $11,
-          max_minutes = $12,
-          min_age = $13,
-          image_url = $14,
+          rating = $8,
+          weight = $9,
+          description = $10,
+          min_players = $11,
+          max_players = $12,
+          min_minutes = $13,
+          max_minutes = $14,
+          min_age = $15,
+          image_url = $16,
           status = 'active',
           updated_at = now()
-      where id = $15
+      where id = $17
       returning id
       `,
       [...params, existingId]
@@ -96,6 +100,8 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
       bgg_url,
       bgg_last_sync_at,
       year_published,
+      rating,
+      weight,
       description,
       min_players,
       max_players,
@@ -106,7 +112,7 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
       status,
       updated_at
     )
-    values ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9, $10, $11, $12, $13, $14, 'active', now())
+    values ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active', now())
     returning id
     `,
     params

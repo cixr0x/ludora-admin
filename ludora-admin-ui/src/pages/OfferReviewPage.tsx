@@ -1,8 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import CancelIcon from '@mui/icons-material/Cancel';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import { Alert, Box, Button, CircularProgress, IconButton, Link, Stack, Tooltip, Typography } from '@mui/material';
-import { adminApi, type AdminRecord } from '../api/client';
+import { adminApi, type AdminRecord, type StoreItemListingStatus } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 function field(record: AdminRecord, keys: string[], fallback = '-') {
@@ -168,6 +171,49 @@ function generateSpanishDescriptionAction(
   );
 }
 
+function listingStatusActions(
+  record: AdminRecord,
+  onSetListingStatus: (row: AdminRecord, listingStatus: StoreItemListingStatus) => void,
+  updatingListingStatusCandidateId: string
+) {
+  const candidateId = field(record, ['candidate_id', 'store_item_id'], '');
+  const currentStatus = field(record, ['store_item_listing_status'], '').toUpperCase();
+  const isUpdating = candidateId !== '' && candidateId === updatingListingStatusCandidateId;
+
+  return (
+    <Stack direction="row" spacing={0.5} sx={{ minWidth: 92 }}>
+      <Tooltip title="Approve listing">
+        <span>
+          <IconButton
+            aria-label="Approve listing"
+            color="success"
+            disabled={!candidateId || isUpdating || currentStatus === 'LISTED'}
+            onClick={() => onSetListingStatus(record, 'LISTED')}
+            size="small"
+            sx={{ p: 0.5 }}
+          >
+            <CheckCircleIcon fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title="Reject listing">
+        <span>
+          <IconButton
+            aria-label="Reject listing"
+            color="error"
+            disabled={!candidateId || isUpdating || currentStatus === 'REJECTED'}
+            onClick={() => onSetListingStatus(record, 'REJECTED')}
+            size="small"
+            sx={{ p: 0.5 }}
+          >
+            <CancelIcon fontSize="small" />
+          </IconButton>
+        </span>
+      </Tooltip>
+    </Stack>
+  );
+}
+
 function candidateLink(record: AdminRecord) {
   const url = field(record, ['candidate_url'], '');
   if (!url) {
@@ -199,7 +245,9 @@ function buildOfferReviewColumns(
   onSetSpanishName: (row: AdminRecord) => void,
   savingCandidateId: string,
   onGenerateSpanishDescription: (row: AdminRecord) => void,
-  generatingDescriptionCandidateId: string
+  generatingDescriptionCandidateId: string,
+  onSetListingStatus: (row: AdminRecord, listingStatus: StoreItemListingStatus) => void,
+  updatingListingStatusCandidateId: string
 ): DataTableColumn<AdminRecord>[] {
   return [
   {
@@ -257,6 +305,22 @@ function buildOfferReviewColumns(
     minWidth: 170,
     render: (row) => field(row, ['store_name', 'store_domain']),
     sortValue: (row) => field(row, ['store_name', 'store_domain'])
+  },
+  {
+    filterable: false,
+    id: 'listing_status_actions',
+    label: 'List',
+    minWidth: 104,
+    render: (row) => listingStatusActions(row, onSetListingStatus, updatingListingStatusCandidateId),
+    sortable: false
+  },
+  {
+    filterValue: (row) => field(row, ['store_item_listing_status']),
+    id: 'store_item_listing_status',
+    label: 'Listing status',
+    minWidth: 150,
+    render: (row) => field(row, ['store_item_listing_status']),
+    sortValue: (row) => field(row, ['store_item_listing_status'])
   },
   {
     filterValue: (row) => field(row, ['match_source']),
@@ -331,6 +395,7 @@ export function OfferReviewPage() {
   const [saveMessage, setSaveMessage] = useState('');
   const [generatingDescriptionCandidateId, setGeneratingDescriptionCandidateId] = useState('');
   const [savingSpanishNameCandidateId, setSavingSpanishNameCandidateId] = useState('');
+  const [updatingListingStatusCandidateId, setUpdatingListingStatusCandidateId] = useState('');
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
     table,
     adminApi.getOfferReviewsPage
@@ -373,6 +438,40 @@ export function OfferReviewPage() {
       }
     },
     [setRows]
+  );
+  const handleSetListingStatus = useCallback(
+    async (row: AdminRecord, listingStatus: StoreItemListingStatus) => {
+      const candidateId = field(row, ['candidate_id', 'store_item_id'], '');
+      if (!candidateId) {
+        return;
+      }
+
+      setSaveError('');
+      setSaveMessage('');
+      setUpdatingListingStatusCandidateId(candidateId);
+
+      try {
+        const savedStoreItem = await adminApi.updateItemCandidateListingStatus(candidateId, listingStatus);
+        const savedListingStatus = field(savedStoreItem, ['listing_status'], listingStatus);
+
+        setRows((currentRows) =>
+          currentRows.map((currentRow, index) =>
+            field(currentRow, ['candidate_id', 'store_item_id'], String(index)) === candidateId
+              ? { ...currentRow, store_item_listing_status: savedListingStatus }
+              : currentRow
+          )
+        );
+        setSaveMessage(
+          listingStatus === 'LISTED' ? 'Store item listing approved.' : 'Store item listing rejected.'
+        );
+        table.refresh();
+      } catch {
+        setSaveError('Store item listing status could not be saved.');
+      } finally {
+        setUpdatingListingStatusCandidateId('');
+      }
+    },
+    [setRows, table]
   );
   const handleGenerateSpanishDescription = useCallback(
     async (row: AdminRecord) => {
@@ -425,9 +524,18 @@ export function OfferReviewPage() {
         handleSetSpanishName,
         savingSpanishNameCandidateId,
         handleGenerateSpanishDescription,
-        generatingDescriptionCandidateId
+        generatingDescriptionCandidateId,
+        handleSetListingStatus,
+        updatingListingStatusCandidateId
       ),
-    [generatingDescriptionCandidateId, handleGenerateSpanishDescription, handleSetSpanishName, savingSpanishNameCandidateId]
+    [
+      generatingDescriptionCandidateId,
+      handleGenerateSpanishDescription,
+      handleSetListingStatus,
+      handleSetSpanishName,
+      savingSpanishNameCandidateId,
+      updatingListingStatusCandidateId
+    ]
   );
 
   return (
@@ -449,7 +557,7 @@ export function OfferReviewPage() {
       ) : null}
 
       {state === 'error' ? <Alert severity="error">Store item reviews could not be loaded.</Alert> : null}
-      {saveMessage ? <Alert severity="success">{saveMessage}</Alert> : null}
+      <FloatingSuccessAlert message={saveMessage} onClose={() => setSaveMessage('')} />
       {saveError ? <Alert severity="error">{saveError}</Alert> : null}
 
       {state === 'ready' ? (
@@ -458,7 +566,7 @@ export function OfferReviewPage() {
           columns={columns}
           defaultSortColumnId="candidate_name"
           getRowKey={(row, index) => field(row, ['candidate_id'], String(index))}
-          minWidth={2570}
+          minWidth={2824}
           serverSide
           tableState={table.tableState}
           onTableStateChange={table.handleTableStateChange}

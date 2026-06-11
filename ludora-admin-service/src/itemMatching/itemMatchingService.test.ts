@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BggClient } from '../bgg/bggClient.js';
+import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import type { Database } from '../db.js';
 import type { TranslationRequest, TranslationService } from '../translation/translationService.js';
 import { createItemMatchingService } from './itemMatchingService.js';
@@ -139,6 +140,134 @@ describe('item matching service', () => {
 
     expect(result).toHaveLength(1);
     expect(result[0].source).toBe('LOCAL');
+  });
+
+  it('matches local items by Spanish normalized name', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        const normalized = normalizeSql(sql);
+        if (normalized.includes('from store_items')) {
+          return { rows: [{ id: 50, item_type: 'base_game', publisher: '', title: 'Cafe Barista' }] };
+        }
+        if (normalized.includes('from items')) {
+          return {
+            rows: [
+              {
+                aliases: [],
+                bgg_id: 377061,
+                canonical_name: 'Coffee Rush',
+                canonical_name_es: 'Cafe Barista',
+                id: 77,
+                item_type: 'base_game',
+                normalized_name: 'coffee rush',
+                normalized_name_es: 'cafe barista'
+              }
+            ]
+          };
+        }
+        if (normalized.startsWith('insert into item_match_candidates')) {
+          return {
+            rows: [
+              {
+                discovery_item_candidate_id: params?.[0],
+                id: 50,
+                item_id: params?.[2],
+                match_reasons: JSON.parse(String(params?.[6])),
+                match_score: params?.[5],
+                matched_name: params?.[4],
+                raw_payload: JSON.parse(String(params?.[7])),
+                source: params?.[1],
+                status: 'PENDING'
+              }
+            ]
+          };
+        }
+        return { rows: [] };
+      }
+    };
+
+    const result = await createItemMatchingService(database).generateMatchCandidates(50);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      item_id: 77,
+      match_reasons: ['exact local Spanish item name match'],
+      source: 'LOCAL'
+    });
+    const localQuery = queries.find((query) => normalizeSql(query.sql).includes('from items'));
+    const sql = normalizeSql(localQuery?.sql ?? '');
+    expect(sql).toContain('i.normalized_name_es = any($1::text[])');
+    expect(localQuery?.params).toEqual([['cafe barista']]);
+  });
+
+  it('queries local item matches using language-edition title variants', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        const normalized = normalizeSql(sql);
+        if (normalized.includes('from store_items')) {
+          return {
+            rows: [
+              {
+                id: 51,
+                item_type: 'base_game',
+                publisher: '',
+                title: '7 Wonders: Architects (Español)'
+              }
+            ]
+          };
+        }
+        if (normalized.includes('from items')) {
+          return {
+            rows: [
+              {
+                aliases: [],
+                bgg_id: 346703,
+                canonical_name: '7 Wonders: Architects',
+                id: 77,
+                item_type: 'base_game',
+                normalized_name: '7 wonders architects'
+              }
+            ]
+          };
+        }
+        if (normalized.startsWith('insert into item_match_candidates')) {
+          return {
+            rows: [
+              {
+                discovery_item_candidate_id: params?.[0],
+                id: 51,
+                item_id: params?.[2],
+                match_reasons: JSON.parse(String(params?.[6])),
+                match_score: params?.[5],
+                matched_name: params?.[4],
+                raw_payload: JSON.parse(String(params?.[7])),
+                source: params?.[1],
+                status: 'PENDING'
+              }
+            ]
+          };
+        }
+        return { rows: [] };
+      }
+    };
+
+    const result = await createItemMatchingService(database).generateMatchCandidates(51);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      item_id: 77,
+      match_reasons: ['exact local item name match after ignoring language edition'],
+      source: 'LOCAL'
+    });
+    const localQuery = queries.find((query) => normalizeSql(query.sql).includes('from items'));
+    const sql = normalizeSql(localQuery?.sql ?? '');
+    expect(sql).toContain('i.normalized_name = any($1::text[])');
+    expect(sql).toContain('ia.normalized_alias = any($1::text[])');
+    expect(localQuery?.params).toEqual([['7 wonders architects espanol', '7 wonders architects']]);
   });
 
   it('uses translated query variants for BGG search', async () => {
@@ -420,6 +549,40 @@ describe('item matching service', () => {
     expect(result[0].bgg_id).toBe(377061);
   });
 
+  it('matches direct BGG cache entries before calling the BGG API', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = matchOnlyDatabase(
+      { id: 54, item_type: 'base_game', publisher: '', title: '7 Wonders: Architects (Español)' },
+      {
+        directCacheResults: [{ bggId: 346703, name: '7 Wonders: Architects', type: 'boardgame', yearPublished: 2021 }],
+        onQuery: (sql, params) => queries.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async () => {
+        throw new Error('BGG fetch API should not be called when direct BGG cache has a strong match');
+      },
+      search: async () => {
+        throw new Error('BGG search API should not be called when direct BGG cache has a strong match');
+      }
+    };
+
+    const result = await createItemMatchingService(database, bggClient).generateMatchCandidates(54);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      bgg_id: 346703,
+      match_reasons: ['exact BGG primary name match after ignoring language edition'],
+      matched_name: '7 Wonders: Architects',
+      source: 'BGG'
+    });
+    expect(result[0].match_score).toBeGreaterThanOrEqual(0.9);
+    const directCacheQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select bgg_id, name'));
+    expect(normalizeSql(directCacheQuery?.sql ?? '')).toContain('from bgg_search_cache');
+    expect(directCacheQuery?.params?.[0]).toEqual(['boardgame', 'boardgameexpansion']);
+    expect(directCacheQuery?.params).toContain('%7%wonders%architects%');
+  });
+
   it('stores BGG search results when the search cache misses', async () => {
     const cacheWrites: Array<{ sql: string; params: unknown[] }> = [];
     const database = matchOnlyDatabase(
@@ -452,6 +615,254 @@ describe('item matching service', () => {
       JSON.stringify({ bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 })
     ]);
     expect(relationWrite?.params).toEqual([91, 92, 0]);
+  });
+
+  it('confirms and links the best local item without searching BGG', async () => {
+    const updates: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 48,
+        item_type: 'base_game',
+        max_players: 4,
+        min_players: 2,
+        publisher: 'Korea Boardgames',
+        title: 'Coffee Rush'
+      },
+      [
+        {
+          aliases: [],
+          bgg_id: 377061,
+          canonical_name: 'Coffee Rush',
+          id: 77,
+          item_type: 'base_game',
+          normalized_name: 'coffee rush'
+        }
+      ],
+      {
+        onStoreItemUpdate: (sql, params) => updates.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async () => {
+        throw new Error('BGG fetch should not run when local match is high confidence');
+      },
+      search: async () => {
+        throw new Error('BGG search should not run when local match is high confidence');
+      }
+    };
+
+    await createItemMatchingService(database, bggClient).confirmBoardgameAndMatch?.(48);
+
+    const linkedUpdate = updates.find((update) => normalizeSql(update.sql).includes('set item_id = $1'));
+    expect(normalizeSql(linkedUpdate?.sql ?? '')).not.toContain('listing_status');
+    expect(normalizeSql(linkedUpdate?.sql ?? '')).not.toContain("status = 'listed'");
+    expect(linkedUpdate?.params).toEqual([
+      77,
+      'LOCAL',
+      377061,
+      'Coffee Rush',
+      0.94,
+      JSON.stringify(['exact local item name match']),
+      JSON.stringify({
+        item: {
+          aliases: [],
+          bggId: 377061,
+          id: 77,
+          itemType: 'base_game',
+          name: 'Coffee Rush',
+          normalizedName: 'coffee rush'
+        }
+      }),
+      48
+    ]);
+  });
+
+  it('confirms, imports, and links a cached BGG match before calling the BGG search API', async () => {
+    const importedBggIds: number[] = [];
+    const updates: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 49,
+        item_type: 'base_game',
+        max_players: 4,
+        min_players: 2,
+        publisher: 'Korea Boardgames',
+        title: 'Coffee Rush'
+      },
+      [],
+      {
+        cachedSearchResults: [{ bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 }],
+        onStoreItemUpdate: (sql, params) => updates.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async (bggId) => ({
+        details: bggThing({ bggId, name: 'Coffee Rush', yearPublished: 2023 }),
+        rawXml: '<items />'
+      }),
+      search: async () => {
+        throw new Error('BGG search API should not be called when cache is populated');
+      }
+    };
+    const bggItemImporter: BggItemImporter = {
+      importBggId: async (bggId) => {
+        importedBggIds.push(bggId);
+        return 88;
+      }
+    };
+
+    await createItemMatchingService(database, bggClient, undefined, bggItemImporter).confirmBoardgameAndMatch?.(49);
+
+    expect(importedBggIds).toEqual([377061]);
+    const linkedUpdate = updates.find((update) => normalizeSql(update.sql).includes('set item_id = $1'));
+    expect(normalizeSql(linkedUpdate?.sql ?? '')).not.toContain('listing_status');
+    expect(normalizeSql(linkedUpdate?.sql ?? '')).not.toContain("status = 'listed'");
+    expect(linkedUpdate?.params?.slice(0, 6)).toEqual([
+      88,
+      'BGG',
+      377061,
+      'Coffee Rush',
+      0.9,
+      JSON.stringify(['exact BGG primary name match'])
+    ]);
+  });
+
+  it('does not mark a boardgame as confirmed when no item match is found', async () => {
+    const updates: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 50,
+        item_type: 'base_game',
+        max_players: 4,
+        min_players: 2,
+        publisher: '',
+        title: 'Unknown Game'
+      },
+      [],
+      {
+        cachedSearchResults: [],
+        onStoreItemUpdate: (sql, params) => updates.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async () => {
+        throw new Error('BGG fetch should not run without search results');
+      },
+      search: async () => []
+    };
+
+    await createItemMatchingService(database, bggClient).confirmBoardgameAndMatch?.(50);
+
+    expect(updates.some((update) => normalizeSql(update.sql).includes('set item_id = $1'))).toBe(false);
+    expect(updates.every((update) => !normalizeSql(update.sql).includes('is_boardgame_confirmed = true'))).toBe(true);
+    const noMatchUpdate = updates.find((update) => normalizeSql(update.sql).includes("match_source = 'none'"));
+    expect(normalizeSql(noMatchUpdate?.sql ?? '')).toContain('is_boardgame_confirmed = false');
+    expect(noMatchUpdate?.params).toEqual([JSON.stringify(['no match above threshold']), 50]);
+  });
+
+  it('keeps admin-confirmed boardgames confirmed when no item match is found', async () => {
+    const updates: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 52,
+        item_type: 'base_game',
+        max_players: 4,
+        min_players: 2,
+        publisher: '',
+        title: 'Unknown Game'
+      },
+      [],
+      {
+        cachedSearchResults: [],
+        onStoreItemUpdate: (sql, params) => updates.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async () => {
+        throw new Error('BGG fetch should not run without search results');
+      },
+      search: async () => []
+    };
+    const service = createItemMatchingService(database, bggClient) as ReturnType<typeof createItemMatchingService> & {
+      confirmBoardgameAndMatch(discoveryItemCandidateId: number, options: { confirmationSource: 'admin' }): Promise<void>;
+    };
+
+    await service.confirmBoardgameAndMatch(52, { confirmationSource: 'admin' });
+
+    expect(updates.some((update) => normalizeSql(update.sql).includes('set item_id = $1'))).toBe(false);
+    const noMatchUpdate = updates.find((update) => normalizeSql(update.sql).includes("match_source = 'none'"));
+    expect(normalizeSql(noMatchUpdate?.sql ?? '')).toContain('is_boardgame_confirmed = true');
+    expect(noMatchUpdate?.params).toEqual([JSON.stringify(['no match above threshold']), 52]);
+  });
+
+  it('does not mark a boardgame as confirmed when automatic matching errors before linking an item', async () => {
+    const updates: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 51,
+        item_type: 'base_game',
+        max_players: 4,
+        min_players: 2,
+        publisher: '',
+        title: 'Rate Limited Game'
+      },
+      [],
+      {
+        onStoreItemUpdate: (sql, params) => updates.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async () => {
+        throw new Error('BGG fetch should not run when search fails');
+      },
+      search: async () => {
+        throw new Error('BGG API request failed with 429');
+      }
+    };
+
+    await createItemMatchingService(database, bggClient).confirmBoardgameAndMatch?.(51);
+
+    expect(updates.some((update) => normalizeSql(update.sql).includes('set item_id = $1'))).toBe(false);
+    expect(updates.every((update) => !normalizeSql(update.sql).includes('is_boardgame_confirmed = true'))).toBe(true);
+    const errorUpdate = updates.find((update) => normalizeSql(update.sql).includes('processing_error = $1'));
+    expect(normalizeSql(errorUpdate?.sql ?? '')).toContain('is_boardgame_confirmed = false');
+    expect(errorUpdate?.params).toEqual(['BGG API request failed with 429', 51]);
+  });
+
+  it('keeps admin-confirmed boardgames confirmed when matching errors before linking an item', async () => {
+    const updates: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 53,
+        item_type: 'base_game',
+        max_players: 4,
+        min_players: 2,
+        publisher: '',
+        title: 'Rate Limited Game'
+      },
+      [],
+      {
+        onStoreItemUpdate: (sql, params) => updates.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async () => {
+        throw new Error('BGG fetch should not run when search fails');
+      },
+      search: async () => {
+        throw new Error('BGG API request failed with 429');
+      }
+    };
+    const service = createItemMatchingService(database, bggClient) as ReturnType<typeof createItemMatchingService> & {
+      confirmBoardgameAndMatch(discoveryItemCandidateId: number, options: { confirmationSource: 'admin' }): Promise<void>;
+    };
+
+    await service.confirmBoardgameAndMatch(53, { confirmationSource: 'admin' });
+
+    expect(updates.some((update) => normalizeSql(update.sql).includes('set item_id = $1'))).toBe(false);
+    const errorUpdate = updates.find((update) => normalizeSql(update.sql).includes('processing_error = $1'));
+    expect(normalizeSql(errorUpdate?.sql ?? '')).toContain('is_boardgame_confirmed = true');
+    expect(errorUpdate?.params).toEqual(['BGG API request failed with 429', 53]);
   });
 
   it('throws 404 when the discovery item candidate is missing', async () => {
@@ -493,17 +904,34 @@ function matchOnlyDatabase(
   candidate: Record<string, unknown>,
   options: {
     cachedSearchResults?: unknown[];
+    directCacheResults?: unknown[];
     onCacheWrite?: (sql: string, params: unknown[] | undefined) => void;
+    onQuery?: (sql: string, params: unknown[] | undefined) => void;
   } = {}
 ): Database {
   return {
     query: async (sql, params) => {
+      options.onQuery?.(sql, params);
       const normalized = normalizeSql(sql);
       if (normalized.includes('from store_items')) {
         return { rows: [candidate] };
       }
       if (normalized.includes('from items')) {
         return { rows: [] };
+      }
+      if (normalized.includes('from bgg_search_cache')) {
+        return {
+          rows: (options.directCacheResults ?? []).map((item) => {
+            const row = item as Record<string, unknown>;
+            return {
+              bgg_id: row.bggId ?? row.bgg_id,
+              item_type: row.type ?? row.item_type,
+              name: row.name,
+              result_json: row.resultJson ?? row.result_json ?? row,
+              year_published: row.yearPublished ?? row.year_published
+            };
+          })
+        };
       }
       if (normalized.includes('from bgg_search_queries')) {
         return options.cachedSearchResults ? { rows: [{ id: 91, result_count: options.cachedSearchResults.length }] } : { rows: [] };
@@ -543,12 +971,56 @@ function matchOnlyDatabase(
               bgg_id: params?.[3],
               discovery_item_candidate_id: params?.[0],
               id: 20,
+              match_reasons: JSON.parse(String(params?.[6] ?? '[]')) as unknown,
+              match_score: params?.[5],
               matched_name: params?.[4],
               source: params?.[1],
               status: 'PENDING'
             }
           ]
         };
+      }
+      return { rows: [] };
+    }
+  };
+}
+
+function confirmMatchDatabase(
+  candidate: Record<string, unknown>,
+  localRows: Record<string, unknown>[],
+  options: {
+    cachedSearchResults?: unknown[];
+    onStoreItemUpdate?: (sql: string, params: unknown[] | undefined) => void;
+  } = {}
+): Database {
+  return {
+    query: async (sql, params) => {
+      const normalized = normalizeSql(sql);
+      if (normalized.includes('from store_items')) {
+        return { rows: [candidate] };
+      }
+      if (normalized.includes('from items')) {
+        return { rows: localRows };
+      }
+      if (normalized.includes('from bgg_search_queries')) {
+        return options.cachedSearchResults ? { rows: [{ id: 91, result_count: options.cachedSearchResults.length }] } : { rows: [] };
+      }
+      if (normalized.includes('from bgg_search_query_results')) {
+        return {
+          rows: (options.cachedSearchResults ?? []).map((item) => {
+            const row = item as Record<string, unknown>;
+            return {
+              bgg_id: row.bggId ?? row.bgg_id,
+              item_type: row.type ?? row.item_type,
+              name: row.name,
+              year_published: row.yearPublished ?? row.year_published
+            };
+          })
+        };
+      }
+      if (normalized.startsWith('update store_items')) {
+        options.onStoreItemUpdate?.(sql, params);
+        return { rows: [] };
       }
       return { rows: [] };
     }

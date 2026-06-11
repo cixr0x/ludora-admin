@@ -45,6 +45,12 @@ describe('BGG XML parser', () => {
           <link type="boardgamedesigner" id="150113" value="Euijin Han" />
           <link type="boardgameartist" id="157654" value="Siwon Hwang" />
           <link type="boardgamepublisher" id="8291" value="Korea Boardgames" />
+          <statistics page="1">
+            <ratings>
+              <average value="7.48231" />
+              <averageweight value="1.9234" />
+            </ratings>
+          </statistics>
         </item>
       </items>
     `;
@@ -67,8 +73,10 @@ describe('BGG XML parser', () => {
       name: 'Coffee Rush',
       playingTime: 30,
       publishers: [{ bggId: 8291, name: 'Korea Boardgames' }],
+      rating: 7.48231,
       thumbnail: 'https://example.com/small.jpg',
       type: 'boardgame',
+      weight: 1.9234,
       yearPublished: 2023
     });
   });

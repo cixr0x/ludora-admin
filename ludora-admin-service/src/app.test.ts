@@ -178,6 +178,378 @@ describe('ludora admin service', () => {
     ]);
   });
 
+  it('filters and paginates front page categories in the database query', async () => {
+    const rows = [
+      {
+        category_id: 5,
+        category_name: 'Party Game',
+        category_name_es: 'Juego de fiesta',
+        category_type: 'category',
+        id: 1,
+        order: 10,
+        title: 'Need a laugh?'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).includes('count(*)')) {
+          return { rows: [{ total: 1 }] };
+        }
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get(
+      '/front-page-categories?page=0&page_size=25&sort=category_name&sort_direction=asc&filter_title=laugh'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: rows,
+      meta: {
+        page: 0,
+        page_size: 25,
+        total: 1
+      }
+    });
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select fpc.id'));
+    const sql = normalizeSql(rowQuery?.sql ?? '');
+    expect(sql).toContain('select fpc.id, fpc.category_type, fpc.category_id, fpc.title, fpc."order"');
+    expect(sql).toContain('from front_page_categories fpc');
+    expect(sql).toContain("left join boardgame_categories bc on fpc.category_type = 'category' and bc.id = fpc.category_id");
+    expect(sql).toContain("left join boardgame_families bf on fpc.category_type = 'family' and bf.id = fpc.category_id");
+    expect(sql).toContain("left join boardgame_mechanics bm on fpc.category_type = 'mechanic' and bm.id = fpc.category_id");
+    expect(sql).toContain("where coalesce((fpc.title)::text, '') ilike $1 escape '\\'");
+    expect(sql).toContain("order by coalesce(bc.name, bf.name, bm.name, '') asc");
+    expect(rowQuery?.params).toEqual(['%laugh%', 25, 0]);
+  });
+
+  it('creates front page categories', async () => {
+    const row = { category_id: 5, category_type: 'category', id: 1, order: 10, title: 'Need a laugh?' };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).post('/front-page-categories').send({
+      category_id: '5',
+      category_type: 'category',
+      order: '10',
+      title: 'Need a laugh?'
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ data: row });
+    expect(normalizeSql(queries[0].sql)).toContain('insert into front_page_categories');
+    expect(queries[0].params).toEqual(['category', 5, 'Need a laugh?', 10]);
+  });
+
+  it('updates front page categories', async () => {
+    const row = { category_id: 8, category_type: 'mechanic', id: 1, order: 20, title: 'Big table energy' };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).patch('/front-page-categories/1').send({
+      category_id: 8,
+      category_type: 'mechanic',
+      order: 20,
+      title: 'Big table energy'
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    expect(normalizeSql(queries[0].sql)).toContain('update front_page_categories');
+    expect(normalizeSql(queries[0].sql)).toContain('where id = $5');
+    expect(queries[0].params).toEqual(['mechanic', 8, 'Big table energy', 20, '1']);
+  });
+
+  it('deletes front page categories', async () => {
+    const row = { category_id: 5, category_type: 'category', id: 1, order: 10, title: 'Need a laugh?' };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).delete('/front-page-categories/1');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('delete from front_page_categories');
+    expect(sql).toContain('where id = $1');
+    expect(sql).toContain('returning');
+    expect(queries[0].params).toEqual(['1']);
+  });
+
+  it('rejects invalid front page category types', async () => {
+    const response = await request(createApp({ database: idleDatabase() })).post('/front-page-categories').send({
+      category_id: '5',
+      category_type: 'publisher',
+      title: 'Need a laugh?'
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toBe('category_type must be category, family, or mechanic');
+  });
+
+  it('lists taxonomy rows available for front page categories', async () => {
+    const rows = [
+      {
+        bgg_id: 1021,
+        category_id: 5,
+        category_type: 'category',
+        front_page_category_id: 12,
+        game_count: 42,
+        name: 'Party Game',
+        name_es: 'Juego de fiesta'
+      },
+      {
+        bgg_id: 2023,
+        category_id: 8,
+        category_type: 'mechanic',
+        front_page_category_id: null,
+        game_count: 17,
+        name: 'Hand Management',
+        name_es: 'Gestión de mano'
+      },
+      {
+        bgg_id: 3001,
+        category_id: 2,
+        category_type: 'family',
+        front_page_category_id: null,
+        game_count: 9,
+        name: 'Food & Drink',
+        name_es: 'Comida y bebida'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/front-page-category-options');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('from boardgame_categories');
+    expect(sql).toContain('from boardgame_mechanics');
+    expect(sql).toContain('from boardgame_families');
+    expect(sql).toContain('from front_page_categories');
+    expect(sql).toContain('from item_categories');
+    expect(sql).toContain('from item_mechanics');
+    expect(sql).toContain('from item_families');
+    expect(sql).toContain('from store_items');
+    expect(sql).toContain('select distinct item_id');
+    expect(sql).toContain('item_id is not null');
+    expect(sql).toContain('is_boardgame = true');
+    expect(sql).toContain('is_boardgame_confirmed = true');
+    expect(sql).toContain('game_count');
+    expect(sql).toContain("where category_type = 'category'");
+    expect(sql).toContain("where category_type = 'mechanic'");
+    expect(sql).toContain("where category_type = 'family'");
+    expect(sql).toContain('order by category_type asc, name asc');
+  });
+
+  it('can count only games not already covered by a front page category taxonomy', async () => {
+    const rows = [
+      {
+        bgg_id: 1021,
+        category_id: 5,
+        category_type: 'category',
+        front_page_category_id: null,
+        game_count: 7,
+        name: 'Party Game',
+        name_es: 'Juego de fiesta'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/front-page-category-options?only_unlinked_games=true');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('countable_items as');
+    expect(sql).toContain('from qualified_items qi');
+    expect(sql).toContain('from item_categories existing_ic');
+    expect(sql).toContain("existing_category_fpc.category_type = 'category'");
+    expect(sql).toContain('existing_category_fpc.category_id = existing_ic.category_id');
+    expect(sql).toContain('existing_ic.item_id = qi.item_id');
+    expect(sql).toContain('from item_families existing_ifa');
+    expect(sql).toContain("existing_family_fpc.category_type = 'family'");
+    expect(sql).toContain('existing_family_fpc.category_id = existing_ifa.family_id');
+    expect(sql).toContain('existing_ifa.item_id = qi.item_id');
+    expect(sql).toContain('from item_mechanics existing_im');
+    expect(sql).toContain("existing_mechanic_fpc.category_type = 'mechanic'");
+    expect(sql).toContain('existing_mechanic_fpc.category_id = existing_im.mechanic_id');
+    expect(sql).toContain('existing_im.item_id = qi.item_id');
+    expect(sql).toContain('join countable_items ci on ci.item_id = ic.item_id');
+    expect(sql).toContain('join countable_items ci on ci.item_id = ifa.item_id');
+    expect(sql).toContain('join countable_items ci on ci.item_id = im.item_id');
+  });
+
+  it('lists products linked to a front page category option', async () => {
+    const rows = [
+      {
+        canonical_name: 'Coffee Rush',
+        canonical_name_es: 'Cafeteria',
+        id: 77,
+        image_url: 'https://cdn.example/coffee.jpg',
+        image_url_es: 'https://cdn.example/cafe.jpg',
+        item_type: 'base_game',
+        year_published: 2023
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/front-page-category-options/category/5/products');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('with qualified_items as');
+    expect(sql).toContain('from store_items');
+    expect(sql).toContain('item_id is not null');
+    expect(sql).toContain('is_boardgame = true');
+    expect(sql).toContain('is_boardgame_confirmed = true');
+    expect(sql).toContain('from item_categories ic');
+    expect(sql).toContain('join qualified_items qi on qi.item_id = ic.item_id');
+    expect(sql).toContain('join items i on i.id = ic.item_id');
+    expect(sql).toContain('where ic.category_id = $1');
+    expect(sql).toContain('order by i.canonical_name asc');
+    expect(queries[0].params).toEqual([5]);
+  });
+
+  it('uses the matching taxonomy relation table for front page category option products', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [] };
+      }
+    };
+    const app = createApp({ database });
+
+    await request(app).get('/front-page-category-options/mechanic/8/products');
+    await request(app).get('/front-page-category-options/family/2/products');
+
+    expect(normalizeSql(queries[0].sql)).toContain('from item_mechanics im');
+    expect(normalizeSql(queries[0].sql)).toContain('where im.mechanic_id = $1');
+    expect(queries[0].params).toEqual([8]);
+    expect(normalizeSql(queries[1].sql)).toContain('from item_families ifa');
+    expect(normalizeSql(queries[1].sql)).toContain('where ifa.family_id = $1');
+    expect(queries[1].params).toEqual([2]);
+  });
+
+  it('randomly assigns active items through twenty category cycles without reusing games', async () => {
+    const rows = [{ assigned_count: 20, skipped_count: 10 }];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).post('/front-page-categories/random-item-assignments');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows[0] });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('from front_page_category_items');
+    expect(sql).toContain('from front_page_categories fpc');
+    expect(sql).toContain('generate_series(1, 20) as cycle_number');
+    expect(sql).toContain('row_number() over (order by cycle_number asc, category_position asc)');
+    expect(sql).toContain('from active_item ai');
+    expect(sql).toContain('from item_categories ic');
+    expect(sql).toContain('from item_families ifa');
+    expect(sql).toContain('from item_mechanics im');
+    expect(sql).toContain('order by random()');
+    expect(sql).toContain('not (ai.id = any(previous.assigned_item_ids))');
+    expect(sql).toContain('insert into front_page_category_items (front_page_category_id, item_id, item_order)');
+    expect(sql).toContain('on conflict (item_id) do update');
+    expect(sql).toContain('delete from front_page_category_items fpci');
+    expect(sql).toContain('cycle_number as item_order');
+    expect(sql).toContain('where item_id is not null');
+    expect(queries[0].params).toBeUndefined();
+  });
+
+  it('lists front page preview rows with assigned active products', async () => {
+    const rows = [
+      {
+        category_id: 5,
+        category_name: 'Party Game',
+        category_type: 'category',
+        id: 1,
+        order: 10,
+        products: [
+          {
+            canonical_name: 'Coffee Rush',
+            canonical_name_es: 'Cafeteria',
+            id: 77,
+            image_url: 'https://cdn.example/coffee.jpg',
+            image_url_es: 'https://cdn.example/cafe.jpg',
+            item_type: 'base_game',
+            year_published: 2023
+          }
+        ],
+        title: 'Party Game'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/front-page-preview');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('from front_page_categories fpc');
+    expect(sql).toContain('left join front_page_category_items fpci on fpci.front_page_category_id = fpc.id');
+    expect(sql).toContain('left join active_item i on i.id = fpci.item_id');
+    expect(sql).toContain('jsonb_agg');
+    expect(sql).toContain('jsonb_build_object');
+    expect(sql).toContain('filter (where i.id is not null)');
+    expect(sql).toContain('group by fpc.id');
+    expect(sql).toContain('order by fpci.item_order asc, i.canonical_name asc, i.id asc');
+    expect(sql).toContain('order by fpc."order" asc, fpc.id asc');
+    expect(queries[0].params).toBeUndefined();
+  });
+
   it('filters and paginates catalog items in the database query', async () => {
     const rows = [{ canonical_name: 'Coffee Rush', id: 377061, item_type: 'base_game' }];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
@@ -205,7 +577,7 @@ describe('ludora admin service', () => {
       }
     });
     const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, canonical_name'));
-    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from items');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from active_item');
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((canonical_name)::text, '') ilike $1 escape '\\'");
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by canonical_name asc');
     expect(rowQuery?.params).toEqual(['%coffee%', 25, 0]);
@@ -300,6 +672,45 @@ describe('ludora admin service', () => {
     expect(query.params).toEqual(['77']);
   });
 
+  it('returns taxonomy metadata linked to a catalog item', async () => {
+    const categories = [{ bgg_id: 1021, id: 1, value: 'Economic', value_es: 'Economico' }];
+    const mechanics = [{ bgg_id: 2912, id: 2, value: 'Contracts', value_es: 'Contratos' }];
+    const families = [{ bgg_id: 46953, id: 3, value: 'Food & Drink: Coffee', value_es: 'Cafe' }];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        const normalized = normalizeSql(sql);
+        if (normalized.includes('from item_categories')) {
+          return { rows: categories };
+        }
+        if (normalized.includes('from item_mechanics')) {
+          return { rows: mechanics };
+        }
+        if (normalized.includes('from item_families')) {
+          return { rows: families };
+        }
+        return { rows: [] };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/items/77/taxonomy');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: {
+        categories,
+        families,
+        mechanics
+      }
+    });
+    expect(queries).toHaveLength(3);
+    expect(queries.map((query) => query.params)).toEqual([['77'], ['77'], ['77']]);
+    expect(normalizeSql(queries[0].sql)).toContain('join boardgame_categories bc on bc.id = ic.category_id');
+    expect(normalizeSql(queries[1].sql)).toContain('join boardgame_mechanics bm on bm.id = im.mechanic_id');
+    expect(normalizeSql(queries[2].sql)).toContain('join boardgame_families bf on bf.id = ifa.family_id');
+  });
+
   it('updates catalog items', async () => {
     const updatedRow = { canonical_name: 'Coffee Rush Updated', id: '377061', item_type: 'base_game' };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
@@ -331,7 +742,9 @@ describe('ludora admin service', () => {
         normalized_name: '',
         normalized_name_es: '',
         parent_item_id: '',
+        rating: '7.48',
         status: 'active',
+        weight: '1.92',
         year_published: '2023'
       });
 
@@ -344,8 +757,10 @@ describe('ludora admin service', () => {
     expect(sql).toContain('canonical_name_es = $3');
     expect(sql).toContain('normalized_name_es = $4');
     expect(sql).toContain('description_es = $11');
-    expect(sql).toContain('image_url_es = $19');
-    expect(sql).toContain('where id = $21');
+    expect(sql).toContain('rating = $17');
+    expect(sql).toContain('weight = $18');
+    expect(sql).toContain('image_url_es = $21');
+    expect(sql).toContain('where id = $23');
     expect(sql).toContain('returning id, canonical_name, normalized_name, canonical_name_es, normalized_name_es');
     expect(query.params).toEqual([
       'Coffee Rush Updated',
@@ -364,6 +779,8 @@ describe('ludora admin service', () => {
       30,
       45,
       1.75,
+      7.48,
+      1.92,
       8,
       'https://cf.geekdo-images.com/coffee.jpg',
       'https://cf.geekdo-images.com/coffee-es.jpg',
@@ -626,7 +1043,7 @@ describe('ludora admin service', () => {
     });
   });
 
-  it('queries discovery item candidates by latest update', async () => {
+  it('queries discovery item candidates by title', async () => {
     const queries: string[] = [];
     const database: Database = {
       query: async (sql) => {
@@ -643,6 +1060,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('from store_items');
     expect(sql).toContain('source_listing_url');
     expect(sql).toContain('image_url');
+    expect(sql).toContain('listing_status');
     expect(sql).toContain('item_type');
     expect(sql).toContain('min_minutes');
     expect(sql).toContain('max_minutes');
@@ -671,7 +1089,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('processed_at');
     expect(sql).toContain('processing_error');
     expect(sql).toContain('last_seen_at');
-    expect(sql).toContain('order by last_updated desc');
+    expect(sql).toContain('order by title asc');
     expect(sql).toContain('limit 200');
   });
 
@@ -700,6 +1118,7 @@ describe('ludora admin service', () => {
       }
     });
     const rowQuery = queries.find((query) => normalizeSql(query.sql).includes('from store_items'));
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by title asc');
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('limit $1 offset $2');
     expect(rowQuery?.params).toEqual([25, 50]);
   });
@@ -734,7 +1153,7 @@ describe('ludora admin service', () => {
   });
 
   it('returns a discovery item candidate by id', async () => {
-    const row = { id: '920', status: 'listed', title: 'Cafe Barista' };
+    const row = { id: '920', listing_status: 'PENDING', title: 'Cafe Barista' };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -751,6 +1170,51 @@ describe('ludora admin service', () => {
     expect(normalizeSql(query.sql)).toContain('from store_items');
     expect(normalizeSql(query.sql)).toContain('where id = $1');
     expect(query.params).toEqual(['920']);
+  });
+
+  it('updates a discovery item candidate listing status only', async () => {
+    const row = { id: '920', listing_status: 'LISTED', title: 'Cafe Barista' };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .patch('/discovery/listings/920/listing-status')
+      .send({ listing_status: 'LISTED' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    const mutation = queries[0];
+    const sql = normalizeSql(mutation.sql);
+    expect(sql).toContain('update store_items');
+    expect(sql).toContain('set listing_status = $1');
+    expect(sql).toContain('last_updated = now()');
+    expect(sql).toContain('where id = $2');
+    expect(sql).toContain('returning');
+    expect(sql).not.toContain('title =');
+    expect(mutation.params).toEqual(['LISTED', '920']);
+  });
+
+  it('rejects unsupported discovery item candidate listing status updates', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .patch('/discovery/listings/920/listing-status')
+      .send({ listing_status: 'ARCHIVED' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toBe('listing_status must be PENDING, LISTED, UNLISTED, or REJECTED');
+    expect(queries).toEqual([]);
   });
 
   it('creates a curated item and lists the store item from a discovery item candidate', async () => {
@@ -770,14 +1234,14 @@ describe('ludora admin service', () => {
       price: '899.00',
       publisher: 'Local Publisher',
       source_url: 'https://store.mx/products/cafe-barista',
-      status: 'MATCH_NOT_FOUND',
+      listing_status: 'PENDING',
       store_id: 42,
       title: 'Café Barista'
     };
     const updatedCandidate = {
       ...candidate,
       item_id: 77,
-      status: 'listed'
+      listing_status: 'PENDING'
     };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
@@ -798,6 +1262,8 @@ describe('ludora admin service', () => {
     const mutation = queries[1];
     const sql = normalizeSql(mutation.sql);
     expect(sql).toContain('insert into items');
+    expect(sql).toContain('rating');
+    expect(sql).toContain('select candidate.title, $2, $3, null, null, \'\', null, 5');
     expect(sql).toContain('insert into publishers');
     expect(sql).toContain('insert into item_publishers');
     expect(sql).not.toContain('insert into offers');
@@ -807,7 +1273,8 @@ describe('ludora admin service', () => {
     expect(sql).toContain('is_boardgame_confirmed = true');
     expect(sql).not.toContain('offer_id');
     expect(sql).not.toContain('match_item_id');
-    expect(sql).toContain("status = 'listed'");
+    expect(sql).not.toContain("status = 'listed'");
+    expect(sql).not.toContain('listing_status =');
     expect(mutation.params).toEqual([
       '920',
       'cafe barista',
@@ -836,7 +1303,7 @@ describe('ludora admin service', () => {
       ...candidate,
       item_id: 77,
       match_source: 'MANUAL',
-      status: 'LISTED'
+      listing_status: 'PENDING'
     };
     const importedBggIds: number[] = [];
     const bggItemImporter = {
@@ -880,6 +1347,58 @@ describe('ludora admin service', () => {
     ]);
   });
 
+  it('copies parent taxonomy links when creating an implementation item from a candidate', async () => {
+    const candidate = {
+      description: 'A local implementation of an existing game.',
+      id: '921',
+      image_url: 'https://store.mx/cafe-barista-dice.jpg',
+      item_id: null,
+      item_type: 'base_game',
+      publisher: 'Local Publisher',
+      source_url: 'https://store.mx/products/cafe-barista-dice',
+      store_id: 42,
+      title: 'Cafe Barista Dice'
+    };
+    const updatedCandidate = {
+      ...candidate,
+      item_id: 78,
+      match_source: 'MANUAL',
+      listing_status: 'PENDING'
+    };
+    const bggItemImporter = {
+      importBggId: async () => 44
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).startsWith('select')) {
+          return { rows: [candidate] };
+        }
+        return { rows: [updatedCandidate] };
+      }
+    };
+
+    const response = await request(createApp({ bggItemImporter, database }))
+      .post('/discovery/listings/921/create-item')
+      .send({ bgg_id: '377061', implements: true });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ data: updatedCandidate });
+    const sql = normalizeSql(queries[1].sql);
+    expect(sql).toContain('insert into item_categories (item_id, category_id)');
+    expect(sql).toContain('select created_item.id, parent_categories.category_id');
+    expect(sql).toContain('join item_categories parent_categories on parent_categories.item_id = $7::bigint');
+    expect(sql).toContain('insert into item_families (item_id, family_id)');
+    expect(sql).toContain('select created_item.id, parent_families.family_id');
+    expect(sql).toContain('join item_families parent_families on parent_families.item_id = $7::bigint');
+    expect(sql).toContain('insert into item_mechanics (item_id, mechanic_id)');
+    expect(sql).toContain('select created_item.id, parent_mechanics.mechanic_id');
+    expect(sql).toContain('join item_mechanics parent_mechanics on parent_mechanics.item_id = $7::bigint');
+    expect(sql).toContain('on conflict do nothing');
+    expect(queries[1].params?.[6]).toBe(44);
+  });
+
   it('imports a BGG item and links it to a discovery item candidate', async () => {
     const candidate = {
       availability: 'available',
@@ -892,7 +1411,7 @@ describe('ludora admin service', () => {
       price: '899.00',
       publisher: 'Local Publisher',
       source_url: 'https://store.mx/products/cafe-barista',
-      status: 'MATCH_NOT_FOUND',
+      listing_status: 'PENDING',
       store_id: 42,
       title: 'CafÃ© Barista'
     };
@@ -900,7 +1419,7 @@ describe('ludora admin service', () => {
       ...candidate,
       item_id: 77,
       matched_bgg_id: 377061,
-      status: 'listed'
+      listing_status: 'PENDING'
     };
     const importedBggIds: number[] = [];
     const bggItemImporter = {
@@ -935,7 +1454,8 @@ describe('ludora admin service', () => {
     expect(sql).toContain('is_boardgame = true');
     expect(sql).toContain('is_boardgame_confirmed = true');
     expect(sql).not.toContain('offer_id');
-    expect(sql).toContain("status = 'listed'");
+    expect(sql).not.toContain("status = 'listed'");
+    expect(sql).not.toContain('listing_status =');
     expect(sql).toContain("match_source = 'bgg_manual'");
     expect(mutation.params).toEqual([
       '920',
@@ -975,7 +1495,7 @@ describe('ludora admin service', () => {
       ...candidate,
       item_id: 88,
       match_source: 'MANUAL',
-      status: 'LISTED'
+      listing_status: 'PENDING'
     };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
@@ -997,7 +1517,7 @@ describe('ludora admin service', () => {
   });
 
   it('updates discovery item candidates', async () => {
-    const updatedRow = { id: '3365', status: 'MATCH_NOT_FOUND', title: 'Kitchen Rush Updated' };
+    const updatedRow = { id: '3365', listing_status: 'UNLISTED', title: 'Kitchen Rush Updated' };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -1042,7 +1562,7 @@ describe('ludora admin service', () => {
         raw_price: '$899.00',
         source_listing_url: 'https://store.mx/collections/boardgames',
         source_url: 'https://store.mx/products/kitchen-rush',
-        status: 'MATCH_NOT_FOUND',
+        listing_status: 'UNLISTED',
         store_id: '42',
         store_sku: 'KR-EN',
         title: 'Kitchen Rush Updated'
@@ -1074,7 +1594,7 @@ describe('ludora admin service', () => {
       'manual',
       'Manual review',
       'https://store.mx/kitchen-rush.jpg',
-      'MATCH_NOT_FOUND',
+      'UNLISTED',
       '$899.00',
       899,
       'manual',
@@ -1098,7 +1618,7 @@ describe('ludora admin service', () => {
     ]);
   });
 
-  it('queries listed store items with linked item comparison data', async () => {
+  it('queries confirmed boardgame store items with optional item comparison data', async () => {
     const rows = [
       {
         candidate_id: 920,
@@ -1129,9 +1649,12 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0] ?? '');
     expect(sql).toContain('from store_items dic');
-    expect(sql).toContain('join items i on i.id = dic.item_id');
+    expect(sql).toContain('left join items i on i.id = dic.item_id');
     expect(sql).toContain('left join stores s on s.id = dic.store_id');
-    expect(sql).toContain("dic.status = 'listed'");
+    expect(sql).toContain('dic.is_boardgame = true');
+    expect(sql).toContain('dic.is_boardgame_confirmed = true');
+    expect(sql).not.toContain("dic.status = 'listed'");
+    expect(sql).not.toContain('dic.item_id is not null');
     expect(sql).toContain('candidate_image_url');
     expect(sql).toContain('candidate_description');
     expect(sql).toContain('item_image_url');
@@ -1139,6 +1662,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('i.description_es as item_description_es');
     expect(sql).toContain('i.canonical_name_es as item_name_es');
     expect(sql).toContain('i.image_url_es as item_image_url_es');
+    expect(sql).toContain('dic.listing_status as store_item_listing_status');
     expect(sql).toContain('order by dic.last_updated desc');
   });
 
@@ -1170,11 +1694,54 @@ describe('ludora admin service', () => {
     });
     const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select dic.id as candidate_id'));
     const sql = normalizeSql(rowQuery?.sql ?? '');
-    expect(sql).toContain('join items i on i.id = dic.item_id');
-    expect(sql).toContain("dic.status = 'listed'");
+    expect(sql).toContain('left join items i on i.id = dic.item_id');
+    expect(sql).toContain('dic.is_boardgame = true');
+    expect(sql).toContain('dic.is_boardgame_confirmed = true');
+    expect(sql).not.toContain("dic.status = 'listed'");
+    expect(sql).not.toContain('dic.item_id is not null');
     expect(sql).toContain("coalesce((concat_ws(' ', i.canonical_name, i.canonical_name_es))::text, '') ilike $1 escape '\\'");
     expect(sql).toContain('order by i.canonical_name asc');
     expect(rowQuery?.params).toEqual(['%kitchen%', 25, 0]);
+  });
+
+  it('filters and sorts store item reviews by listing status', async () => {
+    const rows = [
+      {
+        candidate_id: 3365,
+        candidate_name: 'Kitchen Rush',
+        item_name: 'Kitchen Rush',
+        store_item_listing_status: 'LISTED'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).includes('count(*)')) {
+          return { rows: [{ total: 1 }] };
+        }
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get(
+      '/admin/discovery/offer-reviews?page=0&page_size=25&sort=store_item_listing_status&sort_direction=asc&filter_store_item_listing_status=listed'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: rows,
+      meta: {
+        page: 0,
+        page_size: 25,
+        total: 1
+      }
+    });
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select dic.id as candidate_id'));
+    const sql = normalizeSql(rowQuery?.sql ?? '');
+    expect(sql).toContain("coalesce((dic.listing_status)::text, '') ilike $1 escape '\\'");
+    expect(sql).toContain('order by dic.listing_status asc');
+    expect(rowQuery?.params).toEqual(['%listed%', 25, 0]);
   });
 
   it('queries admin review tasks by latest update', async () => {
@@ -1236,7 +1803,7 @@ describe('ludora admin service', () => {
         status: 'PENDING'
       }
     ];
-    const calls: number[] = [];
+    const calls: Array<{ id: number; options: unknown }> = [];
     const itemMatchingService: ItemMatchingService = {
       generateMatchCandidates: async (id) => {
         calls.push(id);
@@ -1252,6 +1819,42 @@ describe('ludora admin service', () => {
     expect(response.status).toBe(201);
     expect(response.body).toEqual({ data: rows });
     expect(calls).toEqual([42]);
+  });
+
+  it('confirms a store item as boardgame and runs item matching', async () => {
+    const row = {
+      id: 42,
+      is_boardgame: true,
+      is_boardgame_confirmed: true,
+      item_id: 77,
+      match_source: 'LOCAL',
+      listing_status: 'PENDING',
+      title: 'Coffee Rush'
+    };
+    const calls: number[] = [];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+    const itemMatchingService: ItemMatchingService = {
+      confirmBoardgameAndMatch: async (id, options) => {
+        calls.push({ id, options });
+      },
+      generateMatchCandidates: async () => [],
+      listMatchCandidates: async () => []
+    };
+
+    const response = await request(createApp({ database, itemMatchingService })).post('/discovery/listings/42/confirm-boardgame');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    expect(calls).toEqual([{ id: 42, options: { confirmationSource: 'admin' } }]);
+    expect(normalizeSql(queries[0].sql)).toContain('from store_items');
+    expect(normalizeSql(queries[0].sql)).toContain('where id = $1');
+    expect(queries[0].params).toEqual([42]);
   });
 
   it('lists item match candidates through the item matching service', async () => {
@@ -1501,6 +2104,7 @@ describe('ludora admin service', () => {
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async () => run,
+      startItemUpdateRun: async () => run,
       startStoreDiscoveryRun: async () => run
     };
 
@@ -1530,6 +2134,7 @@ describe('ludora admin service', () => {
       getLatestStoreDiscoveryRun: async () => run,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async () => run,
+      startItemUpdateRun: async () => run,
       startStoreDiscoveryRun: async () => run
     };
 
@@ -1546,6 +2151,9 @@ describe('ludora admin service', () => {
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => null,
       startItemDiscoveryRun: async () => {
+        throw new DiscoveryApiError('Store discovery is already running', 409);
+      },
+      startItemUpdateRun: async () => {
         throw new DiscoveryApiError('Store discovery is already running', 409);
       },
       startStoreDiscoveryRun: async () => {
@@ -1590,6 +2198,7 @@ describe('ludora admin service', () => {
         calls.push({ storeId, websiteUrl });
         return run;
       },
+      startItemUpdateRun: async () => run,
       startStoreDiscoveryRun: async () => run
     };
 
@@ -1602,11 +2211,49 @@ describe('ludora admin service', () => {
     expect(calls).toEqual([{ storeId: 12, websiteUrl: 'https://example.mx/' }]);
   });
 
+  it('starts item update runs through the discovery operations client', async () => {
+    const run: StoreDiscoveryRun = {
+      completed_at: null,
+      error: null,
+      id: 'run-3',
+      result: {
+        updated_items: 8
+      },
+      started_at: '2026-06-08T20:00:00Z',
+      status: 'completed',
+      type: 'item_update'
+    };
+    const calls: string[] = [];
+    const operationsClient: DiscoveryOperationsClient = {
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => run,
+      startItemDiscoveryRun: async () => {
+        throw new Error('should not start item discovery');
+      },
+      startItemUpdateRun: async () => {
+        calls.push('item_update');
+        return run;
+      },
+      startStoreDiscoveryRun: async () => run
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient })).post(
+      '/admin/operations/item-update-runs'
+    );
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: run });
+    expect(calls).toEqual(['item_update']);
+  });
+
   it('returns 404 when starting item discovery for a missing clean store', async () => {
     const operationsClient: DiscoveryOperationsClient = {
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => null,
       startItemDiscoveryRun: async () => {
+        throw new Error('should not call discovery API');
+      },
+      startItemUpdateRun: async () => {
         throw new Error('should not call discovery API');
       },
       startStoreDiscoveryRun: async () => {

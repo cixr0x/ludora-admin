@@ -71,4 +71,28 @@ describe('createDiscoveryOperationsClient', () => {
       method: 'POST'
     });
   });
+
+  it('starts item update runs', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-3',
+      result: null,
+      started_at: '2026-06-08T20:00:00Z',
+      status: 'running',
+      type: 'item_update'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(createDiscoveryOperationsClient('http://localhost:8001/').startItemUpdateRun()).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8001/operations/item-update-runs', {
+      method: 'POST'
+    });
+  });
 });

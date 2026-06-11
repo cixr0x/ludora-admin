@@ -68,8 +68,10 @@ describe('BGG item importer', () => {
             name: 'Coffee Rush',
             playingTime: 30,
             publishers: [{ bggId: 8291, name: 'Korea Boardgames' }],
+            rating: 7.48231,
             thumbnail: 'https://example.com/small.jpg',
             type: 'boardgame',
+            weight: 1.9234,
             yearPublished: 2023
           },
           rawXml: '<items />'
@@ -82,7 +84,11 @@ describe('BGG item importer', () => {
 
     expect(itemId).toBe(77);
     expect(fetchedBggIds).toEqual([377061]);
-    expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into items'))).toBe(true);
+    const insertItemQuery = queries.find((query) => normalizeSql(query.sql).startsWith('insert into items'));
+    expect(insertItemQuery).toBeDefined();
+    expect(normalizeSql(insertItemQuery?.sql ?? '')).toContain('rating');
+    expect(normalizeSql(insertItemQuery?.sql ?? '')).toContain('weight');
+    expect(insertItemQuery?.params?.slice(6, 10)).toEqual([2023, 7.48231, 1.9234, 'A coffee shop game.']);
     expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into item_aliases'))).toBe(true);
     expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into boardgame_categories'))).toBe(true);
     expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into item_categories'))).toBe(true);

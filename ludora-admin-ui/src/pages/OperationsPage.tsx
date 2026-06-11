@@ -1,12 +1,26 @@
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import { Alert, Box, Button, Chip, CircularProgress, Paper, Stack, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
-import { adminApi, type StoreDiscoveryRun, type StoreDiscoveryRunResult } from '../api/client';
+import {
+  adminApi,
+  type ItemDiscoveryRunResult,
+  type ItemUpdateRunResult,
+  type StoreDiscoveryRun,
+  type StoreDiscoveryRunResult
+} from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 
 type LoadState = 'loading' | 'ready' | 'error';
 
 const operationRunColumns: DataTableColumn<StoreDiscoveryRun>[] = [
+  {
+    filterValue: (run) => run.type,
+    id: 'type',
+    label: 'Type',
+    minWidth: 150,
+    render: (run) => run.type,
+    sortValue: (run) => run.type
+  },
   {
     filterValue: (run) => run.status,
     id: 'status',
@@ -14,6 +28,21 @@ const operationRunColumns: DataTableColumn<StoreDiscoveryRun>[] = [
     minWidth: 140,
     render: (run) => <Chip label={run.status} size="small" />,
     sortValue: (run) => run.status
+  },
+  {
+    filterValue: (run) => run.error ?? '-',
+    id: 'error',
+    label: 'Error',
+    minWidth: 360,
+    render: (run) =>
+      run.error ? (
+        <Typography color="error" sx={{ whiteSpace: 'pre-wrap' }} variant="body2">
+          {run.error}
+        </Typography>
+      ) : (
+        '-'
+      ),
+    sortValue: (run) => run.error ?? ''
   },
   {
     filterValue: (run) => run.started_at,
@@ -54,6 +83,22 @@ const operationRunColumns: DataTableColumn<StoreDiscoveryRun>[] = [
     minWidth: 160,
     render: (run) => storeDiscoveryResult(run)?.searched_queries ?? '-',
     sortValue: (run) => storeDiscoveryResult(run)?.searched_queries ?? null
+  },
+  {
+    filterValue: (run) => itemDiscoveryResult(run)?.item_candidates ?? '-',
+    id: 'item_candidates',
+    label: 'New items',
+    minWidth: 130,
+    render: (run) => itemDiscoveryResult(run)?.item_candidates ?? '-',
+    sortValue: (run) => itemDiscoveryResult(run)?.item_candidates ?? null
+  },
+  {
+    filterValue: (run) => itemUpdateResult(run)?.updated_items ?? '-',
+    id: 'updated_items',
+    label: 'Updated items',
+    minWidth: 150,
+    render: (run) => itemUpdateResult(run)?.updated_items ?? '-',
+    sortValue: (run) => itemUpdateResult(run)?.updated_items ?? null
   }
 ];
 
@@ -61,10 +106,18 @@ function storeDiscoveryResult(run: StoreDiscoveryRun): StoreDiscoveryRunResult |
   return run.type === 'store_discovery' ? (run.result as StoreDiscoveryRunResult | null) : null;
 }
 
+function itemDiscoveryResult(run: StoreDiscoveryRun): ItemDiscoveryRunResult | null {
+  return run.type === 'item_discovery' ? (run.result as ItemDiscoveryRunResult | null) : null;
+}
+
+function itemUpdateResult(run: StoreDiscoveryRun): ItemUpdateRunResult | null {
+  return run.type === 'item_update' ? (run.result as ItemUpdateRunResult | null) : null;
+}
+
 export function OperationsPage() {
   const [run, setRun] = useState<StoreDiscoveryRun | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
-  const [isStarting, setIsStarting] = useState(false);
+  const [startingOperation, setStartingOperation] = useState<'item_update' | 'store_discovery' | ''>('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -114,7 +167,7 @@ export function OperationsPage() {
   const runIsActive = run?.status === 'running';
 
   async function handleStartStoreDiscovery() {
-    setIsStarting(true);
+    setStartingOperation('store_discovery');
     setError('');
     try {
       const startedRun = await adminApi.startStoreDiscoveryRun();
@@ -123,7 +176,21 @@ export function OperationsPage() {
     } catch {
       setError('Store discovery could not be started.');
     } finally {
-      setIsStarting(false);
+      setStartingOperation('');
+    }
+  }
+
+  async function handleStartItemUpdate() {
+    setStartingOperation('item_update');
+    setError('');
+    try {
+      const startedRun = await adminApi.startItemUpdateRun();
+      setRun(startedRun);
+      setLoadState('ready');
+    } catch {
+      setError('Item update could not be started.');
+    } finally {
+      setStartingOperation('');
     }
   }
 
@@ -151,13 +218,47 @@ export function OperationsPage() {
             </Typography>
           </Box>
           <Button
-            disabled={isStarting || runIsActive}
-            startIcon={isStarting || runIsActive ? <CircularProgress color="inherit" size={16} /> : <PlayArrowIcon />}
+            disabled={Boolean(startingOperation) || runIsActive}
+            startIcon={
+              startingOperation === 'store_discovery' || runIsActive ? (
+                <CircularProgress color="inherit" size={16} />
+              ) : (
+                <PlayArrowIcon />
+              )
+            }
             sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
             variant="contained"
             onClick={handleStartStoreDiscovery}
           >
             Run Store Discovery
+          </Button>
+        </Stack>
+      </Paper>
+
+      <Paper variant="outlined" sx={{ p: 2 }}>
+        <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+          <Box>
+            <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+              Item update
+            </Typography>
+            <Typography color="text.secondary" variant="body2">
+              Refresh confirmed boardgame store items from their product pages.
+            </Typography>
+          </Box>
+          <Button
+            disabled={Boolean(startingOperation) || runIsActive}
+            startIcon={
+              startingOperation === 'item_update' || runIsActive ? (
+                <CircularProgress color="inherit" size={16} />
+              ) : (
+                <PlayArrowIcon />
+              )
+            }
+            sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
+            variant="contained"
+            onClick={handleStartItemUpdate}
+          >
+            Run Item Update
           </Button>
         </Stack>
       </Paper>
@@ -169,14 +270,14 @@ export function OperationsPage() {
         </Stack>
       ) : null}
 
-      {loadState === 'ready' && !run ? <Alert severity="info">No recent store discovery run.</Alert> : null}
+      {loadState === 'ready' && !run ? <Alert severity="info">No recent operation run.</Alert> : null}
 
       {run ? (
         <DataTable
           ariaLabel="Store discovery runs"
           columns={operationRunColumns}
           getRowKey={(row) => row.id}
-          minWidth={1010}
+          minWidth={1800}
           rows={[run]}
         />
       ) : null}

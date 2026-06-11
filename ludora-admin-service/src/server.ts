@@ -31,8 +31,8 @@ const descriptionGenerationClient = config.openAiApiKey ? createOpenAiDescriptio
 const descriptionGenerationService = descriptionGenerationClient
   ? createDescriptionGenerationService(descriptionGenerationClient, { model: config.openAiTranslationModel })
   : undefined;
-const itemMatchingService = createItemMatchingService(database, bggClient, translationService);
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
+const itemMatchingService = createItemMatchingService(database, bggClient, translationService, bggItemImporter);
 const operationsClient = createDiscoveryOperationsClient(config.discoveryApiUrl);
 const app = createApp({
   bggItemImporter,

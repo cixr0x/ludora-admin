@@ -1,7 +1,8 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { DataTable, type DataTableColumn } from './DataTable';
+import { DataTable, type DataTableColumn, type DataTableState } from './DataTable';
 
 type Row = {
   city: string;
@@ -122,6 +123,46 @@ describe('DataTable', () => {
     });
   });
 
+  it('updates controlled server-side table state without render-phase parent updates', async () => {
+    const user = userEvent.setup();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    function ControlledServerTable() {
+      const [tableState, setTableState] = useState<DataTableState>({
+        filters: {},
+        sortColumnId: 'store',
+        sortDirection: 'asc'
+      });
+
+      return (
+        <>
+          <output aria-label="City filter state">{tableState.filters.city ?? ''}</output>
+          <DataTable
+            ariaLabel="Stores"
+            columns={columns}
+            getRowKey={(row) => row.id}
+            rows={rows}
+            serverSide
+            tableState={tableState}
+            onTableStateChange={setTableState}
+          />
+        </>
+      );
+    }
+
+    render(<ControlledServerTable />);
+
+    await user.type(screen.getByLabelText('Filter City'), 'mexico');
+
+    expect(screen.getByLabelText('City filter state')).toHaveTextContent('mexico');
+    expect(consoleErrorSpy).not.toHaveBeenCalledWith(
+      expect.stringContaining('Cannot update a component'),
+      expect.anything(),
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it('notifies when a row is double clicked', async () => {
     const user = userEvent.setup();
     const handleDoubleClick = vi.fn();
@@ -138,6 +179,24 @@ describe('DataTable', () => {
     await user.dblClick(screen.getByText('Beta Juegos'));
 
     expect(handleDoubleClick).toHaveBeenCalledWith(rows[0]);
+  });
+
+  it('notifies when a row is clicked', async () => {
+    const user = userEvent.setup();
+    const handleClick = vi.fn();
+    render(
+      <DataTable
+        ariaLabel="Stores"
+        columns={columns}
+        getRowKey={(row) => row.id}
+        rows={rows}
+        onRowClick={handleClick}
+      />
+    );
+
+    await user.click(screen.getByText('Beta Juegos'));
+
+    expect(handleClick).toHaveBeenCalledWith(rows[0]);
   });
 
   it('loads more server rows when scrolled near the bottom', () => {

@@ -1,11 +1,14 @@
 import type { BggClient, BggThingResult } from '../bgg/bggClient.js';
+import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import type { BggSearchItem } from '../bgg/bggParser.js';
 import type { Database } from '../db.js';
 import type { TranslationService } from '../translation/translationService.js';
 import {
   normalizeTitle,
+  normalizeTitleVariants,
   scoreBggThing,
   scoreLocalItem,
+  type BggThingForMatch,
   type DiscoveryCandidateForMatch,
   type LocalItemForMatch
 } from './itemMatcher.js';
@@ -24,6 +27,10 @@ export type ItemMatchCandidateRow = {
 };
 
 export type ItemMatchingService = {
+  confirmBoardgameAndMatch?(
+    discoveryItemCandidateId: number,
+    options?: { confirmationSource?: 'admin' | 'automated' }
+  ): Promise<void>;
   generateMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]>;
   listMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]>;
 };
@@ -53,15 +60,81 @@ const matchCandidateSelect = `
   match_score, match_reasons, status, raw_payload, created_at, updated_at
 `;
 
-const BGG_SEARCH_TYPE = 'boardgame,boardgameexpansion';
+const BGG_SEARCH_ITEM_TYPES = ['boardgame', 'boardgameexpansion'];
+const BGG_SEARCH_TYPE = BGG_SEARCH_ITEM_TYPES.join(',');
+const AUTO_MATCH_SCORE_THRESHOLD = 0.9;
 const HIGH_CONFIDENCE_BGG_MATCH_SCORE = 0.85;
 
 export function createItemMatchingService(
   database: Database,
   bggClient?: BggClient,
-  translationService?: TranslationService
+  translationService?: TranslationService,
+  bggItemImporter?: BggItemImporter
 ): ItemMatchingService {
   return {
+    async confirmBoardgameAndMatch(
+      discoveryItemCandidateId: number,
+      options: { confirmationSource?: 'admin' | 'automated' } = {}
+    ): Promise<void> {
+      const candidate = await loadDiscoveryItemCandidate(database, discoveryItemCandidateId);
+      const isAdminConfirmation = options.confirmationSource === 'admin';
+      await confirmStoreItemAsBoardgame(database, discoveryItemCandidateId, isAdminConfirmation);
+
+      try {
+        const localMatch = bestMatchAboveThreshold(await generateLocalMatches(database, candidate));
+        if (localMatch?.itemId) {
+          await linkStoreItemMatch(database, discoveryItemCandidateId, localMatch, localMatch.itemId);
+          return;
+        }
+
+        if (!bggClient) {
+          await markStoreItemProcessingError(
+            database,
+            discoveryItemCandidateId,
+            'BGG client is not configured',
+            isAdminConfirmation
+          );
+          return;
+        }
+
+        const bggMatch = bestMatchAboveThreshold(await generateBggMatches(database, candidate, bggClient, translationService));
+        if (!bggMatch?.bggId) {
+          await markStoreItemMatchNotFound(database, discoveryItemCandidateId, ['no match above threshold'], isAdminConfirmation);
+          return;
+        }
+
+        if (!bggItemImporter) {
+          await markStoreItemProcessingError(
+            database,
+            discoveryItemCandidateId,
+            'BGG item importer is not configured',
+            isAdminConfirmation
+          );
+          return;
+        }
+
+        const itemId = await bggItemImporter.importBggId(bggMatch.bggId);
+        if (!itemId) {
+          await markStoreItemProcessingError(
+            database,
+            discoveryItemCandidateId,
+            'BGG item could not be imported',
+            isAdminConfirmation
+          );
+          return;
+        }
+
+        await linkStoreItemMatch(database, discoveryItemCandidateId, bggMatch, itemId);
+      } catch (error) {
+        await markStoreItemProcessingError(
+          database,
+          discoveryItemCandidateId,
+          error instanceof Error ? error.message : 'Item matching failed',
+          isAdminConfirmation
+        );
+      }
+    },
+
     async generateMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]> {
       const candidate = await loadDiscoveryItemCandidate(database, discoveryItemCandidateId);
       const generated = [
@@ -129,6 +202,109 @@ export function createItemMatchingService(
   };
 }
 
+function bestMatchAboveThreshold(matches: GeneratedMatchCandidate[]): GeneratedMatchCandidate | null {
+  const match = [...matches].sort((left, right) => right.matchScore - left.matchScore)[0];
+  return match && match.matchScore >= AUTO_MATCH_SCORE_THRESHOLD ? match : null;
+}
+
+async function confirmStoreItemAsBoardgame(
+  database: Database,
+  discoveryItemCandidateId: number,
+  isBoardgameConfirmed: boolean
+): Promise<void> {
+  await database.query(
+    `
+    update store_items
+    set is_boardgame = true,
+        is_boardgame_confirmed = ${isBoardgameConfirmed ? 'true' : 'false'},
+        processing_error = '',
+        last_updated = now()
+    where id = $1
+    `,
+    [discoveryItemCandidateId]
+  );
+}
+
+async function linkStoreItemMatch(
+  database: Database,
+  discoveryItemCandidateId: number,
+  match: GeneratedMatchCandidate,
+  itemId: number
+): Promise<void> {
+  await database.query(
+    `
+    update store_items
+    set item_id = $1,
+        is_boardgame = true,
+        is_boardgame_confirmed = true,
+        match_source = $2,
+        matched_bgg_id = $3,
+        matched_name = $4,
+        match_score = $5,
+        match_reasons = $6::jsonb,
+        match_payload = $7::jsonb,
+        matched_at = now(),
+        processed_at = now(),
+        processing_error = '',
+        last_updated = now()
+    where id = $8
+    `,
+    [
+      itemId,
+      match.source,
+      match.bggId,
+      match.matchedName,
+      match.matchScore,
+      JSON.stringify(match.matchReasons),
+      JSON.stringify(match.rawPayload),
+      discoveryItemCandidateId
+    ]
+  );
+}
+
+async function markStoreItemMatchNotFound(
+  database: Database,
+  discoveryItemCandidateId: number,
+  reasons: string[],
+  isBoardgameConfirmed: boolean
+): Promise<void> {
+  await database.query(
+    `
+    update store_items
+    set is_boardgame = true,
+        is_boardgame_confirmed = ${isBoardgameConfirmed ? 'true' : 'false'},
+        match_source = 'NONE',
+        match_reasons = $1::jsonb,
+        match_payload = '{}'::jsonb,
+        processed_at = now(),
+        processing_error = '',
+        last_updated = now()
+    where id = $2
+    `,
+    [JSON.stringify(reasons), discoveryItemCandidateId]
+  );
+}
+
+async function markStoreItemProcessingError(
+  database: Database,
+  discoveryItemCandidateId: number,
+  error: string,
+  isBoardgameConfirmed: boolean
+): Promise<void> {
+  await database.query(
+    `
+    update store_items
+    set is_boardgame = true,
+        is_boardgame_confirmed = ${isBoardgameConfirmed ? 'true' : 'false'},
+        processing_error = $1,
+        processed_at = now(),
+        last_updated = now()
+    where id = $2
+    `,
+    [error, discoveryItemCandidateId]
+  );
+}
+
 async function loadDiscoveryItemCandidate(database: Database, discoveryItemCandidateId: number): Promise<DiscoveryItemCandidateRow> {
   const result = await database.query(
     `
@@ -146,25 +322,28 @@ async function loadDiscoveryItemCandidate(database: Database, discoveryItemCandi
 }
 
 async function generateLocalMatches(database: Database, candidate: DiscoveryItemCandidateRow): Promise<GeneratedMatchCandidate[]> {
-  const normalizedTitle = normalizeTitle(candidate.title);
+  const normalizedTitleVariants = normalizeTitleVariants(candidate.title);
   const result = await database.query(
     `
     select
       i.id,
       i.canonical_name,
+      i.canonical_name_es,
       i.normalized_name,
+      i.normalized_name_es,
       i.item_type,
       i.bgg_id,
       coalesce(json_agg(distinct ia.alias) filter (where ia.alias is not null), '[]'::json) as aliases
     from items i
     left join item_aliases ia on ia.item_id = i.id
-    where i.normalized_name = $1
-       or ia.normalized_alias = $1
-    group by i.id, i.canonical_name, i.normalized_name, i.item_type, i.bgg_id
+    where i.normalized_name = any($1::text[])
+       or i.normalized_name_es = any($1::text[])
+       or ia.normalized_alias = any($1::text[])
+    group by i.id, i.canonical_name, i.canonical_name_es, i.normalized_name, i.normalized_name_es, i.item_type, i.bgg_id
     order by i.canonical_name asc
     limit 20
     `,
-    [normalizedTitle]
+    [normalizedTitleVariants]
   );
 
   return result.rows.map((row) => {
@@ -188,12 +367,20 @@ async function generateBggMatches(
   bggClient?: BggClient,
   translationService?: TranslationService
 ): Promise<GeneratedMatchCandidate[]> {
-  if (!bggClient) {
-    return [];
+  const originalQueries = dedupeStrings([candidate.title]);
+  const originalCacheMatches = await generateBggCacheMatches(database, candidate, originalQueries, originalQueries);
+  if (originalCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
+    return originalCacheMatches;
   }
 
-  const originalQueries = dedupeStrings([candidate.title]);
-  const originalMatches = await searchBggMatches(database, candidate, bggClient, originalQueries, originalQueries);
+  if (!bggClient) {
+    return originalCacheMatches;
+  }
+
+  const originalMatches = mergeMatchesByBggId([
+    ...originalCacheMatches,
+    ...(await searchBggMatches(database, candidate, bggClient, originalQueries, originalQueries))
+  ]);
   if (originalMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
     return originalMatches;
   }
@@ -203,12 +390,57 @@ async function generateBggMatches(
     return originalMatches;
   }
 
-  const translatedMatches = await searchBggMatches(database, candidate, bggClient, translatedQueries, [
-    ...originalQueries,
-    ...translatedQueries
-  ]);
+  const titleVariants = [...originalQueries, ...translatedQueries];
+  const translatedCacheMatches = await generateBggCacheMatches(database, candidate, translatedQueries, titleVariants);
+  const cacheMatches = mergeMatchesByBggId([...originalMatches, ...translatedCacheMatches]);
+  if (translatedCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
+    return cacheMatches;
+  }
 
-  return mergeMatchesByBggId([...originalMatches, ...translatedMatches]);
+  const translatedMatches = await searchBggMatches(database, candidate, bggClient, translatedQueries, titleVariants);
+
+  return mergeMatchesByBggId([...cacheMatches, ...translatedMatches]);
+}
+
+async function generateBggCacheMatches(
+  database: Database,
+  candidate: DiscoveryItemCandidateRow,
+  searchQueries: string[],
+  titleVariants: string[]
+): Promise<GeneratedMatchCandidate[]> {
+  const namePatterns = bggCacheNamePatterns(searchQueries);
+  if (namePatterns.length === 0) {
+    return [];
+  }
+
+  const namePredicates = namePatterns.map((_, index) => `name ilike $${index + 2} escape '\\'`).join('\n       or ');
+  const cacheRows = await database.query(
+    `
+    select bgg_id, name, item_type, year_published, result_json
+    from bgg_search_cache
+    where item_type = any($1::text[])
+      and (
+        ${namePredicates}
+      )
+    order by year_published desc nulls last, bgg_id desc
+    limit 20
+    `,
+    [BGG_SEARCH_ITEM_TYPES, ...namePatterns]
+  );
+
+  const searchResults = selectSearchResultsForScoring(dedupeSearchResults(bggSearchItems(cacheRows.rows)), titleVariants).slice(0, 10);
+  return searchResults.map((searchResult) => {
+    const score = scoreBggThingWithTitleVariants(candidate, titleVariants, bggThingFromSearchItem(searchResult));
+    return {
+      bggId: searchResult.bggId,
+      itemId: null,
+      matchReasons: score.matchReasons,
+      matchScore: score.matchScore,
+      matchedName: searchResult.name,
+      rawPayload: bggCacheRawPayload(searchResult),
+      source: 'BGG' as const
+    };
+  });
 }
 
 async function searchBggMatches(
@@ -419,7 +651,7 @@ function discoveryCandidateForMatch(candidate: DiscoveryItemCandidateRow): Disco
 function scoreBggThingWithTitleVariants(
   candidate: DiscoveryItemCandidateRow,
   titleVariants: string[],
-  thing: BggThingResult['details']
+  thing: BggThingForMatch
 ) {
   const baseCandidate = discoveryCandidateForMatch(candidate);
   const scores = titleVariants.map((title, index) => {
@@ -436,7 +668,7 @@ function scoreBggThingWithTitleVariants(
 }
 
 function localItemFromRow(row: Record<string, unknown>): LocalItemForMatch {
-  return {
+  const item: LocalItemForMatch = {
     aliases: stringList(row.aliases),
     bggId: numberOrNull(row.bgg_id),
     id: Number(row.id),
@@ -444,6 +676,15 @@ function localItemFromRow(row: Record<string, unknown>): LocalItemForMatch {
     name: String(row.canonical_name ?? ''),
     normalizedName: String(row.normalized_name ?? '')
   };
+  const nameEs = stringOrNull(row.canonical_name_es)?.trim();
+  const normalizedNameEs = stringOrNull(row.normalized_name_es)?.trim();
+  if (nameEs) {
+    item.nameEs = nameEs;
+  }
+  if (normalizedNameEs) {
+    item.normalizedNameEs = normalizedNameEs;
+  }
+  return item;
 }
 
 function dedupeSearchResults(items: BggSearchItem[]): BggSearchItem[] {
@@ -489,6 +730,40 @@ function bggRawPayload(searchResult: BggSearchItem, thing: BggThingResult): unkn
     search_result: searchResult,
     thing: thing.details
   };
+}
+
+function bggCacheRawPayload(searchResult: BggSearchItem): unknown {
+  return {
+    search_result: searchResult,
+    source: 'bgg_search_cache'
+  };
+}
+
+function bggThingFromSearchItem(searchResult: BggSearchItem): BggThingForMatch {
+  return {
+    alternateNames: [],
+    bggId: searchResult.bggId,
+    maxPlayers: null,
+    minPlayers: null,
+    name: searchResult.name,
+    publishers: [],
+    type: searchResult.type,
+    yearPublished: searchResult.yearPublished
+  };
+}
+
+function bggCacheNamePatterns(searchQueries: string[]): string[] {
+  return dedupeStrings(
+    searchQueries
+      .flatMap((query) => normalizeTitleVariants(query))
+      .map((query) => query.trim())
+      .filter(Boolean)
+      .map((query) => `%${query.split(' ').map(escapeLikePattern).join('%')}%`)
+  );
+}
+
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, '\\$&');
 }
 
 function stringList(value: unknown): string[] {

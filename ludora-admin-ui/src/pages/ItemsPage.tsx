@@ -2,12 +2,19 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import SaveIcon from '@mui/icons-material/Save';
 import { Alert, Box, Button, Chip, CircularProgress, Link, Paper, Stack, TextField, Typography } from '@mui/material';
 import { type FormEvent, useEffect, useState } from 'react';
-import { adminApi, type AdminRecord } from '../api/client';
+import { adminApi, type AdminRecord, type ItemTaxonomy } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 type LoadState = 'loading' | 'ready' | 'error';
 type ViewMode = 'form' | 'table';
+
+const emptyItemTaxonomy: ItemTaxonomy = {
+  categories: [],
+  families: [],
+  mechanics: []
+};
 
 type ItemDetailField = {
   gridColumn?: { md?: string; xs?: string };
@@ -303,6 +310,7 @@ type ItemsPageProps = {
 
 export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPageProps = {}) {
   const [detailState, setDetailState] = useState<LoadState>('ready');
+  const [itemTaxonomy, setItemTaxonomy] = useState<ItemTaxonomy>(emptyItemTaxonomy);
   const [linkedStoreItems, setLinkedStoreItems] = useState<AdminRecord[]>([]);
   const [relatedState, setRelatedState] = useState<LoadState>('ready');
   const [selectedItem, setSelectedItem] = useState<AdminRecord | null>(null);
@@ -319,6 +327,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
   useEffect(() => {
     if (!selectedItemId) {
       setDetailState('ready');
+      setItemTaxonomy(emptyItemTaxonomy);
       setLinkedStoreItems([]);
       setRelatedState('ready');
       setSaveError('');
@@ -330,18 +339,23 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
 
     let ignore = false;
     setDetailState('loading');
+    setItemTaxonomy(emptyItemTaxonomy);
+    setLinkedStoreItems([]);
+    setRelatedState('loading');
     setSaveError('');
     setSaveMessage('');
     setViewMode('form');
 
     Promise.all([
       adminApi.getItem(selectedItemId),
-      adminApi.getItemStoreItems(selectedItemId)
+      adminApi.getItemStoreItems(selectedItemId),
+      adminApi.getItemTaxonomy(selectedItemId)
     ])
-      .then(([item, storeItems]) => {
+      .then(([item, storeItems, taxonomy]) => {
         if (!ignore) {
           setSelectedItem(item);
           setLinkedStoreItems(storeItems);
+          setItemTaxonomy(taxonomy);
           setRelatedState('ready');
           setViewMode('form');
           setDetailState('ready');
@@ -382,12 +396,14 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
   }
 
   async function loadLinkedItemData(itemId: string) {
+    setItemTaxonomy(emptyItemTaxonomy);
     setLinkedStoreItems([]);
     setRelatedState('loading');
 
     try {
-      const storeItems = await adminApi.getItemStoreItems(itemId);
+      const [storeItems, taxonomy] = await Promise.all([adminApi.getItemStoreItems(itemId), adminApi.getItemTaxonomy(itemId)]);
       setLinkedStoreItems(storeItems);
+      setItemTaxonomy(taxonomy);
       setRelatedState('ready');
     } catch {
       setRelatedState('error');
@@ -421,15 +437,18 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
 
       {state === 'error' && viewMode === 'table' ? <Alert severity="error">Items could not be loaded.</Alert> : null}
       {detailState === 'error' && viewMode === 'form' ? <Alert severity="error">Item could not be loaded.</Alert> : null}
+      <FloatingSuccessAlert message={saveMessage} onClose={() => setSaveMessage('')} />
 
       {detailState === 'ready' && viewMode === 'form' && selectedItem ? (
         <ItemForm
           isSaving={isSaving}
+          itemTaxonomy={itemTaxonomy}
           item={selectedItem}
           linkedStoreItems={linkedStoreItems}
           onBack={() => {
             setSelectedItem(null);
             setDetailState('ready');
+            setItemTaxonomy(emptyItemTaxonomy);
             setLinkedStoreItems([]);
             setRelatedState('ready');
             setSaveError('');
@@ -440,7 +459,6 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
           onSave={handleSaveItem}
           relatedState={relatedState}
           saveError={saveError}
-          saveMessage={saveMessage}
         />
       ) : null}
 
@@ -455,6 +473,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
             setSaveError('');
             setSaveMessage('');
             setSelectedItem(row);
+            setItemTaxonomy(emptyItemTaxonomy);
             setViewMode('form');
             void loadLinkedItemData(field(row, ['id'], ''));
           }}
@@ -478,21 +497,21 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
 function ItemForm({
   isSaving,
   item,
+  itemTaxonomy,
   linkedStoreItems,
   onBack,
   onSave,
   relatedState,
-  saveError,
-  saveMessage
+  saveError
 }: {
   isSaving: boolean;
   item: AdminRecord;
+  itemTaxonomy: ItemTaxonomy;
   linkedStoreItems: AdminRecord[];
   onBack: () => void;
   onSave: (input: AdminRecord) => void;
   relatedState: LoadState;
   saveError: string;
-  saveMessage: string;
 }) {
   const title = field(item, ['canonical_name'], 'Item');
   const imageUrl = field(item, ['image_url'], '');
@@ -528,7 +547,6 @@ function ItemForm({
             </Stack>
           </Stack>
 
-          {saveMessage ? <Alert severity="success">{saveMessage}</Alert> : null}
           {saveError ? <Alert severity="error">{saveError}</Alert> : null}
 
           <Stack alignItems={{ md: 'flex-start', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={2}>
@@ -595,12 +613,12 @@ function ItemForm({
         </Stack>
       </Paper>
 
-      <ItemRelations storeItems={linkedStoreItems} state={relatedState} />
+      <ItemRelations state={relatedState} storeItems={linkedStoreItems} taxonomy={itemTaxonomy} />
     </Stack>
   );
 }
 
-function ItemRelations({ storeItems, state }: { storeItems: AdminRecord[]; state: LoadState }) {
+function ItemRelations({ state, storeItems, taxonomy }: { state: LoadState; storeItems: AdminRecord[]; taxonomy: ItemTaxonomy }) {
   if (state === 'loading') {
     return (
       <Stack alignItems="center" direction="row" spacing={1.5}>
@@ -618,6 +636,26 @@ function ItemRelations({ storeItems, state }: { storeItems: AdminRecord[]; state
     <Stack spacing={2}>
       <Box>
         <Typography variant="h6" sx={{ fontWeight: 700 }}>
+          Taxonomy
+        </Typography>
+      </Box>
+      <Box
+        sx={{
+          display: 'grid',
+          gap: 2,
+          gridTemplateColumns: {
+            md: 'repeat(3, minmax(0, 1fr))',
+            xs: '1fr'
+          }
+        }}
+      >
+        <TaxonomySection records={taxonomy.categories} title="Categories" />
+        <TaxonomySection records={taxonomy.mechanics} title="Mechanics" />
+        <TaxonomySection records={taxonomy.families} title="Families" />
+      </Box>
+
+      <Box>
+        <Typography variant="h6" sx={{ fontWeight: 700 }}>
           Linked Store Items
         </Typography>
       </Box>
@@ -631,6 +669,36 @@ function ItemRelations({ storeItems, state }: { storeItems: AdminRecord[]; state
       />
     </Stack>
   );
+}
+
+function TaxonomySection({ records, title }: { records: AdminRecord[]; title: string }) {
+  return (
+    <Stack spacing={1}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+        {title}
+      </Typography>
+      {records.length ? (
+        <Stack direction="row" flexWrap="wrap" gap={1}>
+          {records.map((record, index) => (
+            <Chip key={field(record, ['id'], String(index))} label={taxonomyLabel(record)} size="small" variant="outlined" />
+          ))}
+        </Stack>
+      ) : (
+        <Typography color="text.secondary" variant="body2">
+          No linked {title.toLowerCase()}.
+        </Typography>
+      )}
+    </Stack>
+  );
+}
+
+function taxonomyLabel(record: AdminRecord) {
+  const value = field(record, ['value', 'name'], '');
+  const valueEs = field(record, ['value_es', 'name_es'], '');
+  if (valueEs && valueEs !== value) {
+    return `${valueEs} (${value})`;
+  }
+  return value || '-';
 }
 
 function inputFromForm(formData: FormData): AdminRecord {

@@ -45,6 +45,7 @@ type DataTableProps<Row> = {
   defaultSortColumnId?: string;
   getRowKey: (row: Row, index: number) => string;
   minWidth?: number;
+  onRowClick?: (row: Row) => void;
   onRowDoubleClick?: (row: Row) => void;
   onTableStateChange?: (state: DataTableState) => void;
   infiniteScroll?: {
@@ -69,6 +70,7 @@ export function DataTable<Row>({
   defaultSortColumnId = '',
   getRowKey,
   minWidth = 960,
+  onRowClick,
   onRowDoubleClick,
   onTableStateChange,
   infiniteScroll,
@@ -143,11 +145,9 @@ export function DataTable<Row>({
   }
 
   function updateTableState(updater: (current: DataTableState) => DataTableState) {
-    setCurrentTableState((current) => {
-      const next = updater(current);
-      onTableStateChange?.(next);
-      return next;
-    });
+    const next = updater(currentTableState);
+    setCurrentTableState(next);
+    onTableStateChange?.(next);
   }
 
   function handleScroll(event: UIEvent<HTMLDivElement>) {
@@ -160,6 +160,8 @@ export function DataTable<Row>({
       infiniteScroll.onLoadMore();
     }
   }
+
+  const hasRowAction = Boolean(onRowClick || onRowDoubleClick);
 
   return (
     <Paper variant="outlined" sx={{ maxWidth: '100%', overflow: 'hidden' }}>
@@ -254,9 +256,10 @@ export function DataTable<Row>({
             {visibleRows.length > 0 ? (
               visibleRows.map((row, index) => (
                 <TableRow
-                  hover={Boolean(onRowDoubleClick)}
+                  hover={hasRowAction}
                   key={getRowKey(row, index)}
-                  sx={onRowDoubleClick ? { cursor: 'pointer' } : undefined}
+                  sx={hasRowAction ? { cursor: 'pointer' } : undefined}
+                  onClick={() => onRowClick?.(row)}
                   onDoubleClick={() => onRowDoubleClick?.(row)}
                 >
                   {columns.map((column) => (

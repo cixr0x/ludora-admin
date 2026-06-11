@@ -19,6 +19,12 @@ export type PagedRows<T extends AdminRecord> = {
   total: number;
 };
 
+export type ItemTaxonomy = {
+  categories: AdminRecord[];
+  families: AdminRecord[];
+  mechanics: AdminRecord[];
+};
+
 export type TableQuery = {
   filters?: Record<string, string>;
   page: number;
@@ -28,6 +34,7 @@ export type TableQuery = {
 };
 
 export type StoreCandidateStatus = 'ACCEPTED' | 'PENDING' | 'REJECTED';
+export type StoreItemListingStatus = 'LISTED' | 'PENDING' | 'REJECTED' | 'UNLISTED';
 
 export type StoreCandidateInput = {
   canonical_domain: string;
@@ -54,6 +61,55 @@ export type StoreInput = {
   state?: string;
   status?: string;
   website_url: string;
+};
+
+export type FrontPageCategoryInput = {
+  category_id: number;
+  category_type: 'category' | 'family' | 'mechanic';
+  order: number;
+  title: string;
+};
+
+export type FrontPageCategoryOption = AdminRecord & {
+  bgg_id: number | null;
+  category_id: number;
+  category_type: FrontPageCategoryInput['category_type'];
+  front_page_category_id: number | null;
+  game_count: number;
+  name: string;
+  name_es: string;
+};
+
+export type FrontPageCategoryOptionsQuery = {
+  onlyUnlinkedGames?: boolean;
+};
+
+export type FrontPageCategoryProduct = AdminRecord & {
+  canonical_name: string;
+  canonical_name_es: string;
+  id: number;
+  image_url: string;
+  image_url_es: string;
+  item_type: string;
+  year_published: number | null;
+};
+
+export type FrontPageCategoryRandomAssignmentResult = {
+  assigned_count: number;
+  removed_count?: number;
+  replaced_count?: number;
+  skipped_count: number;
+};
+
+export type FrontPagePreviewCategory = AdminRecord & {
+  category_id: number;
+  category_name: string;
+  category_name_es?: string;
+  category_type: FrontPageCategoryInput['category_type'];
+  id: number;
+  order: number;
+  products: FrontPageCategoryProduct[];
+  title: string;
 };
 
 export type ItemCandidateInput = AdminRecord;
@@ -90,14 +146,18 @@ export type ItemDiscoveryRunResult = {
   website_url: string;
 };
 
+export type ItemUpdateRunResult = {
+  updated_items: number;
+};
+
 export type StoreDiscoveryRun = {
   completed_at: string | null;
   error: string | null;
   id: string;
-  result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | null;
+  result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | ItemUpdateRunResult | null;
   started_at: string;
   status: StoreDiscoveryRunStatus;
-  type: 'item_discovery' | 'store_discovery';
+  type: 'item_discovery' | 'item_update' | 'store_discovery';
 };
 
 function buildApiUrl(path: string) {
@@ -182,6 +242,33 @@ export const adminApi = {
   getStores: () => fetchRows('/stores'),
   getStoresPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/stores', query), query),
   updateStore: (id: string, input: StoreInput) => sendJson<AdminRecord>(`/stores/${encodeURIComponent(id)}`, 'PATCH', input),
+  getFrontPageCategoriesPage: (query: TableQuery) =>
+    fetchPagedRows<AdminRecord>(pagedPath('/front-page-categories', query), query),
+  getFrontPageCategoryOptions: (query: FrontPageCategoryOptionsQuery = {}) => {
+    const searchParams = new URLSearchParams();
+    if (query.onlyUnlinkedGames) {
+      searchParams.set('only_unlinked_games', 'true');
+    }
+    const queryString = searchParams.toString();
+    return fetchRows<FrontPageCategoryOption>(`/front-page-category-options${queryString ? `?${queryString}` : ''}`);
+  },
+  getFrontPageCategoryProducts: (categoryType: FrontPageCategoryInput['category_type'], categoryId: number | string) =>
+    fetchRows<FrontPageCategoryProduct>(
+      `/front-page-category-options/${encodeURIComponent(categoryType)}/${encodeURIComponent(String(categoryId))}/products`
+    ),
+  createFrontPageCategory: (input: FrontPageCategoryInput) =>
+    sendJson<AdminRecord>('/front-page-categories', 'POST', input),
+  updateFrontPageCategory: (id: string, input: FrontPageCategoryInput) =>
+    sendJson<AdminRecord>(`/front-page-categories/${encodeURIComponent(id)}`, 'PATCH', input),
+  deleteFrontPageCategory: (id: string) =>
+    fetchData<AdminRecord>(`/front-page-categories/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    }),
+  assignRandomFrontPageCategoryItems: () =>
+    fetchData<FrontPageCategoryRandomAssignmentResult>('/front-page-categories/random-item-assignments', {
+      method: 'POST'
+    }),
+  getFrontPagePreview: () => fetchRows<FrontPagePreviewCategory>('/front-page-preview'),
   getStoreCandidates: () => fetchRows('/discovery/stores'),
   getStoreCandidatesPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/discovery/stores', query), query),
   createStoreCandidate: (input: StoreCandidateInput) => sendJson<AdminRecord>('/discovery/stores', 'POST', input),
@@ -207,11 +294,20 @@ export const adminApi = {
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/create-item-from-bgg`, 'POST', {
       bgg_id: bggId
     }),
+  confirmItemCandidateBoardgame: (id: string) =>
+    fetchData<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/confirm-boardgame`, {
+      method: 'POST'
+    }),
+  updateItemCandidateListingStatus: (id: string, listingStatus: StoreItemListingStatus) =>
+    sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/listing-status`, 'PATCH', {
+      listing_status: listingStatus
+    }),
   updateItemCandidate: (id: string, input: ItemCandidateInput) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`, 'PATCH', input),
   getItem: (id: string) => fetchData<AdminRecord>(`/items/${encodeURIComponent(id)}`),
   getItemLinkedCandidates: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/candidates`),
   getItemStoreItems: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/store-items`),
+  getItemTaxonomy: (id: string) => fetchData<ItemTaxonomy>(`/items/${encodeURIComponent(id)}/taxonomy`),
   getItemsPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/items', query), query),
   updateItem: (id: string, input: ItemInput) => sendJson<AdminRecord>(`/items/${encodeURIComponent(id)}`, 'PATCH', input),
   getListingCandidates: () => fetchRows('/discovery/listings'),
@@ -226,6 +322,10 @@ export const adminApi = {
     fetchData<StoreDiscoveryRun | null>(`/admin/operations/store-discovery-runs/${encodeURIComponent(runId)}`),
   startStoreItemDiscoveryRun: (storeId: string) =>
     fetchData<StoreDiscoveryRun>(`/admin/operations/stores/${encodeURIComponent(storeId)}/item-discovery-runs`, {
+      method: 'POST'
+    }),
+  startItemUpdateRun: () =>
+    fetchData<StoreDiscoveryRun>('/admin/operations/item-update-runs', {
       method: 'POST'
     }),
   startStoreDiscoveryRun: () =>

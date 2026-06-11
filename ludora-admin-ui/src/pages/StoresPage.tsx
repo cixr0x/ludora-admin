@@ -1,6 +1,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import SaveIcon from '@mui/icons-material/Save';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
+import UpdateIcon from '@mui/icons-material/Update';
 import {
   Alert,
   Box,
@@ -16,6 +17,7 @@ import {
 import { type FormEvent, useState } from 'react';
 import { adminApi, type AdminRecord, type StoreInput } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 type FormMode = 'edit' | 'table';
@@ -251,6 +253,7 @@ export function StoresPage() {
   const [formState, setFormState] = useState<StoreFormState>(emptyFormState);
   const [isSaving, setIsSaving] = useState(false);
   const [isRunningDiscovery, setIsRunningDiscovery] = useState(false);
+  const [isRunningItemUpdate, setIsRunningItemUpdate] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [operationError, setOperationError] = useState('');
   const [operationMessage, setOperationMessage] = useState('');
@@ -312,6 +315,21 @@ export function StoresPage() {
     }
   }
 
+  async function handleRunItemUpdate() {
+    setIsRunningItemUpdate(true);
+    setOperationError('');
+    setOperationMessage('');
+
+    try {
+      await adminApi.startItemUpdateRun();
+      setOperationMessage('Item update started.');
+    } catch {
+      setOperationError('Item update could not be started.');
+    } finally {
+      setIsRunningItemUpdate(false);
+    }
+  }
+
   const isFormMode = formMode !== 'table';
 
   return (
@@ -333,6 +351,7 @@ export function StoresPage() {
       ) : null}
 
       {state === 'error' && !isFormMode ? <Alert severity="error">Stores could not be loaded.</Alert> : null}
+      <FloatingSuccessAlert message={operationMessage} onClose={() => setOperationMessage('')} />
 
       {isFormMode ? (
         <Paper component="section" variant="outlined" sx={{ maxWidth: 980, p: 2 }}>
@@ -342,7 +361,6 @@ export function StoresPage() {
 
               {saveError ? <Alert severity="error">{saveError}</Alert> : null}
               {operationError ? <Alert severity="error">{operationError}</Alert> : null}
-              {operationMessage ? <Alert severity="success">{operationMessage}</Alert> : null}
 
               <Box
                 sx={{
@@ -421,7 +439,7 @@ export function StoresPage() {
                   Save Store
                 </Button>
                 <Button
-                  disabled={isRunningDiscovery}
+                  disabled={isRunningDiscovery || isRunningItemUpdate}
                   startIcon={isRunningDiscovery ? <CircularProgress color="inherit" size={16} /> : <TravelExploreIcon />}
                   type="button"
                   variant="outlined"
@@ -430,7 +448,16 @@ export function StoresPage() {
                   Run Item Discovery
                 </Button>
                 <Button
-                  disabled={isSaving || isRunningDiscovery}
+                  disabled={isRunningDiscovery || isRunningItemUpdate}
+                  startIcon={isRunningItemUpdate ? <CircularProgress color="inherit" size={16} /> : <UpdateIcon />}
+                  type="button"
+                  variant="outlined"
+                  onClick={handleRunItemUpdate}
+                >
+                  Run Item Update
+                </Button>
+                <Button
+                  disabled={isSaving || isRunningDiscovery || isRunningItemUpdate}
                   startIcon={<ArrowBackIcon />}
                   type="button"
                   variant="outlined"

@@ -176,6 +176,25 @@ describe('fetchRows', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/77/store-items');
   });
 
+  it('fetches item taxonomy metadata', async () => {
+    const taxonomy = {
+      categories: [{ id: 1, value: 'Economic', value_es: 'Economico' }],
+      families: [{ id: 2, value: 'Food & Drink: Coffee', value_es: 'Cafe' }],
+      mechanics: [{ id: 3, value: 'Contracts', value_es: 'Contratos' }]
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: taxonomy }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getItemTaxonomy('77')).resolves.toEqual(taxonomy);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/77/taxonomy');
+  });
+
   it('encodes table sort and filters in paged admin requests', async () => {
     const records = [{ canonical_domain: 'caravanagameshop.com', id: 'store-1' }];
     const { adminApi } = await importClient();
@@ -338,11 +357,211 @@ describe('fetchRows', () => {
     });
   });
 
+  it('fetches paged front page categories with page metadata', async () => {
+    const records = [{ category_id: 5, category_name: 'Party Game', category_type: 'category', id: '1', order: 10, title: 'Need a laugh?' }];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: records,
+          meta: {
+            page: 0,
+            page_size: 100,
+            total: 1
+          }
+        }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        }
+      )
+    );
+
+    await expect(
+      adminApi.getFrontPageCategoriesPage({
+        filters: { title: 'laugh' },
+        page: 0,
+        pageSize: 100,
+        sortColumnId: 'title',
+        sortDirection: 'asc'
+      })
+    ).resolves.toEqual({
+      page: 0,
+      pageSize: 100,
+      rows: records,
+      total: 1
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:4001/front-page-categories?page=0&page_size=100&sort=title&sort_direction=asc&filter_title=laugh'
+    );
+  });
+
+  it('creates, updates, and deletes front page categories', async () => {
+    const category = { category_id: 5, category_type: 'category', id: '1', order: 10, title: 'Need a laugh?' };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ data: category }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.createFrontPageCategory({ category_id: 5, category_type: 'category', order: 10, title: 'Need a laugh?' })).resolves.toEqual(
+      category
+    );
+    await expect(adminApi.updateFrontPageCategory('1', { category_id: 6, category_type: 'family', order: 20, title: 'Cozy nights' })).resolves.toEqual(
+      category
+    );
+    await expect(adminApi.deleteFrontPageCategory('1')).resolves.toEqual(category);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:4001/front-page-categories', {
+      body: JSON.stringify({ category_id: 5, category_type: 'category', order: 10, title: 'Need a laugh?' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:4001/front-page-categories/1', {
+      body: JSON.stringify({ category_id: 6, category_type: 'family', order: 20, title: 'Cozy nights' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH'
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://localhost:4001/front-page-categories/1', {
+      method: 'DELETE'
+    });
+  });
+
+  it('fetches front page category taxonomy options', async () => {
+    const rows = [
+      {
+        bgg_id: 1021,
+        category_id: 5,
+        category_type: 'category',
+        front_page_category_id: null,
+        game_count: 42,
+        name: 'Party Game',
+        name_es: 'Juego de fiesta'
+      }
+    ];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: rows }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getFrontPageCategoryOptions()).resolves.toEqual(rows);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-category-options');
+  });
+
+  it('fetches front page category taxonomy options with uncovered-game counts', async () => {
+    const rows = [
+      {
+        bgg_id: 1021,
+        category_id: 5,
+        category_type: 'category',
+        front_page_category_id: null,
+        game_count: 7,
+        name: 'Party Game',
+        name_es: 'Juego de fiesta'
+      }
+    ];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: rows }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getFrontPageCategoryOptions({ onlyUnlinkedGames: true })).resolves.toEqual(rows);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-category-options?only_unlinked_games=true');
+  });
+
+  it('fetches products linked to a front page category taxonomy option', async () => {
+    const rows = [
+      {
+        canonical_name: 'Coffee Rush',
+        canonical_name_es: 'Cafeteria',
+        id: 77,
+        image_url: 'https://cdn.example/coffee.jpg',
+        image_url_es: 'https://cdn.example/cafe.jpg',
+        item_type: 'base_game',
+        year_published: 2023
+      }
+    ];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: rows }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getFrontPageCategoryProducts('mechanic', 8)).resolves.toEqual(rows);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-category-options/mechanic/8/products');
+  });
+
+  it('starts random front page category item assignment with a POST request', async () => {
+    const result = { assigned_count: 2, skipped_count: 1 };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: result }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.assignRandomFrontPageCategoryItems()).resolves.toEqual(result);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-categories/random-item-assignments', {
+      method: 'POST'
+    });
+  });
+
+  it('fetches front page preview rows', async () => {
+    const rows = [
+      {
+        category_id: 5,
+        category_name: 'Party Game',
+        category_type: 'category',
+        id: 1,
+        order: 10,
+        products: [
+          {
+            canonical_name: 'Coffee Rush',
+            canonical_name_es: 'Cafeteria',
+            id: 77,
+            image_url: 'https://cdn.example/coffee.jpg',
+            image_url_es: 'https://cdn.example/cafe.jpg',
+            item_type: 'base_game',
+            year_published: 2023
+          }
+        ],
+        title: 'Party Game'
+      }
+    ];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: rows }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getFrontPagePreview()).resolves.toEqual(rows);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-preview');
+  });
+
   it('updates store items with a JSON body', async () => {
-    const itemCandidate = { id: '3365', status: 'MATCH_NOT_FOUND', title: 'Kitchen Rush Updated' };
+    const itemCandidate = { id: '3365', listing_status: 'UNLISTED', title: 'Kitchen Rush Updated' };
     const payload = {
       description: 'Updated description',
-      status: 'MATCH_NOT_FOUND',
+      listing_status: 'UNLISTED',
       title: 'Kitchen Rush Updated'
     };
     const { adminApi } = await importClient();
@@ -362,8 +581,44 @@ describe('fetchRows', () => {
     });
   });
 
+  it('confirms store items as boardgames with a POST request', async () => {
+    const itemCandidate = { id: '3365', item_id: 77, listing_status: 'PENDING', title: 'Kitchen Rush' };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: itemCandidate }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.confirmItemCandidateBoardgame('3365')).resolves.toEqual(itemCandidate);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/confirm-boardgame', {
+      method: 'POST'
+    });
+  });
+
+  it('updates store item listing status with a PATCH request', async () => {
+    const itemCandidate = { id: '3365', item_id: 77, listing_status: 'LISTED', title: 'Kitchen Rush' };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: itemCandidate }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.updateItemCandidateListingStatus('3365', 'LISTED')).resolves.toEqual(itemCandidate);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/listing-status', {
+      body: JSON.stringify({ listing_status: 'LISTED' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH'
+    });
+  });
+
   it('creates items from store items with a POST request', async () => {
-    const itemCandidate = { id: '3365', item_id: 77, status: 'LISTED', title: 'Kitchen Rush' };
+    const itemCandidate = { id: '3365', item_id: 77, listing_status: 'PENDING', title: 'Kitchen Rush' };
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ data: itemCandidate }), {
@@ -382,7 +637,7 @@ describe('fetchRows', () => {
   });
 
   it('creates store items with an implementation reference payload', async () => {
-    const itemCandidate = { id: '3365', item_id: 77, status: 'LISTED', title: 'Kitchen Rush Mexico' };
+    const itemCandidate = { id: '3365', item_id: 77, listing_status: 'PENDING', title: 'Kitchen Rush Mexico' };
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ data: itemCandidate }), {
@@ -403,7 +658,7 @@ describe('fetchRows', () => {
   });
 
   it('creates items from BGG IDs for store items with a JSON body', async () => {
-    const itemCandidate = { id: '3365', item_id: 77, matched_bgg_id: 377061, status: 'LISTED' };
+    const itemCandidate = { id: '3365', item_id: 77, listing_status: 'PENDING', matched_bgg_id: 377061 };
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ data: itemCandidate }), {
@@ -466,6 +721,33 @@ describe('fetchRows', () => {
     await expect(adminApi.startStoreItemDiscoveryRun('12')).resolves.toEqual(run);
 
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/stores/12/item-discovery-runs', {
+      method: 'POST'
+    });
+  });
+
+  it('starts item update runs with a POST request', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-3',
+      result: {
+        updated_items: 8
+      },
+      started_at: '2026-06-08T20:00:00Z',
+      status: 'completed',
+      type: 'item_update'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.startItemUpdateRun()).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
       method: 'POST'
     });
   });

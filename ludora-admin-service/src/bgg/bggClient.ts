@@ -50,6 +50,7 @@ export function createBggClient({
         'thing',
         new URLSearchParams({
           id: String(bggId),
+          stats: '1',
           type: 'boardgame,boardgameexpansion'
         })
       );

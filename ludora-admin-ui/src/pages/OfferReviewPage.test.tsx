@@ -32,6 +32,7 @@ describe('OfferReviewPage', () => {
               match_score: '0.9400',
               match_source: 'BGG',
               store_domain: 'store.mx',
+              store_item_listing_status: 'PENDING',
               store_name: 'Store MX'
             }
           ]
@@ -48,6 +49,8 @@ describe('OfferReviewPage', () => {
     expect(await screen.findByRole('link', { name: 'Cafe Barista' })).toHaveAttribute('href', '#listings?id=920');
     expect(screen.getByRole('link', { name: 'Coffee Rush (Cafe Barista)' })).toHaveAttribute('href', '#items?id=77');
     expect(screen.getByText('Store MX')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Listing status' })).toBeInTheDocument();
+    expect(screen.getByText('PENDING')).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Admin links' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Candidate form' })).not.toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Item form' })).not.toBeInTheDocument();
@@ -103,6 +106,77 @@ describe('OfferReviewPage', () => {
       'src',
       'https://bgg.example/azul-mini.jpg'
     );
+  });
+
+  it('approves and rejects listing status from the review table', async () => {
+    const user = userEvent.setup();
+    let listingStatus = 'PENDING';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+
+      if (url.pathname.endsWith('/discovery/offer-reviews')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                candidate_id: 920,
+                candidate_name: 'Cafe Barista',
+                item_id: 77,
+                item_name: 'Coffee Rush',
+                store_item_listing_status: listingStatus,
+                store_name: 'Store MX'
+              }
+            ],
+            meta: { page: 0, page_size: 100, total: 1 }
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 200
+          }
+        );
+      }
+
+      if (url.pathname.endsWith('/discovery/listings/920/listing-status') && init?.method === 'PATCH') {
+        listingStatus = JSON.parse(String(init.body)).listing_status;
+        return new Response(
+          JSON.stringify({
+            data: {
+              id: 920,
+              listing_status: listingStatus,
+              title: 'Cafe Barista'
+            }
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 200
+          }
+        );
+      }
+
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<OfferReviewPage />);
+
+    expect(await screen.findByText('PENDING')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Approve listing' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('LISTED')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Store item listing approved.')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Reject listing' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('REJECTED')).toBeInTheDocument();
+    });
+    expect(screen.getByText('Store item listing rejected.')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'PATCH')).toHaveLength(2);
+    expect(JSON.parse(String(fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH')?.[1]?.body))).toEqual({
+      listing_status: 'LISTED'
+    });
   });
 
   it('filters offer reviews by item name', async () => {

@@ -139,6 +139,47 @@ describe('StoresPage', () => {
       method: 'POST'
     });
   });
+
+  it('starts item update from the clean store form', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/stores' && !init) {
+        return jsonResponse([
+          {
+            canonical_domain: 'example.mx',
+            country: 'Mexico',
+            id: 12,
+            name: 'Example Juegos',
+            status: 'active',
+            website_url: 'https://example.mx/'
+          }
+        ]);
+      }
+      if (url.endsWith('/admin/operations/item-update-runs') && init?.method === 'POST') {
+        return jsonResponse({
+          completed_at: null,
+          error: null,
+          id: 'run-3',
+          result: null,
+          started_at: '2026-06-08T20:00:00Z',
+          status: 'running',
+          type: 'item_update'
+        }, 202);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<StoresPage />);
+
+    await user.dblClick(await screen.findByText('Example Juegos'));
+    await user.click(screen.getByRole('button', { name: 'Run Item Update' }));
+
+    expect(await screen.findByText('Item update started.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+      method: 'POST'
+    });
+  });
 });
 
 function jsonResponse(data: unknown, status = 200) {

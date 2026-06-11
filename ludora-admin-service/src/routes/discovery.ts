@@ -31,6 +31,13 @@ type StoreInput = {
   website_url: string;
 };
 
+type FrontPageCategoryInput = {
+  category_id: number;
+  category_type: 'category' | 'family' | 'mechanic';
+  order: number;
+  title: string;
+};
+
 type ItemCandidateInput = {
   availability: string;
   availability_source: string;
@@ -65,7 +72,7 @@ type ItemCandidateInput = {
   raw_price: string;
   source_listing_url: string;
   source_url: string;
-  status: string;
+  listing_status: string;
   store_id: number | null;
   store_sku: string;
   title: string;
@@ -90,7 +97,9 @@ type ItemInput = {
   normalized_name: string;
   normalized_name_es: string;
   parent_item_id: number | null;
+  rating: number | null;
   status: string;
+  weight: number | null;
   year_published: number | null;
 };
 
@@ -124,7 +133,7 @@ const storeSelect = `
 const itemCandidateSelect = `
   id, store_id, source_url, source_listing_url, title, publisher, description,
   item_id, item_type, min_players, max_players, min_minutes, max_minutes,
-  min_age, language, language_source, language_evidence, image_url, status,
+  min_age, language, language_source, language_evidence, image_url, listing_status,
   raw_price, price, price_source, currency, availability, availability_source,
   store_sku, raw_payload, is_boardgame, is_boardgame_confirmed, category_confidence,
   classification_reasons, match_source,
@@ -135,7 +144,7 @@ const itemCandidateSelect = `
 const itemSelect = `
   id, canonical_name, normalized_name, canonical_name_es, normalized_name_es,
   item_type, parent_item_id, bgg_id, bgg_url, bgg_last_sync_at,
-  year_published, description, description_es, min_players, max_players,
+  year_published, rating, weight, description, description_es, min_players, max_players,
   min_minutes, max_minutes, complexity, min_age, image_url, image_url_es, status,
   created_at, updated_at
 `;
@@ -144,9 +153,199 @@ const itemLinkedCandidateSelect = `
   dic.id, dic.store_id, s.name as store_name, s.canonical_domain as store_domain,
   dic.source_url, dic.source_listing_url, dic.title, dic.publisher,
   dic.description, dic.item_id, dic.item_type, dic.min_players, dic.max_players,
-  dic.language, dic.status, dic.raw_price, dic.price, dic.currency,
+  dic.language, dic.listing_status, dic.raw_price, dic.price, dic.currency,
   dic.availability, dic.match_source, dic.match_score,
   dic.last_seen_at, dic.last_updated
+`;
+
+const frontPageCategorySelect = `
+  fpc.id, fpc.category_type, fpc.category_id, fpc.title, fpc."order",
+  coalesce(bc.name, bf.name, bm.name, '') as category_name,
+  coalesce(bc.name_es, bf.name_es, bm.name_es, '') as category_name_es,
+  fpc.created_at, fpc.updated_at
+`;
+
+const frontPageCategoryFromSql = `
+  from front_page_categories fpc
+  left join boardgame_categories bc on fpc.category_type = 'category' and bc.id = fpc.category_id
+  left join boardgame_families bf on fpc.category_type = 'family' and bf.id = fpc.category_id
+  left join boardgame_mechanics bm on fpc.category_type = 'mechanic' and bm.id = fpc.category_id
+`;
+
+const frontPageCategoryAssignmentCandidatePredicateSql = `
+  (
+    (
+      oc.category_type = 'category'
+      and exists (
+        select 1
+        from item_categories ic
+        where ic.item_id = ai.id
+          and ic.category_id = oc.category_id
+      )
+    )
+    or (
+      oc.category_type = 'family'
+      and exists (
+        select 1
+        from item_families ifa
+        where ifa.item_id = ai.id
+          and ifa.family_id = oc.category_id
+      )
+    )
+    or (
+      oc.category_type = 'mechanic'
+      and exists (
+        select 1
+        from item_mechanics im
+        where im.item_id = ai.id
+          and im.mechanic_id = oc.category_id
+      )
+    )
+  )
+`;
+
+const randomFrontPageCategoryAssignmentsSql = `
+  with recursive
+  existing_count as (
+    select count(*)::int as replaced_count
+    from front_page_category_items
+  ),
+  ordered_categories as (
+    select
+      fpc.id as front_page_category_id,
+      fpc.category_type,
+      fpc.category_id,
+      row_number() over (order by fpc."order" asc, fpc.id asc) as category_position
+    from front_page_categories fpc
+  ),
+  category_cycles as (
+    select
+      oc.front_page_category_id,
+      oc.category_type,
+      oc.category_id,
+      oc.category_position,
+      cycle_number.cycle_number
+    from ordered_categories oc
+    cross join generate_series(1, 20) as cycle_number(cycle_number)
+  ),
+  assignment_slots as (
+    select
+      front_page_category_id,
+      category_type,
+      category_id,
+      category_position,
+      cycle_number,
+      row_number() over (order by cycle_number asc, category_position asc) as position
+    from category_cycles
+  ),
+  assignments(position, front_page_category_id, item_id, item_order, assigned_item_ids) as (
+    select
+      oc.position,
+      oc.front_page_category_id,
+      candidate.item_id,
+      oc.cycle_number as item_order,
+      case
+        when candidate.item_id is null then array[]::bigint[]
+        else array[candidate.item_id]::bigint[]
+      end as assigned_item_ids
+    from assignment_slots oc
+    left join lateral (
+      select ai.id as item_id
+      from active_item ai
+      where ${frontPageCategoryAssignmentCandidatePredicateSql}
+      order by random()
+      limit 1
+    ) candidate on true
+    where oc.position = 1
+
+    union all
+
+    select
+      oc.position,
+      oc.front_page_category_id,
+      candidate.item_id,
+      oc.cycle_number as item_order,
+      previous.assigned_item_ids ||
+        case
+          when candidate.item_id is null then array[]::bigint[]
+          else array[candidate.item_id]::bigint[]
+        end as assigned_item_ids
+    from assignments previous
+    join assignment_slots oc on oc.position = previous.position + 1
+    left join lateral (
+      select ai.id as item_id
+      from active_item ai
+      where ${frontPageCategoryAssignmentCandidatePredicateSql}
+        and not (ai.id = any(previous.assigned_item_ids))
+      order by random()
+      limit 1
+    ) candidate on true
+  ),
+  upserted as (
+    insert into front_page_category_items (front_page_category_id, item_id, item_order)
+    select front_page_category_id, item_id, item_order
+    from assignments
+    where item_id is not null
+    on conflict (item_id) do update
+    set front_page_category_id = excluded.front_page_category_id,
+        item_order = excluded.item_order,
+        updated_at = now()
+    returning front_page_category_id, item_id, item_order
+  ),
+  deleted as (
+    delete from front_page_category_items fpci
+    where not exists (
+      select 1
+      from assignments assigned
+      where assigned.item_id is not null
+        and assigned.item_id = fpci.item_id
+    )
+    returning item_id
+  ),
+  deleted_count as (
+    select count(*)::int as removed_count
+    from deleted
+  )
+  select
+    count(upserted.item_id)::int as assigned_count,
+    ((select count(*) from assignment_slots) - count(upserted.item_id))::int as skipped_count,
+    (select replaced_count from existing_count)::int as replaced_count,
+    (select removed_count from deleted_count)::int as removed_count
+  from upserted
+`;
+
+const frontPagePreviewSql = `
+  select
+    fpc.id,
+    fpc.category_type,
+    fpc.category_id,
+    fpc.title,
+    fpc."order",
+    coalesce(bc.name, bf.name, bm.name, '') as category_name,
+    coalesce(bc.name_es, bf.name_es, bm.name_es, '') as category_name_es,
+    coalesce(
+      jsonb_agg(
+        jsonb_build_object(
+          'id', i.id,
+          'canonical_name', i.canonical_name,
+          'canonical_name_es', i.canonical_name_es,
+          'image_url', i.image_url,
+          'image_url_es', i.image_url_es,
+          'item_type', i.item_type,
+          'year_published', i.year_published
+        )
+        order by fpci.item_order asc, i.canonical_name asc, i.id asc
+      ) filter (where i.id is not null),
+      '[]'::jsonb
+    ) as products
+  from front_page_categories fpc
+  left join boardgame_categories bc on fpc.category_type = 'category' and bc.id = fpc.category_id
+  left join boardgame_families bf on fpc.category_type = 'family' and bf.id = fpc.category_id
+  left join boardgame_mechanics bm on fpc.category_type = 'mechanic' and bm.id = fpc.category_id
+  left join front_page_category_items fpci on fpci.front_page_category_id = fpc.id
+  left join active_item i on i.id = fpci.item_id
+  group by fpc.id, bc.name, bc.name_es, bf.name, bf.name_es, bm.name, bm.name_es
+  order by fpc."order" asc, fpc.id asc
 `;
 
 const offerReviewSelect = `
@@ -166,7 +365,7 @@ const offerReviewSelect = `
   dic.id as store_item_id,
   dic.price as store_item_price,
   dic.availability as store_item_availability,
-  dic.status as store_item_status,
+  dic.listing_status as store_item_listing_status,
   dic.last_seen_at as store_item_last_seen_at,
   i.id as item_id,
   i.canonical_name as item_name,
@@ -200,6 +399,24 @@ const cleanStoresTableConfig: TableQueryConfig = {
   defaultSortDirection: 'asc',
   fromSql: 'from stores',
   selectSql: storeSelect
+};
+
+const frontPageCategoriesTableConfig: TableQueryConfig = {
+  columns: {
+    category_id: columnSql('fpc.category_id'),
+    category_name: {
+      filterSql: textSql("coalesce(bc.name, bf.name, bm.name, '')"),
+      sortSql: "coalesce(bc.name, bf.name, bm.name, '')"
+    },
+    category_type: columnSql('fpc.category_type'),
+    order: columnSql('fpc."order"'),
+    title: columnSql('fpc.title'),
+    updated_at: columnSql('fpc.updated_at')
+  },
+  defaultSortColumnId: 'order',
+  defaultSortDirection: 'asc',
+  fromSql: frontPageCategoryFromSql,
+  selectSql: frontPageCategorySelect
 };
 
 const storeCandidatesTableConfig: TableQueryConfig = {
@@ -261,13 +478,13 @@ const itemCandidatesTableConfig: TableQueryConfig = {
     raw_payload: columnSql('raw_payload'),
     source_listing_url: columnSql('source_listing_url'),
     source_url: columnSql('source_url'),
-    status: columnSql('status'),
+    listing_status: columnSql('listing_status'),
     store: columnSql('store_id'),
     store_sku: columnSql('store_sku'),
     title: columnSql('title')
   },
-  defaultSortColumnId: 'last_updated',
-  defaultSortDirection: 'desc',
+  defaultSortColumnId: 'title',
+  defaultSortDirection: 'asc',
   fromSql: 'from store_items',
   selectSql: itemCandidateSelect
 };
@@ -298,13 +515,15 @@ const itemsTableConfig: TableQueryConfig = {
       filterSql: textSql("concat_ws(' ', min_players, max_players)"),
       sortSql: 'min_players'
     },
+    rating: columnSql('rating'),
     status: columnSql('status'),
     updated_at: columnSql('updated_at'),
+    weight: columnSql('weight'),
     year_published: columnSql('year_published')
   },
   defaultSortColumnId: 'canonical_name',
   defaultSortDirection: 'asc',
-  fromSql: 'from items',
+  fromSql: 'from active_item',
   selectSql: itemSelect
 };
 
@@ -369,17 +588,21 @@ const offerReviewsTableConfig: TableQueryConfig = {
     store: {
       filterSql: textSql("concat_ws(' ', s.name, s.canonical_domain)"),
       sortSql: 's.name'
+    },
+    store_item_listing_status: {
+      filterSql: textSql('dic.listing_status'),
+      sortSql: 'dic.listing_status'
     }
   },
   defaultSortColumnId: 'candidate_name',
   defaultSortDirection: 'asc',
   fromSql: `
     from store_items dic
-    join items i on i.id = dic.item_id
+    left join items i on i.id = dic.item_id
     left join stores s on s.id = dic.store_id
   `,
   selectSql: offerReviewSelect,
-  whereSql: "dic.status = 'LISTED' and dic.item_id is not null"
+  whereSql: 'dic.is_boardgame = true and dic.is_boardgame_confirmed = true'
 };
 
 const reviewTasksTableConfig: TableQueryConfig = {
@@ -463,6 +686,159 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.get('/front-page-category-options', async (request, response, next) => {
+    try {
+      const onlyUnlinkedGames = booleanField(request.query as Record<string, unknown>, 'only_unlinked_games');
+      const result = await database.query(frontPageCategoryOptionsSql(onlyUnlinkedGames));
+
+      response.json({ data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/front-page-category-options/:categoryType/:categoryId/products', async (request, response, next) => {
+    try {
+      const categoryId = integerPathParam(request.params.categoryId ?? '');
+      const result = await database.query(frontPageCategoryProductsSql(request.params.categoryType ?? ''), [categoryId]);
+
+      response.json({ data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/front-page-preview', async (_request, response, next) => {
+    try {
+      const result = await database.query(frontPagePreviewSql);
+      response.json({ data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/front-page-categories', async (request, response, next) => {
+    try {
+      if (hasTableQuery(request.query)) {
+        response.json(await queryTable(database, frontPageCategoriesTableConfig, request.query));
+        return;
+      }
+
+        const result = await database.query(
+          `select ${frontPageCategorySelect}
+           ${frontPageCategoryFromSql}
+           order by fpc."order" asc, fpc.title asc
+           limit 200`
+        );
+      response.json({ data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/front-page-categories', async (request, response, next) => {
+    try {
+      const input = parseFrontPageCategoryInput(request.body);
+      const result = await database.query(
+          `
+          with saved as (
+            insert into front_page_categories (category_type, category_id, title, "order")
+            values ($1, $2, $3, $4)
+            returning *
+          )
+        select ${frontPageCategorySelect}
+        from saved fpc
+        left join boardgame_categories bc on fpc.category_type = 'category' and bc.id = fpc.category_id
+        left join boardgame_families bf on fpc.category_type = 'family' and bf.id = fpc.category_id
+        left join boardgame_mechanics bm on fpc.category_type = 'mechanic' and bm.id = fpc.category_id
+        `,
+        frontPageCategoryParams(input)
+      );
+
+      response.status(201).json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/front-page-categories/random-item-assignments', async (_request, response, next) => {
+    try {
+      const result = await database.query(randomFrontPageCategoryAssignmentsSql);
+
+      response.json({
+        data: result.rows[0] ?? {
+          assigned_count: 0,
+          replaced_count: 0,
+          skipped_count: 0
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/front-page-categories/:id', async (request, response, next) => {
+    try {
+      const input = parseFrontPageCategoryInput(request.body);
+      const result = await database.query(
+        `
+          with saved as (
+            update front_page_categories
+            set category_type = $1,
+                category_id = $2,
+                title = $3,
+                "order" = $4,
+                updated_at = now()
+            where id = $5
+            returning *
+          )
+        select ${frontPageCategorySelect}
+        from saved fpc
+        left join boardgame_categories bc on fpc.category_type = 'category' and bc.id = fpc.category_id
+        left join boardgame_families bf on fpc.category_type = 'family' and bf.id = fpc.category_id
+        left join boardgame_mechanics bm on fpc.category_type = 'mechanic' and bm.id = fpc.category_id
+        `,
+        [...frontPageCategoryParams(input), request.params.id]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Front page category not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/front-page-categories/:id', async (request, response, next) => {
+    try {
+      const result = await database.query(
+        `
+        with deleted as (
+          delete from front_page_categories
+          where id = $1
+          returning *
+        )
+        select ${frontPageCategorySelect}
+        from deleted fpc
+        left join boardgame_categories bc on fpc.category_type = 'category' and bc.id = fpc.category_id
+        left join boardgame_families bf on fpc.category_type = 'family' and bf.id = fpc.category_id
+        left join boardgame_mechanics bm on fpc.category_type = 'mechanic' and bm.id = fpc.category_id
+        `,
+        [request.params.id]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Front page category not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/items', async (request, response, next) => {
     try {
       if (hasTableQuery(request.query)) {
@@ -472,7 +848,7 @@ export function createDiscoveryRouter(
 
       const result = await database.query(
         `select ${itemSelect}
-         from items
+         from active_item
          order by canonical_name asc
          limit 200`
       );
@@ -533,6 +909,53 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.get('/items/:id/taxonomy', async (request, response, next) => {
+    try {
+      const [categories, mechanics, families] = await Promise.all([
+        database.query(
+          `
+          select bc.id, bc.bgg_id, bc.name as value, bc.name_es as value_es
+          from item_categories ic
+          join boardgame_categories bc on bc.id = ic.category_id
+          where ic.item_id = $1
+          order by bc.name asc
+          `,
+          [request.params.id]
+        ),
+        database.query(
+          `
+          select bm.id, bm.bgg_id, bm.name as value, bm.name_es as value_es
+          from item_mechanics im
+          join boardgame_mechanics bm on bm.id = im.mechanic_id
+          where im.item_id = $1
+          order by bm.name asc
+          `,
+          [request.params.id]
+        ),
+        database.query(
+          `
+          select bf.id, bf.bgg_id, bf.name as value, bf.name_es as value_es
+          from item_families ifa
+          join boardgame_families bf on bf.id = ifa.family_id
+          where ifa.item_id = $1
+          order by bf.name asc
+          `,
+          [request.params.id]
+        )
+      ]);
+
+      response.json({
+        data: {
+          categories: categories.rows,
+          families: families.rows,
+          mechanics: mechanics.rows
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.patch('/items/:id', async (request, response, next) => {
     try {
       const input = parseItemInput(request.body);
@@ -555,12 +978,14 @@ export function createDiscoveryRouter(
             min_minutes = $14,
             max_minutes = $15,
             complexity = $16,
-            min_age = $17,
-            image_url = $18,
-            image_url_es = $19,
-            status = $20,
+            rating = $17,
+            weight = $18,
+            min_age = $19,
+            image_url = $20,
+            image_url_es = $21,
+            status = $22,
             updated_at = now()
-        where id = $21
+        where id = $23
         returning ${itemSelect}
         `,
         [...itemParams(input), request.params.id]
@@ -759,7 +1184,7 @@ export function createDiscoveryRouter(
       const result = await database.query(
         `select ${itemCandidateSelect}
          from store_items
-         order by last_updated desc
+         order by title asc
          limit 200`
       );
       response.json({ data: result.rows });
@@ -840,6 +1265,7 @@ export function createDiscoveryRouter(
             bgg_id,
             bgg_url,
             year_published,
+            rating,
             description,
             min_players,
             max_players,
@@ -858,6 +1284,7 @@ export function createDiscoveryRouter(
             null,
             '',
             null,
+            5,
             candidate.description,
             candidate.min_players,
             candidate.max_players,
@@ -896,12 +1323,35 @@ export function createDiscoveryRouter(
             source = excluded.source,
             source_ref = excluded.source_ref
         ),
+        copied_parent_categories as (
+          insert into item_categories (item_id, category_id)
+          select created_item.id, parent_categories.category_id
+          from created_item
+          join item_categories parent_categories on parent_categories.item_id = $7::bigint
+          where $7::bigint is not null
+          on conflict do nothing
+        ),
+        copied_parent_families as (
+          insert into item_families (item_id, family_id)
+          select created_item.id, parent_families.family_id
+          from created_item
+          join item_families parent_families on parent_families.item_id = $7::bigint
+          where $7::bigint is not null
+          on conflict do nothing
+        ),
+        copied_parent_mechanics as (
+          insert into item_mechanics (item_id, mechanic_id)
+          select created_item.id, parent_mechanics.mechanic_id
+          from created_item
+          join item_mechanics parent_mechanics on parent_mechanics.item_id = $7::bigint
+          where $7::bigint is not null
+          on conflict do nothing
+        ),
         updated_candidate as (
           update store_items
           set item_id = created_item.id,
               is_boardgame = true,
               is_boardgame_confirmed = true,
-              status = 'LISTED',
               match_source = 'MANUAL',
               matched_bgg_id = null,
               matched_name = candidate.title,
@@ -984,7 +1434,6 @@ export function createDiscoveryRouter(
           set item_id = linked_item.id,
               is_boardgame = true,
               is_boardgame_confirmed = true,
-              status = 'LISTED',
               match_source = 'BGG_MANUAL',
               matched_bgg_id = $3,
               matched_name = linked_item.canonical_name,
@@ -1022,6 +1471,56 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.post('/discovery/listings/:id/confirm-boardgame', async (request, response, next) => {
+    try {
+      if (!itemMatchingService?.confirmBoardgameAndMatch) {
+        throw httpError(503, 'Item matching service is not configured');
+      }
+
+      const candidateId = integerPathParam(request.params.id);
+      await itemMatchingService.confirmBoardgameAndMatch(candidateId, { confirmationSource: 'admin' });
+
+      const result = await database.query(
+        `select ${itemCandidateSelect}
+         from store_items
+         where id = $1`,
+        [candidateId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Item candidate not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.patch('/discovery/listings/:id/listing-status', async (request, response, next) => {
+    try {
+      const listingStatus = listingStatusField((request.body ?? {}) as Record<string, unknown>, 'listing_status');
+      const result = await database.query(
+        `
+        update store_items
+        set listing_status = $1,
+            last_updated = now()
+        where id = $2
+        returning ${itemCandidateSelect}
+        `,
+        [listingStatus, request.params.id]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Item candidate not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.patch('/discovery/listings/:id', async (request, response, next) => {
     try {
       const input = parseItemCandidateInput(request.body);
@@ -1045,7 +1544,7 @@ export function createDiscoveryRouter(
             language_source = $15,
             language_evidence = $16,
             image_url = $17,
-            status = $18,
+            listing_status = $18,
             raw_price = $19,
             price = $20,
             price_source = $21,
@@ -1092,10 +1591,10 @@ export function createDiscoveryRouter(
       const result = await database.query(
         `select ${offerReviewSelect}
          from store_items dic
-         join items i on i.id = dic.item_id
+         left join items i on i.id = dic.item_id
          left join stores s on s.id = dic.store_id
-         where dic.status = 'LISTED'
-           and dic.item_id is not null
+         where dic.is_boardgame = true
+           and dic.is_boardgame_confirmed = true
          order by dic.last_updated desc`
       );
       response.json({ data: result.rows });
@@ -1323,6 +1822,188 @@ function storeParams(input: StoreInput): unknown[] {
   ];
 }
 
+function parseFrontPageCategoryInput(body: unknown): FrontPageCategoryInput {
+  const value = (body ?? {}) as Record<string, unknown>;
+  const categoryType = stringField(value, 'category_type').toLowerCase();
+  if (categoryType !== 'category' && categoryType !== 'family' && categoryType !== 'mechanic') {
+    throw httpError(400, 'category_type must be category, family, or mechanic');
+  }
+
+  const input: FrontPageCategoryInput = {
+    category_id: positiveIntegerBodyField(body, 'category_id'),
+    category_type: categoryType,
+    order: numberField(value, 'order'),
+    title: stringField(value, 'title')
+  };
+
+  if (!input.title) {
+    throw httpError(400, 'title is required');
+  }
+
+  return input;
+}
+
+function frontPageCategoryParams(input: FrontPageCategoryInput): unknown[] {
+  return [input.category_type, input.category_id, input.title, input.order];
+}
+
+function frontPageCategoryOptionsSql(onlyUnlinkedGames: boolean): string {
+  const unlinkedFilterSql = onlyUnlinkedGames
+    ? `
+      where not exists (
+        select 1
+        from item_categories existing_ic
+        join front_page_categories existing_category_fpc
+          on existing_category_fpc.category_type = 'category'
+         and existing_category_fpc.category_id = existing_ic.category_id
+        where existing_ic.item_id = qi.item_id
+      )
+      and not exists (
+        select 1
+        from item_families existing_ifa
+        join front_page_categories existing_family_fpc
+          on existing_family_fpc.category_type = 'family'
+         and existing_family_fpc.category_id = existing_ifa.family_id
+        where existing_ifa.item_id = qi.item_id
+      )
+      and not exists (
+        select 1
+        from item_mechanics existing_im
+        join front_page_categories existing_mechanic_fpc
+          on existing_mechanic_fpc.category_type = 'mechanic'
+         and existing_mechanic_fpc.category_id = existing_im.mechanic_id
+        where existing_im.item_id = qi.item_id
+      )
+    `
+    : '';
+
+  return `
+    with qualified_items as (
+      select distinct item_id
+      from store_items
+      where item_id is not null
+        and is_boardgame = true
+        and is_boardgame_confirmed = true
+    ),
+    countable_items as (
+      select qi.item_id
+      from qualified_items qi
+      ${unlinkedFilterSql}
+    )
+    select category_type, category_id, bgg_id, name, name_es, front_page_category_id, game_count
+    from (
+      select
+        'category' as category_type,
+        bc.id as category_id,
+        bc.bgg_id,
+        bc.name,
+        bc.name_es,
+        fpc.id as front_page_category_id,
+        coalesce(ic.game_count, 0) as game_count
+      from boardgame_categories bc
+      left join (
+        select min(id) as id, category_id
+        from front_page_categories
+        where category_type = 'category'
+        group by category_id
+      ) fpc on fpc.category_id = bc.id
+      left join (
+        select ic.category_id, count(*)::int as game_count
+        from item_categories ic
+        join countable_items ci on ci.item_id = ic.item_id
+        group by ic.category_id
+      ) ic on ic.category_id = bc.id
+      union all
+      select
+        'family' as category_type,
+        bf.id as category_id,
+        bf.bgg_id,
+        bf.name,
+        bf.name_es,
+        fpc.id as front_page_category_id,
+        coalesce(ifa.game_count, 0) as game_count
+      from boardgame_families bf
+      left join (
+        select min(id) as id, category_id
+        from front_page_categories
+        where category_type = 'family'
+        group by category_id
+      ) fpc on fpc.category_id = bf.id
+      left join (
+        select ifa.family_id as category_id, count(*)::int as game_count
+        from item_families ifa
+        join countable_items ci on ci.item_id = ifa.item_id
+        group by ifa.family_id
+      ) ifa on ifa.category_id = bf.id
+      union all
+      select
+        'mechanic' as category_type,
+        bm.id as category_id,
+        bm.bgg_id,
+        bm.name,
+        bm.name_es,
+        fpc.id as front_page_category_id,
+        coalesce(im.game_count, 0) as game_count
+      from boardgame_mechanics bm
+      left join (
+        select min(id) as id, category_id
+        from front_page_categories
+        where category_type = 'mechanic'
+        group by category_id
+      ) fpc on fpc.category_id = bm.id
+      left join (
+        select im.mechanic_id as category_id, count(*)::int as game_count
+        from item_mechanics im
+        join countable_items ci on ci.item_id = im.item_id
+        group by im.mechanic_id
+      ) im on im.category_id = bm.id
+    ) options
+    order by category_type asc, name asc
+  `;
+}
+
+function frontPageCategoryProductsSql(categoryType: string): string {
+  const normalizedType = categoryType.toLowerCase();
+
+  if (normalizedType === 'category') {
+    return frontPageCategoryProductsSqlFor('item_categories ic', 'ic.item_id', 'ic.category_id');
+  }
+  if (normalizedType === 'family') {
+    return frontPageCategoryProductsSqlFor('item_families ifa', 'ifa.item_id', 'ifa.family_id');
+  }
+  if (normalizedType === 'mechanic') {
+    return frontPageCategoryProductsSqlFor('item_mechanics im', 'im.item_id', 'im.mechanic_id');
+  }
+
+  throw httpError(400, 'category_type must be category, family, or mechanic');
+}
+
+function frontPageCategoryProductsSqlFor(relationSql: string, itemIdSql: string, categoryIdSql: string): string {
+  return `
+    with qualified_items as (
+      select distinct item_id
+      from store_items
+      where item_id is not null
+        and is_boardgame = true
+        and is_boardgame_confirmed = true
+    )
+    select
+      i.id,
+      i.canonical_name,
+      i.canonical_name_es,
+      i.image_url,
+      i.image_url_es,
+      i.item_type,
+      i.year_published
+    from ${relationSql}
+    join qualified_items qi on qi.item_id = ${itemIdSql}
+    join items i on i.id = ${itemIdSql}
+    where ${categoryIdSql} = $1
+    order by i.canonical_name asc
+    limit 500
+  `;
+}
+
 function parseStoreCandidateInput(body: unknown): StoreCandidateInput {
   const value = (body ?? {}) as Record<string, unknown>;
   const input: StoreCandidateInput = {
@@ -1387,7 +2068,9 @@ function parseItemInput(body: unknown): ItemInput {
     normalized_name: normalizedName,
     normalized_name_es: normalizedNameEs,
     parent_item_id: nullableIntegerField(value, 'parent_item_id'),
+    rating: nullableNumberField(value, 'rating'),
     status: stringField(value, 'status') || 'draft',
+    weight: nullableNumberField(value, 'weight'),
     year_published: nullableIntegerField(value, 'year_published')
   };
 
@@ -1416,6 +2099,8 @@ function itemParams(input: ItemInput): unknown[] {
     input.min_minutes,
     input.max_minutes,
     input.complexity,
+    input.rating,
+    input.weight,
     input.min_age,
     input.image_url,
     input.image_url_es,
@@ -1459,7 +2144,7 @@ function parseItemCandidateInput(body: unknown): ItemCandidateInput {
     raw_price: stringField(value, 'raw_price'),
     source_listing_url: stringField(value, 'source_listing_url'),
     source_url: stringField(value, 'source_url'),
-    status: stringField(value, 'status') || 'NEW',
+    listing_status: listingStatusField(value, 'listing_status'),
     store_id: nullableIntegerField(value, 'store_id'),
     store_sku: stringField(value, 'store_sku'),
     title: stringField(value, 'title')
@@ -1491,7 +2176,7 @@ function itemCandidateParams(input: ItemCandidateInput): unknown[] {
     input.language_source,
     input.language_evidence,
     input.image_url,
-    input.status,
+    input.listing_status,
     input.raw_price,
     input.price,
     input.price_source,
@@ -1517,6 +2202,14 @@ function itemCandidateParams(input: ItemCandidateInput): unknown[] {
 function stringField(value: Record<string, unknown>, key: string): string {
   const field = value[key];
   return typeof field === 'string' ? field.trim() : '';
+}
+
+function listingStatusField(value: Record<string, unknown>, key: string): string {
+  const status = stringField(value, key).toUpperCase() || 'PENDING';
+  if (!['PENDING', 'LISTED', 'UNLISTED', 'REJECTED'].includes(status)) {
+    throw httpError(400, `${key} must be PENDING, LISTED, UNLISTED, or REJECTED`);
+  }
+  return status;
 }
 
 function booleanField(value: Record<string, unknown>, key: string): boolean {

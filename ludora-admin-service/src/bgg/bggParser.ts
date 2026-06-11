@@ -30,8 +30,10 @@ export type BggThingDetails = {
   name: string;
   playingTime: number | null;
   publishers: BggNamedLink[];
+  rating: number | null;
   thumbnail: string;
   type: string;
+  weight: number | null;
   yearPublished: number | null;
 };
 
@@ -78,8 +80,10 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
     name: primaryName(item),
     playingTime: numberValue(item.playingtime?.value),
     publishers: linksByType(item, 'boardgamepublisher'),
+    rating: numberValue(item.statistics?.ratings?.average?.value),
     thumbnail: stringValue(item.thumbnail),
     type: stringValue(item.type),
+    weight: numberValue(item.statistics?.ratings?.averageweight?.value),
     yearPublished: numberValue(item.yearpublished?.value)
   };
 }
@@ -146,6 +150,12 @@ type BggXmlItem = {
   minplaytime?: BggXmlValue;
   name?: BggXmlName | BggXmlName[];
   playingtime?: BggXmlValue;
+  statistics?: {
+    ratings?: {
+      average?: BggXmlValue;
+      averageweight?: BggXmlValue;
+    };
+  };
   thumbnail?: string;
   type?: string;
   yearpublished?: BggXmlValue;

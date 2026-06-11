@@ -67,4 +67,21 @@ describe('item matcher', () => {
     expect(result.matchScore).toBeGreaterThanOrEqual(0.9);
     expect(result.matchReasons).toContain('exact local alias match');
   });
+
+  it('scores local matches with language-only edition suffixes as strong matches', () => {
+    const result = scoreLocalItem(
+      { title: '7 Wonders: Architects (Español)', itemType: 'base_game' },
+      {
+        aliases: [],
+        bggId: 346703,
+        id: 77,
+        itemType: 'base_game',
+        name: '7 Wonders: Architects',
+        normalizedName: '7 wonders architects'
+      }
+    );
+
+    expect(result.matchScore).toBeGreaterThanOrEqual(0.9);
+    expect(result.matchReasons).toContain('exact local item name match after ignoring language edition');
+  });
 });

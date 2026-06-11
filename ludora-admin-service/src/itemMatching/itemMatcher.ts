@@ -25,7 +25,9 @@ export type LocalItemForMatch = {
   id: number;
   itemType?: string | null;
   name: string;
+  nameEs?: string;
   normalizedName: string;
+  normalizedNameEs?: string;
 };
 
 export type MatchScore = {
@@ -56,13 +58,15 @@ const MEANINGFUL_EXTRA_TOKENS = new Set([
 export function scoreBggThing(candidate: DiscoveryCandidateForMatch, thing: BggThingForMatch): MatchScore {
   const reasons: string[] = [];
   const candidateTitle = normalizeTitle(candidate.title);
+  const candidateTitleVariants = normalizeTitleVariants(candidate.title);
   const names = [{ label: 'primary', value: thing.name }, ...thing.alternateNames.map((value) => ({ label: 'alternate', value }))];
-  const exactName = names.find((name) => normalizeTitle(name.value) === candidateTitle);
+  const exactName = names.find((name) => candidateTitleVariants.includes(normalizeTitle(name.value)));
   let score = 0.2;
 
   if (exactName) {
     score = 0.9;
-    reasons.push(`exact BGG ${exactName.label} name match`);
+    const reasonSuffix = normalizeTitle(exactName.value) === candidateTitle ? '' : ' after ignoring language edition';
+    reasons.push(`exact BGG ${exactName.label} name match${reasonSuffix}`);
   } else {
     const bestName = names.find((name) => hasTitleOverlap(candidateTitle, normalizeTitle(name.value)));
     if (bestName) {
@@ -101,17 +105,28 @@ export function scoreBggThing(candidate: DiscoveryCandidateForMatch, thing: BggT
 export function scoreLocalItem(candidate: DiscoveryCandidateForMatch, item: LocalItemForMatch): MatchScore {
   const reasons: string[] = [];
   const candidateTitle = normalizeTitle(candidate.title);
+  const candidateTitleVariants = normalizeTitleVariants(candidate.title);
   const canonicalName = normalizeTitle(item.name || item.normalizedName);
+  const spanishNames = [item.nameEs, item.normalizedNameEs].map((value) => normalizeTitle(value ?? '')).filter(Boolean);
   const aliases = item.aliases.map(normalizeTitle);
   let score = 0.2;
 
-  if (candidateTitle === canonicalName || candidateTitle === normalizeTitle(item.normalizedName)) {
+  if (candidateTitleVariants.includes(canonicalName) || candidateTitleVariants.includes(normalizeTitle(item.normalizedName))) {
     score = 0.94;
-    reasons.push('exact local item name match');
-  } else if (aliases.includes(candidateTitle)) {
+    const reasonSuffix =
+      candidateTitle === canonicalName || candidateTitle === normalizeTitle(item.normalizedName)
+        ? ''
+        : ' after ignoring language edition';
+    reasons.push(`exact local item name match${reasonSuffix}`);
+  } else if (spanishNames.some((name) => candidateTitleVariants.includes(name))) {
     score = 0.94;
-    reasons.push('exact local alias match');
-  } else if (hasTitleOverlap(candidateTitle, canonicalName)) {
+    const reasonSuffix = spanishNames.includes(candidateTitle) ? '' : ' after ignoring language edition';
+    reasons.push(`exact local Spanish item name match${reasonSuffix}`);
+  } else if (aliases.some((alias) => candidateTitleVariants.includes(alias))) {
+    score = 0.94;
+    const reasonSuffix = aliases.includes(candidateTitle) ? '' : ' after ignoring language edition';
+    reasons.push(`exact local alias match${reasonSuffix}`);
+  } else if ([canonicalName, ...spanishNames].some((name) => hasTitleOverlap(candidateTitle, name))) {
     score = 0.55;
     reasons.push('substring title overlap only');
     reasons.push(...meaningfulExtraTokenReasons(candidateTitle, canonicalName));
@@ -137,6 +152,48 @@ export function normalizeTitle(value: string): string {
     .split(/\s+/)
     .filter(Boolean)
     .join(' ');
+}
+
+export function normalizeTitleVariants(value: string): string[] {
+  return uniqueNormalizedTitles([value, stripLanguageEditionParentheticals(value)]);
+}
+
+const LANGUAGE_TOKENS = new Set([
+  'aleman',
+  'castellano',
+  'deutsch',
+  'english',
+  'espanol',
+  'francais',
+  'frances',
+  'french',
+  'german',
+  'ingles',
+  'italian',
+  'italiano',
+  'portugues',
+  'portuguese',
+  'spanish'
+]);
+
+const LANGUAGE_EDITION_FILLER_TOKENS = new Set(['edition', 'edicion', 'en', 'idioma', 'language', 'version']);
+
+function stripLanguageEditionParentheticals(value: string): string {
+  return value.replace(/\(([^()]*)\)/g, (segment, content) => {
+    const tokens = normalizeTitle(content).split(' ').filter(Boolean);
+    if (tokens.length === 0) {
+      return segment;
+    }
+    const hasLanguageToken = tokens.some((token) => LANGUAGE_TOKENS.has(token));
+    const hasOnlyLanguageEditionTokens = tokens.every(
+      (token) => LANGUAGE_TOKENS.has(token) || LANGUAGE_EDITION_FILLER_TOKENS.has(token)
+    );
+    return hasLanguageToken && hasOnlyLanguageEditionTokens ? ' ' : segment;
+  });
+}
+
+function uniqueNormalizedTitles(values: string[]): string[] {
+  return Array.from(new Set(values.map(normalizeTitle).filter(Boolean)));
 }
 
 function hasTitleOverlap(candidateTitle: string, matchedTitle: string): boolean {

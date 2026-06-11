@@ -1,5 +1,7 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
+import CancelIcon from '@mui/icons-material/Cancel';
+import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import SaveIcon from '@mui/icons-material/Save';
 import {
   Alert,
@@ -12,15 +14,18 @@ import {
   DialogContent,
   DialogTitle,
   FormControlLabel,
+  IconButton,
   Link,
   Paper,
   Stack,
   TextField,
+  Tooltip,
   Typography
 } from '@mui/material';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
 import { adminApi, type AdminRecord } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 type LoadState = 'loading' | 'ready' | 'error';
@@ -99,6 +104,56 @@ function candidateProductImage(record: AdminRecord) {
   );
 }
 
+function boardgameConfirmationActions(
+  record: AdminRecord,
+  onSetBoardgameState: (record: AdminRecord, isBoardgame: boolean) => void,
+  updatingBoardgameCandidateId: string
+) {
+  const candidateId = field(record, ['id'], '');
+  const isConfirmed = field(record, ['is_boardgame_confirmed'], '').toLowerCase() === 'true';
+  const isUpdating = candidateId !== '' && candidateId === updatingBoardgameCandidateId;
+  const isDisabled = !candidateId || isConfirmed || isUpdating;
+
+  return (
+    <Stack direction="row" spacing={0.5} sx={{ minWidth: 104 }} onDoubleClick={(event) => event.stopPropagation()}>
+      <Tooltip title="Mark as boardgame">
+        <span>
+          <IconButton
+            aria-label="Mark as boardgame"
+            color="success"
+            disabled={isDisabled}
+            size="large"
+            sx={{ p: 0.5 }}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSetBoardgameState(record, true);
+            }}
+          >
+            <CheckCircleIcon fontSize="large" />
+          </IconButton>
+        </span>
+      </Tooltip>
+      <Tooltip title="Mark as not boardgame">
+        <span>
+          <IconButton
+            aria-label="Mark as not boardgame"
+            color="error"
+            disabled={isDisabled}
+            size="large"
+            sx={{ p: 0.5 }}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSetBoardgameState(record, false);
+            }}
+          >
+            <CancelIcon fontSize="large" />
+          </IconButton>
+        </span>
+      </Tooltip>
+    </Stack>
+  );
+}
+
 function detailValue(record: AdminRecord, key: string) {
   const value = record[key];
   if (value === undefined || value === null) {
@@ -142,7 +197,7 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { key: 'language_source', label: 'Language Source' },
   { gridColumn: { md: 'span 2' }, key: 'language_evidence', label: 'Language Evidence', multiline: true },
   { gridColumn: { md: 'span 2' }, key: 'image_url', label: 'Image URL' },
-  { key: 'status', label: 'Status' },
+  { key: 'listing_status', label: 'Listing Status' },
   { key: 'raw_price', label: 'Raw Price' },
   { key: 'price', label: 'Price' },
   { key: 'price_source', label: 'Price Source' },
@@ -169,7 +224,11 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { gridColumn: { md: '1 / -1' }, key: 'match_payload', label: 'Match Payload', multiline: true }
 ];
 
-const itemCandidateColumns: DataTableColumn<AdminRecord>[] = [
+function buildItemCandidateColumns(
+  onSetBoardgameState: (record: AdminRecord, isBoardgame: boolean) => void,
+  updatingBoardgameCandidateId: string
+): DataTableColumn<AdminRecord>[] {
+  return [
   {
     filterable: false,
     id: 'image_url',
@@ -185,6 +244,14 @@ const itemCandidateColumns: DataTableColumn<AdminRecord>[] = [
     minWidth: 220,
     render: (row) => field(row, ['title', 'name']),
     sortValue: (row) => field(row, ['title', 'name'])
+  },
+  {
+    filterable: false,
+    id: 'boardgame_actions',
+    label: 'BG',
+    minWidth: 112,
+    render: (row) => boardgameConfirmationActions(row, onSetBoardgameState, updatingBoardgameCandidateId),
+    sortable: false
   },
   {
     filterValue: (row) => field(row, ['source_url']),
@@ -291,12 +358,12 @@ const itemCandidateColumns: DataTableColumn<AdminRecord>[] = [
     sortValue: (row) => field(row, ['availability_source'])
   },
   {
-    filterValue: (row) => field(row, ['status']),
-    id: 'status',
-    label: 'Status',
+    filterValue: (row) => field(row, ['listing_status']),
+    id: 'listing_status',
+    label: 'Listing Status',
     minWidth: 130,
-    render: (row) => field(row, ['status']),
-    sortValue: (row) => field(row, ['status'])
+    render: (row) => field(row, ['listing_status']),
+    sortValue: (row) => field(row, ['listing_status'])
   },
   {
     filterValue: (row) => field(row, ['match_source']),
@@ -338,7 +405,8 @@ const itemCandidateColumns: DataTableColumn<AdminRecord>[] = [
     render: (row) => field(row, ['last_updated']),
     sortValue: (row) => field(row, ['last_updated'])
   }
-];
+  ];
+}
 
 type ListingCandidatesPageProps = {
   onClearSelectedCandidateId?: () => void;
@@ -350,14 +418,56 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
   const [isCreatingBggItem, setIsCreatingBggItem] = useState(false);
   const [isCreatingItem, setIsCreatingItem] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [updatingBoardgameCandidateId, setUpdatingBoardgameCandidateId] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
-  const table = useServerTableState('last_updated', 'desc');
+  const table = useServerTableState('title');
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
     table,
     adminApi.getItemCandidatesPage
+  );
+
+  const handleSetBoardgameState = useCallback(
+    async (candidate: AdminRecord, isBoardgame: boolean) => {
+      const candidateId = field(candidate, ['id'], '');
+      if (!candidateId) {
+        return;
+      }
+
+      setUpdatingBoardgameCandidateId(candidateId);
+      setSaveError('');
+      setSaveMessage('');
+
+      try {
+        const savedCandidate = isBoardgame
+          ? await adminApi.confirmItemCandidateBoardgame(candidateId)
+          : await adminApi.updateItemCandidate(candidateId, {
+              ...candidate,
+              is_boardgame: false,
+              is_boardgame_confirmed: true
+            });
+        setRows((currentRows) =>
+          currentRows.map((row, index) => (field(row, ['id'], String(index)) === candidateId ? savedCandidate : row))
+        );
+        setSelectedCandidate((currentCandidate) =>
+          currentCandidate && field(currentCandidate, ['id'], '') === candidateId ? savedCandidate : currentCandidate
+        );
+        setSaveMessage(isBoardgame ? 'Store item marked as boardgame.' : 'Store item marked as not boardgame.');
+        table.refresh();
+      } catch {
+        setSaveError('Store item boardgame status could not be saved.');
+      } finally {
+        setUpdatingBoardgameCandidateId('');
+      }
+    },
+    [setRows, table]
+  );
+
+  const itemCandidateColumns = useMemo(
+    () => buildItemCandidateColumns(handleSetBoardgameState, updatingBoardgameCandidateId),
+    [handleSetBoardgameState, updatingBoardgameCandidateId]
   );
 
   useEffect(() => {
@@ -495,6 +605,8 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
 
       {state === 'error' && viewMode === 'table' ? <Alert severity="error">Store items could not be loaded.</Alert> : null}
       {detailState === 'error' && viewMode === 'form' ? <Alert severity="error">Store item could not be loaded.</Alert> : null}
+      <FloatingSuccessAlert message={saveMessage} onClose={() => setSaveMessage('')} />
+      {viewMode === 'table' && saveError ? <Alert severity="error">{saveError}</Alert> : null}
 
       {detailState === 'ready' && viewMode === 'form' && selectedCandidate ? (
         <ItemCandidateForm
@@ -514,7 +626,6 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
           onSave={handleSaveCandidate}
           onCreateItem={handleCreateItemFromCandidate}
           saveError={saveError}
-          saveMessage={saveMessage}
         />
       ) : null}
 
@@ -523,7 +634,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
           ariaLabel="Store items"
           columns={itemCandidateColumns}
           getRowKey={(row, index) => field(row, ['id'], String(index))}
-          minWidth={3562}
+          minWidth={3674}
           onRowDoubleClick={(row) => {
             setDetailState('ready');
             setSaveError('');
@@ -557,8 +668,7 @@ function ItemCandidateForm({
   onCreateItemFromBggId,
   onCreateItem,
   onSave,
-  saveError,
-  saveMessage
+  saveError
 }: {
   candidate: AdminRecord;
   isCreatingBggItem: boolean;
@@ -569,7 +679,6 @@ function ItemCandidateForm({
   onCreateItem: (input?: { bgg_id?: string; implements?: boolean }) => Promise<void>;
   onSave: (input: AdminRecord) => void;
   saveError: string;
-  saveMessage: string;
 }) {
   const title = field(candidate, ['title'], 'Item candidate');
   const imageUrl = field(candidate, ['image_url'], '');
@@ -660,7 +769,6 @@ function ItemCandidateForm({
           </Button>
         </Stack>
 
-        {saveMessage ? <Alert severity="success">{saveMessage}</Alert> : null}
         {saveError ? <Alert severity="error">{saveError}</Alert> : null}
 
         <Stack alignItems={{ md: 'flex-start', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={2}>

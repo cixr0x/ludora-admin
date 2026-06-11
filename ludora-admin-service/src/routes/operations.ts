@@ -48,6 +48,15 @@ export function createOperationsRouter(operationsClient: DiscoveryOperationsClie
     }
   });
 
+  router.post('/admin/operations/item-update-runs', async (_request, response, next) => {
+    try {
+      const run = await operationsClient.startItemUpdateRun();
+      response.status(202).json({ data: run });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   return router;
 }
 

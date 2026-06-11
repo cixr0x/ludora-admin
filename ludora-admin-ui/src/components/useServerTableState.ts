@@ -7,6 +7,7 @@ type ServerRowsLoadState = 'loading' | 'ready' | 'error';
 
 export function useServerTableState(defaultSortColumnId: string, defaultSortDirection: SortDirection = 'asc') {
   const [page, setPage] = useState(0);
+  const [refreshToken, setRefreshToken] = useState(0);
   const [tableState, setTableState] = useState<DataTableState>({
     filters: {},
     sortColumnId: defaultSortColumnId,
@@ -30,6 +31,11 @@ export function useServerTableState(defaultSortColumnId: string, defaultSortDire
     },
     page,
     query,
+    refresh: () => {
+      setPage(0);
+      setRefreshToken((currentToken) => currentToken + 1);
+    },
+    refreshToken,
     tableState,
     handleTableStateChange: (nextTableState: DataTableState) => {
       setTableState(nextTableState);
@@ -84,7 +90,7 @@ export function useInfiniteServerRows<Row extends AdminRecord>(
     return () => {
       ignore = true;
     };
-  }, [fetchPage, table.page, table.query]);
+  }, [fetchPage, table.page, table.query, table.refreshToken]);
 
   const hasMore = rows.length < totalRows;
   const loadMore = useCallback(() => {

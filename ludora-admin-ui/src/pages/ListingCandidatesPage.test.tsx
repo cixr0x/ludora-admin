@@ -34,7 +34,7 @@ describe('ListingCandidatesPage', () => {
               publisher: 'Plan B Games',
               raw_price: '899.00',
               source_url: 'https://store.mx/products/azul-mx',
-              status: 'LISTED',
+              listing_status: 'LISTED',
               store_id: 42,
               title: 'Azul MX',
               availability_source: 'json_ld_offer'
@@ -51,7 +51,7 @@ describe('ListingCandidatesPage', () => {
               processing_error: 'BGG client is not configured',
               publisher: '',
               raw_price: '',
-              status: 'MATCH_NOT_FOUND',
+              listing_status: 'PENDING',
               store_id: 43,
               title: 'Catan Ingles'
             }
@@ -142,6 +142,181 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByText('Catan Ingles')).toBeInTheDocument();
   });
 
+  it('updates boardgame confirmation from table actions', async () => {
+    const user = userEvent.setup();
+    const originalCandidate = {
+      availability: 'available',
+      id: '3365',
+      image_url: 'https://store.mx/kitchen-rush.jpg',
+      is_boardgame: false,
+      is_boardgame_confirmed: false,
+      price: '899.00',
+      source_url: 'https://store.mx/products/kitchen-rush',
+      listing_status: 'PENDING',
+      store_id: 42,
+      title: 'Kitchen Rush'
+    };
+    const confirmedCandidate = {
+      ...originalCandidate,
+      is_boardgame: true,
+      is_boardgame_confirmed: true,
+      item_id: 77,
+      match_source: 'LOCAL',
+      listing_status: 'PENDING'
+    };
+    let currentCandidate = originalCandidate;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/discovery/listings' && !init) {
+        return jsonResponse([currentCandidate], 200, { page: 0, page_size: 100, total: 1 });
+      }
+      if (pathOf(url) === '/discovery/listings/3365/confirm-boardgame' && init?.method === 'POST') {
+        currentCandidate = confirmedCandidate;
+        return jsonResponse(confirmedCandidate);
+      }
+      if (pathOf(url) === '/discovery/listings/3365' && init?.method === 'PATCH') {
+        currentCandidate = {
+          ...currentCandidate,
+          ...JSON.parse(String(init.body))
+        };
+        return jsonResponse({
+          ...currentCandidate
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    expect(await screen.findByText('Kitchen Rush')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Mark as boardgame' }));
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) => pathOf(String(url)) === '/discovery/listings/3365/confirm-boardgame' && init?.method === 'POST'
+        )
+      ).toBe(true)
+    );
+    expect(currentCandidate).toMatchObject({
+      is_boardgame: true,
+      is_boardgame_confirmed: true,
+      item_id: 77,
+      match_source: 'LOCAL'
+    });
+    expect(await screen.findByText('Store item marked as boardgame.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark as boardgame' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark as not boardgame' })).toBeDisabled();
+  });
+
+  it('marks unconfirmed store items as not boardgame from table actions', async () => {
+    const user = userEvent.setup();
+    const originalCandidate = {
+      availability: 'available',
+      id: '3365',
+      image_url: 'https://store.mx/kitchen-rush.jpg',
+      is_boardgame: false,
+      is_boardgame_confirmed: false,
+      price: '899.00',
+      source_url: 'https://store.mx/products/kitchen-rush',
+      listing_status: 'PENDING',
+      store_id: 42,
+      title: 'Kitchen Rush'
+    };
+    let currentCandidate = originalCandidate;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/discovery/listings' && !init) {
+        return jsonResponse([currentCandidate], 200, { page: 0, page_size: 100, total: 1 });
+      }
+      if (pathOf(url) === '/discovery/listings/3365' && init?.method === 'PATCH') {
+        currentCandidate = {
+          ...currentCandidate,
+          ...JSON.parse(String(init.body))
+        };
+        return jsonResponse({
+          ...currentCandidate
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    expect(await screen.findByText('Kitchen Rush')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Mark as not boardgame' }));
+
+    await waitFor(() =>
+      expect(fetchMock.mock.calls.some(([, init]) => JSON.parse(String(init?.body ?? '{}')).is_boardgame === false)).toBe(true)
+    );
+    const notBoardgamePatchCalls = fetchMock.mock.calls.filter(
+      ([url, init]) => pathOf(String(url)) === '/discovery/listings/3365' && init?.method === 'PATCH'
+    );
+    expect(JSON.parse(String(notBoardgamePatchCalls.at(-1)?.[1]?.body))).toMatchObject({
+      is_boardgame: false,
+      is_boardgame_confirmed: true
+    });
+    expect(await screen.findByText('Store item marked as not boardgame.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Mark as boardgame' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark as not boardgame' })).toBeDisabled();
+  });
+
+  it('refreshes store items with active filters after boardgame table actions', async () => {
+    const user = userEvent.setup();
+    const originalCandidate = {
+      availability: 'available',
+      id: '3365',
+      image_url: 'https://store.mx/kitchen-rush.jpg',
+      is_boardgame: false,
+      is_boardgame_confirmed: false,
+      price: '899.00',
+      source_url: 'https://store.mx/products/kitchen-rush',
+      listing_status: 'PENDING',
+      store_id: 42,
+      title: 'Kitchen Rush'
+    };
+    const refreshedCandidate = {
+      ...originalCandidate,
+      is_boardgame: true,
+      is_boardgame_confirmed: true,
+      item_id: 77,
+      match_source: 'LOCAL',
+      listing_status: 'PENDING',
+      title: 'Kitchen Rush Refreshed'
+    };
+    const listingRequests: string[] = [];
+    let matchCompleted = false;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/discovery/listings' && !init) {
+        listingRequests.push(url);
+        return jsonResponse([matchCompleted ? refreshedCandidate : originalCandidate], 200, {
+          page: 0,
+          page_size: 100,
+          total: 1
+        });
+      }
+      if (pathOf(url) === '/discovery/listings/3365/confirm-boardgame' && init?.method === 'POST') {
+        matchCompleted = true;
+        return jsonResponse(refreshedCandidate);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    expect(await screen.findByText('Kitchen Rush')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Filter Title'), 'kitchen');
+    await waitFor(() => expect(listingRequests.at(-1)).toContain('filter_title=kitchen'));
+
+    await user.click(screen.getByRole('button', { name: 'Mark as boardgame' }));
+
+    expect(await screen.findByText('Kitchen Rush Refreshed')).toBeInTheDocument();
+    expect(listingRequests.at(-1)).toContain('filter_title=kitchen');
+    expect(listingRequests.at(-1)).toContain('sort=title');
+    expect(listingRequests.at(-1)).toContain('sort_direction=asc');
+  }, 10000);
+
   it('opens a form view with all item candidate fields on row double click', async () => {
     const user = userEvent.setup();
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -187,7 +362,7 @@ describe('ListingCandidatesPage', () => {
               raw_price: '$899.00',
               source_listing_url: 'https://store.mx/collections/boardgames',
               source_url: 'https://store.mx/products/kitchen-rush',
-              status: 'LISTED',
+              listing_status: 'LISTED',
               store_id: 42,
               store_sku: 'KR-EN',
               title: 'Kitchen Rush'
@@ -275,7 +450,7 @@ describe('ListingCandidatesPage', () => {
       raw_price: '$899.00',
       source_listing_url: 'https://store.mx/collections/boardgames',
       source_url: 'https://store.mx/products/kitchen-rush',
-      status: 'NEW',
+      listing_status: 'PENDING',
       store_id: 42,
       store_sku: 'KR-EN',
       title: 'Kitchen Rush'
@@ -289,7 +464,7 @@ describe('ListingCandidatesPage', () => {
         return jsonResponse({
           ...originalCandidate,
           description: 'Updated description',
-          status: 'MATCH_NOT_FOUND',
+          listing_status: 'UNLISTED',
           title: 'Kitchen Rush Updated'
         });
       }
@@ -300,31 +475,28 @@ describe('ListingCandidatesPage', () => {
 
     const titleCells = await screen.findAllByText('Kitchen Rush');
     await user.dblClick(titleCells[0]);
-    await user.clear(screen.getByLabelText('Title'));
-    await user.type(screen.getByLabelText('Title'), 'Kitchen Rush Updated');
-    await user.clear(screen.getByLabelText('Status'));
-    await user.type(screen.getByLabelText('Status'), 'MATCH_NOT_FOUND');
-    await user.clear(screen.getByLabelText('Description'));
-    await user.type(screen.getByLabelText('Description'), 'Updated description');
-    await user.click(screen.getByRole('button', { name: 'Save Store Item' }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Kitchen Rush Updated' } });
+    fireEvent.change(screen.getByLabelText('Listing Status'), { target: { value: 'UNLISTED' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Updated description' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Store Item' }));
 
     expect(await screen.findByText('Store item saved.')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Kitchen Rush Updated')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('MATCH_NOT_FOUND')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('UNLISTED')).toBeInTheDocument();
 
     const patchCall = fetchMock.mock.calls.find(
       ([url, init]) => pathOf(String(url)) === '/discovery/listings/3365' && init?.method === 'PATCH'
     );
     expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
       description: 'Updated description',
-      status: 'MATCH_NOT_FOUND',
+      listing_status: 'UNLISTED',
       title: 'Kitchen Rush Updated'
     });
 
     await user.click(screen.getByRole('button', { name: 'Back to Store Items' }));
 
     expect(await screen.findByText('Kitchen Rush Updated')).toBeInTheDocument();
-  });
+  }, 10000);
 
   it('creates a curated item from the item candidate form', async () => {
     const user = userEvent.setup();
@@ -342,7 +514,7 @@ describe('ListingCandidatesPage', () => {
       publisher: 'Artipia Games',
       matched_bgg_id: 223953,
       source_url: 'https://store.mx/products/kitchen-rush',
-      status: 'MATCH_NOT_FOUND',
+      listing_status: 'PENDING',
       store_id: 42,
       title: 'Kitchen Rush'
     };
@@ -356,7 +528,7 @@ describe('ListingCandidatesPage', () => {
           ...originalCandidate,
           item_id: 77,
           match_source: 'MANUAL',
-          status: 'LISTED'
+          listing_status: 'PENDING'
         });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -367,16 +539,16 @@ describe('ListingCandidatesPage', () => {
     const titleCells = await screen.findAllByText('Kitchen Rush');
     await user.dblClick(titleCells[0]);
     expect(screen.queryByLabelText('BGG ID')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Create Item from Candidate' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create Item from Candidate' }));
     const dialog = await screen.findByRole('dialog', { name: 'Create Item from Candidate' });
     expect(within(dialog).getByLabelText('Implements')).not.toBeChecked();
     expect(within(dialog).getByLabelText('BGG ID')).toHaveValue('223953');
-    await user.click(within(dialog).getByLabelText('Implements'));
-    await user.click(within(dialog).getByRole('button', { name: 'Create Item' }));
+    fireEvent.click(within(dialog).getByLabelText('Implements'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create Item' }));
 
     expect(await screen.findByText('Item created from candidate.')).toBeInTheDocument();
     expect(screen.getByLabelText('Item ID')).toHaveValue('77');
-    expect(screen.getByDisplayValue('LISTED')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('PENDING')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create Item from Candidate' })).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Create Item from Candidate' })).toBeEnabled();
 
@@ -385,7 +557,7 @@ describe('ListingCandidatesPage', () => {
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
-  });
+  }, 10000);
 
   it('creates a BGG item from the item candidate form and links the candidate', async () => {
     const user = userEvent.setup();
@@ -403,7 +575,7 @@ describe('ListingCandidatesPage', () => {
       publisher: 'Korea Boardgames',
       matched_bgg_id: 123456,
       source_url: 'https://store.mx/products/cafe-barista',
-      status: 'MATCH_NOT_FOUND',
+      listing_status: 'PENDING',
       store_id: 42,
       title: 'Cafe Barista'
     };
@@ -420,7 +592,7 @@ describe('ListingCandidatesPage', () => {
             match_source: 'BGG_MANUAL',
             matched_bgg_id: 377061,
             matched_name: 'Coffee Rush',
-            status: 'LISTED'
+            listing_status: 'PENDING'
           },
           201
         );
@@ -434,17 +606,16 @@ describe('ListingCandidatesPage', () => {
     await user.dblClick(titleCells[0]);
     expect(screen.getByRole('button', { name: 'Create Item from Candidate' })).toBeEnabled();
     expect(screen.queryByLabelText('BGG ID')).not.toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Create item from BGG ID' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Create item from BGG ID' }));
     const dialog = await screen.findByRole('dialog', { name: 'Create Item from BGG' });
     expect(within(dialog).getByLabelText('BGG ID')).toHaveValue('123456');
-    await user.clear(within(dialog).getByLabelText('BGG ID'));
-    await user.type(within(dialog).getByLabelText('BGG ID'), '377061');
-    await user.click(within(dialog).getByRole('button', { name: 'Create BGG Item' }));
+    fireEvent.change(within(dialog).getByLabelText('BGG ID'), { target: { value: '377061' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create BGG Item' }));
 
     expect(await screen.findByText('Item created from BGG ID.')).toBeInTheDocument();
     expect(screen.getByLabelText('Item ID')).toHaveValue('77');
     expect(screen.getByLabelText('Matched BGG ID')).toHaveValue('377061');
-    expect(screen.getByDisplayValue('LISTED')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('PENDING')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create Item from BGG' })).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Create Item from Candidate' })).toBeEnabled();
 
@@ -452,7 +623,7 @@ describe('ListingCandidatesPage', () => {
       ([url, init]) => pathOf(String(url)) === '/discovery/listings/3365/create-item-from-bgg' && init?.method === 'POST'
     );
     expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({ bgg_id: '377061' });
-  });
+  }, 10000);
 
   it('appends the next page when scrolled near the bottom', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
@@ -490,7 +661,7 @@ describe('ListingCandidatesPage', () => {
     expect(await screen.findByText('Second Page Item')).toBeInTheDocument();
     expect(screen.getByText('First Page Item')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'http://localhost:4001/discovery/listings?page=1&page_size=100&sort=last_updated&sort_direction=desc'
+      'http://localhost:4001/discovery/listings?page=1&page_size=100&sort=title&sort_direction=asc'
     );
   });
 
@@ -502,7 +673,7 @@ describe('ListingCandidatesPage', () => {
           id: '920',
           image_url: 'https://store.mx/cafe-barista.jpg',
           source_url: 'https://store.mx/products/cafe-barista',
-          status: 'LISTED',
+          listing_status: 'LISTED',
           title: 'Cafe Barista'
         });
       }

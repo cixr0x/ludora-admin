@@ -1,8 +1,10 @@
 import AssignmentTurnedInIcon from '@mui/icons-material/AssignmentTurnedIn';
+import AddCircleIcon from '@mui/icons-material/AddCircle';
 import BuildIcon from '@mui/icons-material/Build';
 import CategoryIcon from '@mui/icons-material/Category';
 import MenuOpenIcon from '@mui/icons-material/MenuOpen';
 import StorefrontIcon from '@mui/icons-material/Storefront';
+import ViewCarouselIcon from '@mui/icons-material/ViewCarousel';
 import ViewListIcon from '@mui/icons-material/ViewList';
 import {
   AppBar,
@@ -25,6 +27,10 @@ export type AdminSection =
   | 'reviews'
   | 'operations'
   | 'items'
+  | 'front-page-category-options'
+  | 'front-page-category-products'
+  | 'front-page-preview'
+  | 'front-page-categories'
   | 'offer-reviews';
 
 type NavigationItem = {
@@ -42,6 +48,9 @@ const navigationItems: NavigationItem[] = [
   { id: 'reviews', label: 'Review Tasks', icon: <AssignmentTurnedInIcon fontSize="small" /> },
   { id: 'operations', label: 'Operations', icon: <BuildIcon fontSize="small" /> },
   { id: 'items', label: 'Items', icon: <CategoryIcon fontSize="small" /> },
+  { id: 'front-page-category-options', label: 'Add Front Page Category', icon: <AddCircleIcon fontSize="small" /> },
+  { id: 'front-page-categories', label: 'Front Page Categories', icon: <CategoryIcon fontSize="small" /> },
+  { id: 'front-page-preview', label: 'Front Page Preview', icon: <ViewCarouselIcon fontSize="small" /> },
   { id: 'offer-reviews', label: 'Store Item Review', icon: <ViewListIcon fontSize="small" /> }
 ];
 

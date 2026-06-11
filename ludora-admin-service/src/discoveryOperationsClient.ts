@@ -12,20 +12,25 @@ export type ItemDiscoveryRunResult = {
   website_url: string;
 };
 
+export type ItemUpdateRunResult = {
+  updated_items: number;
+};
+
 export type StoreDiscoveryRun = {
   completed_at: string | null;
   error: string | null;
   id: string;
-  result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | null;
+  result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | ItemUpdateRunResult | null;
   started_at: string;
   status: StoreDiscoveryRunStatus;
-  type: 'item_discovery' | 'store_discovery';
+  type: 'item_discovery' | 'item_update' | 'store_discovery';
 };
 
 export type DiscoveryOperationsClient = {
   getLatestStoreDiscoveryRun(): Promise<StoreDiscoveryRun | null>;
   getStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun | null>;
   startItemDiscoveryRun(storeId: number, websiteUrl: string): Promise<StoreDiscoveryRun>;
+  startItemUpdateRun(): Promise<StoreDiscoveryRun>;
   startStoreDiscoveryRun(): Promise<StoreDiscoveryRun>;
 };
 
@@ -57,6 +62,10 @@ export function createDiscoveryOperationsClient(baseUrl: string): DiscoveryOpera
       requestData<StoreDiscoveryRun>(baseUrl, `/operations/stores/${encodeURIComponent(storeId)}/item-discovery-runs`, {
         body: JSON.stringify({ website_url: websiteUrl }),
         headers: { 'Content-Type': 'application/json' },
+        method: 'POST'
+      }),
+    startItemUpdateRun: () =>
+      requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-update-runs', {
         method: 'POST'
       }),
     startStoreDiscoveryRun: () =>
