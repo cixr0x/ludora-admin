@@ -226,7 +226,7 @@ const randomFrontPageCategoryAssignmentsSql = `
       oc.category_position,
       cycle_number.cycle_number
     from ordered_categories oc
-    cross join generate_series(1, 20) as cycle_number(cycle_number)
+    cross join generate_series(1, 32) as cycle_number(cycle_number)
   ),
   assignment_slots as (
     select
@@ -523,7 +523,7 @@ const itemsTableConfig: TableQueryConfig = {
   },
   defaultSortColumnId: 'canonical_name',
   defaultSortDirection: 'asc',
-  fromSql: 'from active_item',
+  fromSql: 'from items',
   selectSql: itemSelect
 };
 
@@ -848,7 +848,7 @@ export function createDiscoveryRouter(
 
       const result = await database.query(
         `select ${itemSelect}
-         from active_item
+         from items
          order by canonical_name asc
          limit 200`
       );

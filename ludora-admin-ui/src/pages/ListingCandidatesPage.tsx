@@ -40,6 +40,13 @@ type ItemCandidateDetailField = {
   readOnly?: boolean;
 };
 
+type BatchSelectionOptions = {
+  enabled: boolean;
+  isProcessing: boolean;
+  onToggle: (record: AdminRecord, checked: boolean) => void;
+  selectedIds: Set<string>;
+};
+
 function field(record: AdminRecord, keys: string[], fallback = '-') {
   const value = keys.map((key) => record[key]).find((candidate) => candidate !== undefined && candidate !== null && candidate !== '');
   return value === undefined ? fallback : String(value);
@@ -179,6 +186,14 @@ function booleanValue(record: AdminRecord, key: string) {
   return false;
 }
 
+function candidateId(record: AdminRecord) {
+  return field(record, ['id'], '');
+}
+
+function isBoardgameConfirmed(record: AdminRecord) {
+  return field(record, ['is_boardgame_confirmed'], '').toLowerCase() === 'true';
+}
+
 const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { key: 'id', label: 'ID', readOnly: true },
   { key: 'store_id', label: 'Store ID' },
@@ -226,9 +241,10 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
 
 function buildItemCandidateColumns(
   onSetBoardgameState: (record: AdminRecord, isBoardgame: boolean) => void,
-  updatingBoardgameCandidateId: string
+  updatingBoardgameCandidateId: string,
+  batchSelection?: BatchSelectionOptions
 ): DataTableColumn<AdminRecord>[] {
-  return [
+  const columns: DataTableColumn<AdminRecord>[] = [
   {
     filterable: false,
     id: 'image_url',
@@ -406,6 +422,34 @@ function buildItemCandidateColumns(
     sortValue: (row) => field(row, ['last_updated'])
   }
   ];
+  return batchSelection?.enabled ? [batchSelectionColumn(batchSelection), ...columns] : columns;
+}
+
+function batchSelectionColumn(options: BatchSelectionOptions): DataTableColumn<AdminRecord> {
+  return {
+    filterable: false,
+    id: 'batch_selection',
+    label: 'Select',
+    minWidth: 72,
+    render: (row) => {
+      const id = candidateId(row);
+      const title = field(row, ['title', 'name'], 'store item');
+      return (
+        <Checkbox
+          checked={options.selectedIds.has(id)}
+          disabled={!id || isBoardgameConfirmed(row) || options.isProcessing}
+          inputProps={{ 'aria-label': `Select ${title}` }}
+          size="small"
+          onChange={(event) => {
+            options.onToggle(row, event.target.checked);
+          }}
+          onClick={(event) => event.stopPropagation()}
+          onDoubleClick={(event) => event.stopPropagation()}
+        />
+      );
+    },
+    sortable: false
+  };
 }
 
 type ListingCandidatesPageProps = {
@@ -414,13 +458,17 @@ type ListingCandidatesPageProps = {
 };
 
 export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCandidateId }: ListingCandidatesPageProps = {}) {
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [detailState, setDetailState] = useState<LoadState>('ready');
+  const [isBatchConfirming, setIsBatchConfirming] = useState(false);
+  const [isBatchModeEnabled, setIsBatchModeEnabled] = useState(false);
   const [isCreatingBggItem, setIsCreatingBggItem] = useState(false);
   const [isCreatingItem, setIsCreatingItem] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [updatingBoardgameCandidateId, setUpdatingBoardgameCandidateId] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
+  const [selectedBatchCandidateIds, setSelectedBatchCandidateIds] = useState<Set<string>>(() => new Set());
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const table = useServerTableState('title');
@@ -465,9 +513,100 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
     [setRows, table]
   );
 
+  const handleToggleBatchCandidate = useCallback((candidate: AdminRecord, checked: boolean) => {
+    const id = candidateId(candidate);
+    if (!id) {
+      return;
+    }
+
+    setSelectedBatchCandidateIds((currentIds) => {
+      const nextIds = new Set(currentIds);
+      if (checked) {
+        nextIds.add(id);
+      } else {
+        nextIds.delete(id);
+      }
+      return nextIds;
+    });
+  }, []);
+
+  async function handleBatchConfirmSelected() {
+    const candidatesById = new Map(rows.map((row) => [candidateId(row), row]));
+    const candidatesToConfirm = [...selectedBatchCandidateIds]
+      .map((id) => candidatesById.get(id))
+      .filter((candidate): candidate is AdminRecord => Boolean(candidate));
+
+    if (candidatesToConfirm.length === 0) {
+      return;
+    }
+
+    setIsBatchConfirming(true);
+    setSaveError('');
+    setSaveMessage('');
+    let successCount = 0;
+    let failureCount = 0;
+
+    try {
+      for (const [index, candidate] of candidatesToConfirm.entries()) {
+        const id = candidateId(candidate);
+        setBatchProgress({ current: index + 1, total: candidatesToConfirm.length });
+        setUpdatingBoardgameCandidateId(id);
+
+        try {
+          const savedCandidate = await adminApi.confirmItemCandidateBoardgame(id);
+          successCount += 1;
+          setRows((currentRows) =>
+            currentRows.map((row, rowIndex) => (field(row, ['id'], String(rowIndex)) === id ? savedCandidate : row))
+          );
+          setSelectedCandidate((currentCandidate) =>
+            currentCandidate && field(currentCandidate, ['id'], '') === id ? savedCandidate : currentCandidate
+          );
+          setSelectedBatchCandidateIds((currentIds) => {
+            const nextIds = new Set(currentIds);
+            nextIds.delete(id);
+            return nextIds;
+          });
+        } catch {
+          failureCount += 1;
+        }
+      }
+
+      if (successCount > 0) {
+        setSaveMessage(`Confirmed ${successCount} store ${successCount === 1 ? 'item' : 'items'} as boardgames.`);
+      }
+      if (failureCount > 0) {
+        setSaveError(`Batch confirmation completed with ${failureCount} failed ${failureCount === 1 ? 'item' : 'items'}.`);
+      }
+      table.refresh();
+    } finally {
+      setBatchProgress(null);
+      setIsBatchConfirming(false);
+      setUpdatingBoardgameCandidateId('');
+    }
+  }
+
   const itemCandidateColumns = useMemo(
-    () => buildItemCandidateColumns(handleSetBoardgameState, updatingBoardgameCandidateId),
-    [handleSetBoardgameState, updatingBoardgameCandidateId]
+    () =>
+      buildItemCandidateColumns(
+        handleSetBoardgameState,
+        updatingBoardgameCandidateId,
+        isBatchModeEnabled
+          ? {
+              enabled: isBatchModeEnabled,
+              isProcessing: isBatchConfirming,
+              onToggle: handleToggleBatchCandidate,
+              selectedIds: selectedBatchCandidateIds
+            }
+          : undefined
+      ),
+    [
+      handleSetBoardgameState,
+      handleToggleBatchCandidate,
+      isBatchConfirming,
+      isBatchModeEnabled,
+      selectedBatchCandidateIds,
+      updatingBoardgameCandidateId
+    ]
   );
 
   useEffect(() => {
@@ -581,12 +720,55 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
   return (
     <Stack spacing={2}>
       <Box>
-        <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
-          Store Items
-        </Typography>
-        <Typography color="text.secondary" variant="body2">
-          Discovered store product rows captured from approved store inventories.
-        </Typography>
+        <Stack alignItems={{ sm: 'center', xs: 'flex-start' }} direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
+          <Box>
+            <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
+              Store Items
+            </Typography>
+            <Typography color="text.secondary" variant="body2">
+              Discovered store product rows captured from approved store inventories.
+            </Typography>
+          </Box>
+          {viewMode === 'table' ? (
+            <Stack alignItems={{ sm: 'center', xs: 'stretch' }} direction={{ sm: 'row', xs: 'column' }} spacing={1}>
+              <Button
+                disabled={isBatchConfirming}
+                type="button"
+                variant={isBatchModeEnabled ? 'contained' : 'outlined'}
+                onClick={() => {
+                  setIsBatchModeEnabled((current) => {
+                    const next = !current;
+                    if (!next) {
+                      setSelectedBatchCandidateIds(new Set());
+                    }
+                    return next;
+                  });
+                  setSaveError('');
+                  setSaveMessage('');
+                }}
+              >
+                {isBatchModeEnabled ? 'Exit batch confirmation' : 'Batch confirmation'}
+              </Button>
+              {isBatchModeEnabled ? (
+                <>
+                  <Button
+                    disabled={selectedBatchCandidateIds.size === 0 || isBatchConfirming}
+                    type="button"
+                    variant="contained"
+                    onClick={handleBatchConfirmSelected}
+                  >
+                    {isBatchConfirming ? 'Confirming...' : 'Confirm selected boardgames'}
+                  </Button>
+                  <Typography color="text.secondary" variant="body2">
+                    {batchProgress
+                      ? `Confirming ${batchProgress.current} / ${batchProgress.total}`
+                      : `${selectedBatchCandidateIds.size} selected`}
+                  </Typography>
+                </>
+              ) : null}
+            </Stack>
+          ) : null}
+        </Stack>
       </Box>
 
       {state === 'loading' && viewMode === 'table' ? (
@@ -634,7 +816,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
           ariaLabel="Store items"
           columns={itemCandidateColumns}
           getRowKey={(row, index) => field(row, ['id'], String(index))}
-          minWidth={3674}
+          minWidth={isBatchModeEnabled ? 3746 : 3674}
           onRowDoubleClick={(row) => {
             setDetailState('ready');
             setSaveError('');

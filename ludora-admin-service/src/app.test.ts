@@ -470,8 +470,8 @@ describe('ludora admin service', () => {
     expect(queries[1].params).toEqual([2]);
   });
 
-  it('randomly assigns active items through twenty category cycles without reusing games', async () => {
-    const rows = [{ assigned_count: 20, skipped_count: 10 }];
+  it('randomly assigns active items through thirty-two category cycles without reusing games', async () => {
+    const rows = [{ assigned_count: 32, skipped_count: 10 }];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -487,7 +487,7 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(queries[0].sql);
     expect(sql).toContain('from front_page_category_items');
     expect(sql).toContain('from front_page_categories fpc');
-    expect(sql).toContain('generate_series(1, 20) as cycle_number');
+    expect(sql).toContain('generate_series(1, 32) as cycle_number');
     expect(sql).toContain('row_number() over (order by cycle_number asc, category_position asc)');
     expect(sql).toContain('from active_item ai');
     expect(sql).toContain('from item_categories ic');
@@ -577,10 +577,32 @@ describe('ludora admin service', () => {
       }
     });
     const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, canonical_name'));
-    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from active_item');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from items');
+    expect(normalizeSql(rowQuery?.sql ?? '')).not.toContain('from active_item');
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((canonical_name)::text, '') ilike $1 escape '\\'");
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by canonical_name asc');
     expect(rowQuery?.params).toEqual(['%coffee%', 25, 0]);
+  });
+
+  it('lists catalog items from all items when no table query is provided', async () => {
+    const rows = [{ canonical_name: 'Coffee Rush', id: 377061, item_type: 'base_game' }];
+    const queries: string[] = [];
+    const database: Database = {
+      query: async (sql) => {
+        queries.push(sql);
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/items');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows });
+    const sql = normalizeSql(queries[0] ?? '');
+    expect(sql).toContain('from items');
+    expect(sql).not.toContain('from active_item');
+    expect(sql).toContain('order by canonical_name asc');
+    expect(sql).toContain('limit 200');
   });
 
   it('returns a catalog item by id', async () => {
@@ -2104,6 +2126,7 @@ describe('ludora admin service', () => {
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async () => run,
+      startItemEmbeddingRun: async () => run,
       startItemUpdateRun: async () => run,
       startStoreDiscoveryRun: async () => run
     };
@@ -2134,6 +2157,7 @@ describe('ludora admin service', () => {
       getLatestStoreDiscoveryRun: async () => run,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async () => run,
+      startItemEmbeddingRun: async () => run,
       startItemUpdateRun: async () => run,
       startStoreDiscoveryRun: async () => run
     };
@@ -2151,6 +2175,9 @@ describe('ludora admin service', () => {
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => null,
       startItemDiscoveryRun: async () => {
+        throw new DiscoveryApiError('Store discovery is already running', 409);
+      },
+      startItemEmbeddingRun: async () => {
         throw new DiscoveryApiError('Store discovery is already running', 409);
       },
       startItemUpdateRun: async () => {
@@ -2198,6 +2225,7 @@ describe('ludora admin service', () => {
         calls.push({ storeId, websiteUrl });
         return run;
       },
+      startItemEmbeddingRun: async () => run,
       startItemUpdateRun: async () => run,
       startStoreDiscoveryRun: async () => run
     };
@@ -2230,6 +2258,9 @@ describe('ludora admin service', () => {
       startItemDiscoveryRun: async () => {
         throw new Error('should not start item discovery');
       },
+      startItemEmbeddingRun: async () => {
+        throw new Error('should not start item embeddings');
+      },
       startItemUpdateRun: async () => {
         calls.push('item_update');
         return run;
@@ -2246,11 +2277,55 @@ describe('ludora admin service', () => {
     expect(calls).toEqual(['item_update']);
   });
 
+  it('starts item embedding runs through the discovery operations client', async () => {
+    const run: StoreDiscoveryRun = {
+      completed_at: null,
+      error: null,
+      id: 'run-4',
+      result: {
+        embedded_items: 8,
+        model: 'text-embedding-3-small',
+        refresh_mode: 'full',
+        selected_items: 8
+      },
+      started_at: '2026-06-13T20:00:00Z',
+      status: 'completed',
+      type: 'item_embeddings'
+    };
+    const calls: string[] = [];
+    const operationsClient: DiscoveryOperationsClient = {
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => run,
+      startItemDiscoveryRun: async () => {
+        throw new Error('should not start item discovery');
+      },
+      startItemEmbeddingRun: async (refreshMode) => {
+        calls.push(refreshMode);
+        return run;
+      },
+      startItemUpdateRun: async () => {
+        throw new Error('should not start item update');
+      },
+      startStoreDiscoveryRun: async () => run
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-embedding-runs')
+      .send({ refresh_mode: 'full' });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: run });
+    expect(calls).toEqual(['full']);
+  });
+
   it('returns 404 when starting item discovery for a missing clean store', async () => {
     const operationsClient: DiscoveryOperationsClient = {
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => null,
       startItemDiscoveryRun: async () => {
+        throw new Error('should not call discovery API');
+      },
+      startItemEmbeddingRun: async () => {
         throw new Error('should not call discovery API');
       },
       startItemUpdateRun: async () => {

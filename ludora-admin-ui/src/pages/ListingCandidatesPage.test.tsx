@@ -209,6 +209,77 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByRole('button', { name: 'Mark as not boardgame' })).toBeDisabled();
   });
 
+  it('batch confirms selected store items sequentially', async () => {
+    const user = userEvent.setup();
+    const originalCandidates = [
+      {
+        availability: 'available',
+        id: '101',
+        is_boardgame: false,
+        is_boardgame_confirmed: false,
+        listing_status: 'PENDING',
+        source_url: 'https://store.mx/products/first-game',
+        store_id: 42,
+        title: 'First Game'
+      },
+      {
+        availability: 'available',
+        id: '102',
+        is_boardgame: false,
+        is_boardgame_confirmed: false,
+        listing_status: 'PENDING',
+        source_url: 'https://store.mx/products/second-game',
+        store_id: 42,
+        title: 'Second Game'
+      }
+    ];
+    let currentCandidates = originalCandidates;
+    const confirmationCalls: string[] = [];
+    let resolveFirstConfirmation: (() => void) | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const path = pathOf(url);
+      if (path === '/discovery/listings' && !init) {
+        return jsonResponse(currentCandidates, 200, { page: 0, page_size: 100, total: currentCandidates.length });
+      }
+      if (path === '/discovery/listings/101/confirm-boardgame' && init?.method === 'POST') {
+        confirmationCalls.push('101');
+        return new Promise<Response>((resolve) => {
+          resolveFirstConfirmation = () => {
+            const confirmed = { ...originalCandidates[0], is_boardgame: true, is_boardgame_confirmed: true };
+            currentCandidates = [confirmed, currentCandidates[1]];
+            resolve(jsonResponse(confirmed));
+          };
+        });
+      }
+      if (path === '/discovery/listings/102/confirm-boardgame' && init?.method === 'POST') {
+        confirmationCalls.push('102');
+        const confirmed = { ...originalCandidates[1], is_boardgame: true, is_boardgame_confirmed: true };
+        currentCandidates = [currentCandidates[0], confirmed];
+        return jsonResponse(confirmed);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    expect(await screen.findByText('First Game')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Batch confirmation' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select First Game' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Second Game' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm selected boardgames' }));
+
+    await waitFor(() => expect(confirmationCalls).toEqual(['101']));
+    expect(screen.getByText('Confirming 1 / 2')).toBeInTheDocument();
+
+    resolveFirstConfirmation?.();
+
+    await waitFor(() => expect(confirmationCalls).toEqual(['101', '102']));
+    expect(await screen.findByText('Confirmed 2 store items as boardgames.')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select First Game' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Second Game' })).not.toBeChecked();
+  });
+
   it('marks unconfirmed store items as not boardgame from table actions', async () => {
     const user = userEvent.setup();
     const originalCandidate = {

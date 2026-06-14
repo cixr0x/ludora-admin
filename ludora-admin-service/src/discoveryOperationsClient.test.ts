@@ -95,4 +95,30 @@ describe('createDiscoveryOperationsClient', () => {
       method: 'POST'
     });
   });
+
+  it('starts item embedding runs with a refresh mode', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-4',
+      result: null,
+      started_at: '2026-06-13T20:00:00Z',
+      status: 'running',
+      type: 'item_embeddings'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(createDiscoveryOperationsClient('http://localhost:8001/').startItemEmbeddingRun('full')).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8001/operations/item-embedding-runs', {
+      body: JSON.stringify({ refresh_mode: 'full' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
 });

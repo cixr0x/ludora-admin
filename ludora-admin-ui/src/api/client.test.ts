@@ -752,6 +752,38 @@ describe('fetchRows', () => {
     });
   });
 
+  it('starts item embedding runs with a refresh mode', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-4',
+      result: {
+        embedded_items: 8,
+        model: 'text-embedding-3-small',
+        refresh_mode: 'missing',
+        selected_items: 8
+      },
+      started_at: '2026-06-13T20:00:00Z',
+      status: 'completed',
+      type: 'item_embeddings'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.startItemEmbeddingRun('missing')).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-embedding-runs', {
+      body: JSON.stringify({ refresh_mode: 'missing' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
   it('approves store candidates with a POST request', async () => {
     const store = { id: 'store-1', status: 'ACCEPTED', store_name: 'Accepted Store' };
     const { adminApi } = await importClient();

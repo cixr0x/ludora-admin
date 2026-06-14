@@ -16,20 +16,28 @@ export type ItemUpdateRunResult = {
   updated_items: number;
 };
 
+export type ItemEmbeddingRunResult = {
+  embedded_items: number;
+  model: string;
+  refresh_mode: 'full' | 'missing';
+  selected_items: number;
+};
+
 export type StoreDiscoveryRun = {
   completed_at: string | null;
   error: string | null;
   id: string;
-  result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | ItemUpdateRunResult | null;
+  result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | ItemUpdateRunResult | ItemEmbeddingRunResult | null;
   started_at: string;
   status: StoreDiscoveryRunStatus;
-  type: 'item_discovery' | 'item_update' | 'store_discovery';
+  type: 'item_discovery' | 'item_embeddings' | 'item_update' | 'store_discovery';
 };
 
 export type DiscoveryOperationsClient = {
   getLatestStoreDiscoveryRun(): Promise<StoreDiscoveryRun | null>;
   getStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun | null>;
   startItemDiscoveryRun(storeId: number, websiteUrl: string): Promise<StoreDiscoveryRun>;
+  startItemEmbeddingRun(refreshMode: 'full' | 'missing'): Promise<StoreDiscoveryRun>;
   startItemUpdateRun(): Promise<StoreDiscoveryRun>;
   startStoreDiscoveryRun(): Promise<StoreDiscoveryRun>;
 };
@@ -66,6 +74,12 @@ export function createDiscoveryOperationsClient(baseUrl: string): DiscoveryOpera
       }),
     startItemUpdateRun: () =>
       requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-update-runs', {
+        method: 'POST'
+      }),
+    startItemEmbeddingRun: (refreshMode: 'full' | 'missing') =>
+      requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-embedding-runs', {
+        body: JSON.stringify({ refresh_mode: refreshMode }),
+        headers: { 'Content-Type': 'application/json' },
         method: 'POST'
       }),
     startStoreDiscoveryRun: () =>

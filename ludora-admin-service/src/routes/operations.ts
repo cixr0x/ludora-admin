@@ -57,7 +57,26 @@ export function createOperationsRouter(operationsClient: DiscoveryOperationsClie
     }
   });
 
+  router.post('/admin/operations/item-embedding-runs', async (request, response, next) => {
+    try {
+      const refreshMode = parseEmbeddingRefreshMode(request.body);
+      const run = await operationsClient.startItemEmbeddingRun(refreshMode);
+      response.status(202).json({ data: run });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   return router;
+}
+
+function parseEmbeddingRefreshMode(body: unknown): 'full' | 'missing' {
+  const value = typeof body === 'object' && body !== null && 'refresh_mode' in body ? String(body.refresh_mode) : 'missing';
+  const normalizedValue = value.trim().toLowerCase();
+  if (normalizedValue === 'full' || normalizedValue === 'missing') {
+    return normalizedValue;
+  }
+  throw httpError(400, 'refresh_mode must be full or missing');
 }
 
 function httpError(status: number, message: string): Error & { status: number } {

@@ -150,14 +150,21 @@ export type ItemUpdateRunResult = {
   updated_items: number;
 };
 
+export type ItemEmbeddingRunResult = {
+  embedded_items: number;
+  model: string;
+  refresh_mode: 'full' | 'missing';
+  selected_items: number;
+};
+
 export type StoreDiscoveryRun = {
   completed_at: string | null;
   error: string | null;
   id: string;
-  result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | ItemUpdateRunResult | null;
+  result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | ItemUpdateRunResult | ItemEmbeddingRunResult | null;
   started_at: string;
   status: StoreDiscoveryRunStatus;
-  type: 'item_discovery' | 'item_update' | 'store_discovery';
+  type: 'item_discovery' | 'item_embeddings' | 'item_update' | 'store_discovery';
 };
 
 function buildApiUrl(path: string) {
@@ -327,6 +334,10 @@ export const adminApi = {
   startItemUpdateRun: () =>
     fetchData<StoreDiscoveryRun>('/admin/operations/item-update-runs', {
       method: 'POST'
+    }),
+  startItemEmbeddingRun: (refreshMode: 'full' | 'missing') =>
+    sendJson<StoreDiscoveryRun>('/admin/operations/item-embedding-runs', 'POST', {
+      refresh_mode: refreshMode
     }),
   startStoreDiscoveryRun: () =>
     fetchData<StoreDiscoveryRun>('/admin/operations/store-discovery-runs', {

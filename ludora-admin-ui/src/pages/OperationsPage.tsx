@@ -1,8 +1,9 @@
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import { Alert, Box, Button, Chip, CircularProgress, Paper, Stack, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, FormControlLabel, Paper, Radio, RadioGroup, Stack, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
 import {
   adminApi,
+  type ItemEmbeddingRunResult,
   type ItemDiscoveryRunResult,
   type ItemUpdateRunResult,
   type StoreDiscoveryRun,
@@ -99,6 +100,30 @@ const operationRunColumns: DataTableColumn<StoreDiscoveryRun>[] = [
     minWidth: 150,
     render: (run) => itemUpdateResult(run)?.updated_items ?? '-',
     sortValue: (run) => itemUpdateResult(run)?.updated_items ?? null
+  },
+  {
+    filterValue: (run) => itemEmbeddingResult(run)?.selected_items ?? '-',
+    id: 'selected_embeddings',
+    label: 'Selected embeddings',
+    minWidth: 190,
+    render: (run) => itemEmbeddingResult(run)?.selected_items ?? '-',
+    sortValue: (run) => itemEmbeddingResult(run)?.selected_items ?? null
+  },
+  {
+    filterValue: (run) => itemEmbeddingResult(run)?.embedded_items ?? '-',
+    id: 'embedded_items',
+    label: 'Embedded items',
+    minWidth: 170,
+    render: (run) => itemEmbeddingResult(run)?.embedded_items ?? '-',
+    sortValue: (run) => itemEmbeddingResult(run)?.embedded_items ?? null
+  },
+  {
+    filterValue: (run) => itemEmbeddingResult(run)?.model ?? '-',
+    id: 'embedding_model',
+    label: 'Embedding model',
+    minWidth: 220,
+    render: (run) => itemEmbeddingResult(run)?.model ?? '-',
+    sortValue: (run) => itemEmbeddingResult(run)?.model ?? ''
   }
 ];
 
@@ -114,10 +139,15 @@ function itemUpdateResult(run: StoreDiscoveryRun): ItemUpdateRunResult | null {
   return run.type === 'item_update' ? (run.result as ItemUpdateRunResult | null) : null;
 }
 
+function itemEmbeddingResult(run: StoreDiscoveryRun): ItemEmbeddingRunResult | null {
+  return run.type === 'item_embeddings' ? (run.result as ItemEmbeddingRunResult | null) : null;
+}
+
 export function OperationsPage() {
   const [run, setRun] = useState<StoreDiscoveryRun | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
-  const [startingOperation, setStartingOperation] = useState<'item_update' | 'store_discovery' | ''>('');
+  const [embeddingRefreshMode, setEmbeddingRefreshMode] = useState<'full' | 'missing'>('missing');
+  const [startingOperation, setStartingOperation] = useState<'item_embeddings' | 'item_update' | 'store_discovery' | ''>('');
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -194,6 +224,20 @@ export function OperationsPage() {
     }
   }
 
+  async function handleStartItemEmbeddings() {
+    setStartingOperation('item_embeddings');
+    setError('');
+    try {
+      const startedRun = await adminApi.startItemEmbeddingRun(embeddingRefreshMode);
+      setRun(startedRun);
+      setLoadState('ready');
+    } catch {
+      setError('Item embeddings could not be started.');
+    } finally {
+      setStartingOperation('');
+    }
+  }
+
   return (
     <Stack spacing={2}>
       <Box>
@@ -263,6 +307,42 @@ export function OperationsPage() {
         </Stack>
       </Paper>
 
+      <Paper variant="outlined" sx={{ p: 2 }}>
+        <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+          <Box>
+            <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+              Item embeddings
+            </Typography>
+            <Typography color="text.secondary" variant="body2">
+              Generate semantic search embeddings from item names, descriptions, and taxonomy.
+            </Typography>
+            <RadioGroup
+              row
+              value={embeddingRefreshMode}
+              onChange={(event) => setEmbeddingRefreshMode(event.target.value === 'full' ? 'full' : 'missing')}
+            >
+              <FormControlLabel control={<Radio size="small" />} label="Missing only" value="missing" />
+              <FormControlLabel control={<Radio size="small" />} label="Full refresh" value="full" />
+            </RadioGroup>
+          </Box>
+          <Button
+            disabled={Boolean(startingOperation) || runIsActive}
+            startIcon={
+              startingOperation === 'item_embeddings' || runIsActive ? (
+                <CircularProgress color="inherit" size={16} />
+              ) : (
+                <PlayArrowIcon />
+              )
+            }
+            sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
+            variant="contained"
+            onClick={handleStartItemEmbeddings}
+          >
+            Run Item Embeddings
+          </Button>
+        </Stack>
+      </Paper>
+
       {loadState === 'loading' ? (
         <Stack alignItems="center" direction="row" spacing={1.5}>
           <CircularProgress size={18} />
@@ -277,7 +357,7 @@ export function OperationsPage() {
           ariaLabel="Store discovery runs"
           columns={operationRunColumns}
           getRowKey={(row) => row.id}
-          minWidth={1800}
+          minWidth={2380}
           rows={[run]}
         />
       ) : null}
