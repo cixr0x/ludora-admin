@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser';
+import * as HtmlEntities from '@nodable/entities';
 
 export type BggSearchItem = {
   bggId: number;
@@ -10,6 +11,10 @@ export type BggSearchItem = {
 export type BggNamedLink = {
   bggId: number;
   name: string;
+};
+
+export type BggRelatedLink = BggNamedLink & {
+  inbound: boolean;
 };
 
 export type BggThingDetails = {
@@ -28,11 +33,13 @@ export type BggThingDetails = {
   minPlayers: number | null;
   minPlaytime: number | null;
   name: string;
+  parentLinks: BggRelatedLink[];
   playingTime: number | null;
   publishers: BggNamedLink[];
   rating: number | null;
   thumbnail: string;
   type: string;
+  implementationLinks: BggRelatedLink[];
   weight: number | null;
   yearPublished: number | null;
 };
@@ -44,6 +51,17 @@ const parser = new XMLParser({
   parseTagValue: false,
   trimValues: true
 });
+type EntityDecoderConstructor = new (options: {
+  namedEntities: Record<string, string>;
+}) => {
+  decode(value: string): string;
+};
+// Package typings expose EntityDecoder as default, while runtime exports it by name.
+const { ALL_ENTITIES, EntityDecoder } = HtmlEntities as unknown as {
+  ALL_ENTITIES: Record<string, string>;
+  EntityDecoder: EntityDecoderConstructor;
+};
+const htmlEntityDecoder = new EntityDecoder({ namedEntities: ALL_ENTITIES });
 
 export function parseBggSearchResponse(xml: string): BggSearchItem[] {
   const parsed = parser.parse(xml) as BggXmlRoot;
@@ -78,11 +96,13 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
     minPlayers: numberValue(item.minplayers?.value),
     minPlaytime: numberValue(item.minplaytime?.value),
     name: primaryName(item),
+    parentLinks: relatedLinksByType(item, 'boardgameexpansion').filter((link) => link.inbound),
     playingTime: numberValue(item.playingtime?.value),
     publishers: linksByType(item, 'boardgamepublisher'),
     rating: numberValue(item.statistics?.ratings?.average?.value),
     thumbnail: stringValue(item.thumbnail),
     type: stringValue(item.type),
+    implementationLinks: relatedLinksByType(item, 'boardgameimplementation'),
     weight: numberValue(item.statistics?.ratings?.averageweight?.value),
     yearPublished: numberValue(item.yearpublished?.value)
   };
@@ -90,13 +110,13 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
 
 function primaryName(item: BggXmlItem): string {
   const primary = asArray(item.name).find((name) => name.type === 'primary');
-  return stringValue(primary?.value);
+  return nameValue(primary?.value);
 }
 
 function namesByType(item: BggXmlItem, type: string): string[] {
   return asArray(item.name)
     .filter((name) => name.type === type)
-    .map((name) => stringValue(name.value))
+    .map((name) => nameValue(name.value))
     .filter(Boolean);
 }
 
@@ -105,7 +125,18 @@ function linksByType(item: BggXmlItem, type: string): BggNamedLink[] {
     .filter((link) => link.type === type)
     .map((link) => ({
       bggId: numberValue(link.id) ?? 0,
-      name: stringValue(link.value)
+      name: nameValue(link.value)
+    }))
+    .filter((link) => link.bggId > 0 && link.name);
+}
+
+function relatedLinksByType(item: BggXmlItem, type: string): BggRelatedLink[] {
+  return asArray(item.link)
+    .filter((link) => link.type === type)
+    .map((link) => ({
+      bggId: numberValue(link.id) ?? 0,
+      inbound: stringValue(link.inbound).toLowerCase() === 'true',
+      name: nameValue(link.value)
     }))
     .filter((link) => link.bggId > 0 && link.name);
 }
@@ -130,6 +161,22 @@ function stringValue(value: unknown): string {
     return '';
   }
   return String(value).trim();
+}
+
+function nameValue(value: unknown): string {
+  return decodeHtmlEntities(stringValue(value));
+}
+
+function decodeHtmlEntities(value: string): string {
+  let decoded = value;
+  for (let index = 0; index < 3; index += 1) {
+    const nextDecoded = htmlEntityDecoder.decode(decoded);
+    if (nextDecoded === decoded) {
+      return decoded;
+    }
+    decoded = nextDecoded;
+  }
+  return decoded;
 }
 
 type BggXmlRoot = {
@@ -168,6 +215,7 @@ type BggXmlName = {
 
 type BggXmlLink = {
   id?: string;
+  inbound?: string;
   type?: string;
   value?: string;
 };

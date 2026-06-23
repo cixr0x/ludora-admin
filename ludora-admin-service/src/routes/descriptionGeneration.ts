@@ -34,8 +34,8 @@ function parseDescriptionGenerationInput(body: unknown) {
   const description1 = stringField(value, 'description_1');
   const description2 = stringField(value, 'description_2');
 
-  if (!boardgameName || !description1 || !description2) {
-    throw httpError(400, 'boardgame_name, description_1, and description_2 are required');
+  if (!boardgameName || (!description1 && !description2)) {
+    throw httpError(400, 'boardgame_name and at least one source description are required');
   }
 
   return {

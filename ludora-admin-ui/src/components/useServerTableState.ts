@@ -5,11 +5,15 @@ import type { DataTableState, SortDirection } from './DataTable';
 const DEFAULT_ROWS_PER_PAGE = 100;
 type ServerRowsLoadState = 'loading' | 'ready' | 'error';
 
-export function useServerTableState(defaultSortColumnId: string, defaultSortDirection: SortDirection = 'asc') {
+export function useServerTableState(
+  defaultSortColumnId: string,
+  defaultSortDirection: SortDirection = 'asc',
+  defaultFilters: Record<string, string> = {}
+) {
   const [page, setPage] = useState(0);
   const [refreshToken, setRefreshToken] = useState(0);
   const [tableState, setTableState] = useState<DataTableState>({
-    filters: {},
+    filters: defaultFilters,
     sortColumnId: defaultSortColumnId,
     sortDirection: defaultSortDirection
   });

@@ -56,4 +56,30 @@ describe('loadConfig', () => {
       openAiTranslationModel: 'gpt-5.4-nano'
     });
   });
+
+  it('loads local cover workflow defaults and overrides', () => {
+    vi.stubEnv('LUDORA_COVER_WORK_DIR', 'D:\\covers');
+    vi.stubEnv('LUDORA_COVER_S3_BUCKET', 'custom-bucket');
+    vi.stubEnv('LUDORA_COVER_S3_PREFIX', 'custom-prefix');
+    vi.stubEnv('LUDORA_COVER_S3_REGION', 'us-west-2');
+    vi.stubEnv('LUDORA_COVER_PUBLIC_BASE_URL', 'https://cdn.example.test');
+    vi.stubEnv('LUDORA_COVER_GIMP_PATH', 'C:\\Program Files\\GIMP\\bin\\gimp.exe');
+
+    expect(loadConfig().localCoverWorkflow).toEqual({
+      gimpPath: 'C:\\Program Files\\GIMP\\bin\\gimp.exe',
+      publicBaseUrl: 'https://cdn.example.test',
+      s3Bucket: 'custom-bucket',
+      s3Prefix: 'custom-prefix',
+      s3Region: 'us-west-2',
+      workDir: 'D:\\covers'
+    });
+  });
+
+  it('defaults local cover S3 region to the Ludora bucket region', () => {
+    vi.stubEnv('LUDORA_COVER_S3_REGION', undefined);
+    vi.stubEnv('AWS_REGION', undefined);
+    vi.stubEnv('AWS_DEFAULT_REGION', undefined);
+
+    expect(loadConfig().localCoverWorkflow.s3Region).toBe('us-east-2');
+  });
 });

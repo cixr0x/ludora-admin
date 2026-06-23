@@ -6,6 +6,7 @@ import type { DescriptionGenerationRequest, DescriptionGenerationService } from 
 import type { Database } from './db.js';
 import { DiscoveryApiError, type DiscoveryOperationsClient, type StoreDiscoveryRun } from './discoveryOperationsClient.js';
 import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
+import { LocalCoverWorkflowError, type LocalCoverWorkflowManager, type LocalCoverWorkflowState } from './localCoverWorkflow.js';
 import type { TranslationRequest, TranslationService } from './translation/translationService.js';
 
 describe('ludora admin service', () => {
@@ -584,6 +585,30 @@ describe('ludora admin service', () => {
     expect(rowQuery?.params).toEqual(['%coffee%', 25, 0]);
   });
 
+  it('filters and sorts catalog items by id in the database query', async () => {
+    const rows = [{ canonical_name: 'Coffee Rush', id: 377061, item_type: 'base_game' }];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).includes('count(*)')) {
+          return { rows: [{ total: 1 }] };
+        }
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get(
+      '/items?page=0&page_size=25&sort=id&sort_direction=desc&filter_id=377061'
+    );
+
+    expect(response.status).toBe(200);
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, canonical_name'));
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((id)::text, '') ilike $1 escape '\\'");
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by id desc');
+    expect(rowQuery?.params).toEqual(['%377061%', 25, 0]);
+  });
+
   it('lists catalog items from all items when no table query is provided', async () => {
     const rows = [{ canonical_name: 'Coffee Rush', id: 377061, item_type: 'base_game' }];
     const queries: string[] = [];
@@ -666,6 +691,7 @@ describe('ludora admin service', () => {
       {
         availability: 'in_stock',
         id: 3365,
+        image_url: 'https://store.mx/coffee-rush-box.jpg',
         item_id: 77,
         price: '799.00',
         title: 'Coffee Rush',
@@ -687,6 +713,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const query = queries[0];
     const sql = normalizeSql(query.sql);
+    expect(sql).toContain('dic.image_url');
     expect(sql).toContain('from store_items dic');
     expect(sql).toContain('left join stores s on s.id = dic.store_id');
     expect(sql).toContain('where dic.item_id = $1');
@@ -731,6 +758,265 @@ describe('ludora admin service', () => {
     expect(normalizeSql(queries[0].sql)).toContain('join boardgame_categories bc on bc.id = ic.category_id');
     expect(normalizeSql(queries[1].sql)).toContain('join boardgame_mechanics bm on bm.id = im.mechanic_id');
     expect(normalizeSql(queries[2].sql)).toContain('join boardgame_families bf on bf.id = ifa.family_id');
+  });
+
+  it('returns relationships linked to a catalog item', async () => {
+    const rows = [
+      {
+        direction: 'outgoing',
+        id: 12,
+        item_a_id: 77,
+        item_b_id: 88,
+        link_type: 'implementation',
+        related_item_id: 88,
+        related_item_name: 'Coffee Rush Original'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/items/77/relationships');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows });
+    const query = queries[0];
+    const sql = normalizeSql(query.sql);
+    expect(sql).toContain('from item_relationships ir');
+    expect(sql).toContain('join items related_item');
+    expect(sql).toContain('ir.item_a_id = $1::bigint or ir.item_b_id = $1::bigint');
+    expect(sql).toContain("then 'outgoing'");
+    expect(sql).toContain("else 'incoming'");
+    expect(sql).toContain('order by ir.link_type asc, related_item.canonical_name asc, ir.id asc');
+    expect(query.params).toEqual(['77']);
+  });
+
+  it('creates a relationship from a catalog item to another item', async () => {
+    const row = {
+      direction: 'outgoing',
+      id: 12,
+      item_a_id: 77,
+      item_b_id: 88,
+      link_type: 'implementation',
+      related_item_id: 88,
+      related_item_name: 'Coffee Rush Original',
+      source: 'admin',
+      source_ref: 'manual'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/items/77/relationships')
+      .send({
+        direction: 'outgoing',
+        link_type: 'implementation',
+        related_item_id: '88',
+        source: 'admin',
+        source_ref: 'manual'
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ data: row });
+    const query = queries[0];
+    const sql = normalizeSql(query.sql);
+    expect(sql).toContain('insert into item_relationships');
+    expect(sql).toContain('on conflict (item_a_id, link_type, item_b_id) do update');
+    expect(sql).toContain('returning *');
+    expect(sql).toContain('join items current_item');
+    expect(sql).toContain('join items target_item');
+    expect(query.params).toEqual(['77', 88, 'implementation', 'admin', 'manual', 'outgoing']);
+  });
+
+  it('copies base taxonomy links when creating an implementation relationship from a catalog item', async () => {
+    const row = {
+      direction: 'outgoing',
+      id: 12,
+      item_a_id: 77,
+      item_b_id: 88,
+      link_type: 'implementation',
+      related_item_id: 88,
+      related_item_name: 'Coffee Rush Original',
+      source: 'admin',
+      source_ref: 'manual'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/items/77/relationships')
+      .send({
+        direction: 'outgoing',
+        link_type: 'implementation',
+        related_item_id: '88',
+        source: 'admin',
+        source_ref: 'manual'
+      });
+
+    expect(response.status).toBe(201);
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('copied_base_categories as');
+    expect(sql).toContain('insert into item_categories (item_id, category_id)');
+    expect(sql).toContain('select saved.item_a_id, base_categories.category_id');
+    expect(sql).toContain('join item_categories base_categories on base_categories.item_id = saved.item_b_id');
+    expect(sql).toContain('copied_base_families as');
+    expect(sql).toContain('insert into item_families (item_id, family_id)');
+    expect(sql).toContain('select saved.item_a_id, base_families.family_id');
+    expect(sql).toContain('join item_families base_families on base_families.item_id = saved.item_b_id');
+    expect(sql).toContain('copied_base_mechanics as');
+    expect(sql).toContain('insert into item_mechanics (item_id, mechanic_id)');
+    expect(sql).toContain('select saved.item_a_id, base_mechanics.mechanic_id');
+    expect(sql).toContain('join item_mechanics base_mechanics on base_mechanics.item_id = saved.item_b_id');
+    expect(sql).toContain("where saved.link_type = 'implementation'");
+    expect(sql).toContain('on conflict do nothing');
+    expect(queries[0].params).toEqual(['77', 88, 'implementation', 'admin', 'manual', 'outgoing']);
+  });
+
+  it('removes reciprocal implementation relationships before saving a catalog item relationship', async () => {
+    const row = {
+      direction: 'outgoing',
+      id: 12,
+      item_a_id: 77,
+      item_b_id: 88,
+      link_type: 'implementation',
+      related_item_id: 88,
+      related_item_name: 'Coffee Rush Original',
+      source: 'admin',
+      source_ref: 'manual'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/items/77/relationships')
+      .send({
+        direction: 'outgoing',
+        link_type: 'implementation',
+        related_item_id: '88',
+        source: 'admin',
+        source_ref: 'manual'
+      });
+
+    expect(response.status).toBe(201);
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('removed_inverse_relationship as');
+    expect(sql).toContain('delete from item_relationships inverse_relationship');
+    expect(sql).toContain('using resolved');
+    expect(sql).toContain("resolved.link_type in ('extension', 'implementation')");
+    expect(sql).toContain('inverse_relationship.link_type = resolved.link_type');
+    expect(sql).toContain('inverse_relationship.item_a_id = resolved.item_b_id');
+    expect(sql).toContain('inverse_relationship.item_b_id = resolved.item_a_id');
+    expect(sql).toContain('cross join (select count(*) as deleted_count from removed_inverse_relationship) inverse_cleanup');
+    expect(queries[0].params).toEqual(['77', 88, 'implementation', 'admin', 'manual', 'outgoing']);
+  });
+
+  it('removes reciprocal extension relationships before saving a catalog item relationship', async () => {
+    const row = {
+      direction: 'outgoing',
+      id: 12,
+      item_a_id: 77,
+      item_b_id: 88,
+      link_type: 'extension',
+      related_item_id: 88,
+      related_item_name: 'Coffee Rush',
+      source: 'admin',
+      source_ref: 'manual'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/items/77/relationships')
+      .send({
+        direction: 'outgoing',
+        link_type: 'extension',
+        related_item_id: '88',
+        source: 'admin',
+        source_ref: 'manual'
+      });
+
+    expect(response.status).toBe(201);
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('removed_inverse_relationship as');
+    expect(sql).toContain('delete from item_relationships inverse_relationship');
+    expect(sql).toContain("resolved.link_type in ('extension', 'implementation')");
+    expect(sql).toContain('inverse_relationship.link_type = resolved.link_type');
+    expect(sql).toContain('inverse_relationship.item_a_id = resolved.item_b_id');
+    expect(sql).toContain('inverse_relationship.item_b_id = resolved.item_a_id');
+    expect(queries[0].params).toEqual(['77', 88, 'extension', 'admin', 'manual', 'outgoing']);
+  });
+
+  it('deletes a relationship linked to a catalog item', async () => {
+    const row = {
+      direction: 'outgoing',
+      id: 12,
+      item_a_id: 77,
+      item_b_id: 88,
+      link_type: 'extension',
+      related_item_id: 88,
+      related_item_name: 'Coffee Rush Expansion',
+      source: 'admin',
+      source_ref: 'manual'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).delete('/items/77/relationships/12');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    const query = queries[0];
+    const sql = normalizeSql(query.sql);
+    expect(sql).toContain('delete from item_relationships');
+    expect(sql).toContain('where ir.id = $2::bigint');
+    expect(sql).toContain('and (ir.item_a_id = $1::bigint or ir.item_b_id = $1::bigint)');
+    expect(sql).toContain('returning *');
+    expect(query.params).toEqual(['77', '12']);
+  });
+
+  it('rejects self-referencing catalog item relationships', async () => {
+    const database: Database = {
+      query: async () => ({ rows: [] })
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/items/77/relationships')
+      .send({
+        link_type: 'implementation',
+        related_item_id: '77'
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toBe('related_item_id must be different from the current item id');
   });
 
   it('updates catalog items', async () => {
@@ -1305,6 +1591,8 @@ describe('ludora admin service', () => {
       JSON.stringify(['Manual item creation from admin candidate form']),
       JSON.stringify({ source: 'admin_manual_create_item' }),
       null,
+      null,
+      null,
       null
     ]);
   });
@@ -1365,7 +1653,63 @@ describe('ludora admin service', () => {
       JSON.stringify(['Manual item creation from admin candidate form']),
       JSON.stringify({ bgg_id: 377061, implements: true, source: 'admin_manual_create_item' }),
       44,
-      '377061'
+      '377061',
+      null,
+      null
+    ]);
+  });
+
+  it('creates a curated item with an extension relationship to an existing item', async () => {
+    const candidate = {
+      description: 'An expansion for an existing game.',
+      id: '922',
+      image_url: 'https://store.mx/cafe-barista-expansion.jpg',
+      item_id: null,
+      item_type: 'expansion',
+      publisher: 'Local Publisher',
+      source_url: 'https://store.mx/products/cafe-barista-expansion',
+      store_id: 42,
+      title: 'Cafe Barista Expansion'
+    };
+    const updatedCandidate = {
+      ...candidate,
+      item_id: 79,
+      match_source: 'MANUAL',
+      listing_status: 'PENDING'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).startsWith('select')) {
+          return { rows: [candidate] };
+        }
+        return { rows: [updatedCandidate] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/discovery/listings/922/create-item')
+      .send({ extends: true, extends_item_id: '55' });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ data: updatedCandidate });
+    const mutation = queries[1];
+    const sql = normalizeSql(mutation.sql);
+    expect(sql).toContain('extension_relationship as');
+    expect(sql).toContain("'extension'");
+    expect(sql).toContain("'admin'");
+    expect(mutation.params).toEqual([
+      '922',
+      'cafe barista expansion',
+      'expansion',
+      'local publisher',
+      JSON.stringify(['Manual item creation from admin candidate form']),
+      JSON.stringify({ extends: true, extends_item_id: 55, source: 'admin_manual_create_item' }),
+      null,
+      null,
+      55,
+      '55'
     ]);
   });
 
@@ -1408,17 +1752,63 @@ describe('ludora admin service', () => {
     expect(response.status).toBe(201);
     expect(response.body).toEqual({ data: updatedCandidate });
     const sql = normalizeSql(queries[1].sql);
+    expect(sql).toContain('taxonomy_parent_items as');
+    expect(sql).toContain('select $7::bigint as item_id');
     expect(sql).toContain('insert into item_categories (item_id, category_id)');
     expect(sql).toContain('select created_item.id, parent_categories.category_id');
-    expect(sql).toContain('join item_categories parent_categories on parent_categories.item_id = $7::bigint');
+    expect(sql).toContain('join item_categories parent_categories on parent_categories.item_id = taxonomy_parent_items.item_id');
     expect(sql).toContain('insert into item_families (item_id, family_id)');
     expect(sql).toContain('select created_item.id, parent_families.family_id');
-    expect(sql).toContain('join item_families parent_families on parent_families.item_id = $7::bigint');
+    expect(sql).toContain('join item_families parent_families on parent_families.item_id = taxonomy_parent_items.item_id');
     expect(sql).toContain('insert into item_mechanics (item_id, mechanic_id)');
     expect(sql).toContain('select created_item.id, parent_mechanics.mechanic_id');
-    expect(sql).toContain('join item_mechanics parent_mechanics on parent_mechanics.item_id = $7::bigint');
+    expect(sql).toContain('join item_mechanics parent_mechanics on parent_mechanics.item_id = taxonomy_parent_items.item_id');
     expect(sql).toContain('on conflict do nothing');
     expect(queries[1].params?.[6]).toBe(44);
+  });
+
+  it('copies parent taxonomy links when creating an extension item from a candidate', async () => {
+    const candidate = {
+      description: 'An expansion of an existing game.',
+      id: '923',
+      image_url: 'https://store.mx/cafe-barista-expansion.jpg',
+      item_id: null,
+      item_type: 'expansion',
+      publisher: 'Local Publisher',
+      source_url: 'https://store.mx/products/cafe-barista-expansion',
+      store_id: 42,
+      title: 'Cafe Barista Expansion'
+    };
+    const updatedCandidate = {
+      ...candidate,
+      item_id: 80,
+      match_source: 'MANUAL',
+      listing_status: 'PENDING'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).startsWith('select')) {
+          return { rows: [candidate] };
+        }
+        return { rows: [updatedCandidate] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/discovery/listings/923/create-item')
+      .send({ extends: true, extends_item_id: '55' });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ data: updatedCandidate });
+    const sql = normalizeSql(queries[1].sql);
+    expect(sql).toContain('taxonomy_parent_items as');
+    expect(sql).toContain('select $9::bigint as item_id');
+    expect(sql).toContain('join item_categories parent_categories on parent_categories.item_id = taxonomy_parent_items.item_id');
+    expect(sql).toContain('join item_families parent_families on parent_families.item_id = taxonomy_parent_items.item_id');
+    expect(sql).toContain('join item_mechanics parent_mechanics on parent_mechanics.item_id = taxonomy_parent_items.item_id');
+    expect(queries[1].params?.[8]).toBe(55);
   });
 
   it('imports a BGG item and links it to a discovery item candidate', async () => {
@@ -2040,6 +2430,40 @@ describe('ludora admin service', () => {
     ]);
   });
 
+  it('creates admin description generations with one source description', async () => {
+    const calls: DescriptionGenerationRequest[] = [];
+    const descriptionGenerationService: DescriptionGenerationService = {
+      generate: async (request) => {
+        calls.push(request);
+        return {
+          descriptionEs: 'Una descripcion generada desde una sola fuente.',
+          metadata: {
+            sourceBalance: 'single_source',
+            warnings: []
+          },
+          model: 'gpt-5.4-nano',
+          promptVersion: 'description-generator-v1'
+        };
+      }
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), descriptionGenerationService }))
+      .post('/admin/description-generations')
+      .send({
+        boardgame_name: 'Star Wars: Unlimited',
+        description_1: 'A tactical card game set in the Star Wars galaxy.'
+      });
+
+    expect(response.status).toBe(201);
+    expect(calls).toEqual([
+      {
+        boardgameName: 'Star Wars: Unlimited',
+        description1: 'A tactical card game set in the Star Wars galaxy.',
+        description2: ''
+      }
+    ]);
+  });
+
   it('returns 503 for admin description generations when the service is not configured', async () => {
     const response = await request(createApp({ database: idleDatabase() })).post('/admin/description-generations').send({
       boardgame_name: 'Coffee Rush',
@@ -2065,14 +2489,13 @@ describe('ludora admin service', () => {
     const response = await request(createApp({ database: idleDatabase(), descriptionGenerationService }))
       .post('/admin/description-generations')
       .send({
-        boardgame_name: 'Coffee Rush',
-        description_1: 'Complete customer orders to increase your ratings.'
+        boardgame_name: 'Coffee Rush'
       });
 
     expect(response.status).toBe(400);
     expect(response.body).toEqual({
       error: {
-        message: 'boardgame_name, description_1, and description_2 are required'
+        message: 'boardgame_name and at least one source description are required'
       }
     });
   });
@@ -2342,6 +2765,146 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: { message: 'Store not found' } });
+  });
+
+  it('starts a local cover workflow through the injected manager', async () => {
+    const workflow: LocalCoverWorkflowState = {
+      error: null,
+      expected_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\dontgetgot.webp',
+      filename: 'dontgetgot.webp',
+      item_id: 77,
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/dontgetgot.webp',
+      source_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\dontgetgot.source.jpg',
+      status: 'waiting_for_edit',
+      store_item_id: 123,
+      workflow_id: 'cover-123-77'
+    };
+    const calls: number[] = [];
+    const localCoverWorkflowManager: LocalCoverWorkflowManager = {
+      getCurrent: () => workflow,
+      start: async (storeItemId) => {
+        calls.push(storeItemId);
+        return workflow;
+      },
+      startFromItem: async () => {
+        throw new Error('should not start workflow from item');
+      },
+      waitForIdle: async () => undefined
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), localCoverWorkflowManager }))
+      .post('/admin/local-cover-workflows')
+      .send({ store_item_id: 123 });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: workflow });
+    expect(calls).toEqual([123]);
+  });
+
+  it('starts a local cover workflow from an item through the injected manager', async () => {
+    const workflow: LocalCoverWorkflowState = {
+      error: null,
+      expected_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.es.webp',
+      expected_paths: [
+        'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.en.webp',
+        'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.es.webp'
+      ],
+      filename: 'coffeerush.es.webp',
+      item_id: 77,
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.es.webp',
+      source_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.source.jpg',
+      status: 'waiting_for_edit',
+      store_item_id: null,
+      target_field: null,
+      workflow_id: 'cover-item-77'
+    };
+    const calls: number[] = [];
+    const localCoverWorkflowManager: LocalCoverWorkflowManager = {
+      getCurrent: () => workflow,
+      start: async () => {
+        throw new Error('should not start from store item');
+      },
+      startFromItem: async (itemId) => {
+        calls.push(itemId);
+        return workflow;
+      },
+      waitForIdle: async () => undefined
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), localCoverWorkflowManager }))
+      .post('/admin/local-cover-workflows/items')
+      .send({ item_id: 77 });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: workflow });
+    expect(calls).toEqual([77]);
+  });
+
+  it('returns the current local cover workflow', async () => {
+    const workflow: LocalCoverWorkflowState = {
+      error: null,
+      expected_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\azul.webp',
+      filename: 'azul.webp',
+      item_id: 7,
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/azul.webp',
+      source_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\azul.source.jpg',
+      status: 'completed',
+      store_item_id: 20,
+      workflow_id: 'cover-20-7'
+    };
+    const localCoverWorkflowManager: LocalCoverWorkflowManager = {
+      getCurrent: () => workflow,
+      start: async () => workflow,
+      startFromItem: async () => workflow,
+      waitForIdle: async () => undefined
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), localCoverWorkflowManager })).get(
+      '/admin/local-cover-workflows/current'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: workflow });
+  });
+
+  it('maps local cover workflow conflicts to 409 responses', async () => {
+    const localCoverWorkflowManager: LocalCoverWorkflowManager = {
+      getCurrent: () => null,
+      start: async () => {
+        throw new LocalCoverWorkflowError('A local cover workflow is already active.', 409);
+      },
+      startFromItem: async () => {
+        throw new LocalCoverWorkflowError('A local cover workflow is already active.', 409);
+      },
+      waitForIdle: async () => undefined
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), localCoverWorkflowManager }))
+      .post('/admin/local-cover-workflows')
+      .send({ store_item_id: 123 });
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: { message: 'A local cover workflow is already active.' } });
+  });
+
+  it('validates local cover workflow store item ids', async () => {
+    const localCoverWorkflowManager: LocalCoverWorkflowManager = {
+      getCurrent: () => null,
+      start: async () => {
+        throw new Error('should not start workflow');
+      },
+      startFromItem: async () => {
+        throw new Error('should not start workflow');
+      },
+      waitForIdle: async () => undefined
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), localCoverWorkflowManager }))
+      .post('/admin/local-cover-workflows')
+      .send({ store_item_id: '' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: { message: 'store_item_id must be a positive integer' } });
   });
 });
 

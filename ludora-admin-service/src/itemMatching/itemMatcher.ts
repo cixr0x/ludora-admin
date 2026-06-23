@@ -155,23 +155,31 @@ export function normalizeTitle(value: string): string {
 }
 
 export function normalizeTitleVariants(value: string): string[] {
-  return uniqueNormalizedTitles([value, stripLanguageEditionParentheticals(value)]);
+  return uniqueNormalizedTitles([value, stripLanguageEditionParentheticals(value), stripTrailingLanguageEdition(value)]);
 }
 
 const LANGUAGE_TOKENS = new Set([
   'aleman',
+  'alemana',
   'castellano',
+  'castellana',
   'deutsch',
   'english',
   'espanol',
+  'espanola',
   'francais',
+  'francaise',
   'frances',
+  'francesa',
   'french',
   'german',
   'ingles',
+  'inglesa',
   'italian',
   'italiano',
+  'italiana',
   'portugues',
+  'portuguesa',
   'portuguese',
   'spanish'
 ]);
@@ -190,6 +198,35 @@ function stripLanguageEditionParentheticals(value: string): string {
     );
     return hasLanguageToken && hasOnlyLanguageEditionTokens ? ' ' : segment;
   });
+}
+
+function stripTrailingLanguageEdition(value: string): string {
+  const tokens = normalizeTitle(value).split(' ').filter(Boolean);
+  if (tokens.length < 2) {
+    return value;
+  }
+
+  let suffixStart = tokens.length;
+  let hasLanguageToken = false;
+  while (suffixStart > 0) {
+    const token = tokens[suffixStart - 1];
+    if (LANGUAGE_TOKENS.has(token)) {
+      hasLanguageToken = true;
+      suffixStart -= 1;
+      continue;
+    }
+    if (LANGUAGE_EDITION_FILLER_TOKENS.has(token)) {
+      suffixStart -= 1;
+      continue;
+    }
+    break;
+  }
+
+  if (!hasLanguageToken || suffixStart === 0 || suffixStart === tokens.length) {
+    return value;
+  }
+
+  return tokens.slice(0, suffixStart).join(' ');
 }
 
 function uniqueNormalizedTitles(values: string[]): string[] {

@@ -1,7 +1,7 @@
 import type { Database } from '../db.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggClient } from './bggClient.js';
-import type { BggNamedLink, BggThingDetails } from './bggParser.js';
+import type { BggNamedLink, BggRelatedLink, BggThingDetails } from './bggParser.js';
 
 export type BggItemImporter = {
   importBggId(bggId: number): Promise<number | null>;
@@ -19,12 +19,22 @@ export function createBggItemImporter(database: Database, bggClient?: BggClient)
         return null;
       }
 
-      return importThing(database, fetched.details);
+      return importThing(database, bggClient, fetched.details, new Set());
     }
   };
 }
 
-async function importThing(database: Database, thing: BggThingDetails): Promise<number> {
+async function importThing(
+  database: Database,
+  bggClient: BggClient,
+  thing: BggThingDetails,
+  visited: Set<number>
+): Promise<number> {
+  if (visited.has(thing.bggId)) {
+    return (await existingItemId(database, thing.bggId)) ?? 0;
+  }
+  visited.add(thing.bggId);
+
   const itemId = await upsertItem(database, thing);
   await upsertAliases(database, itemId, thing.alternateNames);
   await upsertTaxonomyLinks(database, itemId, 'boardgame_categories', 'item_categories', 'category_id', thing.categories);
@@ -33,12 +43,12 @@ async function importThing(database: Database, thing: BggThingDetails): Promise<
   await upsertContributors(database, itemId, thing.designers, 'designer');
   await upsertContributors(database, itemId, thing.artists, 'artist');
   await upsertPublishers(database, itemId, thing.publishers);
+  await upsertRelatedItems(database, bggClient, itemId, thing, visited);
   return itemId;
 }
 
 async function upsertItem(database: Database, thing: BggThingDetails): Promise<number> {
-  const existing = await database.query('select id from items where bgg_id = $1', [thing.bggId]);
-  const existingId = idFromRows(existing.rows);
+  const existingId = await existingItemId(database, thing.bggId);
   const params = [
     thing.name,
     normalizeTitle(thing.name),
@@ -122,6 +132,94 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
     throw new Error('Failed to import BGG item');
   }
   return itemId;
+}
+
+async function upsertRelatedItems(
+  database: Database,
+  bggClient: BggClient,
+  itemId: number,
+  thing: BggThingDetails,
+  visited: Set<number>
+) {
+  for (const parentLink of thing.parentLinks) {
+    const parentId = await importLinkedThing(database, bggClient, parentLink, visited);
+    if (!parentId) {
+      continue;
+    }
+    await upsertItemRelationship(database, itemId, 'extension', parentId, String(parentLink.bggId));
+    await updateParentItem(database, itemId, parentId);
+  }
+
+  for (const implementationLink of thing.implementationLinks) {
+    const implementationId = await importLinkedThing(database, bggClient, implementationLink, visited);
+    if (!implementationId) {
+      continue;
+    }
+    await upsertItemRelationship(database, itemId, 'implementation', implementationId, String(implementationLink.bggId));
+  }
+}
+
+async function importLinkedThing(
+  database: Database,
+  bggClient: BggClient,
+  link: BggRelatedLink,
+  visited: Set<number>
+): Promise<number | null> {
+  const fetched = await bggClient.fetchThing(link.bggId);
+  if (!fetched) {
+    return null;
+  }
+  const linkedId = await importThing(database, bggClient, fetched.details, visited);
+  return linkedId || null;
+}
+
+async function upsertItemRelationship(
+  database: Database,
+  itemAId: number,
+  linkType: 'extension' | 'implementation',
+  itemBId: number,
+  sourceRef: string
+) {
+  await database.query(
+    `
+    with relationship_input as (
+      select
+        $1::bigint as item_a_id,
+        $2::text as link_type,
+        $3::bigint as item_b_id,
+        $4::text as source_ref
+    ),
+    removed_inverse_relationship as (
+      delete from item_relationships inverse_relationship
+      using relationship_input
+      where relationship_input.link_type in ('extension', 'implementation')
+        and inverse_relationship.link_type = relationship_input.link_type
+        and inverse_relationship.item_a_id = relationship_input.item_b_id
+        and inverse_relationship.item_b_id = relationship_input.item_a_id
+      returning inverse_relationship.id
+    )
+    insert into item_relationships (item_a_id, link_type, item_b_id, source, source_ref)
+    select relationship_input.item_a_id, relationship_input.link_type, relationship_input.item_b_id, 'BGG', relationship_input.source_ref
+    from relationship_input
+    cross join (select count(*) as deleted_count from removed_inverse_relationship) inverse_cleanup
+    on conflict (item_a_id, link_type, item_b_id) do update set
+      source = excluded.source,
+      source_ref = excluded.source_ref
+    `,
+    [itemAId, linkType, itemBId, sourceRef]
+  );
+}
+
+async function updateParentItem(database: Database, itemId: number, parentItemId: number) {
+  await database.query(
+    `
+    update items
+    set parent_item_id = $1,
+        updated_at = now()
+    where id = $2
+    `,
+    [parentItemId, itemId]
+  );
 }
 
 async function upsertAliases(database: Database, itemId: number, aliases: string[]) {
@@ -283,6 +381,11 @@ function dedupeByNormalizedName(values: string[]) {
     deduped.push(value);
   }
   return deduped;
+}
+
+async function existingItemId(database: Database, bggId: number): Promise<number | null> {
+  const existing = await database.query('select id from items where bgg_id = $1', [bggId]);
+  return idFromRows(existing.rows);
 }
 
 function idFromRows(rows: unknown[]): number | null {

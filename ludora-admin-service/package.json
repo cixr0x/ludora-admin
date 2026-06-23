@@ -10,6 +10,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1072.0",
+    "@nodable/entities": "^2.1.0",
     "cors": "2.8.6",
     "dotenv": "17.4.2",
     "express": "5.2.1",

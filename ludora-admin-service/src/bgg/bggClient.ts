@@ -19,6 +19,9 @@ export class BggApiError extends Error {
   }
 }
 
+const BGG_REQUEST_INTERVAL_MS = 1000;
+const BGG_429_RETRY_DELAY_MS = 5000;
+
 export function createBggClient({
   apiToken,
   baseUrl = 'https://boardgamegeek.com/xmlapi2'
@@ -27,21 +30,57 @@ export function createBggClient({
   baseUrl?: string;
 }): BggClient {
   const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
+  let requestQueue: Promise<void> = Promise.resolve();
+  let lastRequestStartedAt: number | null = null;
+
+  function enqueueRequest<T>(request: () => Promise<T>): Promise<T> {
+    const queuedRequest = requestQueue.then(request);
+    requestQueue = queuedRequest.then(
+      () => undefined,
+      () => undefined
+    );
+    return queuedRequest;
+  }
 
   async function getXml(path: string, params: URLSearchParams): Promise<string> {
-    const url = `${normalizedBaseUrl}/${path}?${params.toString()}`;
-    const response = await fetch(url, {
+    return enqueueRequest(() => getXmlWithRetry(path, params));
+  }
+
+  async function getXmlWithRetry(path: string, params: URLSearchParams): Promise<string> {
+    while (true) {
+      const response = await sendXmlRequest(path, params);
+      if (response.status === 429) {
+        await sleep(BGG_429_RETRY_DELAY_MS);
+        continue;
+      }
+
+      if (!response.ok) {
+        throw new BggApiError(`BGG API request failed with ${response.status}`, response.status);
+      }
+
+      return response.text();
+    }
+  }
+
+  async function sendXmlRequest(path: string, params: URLSearchParams): Promise<Response> {
+    await waitForRequestSlot();
+    return fetch(`${normalizedBaseUrl}/${path}?${params.toString()}`, {
       headers: {
         Authorization: `Bearer ${apiToken}`,
         Accept: 'application/xml,text/xml'
       }
     });
+  }
 
-    if (!response.ok) {
-      throw new BggApiError(`BGG API request failed with ${response.status}`, response.status);
+  async function waitForRequestSlot(): Promise<void> {
+    if (lastRequestStartedAt !== null) {
+      const nextAllowedStart = lastRequestStartedAt + BGG_REQUEST_INTERVAL_MS;
+      const delayMs = Math.max(0, nextAllowedStart - Date.now());
+      if (delayMs > 0) {
+        await sleep(delayMs);
+      }
     }
-
-    return response.text();
+    lastRequestStartedAt = Date.now();
   }
 
   return {
@@ -69,4 +108,8 @@ export function createBggClient({
       return parseBggSearchResponse(xml);
     }
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -108,6 +108,37 @@ describe('OfferReviewPage', () => {
     );
   });
 
+  it('filters pending listing status by default', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              candidate_id: 920,
+              candidate_name: 'Cafe Barista',
+              item_id: 77,
+              item_name: 'Coffee Rush',
+              store_item_listing_status: 'PENDING'
+            }
+          ],
+          meta: { page: 0, page_size: 100, total: 1 }
+        }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        }
+      )
+    );
+
+    render(<OfferReviewPage />);
+
+    expect(await screen.findByRole('table', { name: 'Store item review' })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(String(fetchMock.mock.calls[0]?.[0])).toContain('filter_store_item_listing_status=PENDING');
+    });
+    expect(screen.getByLabelText('Filter Listing status')).toHaveValue('PENDING');
+  });
+
   it('approves and rejects listing status from the review table', async () => {
     const user = userEvent.setup();
     let listingStatus = 'PENDING';
@@ -216,12 +247,12 @@ describe('OfferReviewPage', () => {
     expect(screen.getByText('Azul')).toBeInTheDocument();
   });
 
-  it('sets the item Spanish name from the candidate name', async () => {
+  it('sets the item Spanish name from the candidate name without a trailing language suffix', async () => {
     const user = userEvent.setup();
     const item = {
       bgg_id: 377061,
-      bgg_url: 'https://boardgamegeek.com/boardgame/377061/coffee-rush',
-      canonical_name: 'Coffee Rush',
+      bgg_url: 'https://boardgamegeek.com/boardgame/377061/los-gatos-de-schrodinger',
+      canonical_name: "Schrodinger's Cats",
       canonical_name_es: '',
       complexity: '1.75',
       description: 'Serve coffee fast.',
@@ -235,7 +266,7 @@ describe('OfferReviewPage', () => {
       min_age: 8,
       min_minutes: 30,
       min_players: 2,
-      normalized_name: 'coffee rush',
+      normalized_name: 'schrodingers cats',
       normalized_name_es: '',
       parent_item_id: null,
       status: 'active',
@@ -250,12 +281,12 @@ describe('OfferReviewPage', () => {
             data: [
               {
                 candidate_id: 920,
-                candidate_name: 'Cafe Barista',
-                candidate_url: 'https://store.mx/products/cafe-barista',
+                candidate_name: 'Los Gatos de Schröndinger (Español)',
+                candidate_url: 'https://store.mx/products/los-gatos-de-schrodinger',
                 item_bgg_id: 377061,
                 item_id: 77,
-                item_image_url: 'https://bgg.example/coffee-rush.jpg',
-                item_name: 'Coffee Rush',
+                item_image_url: 'https://bgg.example/los-gatos-de-schrodinger.jpg',
+                item_name: "Schrodinger's Cats",
                 item_name_es: ''
               }
             ],
@@ -280,8 +311,8 @@ describe('OfferReviewPage', () => {
           JSON.stringify({
             data: {
               ...item,
-              canonical_name_es: 'Cafe Barista',
-              normalized_name_es: 'cafe barista'
+              canonical_name_es: 'Los Gatos de Schröndinger',
+              normalized_name_es: 'los gatos de schrodinger'
             }
           }),
           {
@@ -306,11 +337,14 @@ describe('OfferReviewPage', () => {
       const patchCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH');
       expect(patchCall).toBeDefined();
       expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
-        canonical_name_es: 'Cafe Barista',
+        canonical_name_es: 'Los Gatos de Schröndinger',
         normalized_name_es: ''
       });
     });
-    expect(screen.getByRole('link', { name: 'Coffee Rush (Cafe Barista)' })).toHaveAttribute('href', '#items?id=77');
+    expect(screen.getByRole('link', { name: "Schrodinger's Cats (Los Gatos de Schröndinger)" })).toHaveAttribute(
+      'href',
+      '#items?id=77'
+    );
     expect(screen.getByText('Spanish item name saved.')).toBeInTheDocument();
   });
 
@@ -450,5 +484,111 @@ describe('OfferReviewPage', () => {
     });
     expect(screen.getByText('Spanish item description saved.')).toBeInTheDocument();
     expect(generateButtons[0]).toBeDisabled();
+  });
+
+  it('generates a Spanish item description from a review row with one source description', async () => {
+    const user = userEvent.setup();
+    const item = {
+      bgg_id: 419398,
+      canonical_name: 'Star Wars: Unlimited - Shadows of the Galaxy',
+      canonical_name_es: '',
+      description: 'A tactical card game set in the Star Wars galaxy.',
+      description_es: '',
+      id: 2247,
+      image_url: '',
+      image_url_es: '',
+      item_type: 'expansion',
+      normalized_name: 'star wars unlimited shadows of the galaxy',
+      normalized_name_es: '',
+      parent_item_id: null,
+      status: 'active'
+    };
+    const generatedDescription = 'Explora una galaxia de decisiones tacticas con cartas y personajes memorables.';
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+
+      if (url.pathname.endsWith('/discovery/offer-reviews')) {
+        return new Response(
+          JSON.stringify({
+            data: [
+              {
+                candidate_description: '',
+                candidate_id: 4656,
+                candidate_name: 'Star Wars Unlimited Shadows of the Galaxy',
+                item_description: 'A tactical card game set in the Star Wars galaxy.',
+                item_description_es: '',
+                item_id: 2247,
+                item_name: 'Star Wars: Unlimited - Shadows of the Galaxy',
+                item_name_es: ''
+              }
+            ],
+            meta: { page: 0, page_size: 100, total: 1 }
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 200
+          }
+        );
+      }
+
+      if (url.pathname.endsWith('/description-generations') && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              description_es: generatedDescription,
+              metadata: { sourceBalance: 'single_source', warnings: [] },
+              model: 'gpt-5.4-mini',
+              prompt_version: 'description-generator-v1'
+            }
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 201
+          }
+        );
+      }
+
+      if (url.pathname.endsWith('/items/2247') && (!init?.method || init.method === 'GET')) {
+        return new Response(JSON.stringify({ data: item }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        });
+      }
+
+      if (url.pathname.endsWith('/items/2247') && init?.method === 'PATCH') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              ...item,
+              description_es: generatedDescription
+            }
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 200
+          }
+        );
+      }
+
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<OfferReviewPage />);
+
+    const generateButton = await screen.findByRole('button', { name: /Generate Spanish item description/ });
+    expect(generateButton).toBeEnabled();
+
+    await user.click(generateButton);
+
+    await waitFor(() => {
+      const generationCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/admin/description-generations'));
+      expect(generationCall).toBeDefined();
+      expect(JSON.parse(String(generationCall?.[1]?.body))).toEqual({
+        boardgame_name: 'Star Wars: Unlimited - Shadows of the Galaxy',
+        description_1: 'A tactical card game set in the Star Wars galaxy.',
+        description_2: ''
+      });
+    });
+    expect(await screen.findByText('Spanish item description saved.')).toBeInTheDocument();
   });
 });

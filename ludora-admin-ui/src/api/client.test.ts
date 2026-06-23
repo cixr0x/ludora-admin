@@ -88,6 +88,94 @@ describe('fetchRows', () => {
     });
   });
 
+  it('starts local cover workflows with a JSON body', async () => {
+    const workflow = {
+      error: null,
+      expected_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\dontgetgot.webp',
+      filename: 'dontgetgot.webp',
+      item_id: 77,
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/dontgetgot.webp',
+      source_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\dontgetgot.source.jpg',
+      status: 'waiting_for_edit',
+      store_item_id: 123,
+      workflow_id: 'cover-123-77'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: workflow }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.startLocalCoverWorkflow('123')).resolves.toEqual(workflow);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/local-cover-workflows', {
+      body: JSON.stringify({ store_item_id: '123' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
+  it('starts item local cover workflows with a JSON body', async () => {
+    const workflow = {
+      error: null,
+      expected_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.es.webp',
+      expected_paths: [
+        'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.en.webp',
+        'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.es.webp'
+      ],
+      filename: 'coffeerush.es.webp',
+      item_id: 77,
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.es.webp',
+      source_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.source.jpg',
+      status: 'waiting_for_edit',
+      store_item_id: null,
+      target_field: null,
+      workflow_id: 'cover-item-77'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: workflow }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.startItemLocalCoverWorkflow('77')).resolves.toEqual(workflow);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/local-cover-workflows/items', {
+      body: JSON.stringify({ item_id: '77' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
+  it('fetches the current local cover workflow', async () => {
+    const workflow = {
+      error: null,
+      expected_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\azul.webp',
+      filename: 'azul.webp',
+      item_id: 7,
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/azul.webp',
+      source_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\azul.source.jpg',
+      status: 'completed',
+      store_item_id: 20,
+      workflow_id: 'cover-20-7'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: workflow }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getCurrentLocalCoverWorkflow()).resolves.toEqual(workflow);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/local-cover-workflows/current');
+  });
+
   it('fetches paged store items with page metadata', async () => {
     const records = [{ id: 'item-candidate-51', title: 'Second page item' }];
     const { adminApi } = await importClient();
@@ -193,6 +281,23 @@ describe('fetchRows', () => {
     await expect(adminApi.getItemTaxonomy('77')).resolves.toEqual(taxonomy);
 
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/77/taxonomy');
+  });
+
+  it('deletes item relationships with a DELETE request', async () => {
+    const relationship = { id: '100', item_a_id: '77', item_b_id: '88', link_type: 'extension' };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: relationship }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.deleteItemRelationship('77', '100')).resolves.toEqual(relationship);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/77/relationships/100', {
+      method: 'DELETE'
+    });
   });
 
   it('encodes table sort and filters in paged admin requests', async () => {

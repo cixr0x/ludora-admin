@@ -9,9 +9,11 @@ import type { ItemMatchingService } from './itemMatching/itemMatchingService.js'
 import { createDescriptionGenerationRouter } from './routes/descriptionGeneration.js';
 import { createDiscoveryRouter } from './routes/discovery.js';
 import { createHealthRouter } from './routes/health.js';
+import { createLocalCoverWorkflowRouter } from './routes/localCoverWorkflow.js';
 import { createOperationsRouter } from './routes/operations.js';
 import { createTranslationRouter } from './routes/translation.js';
 import type { TranslationService } from './translation/translationService.js';
+import type { LocalCoverWorkflowManager } from './localCoverWorkflow.js';
 
 type HttpError = Error & {
   status?: number;
@@ -24,6 +26,7 @@ type CreateAppOptions = {
   corsOrigin?: string | string[];
   descriptionGenerationService?: DescriptionGenerationService;
   itemMatchingService?: ItemMatchingService;
+  localCoverWorkflowManager?: LocalCoverWorkflowManager;
   operationsClient?: DiscoveryOperationsClient;
   translationService?: TranslationService;
 };
@@ -34,6 +37,7 @@ export function createApp({
   corsOrigin,
   descriptionGenerationService,
   itemMatchingService,
+  localCoverWorkflowManager,
   operationsClient,
   translationService
 }: CreateAppOptions): Express {
@@ -45,6 +49,9 @@ export function createApp({
   app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter));
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
   app.use(createTranslationRouter(translationService));
+  if (localCoverWorkflowManager) {
+    app.use(createLocalCoverWorkflowRouter(localCoverWorkflowManager));
+  }
   if (operationsClient) {
     app.use(createOperationsRouter(operationsClient, database));
   }

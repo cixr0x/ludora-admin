@@ -7,6 +7,7 @@ import { createDescriptionGenerationService } from './descriptionGeneration/desc
 import { createOpenAiDescriptionGenerationClient } from './descriptionGeneration/openAiDescriptionGenerationClient.js';
 import { createDiscoveryOperationsClient } from './discoveryOperationsClient.js';
 import { createItemMatchingService } from './itemMatching/itemMatchingService.js';
+import { createLocalCoverWorkflowManager, createNodeLocalCoverWorkflowDependencies } from './localCoverWorkflow.js';
 import { createOpenAiTranslationClient } from './translation/openAiTranslationClient.js';
 import { createTranslationService } from './translation/translationService.js';
 
@@ -34,12 +35,17 @@ const descriptionGenerationService = descriptionGenerationClient
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
 const itemMatchingService = createItemMatchingService(database, bggClient, translationService, bggItemImporter);
 const operationsClient = createDiscoveryOperationsClient(config.discoveryApiUrl);
+const localCoverWorkflowManager = createLocalCoverWorkflowManager(
+  database,
+  createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
+);
 const app = createApp({
   bggItemImporter,
   database,
   corsOrigin: config.corsOrigin,
   descriptionGenerationService,
   itemMatchingService,
+  localCoverWorkflowManager,
   operationsClient,
   translationService
 });

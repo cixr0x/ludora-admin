@@ -25,6 +25,20 @@ export type ItemTaxonomy = {
   mechanics: AdminRecord[];
 };
 
+export type LocalCoverWorkflow = {
+  error: string | null;
+  expected_path: string;
+  expected_paths?: string[];
+  filename: string;
+  item_id: number;
+  public_url: string;
+  source_path: string;
+  status: 'completed' | 'failed' | 'uploading' | 'waiting_for_edit';
+  store_item_id: number | null;
+  target_field?: 'image_url' | 'image_url_es' | null;
+  workflow_id: string;
+};
+
 export type TableQuery = {
   filters?: Record<string, string>;
   page: number;
@@ -115,9 +129,18 @@ export type FrontPagePreviewCategory = AdminRecord & {
 export type ItemCandidateInput = AdminRecord;
 export type CreateItemFromCandidateInput = {
   bgg_id?: string;
+  extends?: boolean;
+  extends_item_id?: string;
   implements?: boolean;
 };
 export type ItemInput = AdminRecord;
+export type ItemRelationshipInput = {
+  direction?: 'incoming' | 'outgoing';
+  link_type: string;
+  related_item_id: string;
+  source?: string;
+  source_ref?: string;
+};
 
 export type DescriptionGenerationInput = {
   boardgame_name: string;
@@ -295,7 +318,13 @@ export const adminApi = {
   createItemFromCandidate: (id: string, input: CreateItemFromCandidateInput = {}) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/create-item`, 'POST', {
       bgg_id: input.bgg_id ?? '',
-      implements: Boolean(input.implements)
+      implements: Boolean(input.implements),
+      ...(input.extends
+        ? {
+            extends: true,
+            extends_item_id: input.extends_item_id ?? ''
+          }
+        : {})
     }),
   createItemFromBggId: (id: string, bggId: string) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/create-item-from-bgg`, 'POST', {
@@ -313,9 +342,19 @@ export const adminApi = {
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`, 'PATCH', input),
   getItem: (id: string) => fetchData<AdminRecord>(`/items/${encodeURIComponent(id)}`),
   getItemLinkedCandidates: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/candidates`),
+  getItemRelationships: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/relationships`),
   getItemStoreItems: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/store-items`),
   getItemTaxonomy: (id: string) => fetchData<ItemTaxonomy>(`/items/${encodeURIComponent(id)}/taxonomy`),
   getItemsPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/items', query), query),
+  createItemRelationship: (id: string, input: ItemRelationshipInput) =>
+    sendJson<AdminRecord>(`/items/${encodeURIComponent(id)}/relationships`, 'POST', input),
+  deleteItemRelationship: (itemId: string, relationshipId: string) =>
+    fetchData<AdminRecord>(
+      `/items/${encodeURIComponent(itemId)}/relationships/${encodeURIComponent(relationshipId)}`,
+      {
+        method: 'DELETE'
+      }
+    ),
   updateItem: (id: string, input: ItemInput) => sendJson<AdminRecord>(`/items/${encodeURIComponent(id)}`, 'PATCH', input),
   getListingCandidates: () => fetchRows('/discovery/listings'),
   generateDescription: (input: DescriptionGenerationInput) =>
@@ -325,6 +364,15 @@ export const adminApi = {
   getReviewTasks: () => fetchRows('/admin/review-tasks'),
   getReviewTasksPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/admin/review-tasks', query), query),
   getLatestStoreDiscoveryRun: () => fetchData<StoreDiscoveryRun | null>('/admin/operations/store-discovery-runs/latest'),
+  getCurrentLocalCoverWorkflow: () => fetchData<LocalCoverWorkflow | null>('/admin/local-cover-workflows/current'),
+  startLocalCoverWorkflow: (storeItemId: string) =>
+    sendJson<LocalCoverWorkflow>('/admin/local-cover-workflows', 'POST', {
+      store_item_id: storeItemId
+    }),
+  startItemLocalCoverWorkflow: (itemId: string) =>
+    sendJson<LocalCoverWorkflow>('/admin/local-cover-workflows/items', 'POST', {
+      item_id: itemId
+    }),
   getStoreDiscoveryRun: (runId: string) =>
     fetchData<StoreDiscoveryRun | null>(`/admin/operations/store-discovery-runs/${encodeURIComponent(runId)}`),
   startStoreItemDiscoveryRun: (storeId: string) =>

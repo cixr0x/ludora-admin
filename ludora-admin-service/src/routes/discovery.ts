@@ -103,6 +103,14 @@ type ItemInput = {
   year_published: number | null;
 };
 
+type ItemRelationshipInput = {
+  direction: 'incoming' | 'outgoing';
+  link_type: string;
+  related_item_id: number;
+  source: string;
+  source_ref: string;
+};
+
 type SortDirection = 'asc' | 'desc';
 
 type TableColumnConfig = {
@@ -153,9 +161,19 @@ const itemLinkedCandidateSelect = `
   dic.id, dic.store_id, s.name as store_name, s.canonical_domain as store_domain,
   dic.source_url, dic.source_listing_url, dic.title, dic.publisher,
   dic.description, dic.item_id, dic.item_type, dic.min_players, dic.max_players,
-  dic.language, dic.listing_status, dic.raw_price, dic.price, dic.currency,
+  dic.language, dic.image_url, dic.listing_status, dic.raw_price, dic.price, dic.currency,
   dic.availability, dic.match_source, dic.match_score,
   dic.last_seen_at, dic.last_updated
+`;
+
+const itemRelationshipSelect = `
+  ir.id, ir.item_a_id, ir.link_type, ir.item_b_id, ir.source, ir.source_ref, ir.created_at,
+  case when ir.item_a_id = $1::bigint then 'outgoing' else 'incoming' end as direction,
+  related_item.id as related_item_id,
+  related_item.canonical_name as related_item_name,
+  related_item.canonical_name_es as related_item_name_es,
+  related_item.item_type as related_item_type,
+  related_item.bgg_id as related_item_bgg_id
 `;
 
 const frontPageCategorySelect = `
@@ -502,6 +520,7 @@ const itemsTableConfig: TableQueryConfig = {
     description_es: columnSql('description_es'),
     image_url: columnSql('image_url'),
     image_url_es: columnSql('image_url_es'),
+    id: columnSql('id'),
     item_type: columnSql('item_type'),
     max_minutes: columnSql('max_minutes'),
     max_players: columnSql('max_players'),
@@ -956,6 +975,160 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.get('/items/:id/relationships', async (request, response, next) => {
+    try {
+      const result = await database.query(
+        `
+        select ${itemRelationshipSelect}
+        from item_relationships ir
+        join items related_item
+          on related_item.id = case
+            when ir.item_a_id = $1::bigint then ir.item_b_id
+            else ir.item_a_id
+          end
+        where ir.item_a_id = $1::bigint or ir.item_b_id = $1::bigint
+        order by ir.link_type asc, related_item.canonical_name asc, ir.id asc
+        `,
+        [request.params.id]
+      );
+
+      response.json({ data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/items/:id/relationships', async (request, response, next) => {
+    try {
+      const input = parseItemRelationshipInput(request.body);
+      if (String(input.related_item_id) === String(request.params.id)) {
+        throw httpError(400, 'related_item_id must be different from the current item id');
+      }
+
+      const result = await database.query(
+        `
+        with relationship_input as (
+          select
+            $1::bigint as current_item_id,
+            $2::bigint as related_item_id,
+            $3::text as link_type,
+            $4::text as source,
+            $5::text as source_ref,
+            $6::text as direction
+        ),
+        resolved as (
+          select
+            case when relationship_input.direction = 'incoming' then target_item.id else current_item.id end as item_a_id,
+            relationship_input.link_type,
+            case when relationship_input.direction = 'incoming' then current_item.id else target_item.id end as item_b_id,
+            relationship_input.source,
+            relationship_input.source_ref
+          from relationship_input
+          join items current_item on current_item.id = relationship_input.current_item_id
+          join items target_item on target_item.id = relationship_input.related_item_id
+        ),
+        removed_inverse_relationship as (
+          delete from item_relationships inverse_relationship
+          using resolved
+          where resolved.link_type in ('extension', 'implementation')
+            and inverse_relationship.link_type = resolved.link_type
+            and inverse_relationship.item_a_id = resolved.item_b_id
+            and inverse_relationship.item_b_id = resolved.item_a_id
+          returning inverse_relationship.id
+        ),
+        saved as (
+          insert into item_relationships (item_a_id, link_type, item_b_id, source, source_ref)
+          select item_a_id, link_type, item_b_id, source, source_ref
+          from resolved
+          cross join (select count(*) as deleted_count from removed_inverse_relationship) inverse_cleanup
+          on conflict (item_a_id, link_type, item_b_id) do update set
+            source = excluded.source,
+            source_ref = excluded.source_ref
+          returning *
+        ),
+        copied_base_categories as (
+          insert into item_categories (item_id, category_id)
+          select saved.item_a_id, base_categories.category_id
+          from saved
+          join item_categories base_categories on base_categories.item_id = saved.item_b_id
+          where saved.link_type = 'implementation'
+          on conflict do nothing
+        ),
+        copied_base_families as (
+          insert into item_families (item_id, family_id)
+          select saved.item_a_id, base_families.family_id
+          from saved
+          join item_families base_families on base_families.item_id = saved.item_b_id
+          where saved.link_type = 'implementation'
+          on conflict do nothing
+        ),
+        copied_base_mechanics as (
+          insert into item_mechanics (item_id, mechanic_id)
+          select saved.item_a_id, base_mechanics.mechanic_id
+          from saved
+          join item_mechanics base_mechanics on base_mechanics.item_id = saved.item_b_id
+          where saved.link_type = 'implementation'
+          on conflict do nothing
+        )
+        select ${itemRelationshipSelect}
+        from saved ir
+        join items related_item
+          on related_item.id = case
+            when ir.item_a_id = $1::bigint then ir.item_b_id
+            else ir.item_a_id
+          end
+        `,
+        [
+          request.params.id,
+          input.related_item_id,
+          input.link_type,
+          input.source,
+          input.source_ref,
+          input.direction
+        ]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Item relationship target not found');
+      }
+
+      response.status(201).json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/items/:id/relationships/:relationshipId', async (request, response, next) => {
+    try {
+      const result = await database.query(
+        `
+        with deleted as (
+          delete from item_relationships ir
+          where ir.id = $2::bigint
+            and (ir.item_a_id = $1::bigint or ir.item_b_id = $1::bigint)
+          returning *
+        )
+        select ${itemRelationshipSelect}
+        from deleted ir
+        join items related_item
+          on related_item.id = case
+            when ir.item_a_id = $1::bigint then ir.item_b_id
+            else ir.item_a_id
+          end
+        `,
+        [request.params.id, request.params.relationshipId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Item relationship not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.patch('/items/:id', async (request, response, next) => {
     try {
       const input = parseItemInput(request.body);
@@ -1323,28 +1496,44 @@ export function createDiscoveryRouter(
             source = excluded.source,
             source_ref = excluded.source_ref
         ),
+        extension_relationship as (
+          insert into item_relationships (item_a_id, link_type, item_b_id, source, source_ref)
+          select created_item.id, 'extension', $9::bigint, 'admin', $10
+          from created_item
+          where $9::bigint is not null
+          on conflict (item_a_id, link_type, item_b_id) do update set
+            source = excluded.source,
+            source_ref = excluded.source_ref
+        ),
+        taxonomy_parent_items as (
+          select $7::bigint as item_id
+          where $7::bigint is not null
+          union
+          select $9::bigint as item_id
+          where $9::bigint is not null
+        ),
         copied_parent_categories as (
           insert into item_categories (item_id, category_id)
           select created_item.id, parent_categories.category_id
           from created_item
-          join item_categories parent_categories on parent_categories.item_id = $7::bigint
-          where $7::bigint is not null
+          cross join taxonomy_parent_items
+          join item_categories parent_categories on parent_categories.item_id = taxonomy_parent_items.item_id
           on conflict do nothing
         ),
         copied_parent_families as (
           insert into item_families (item_id, family_id)
           select created_item.id, parent_families.family_id
           from created_item
-          join item_families parent_families on parent_families.item_id = $7::bigint
-          where $7::bigint is not null
+          cross join taxonomy_parent_items
+          join item_families parent_families on parent_families.item_id = taxonomy_parent_items.item_id
           on conflict do nothing
         ),
         copied_parent_mechanics as (
           insert into item_mechanics (item_id, mechanic_id)
           select created_item.id, parent_mechanics.mechanic_id
           from created_item
-          join item_mechanics parent_mechanics on parent_mechanics.item_id = $7::bigint
-          where $7::bigint is not null
+          cross join taxonomy_parent_items
+          join item_mechanics parent_mechanics on parent_mechanics.item_id = taxonomy_parent_items.item_id
           on conflict do nothing
         ),
         updated_candidate as (
@@ -1378,7 +1567,9 @@ export function createDiscoveryRouter(
           JSON.stringify(['Manual item creation from admin candidate form']),
           JSON.stringify(createOptions.matchPayload),
           implementedItemId,
-          createOptions.implementsBggItem ? String(createOptions.bggId) : null
+          createOptions.implementsBggItem ? String(createOptions.bggId) : null,
+          createOptions.extendsItemId,
+          createOptions.extendsItem ? String(createOptions.extendsItemId) : null
         ]
       );
 
@@ -2108,6 +2299,28 @@ function itemParams(input: ItemInput): unknown[] {
   ];
 }
 
+function parseItemRelationshipInput(body: unknown): ItemRelationshipInput {
+  const value = (body ?? {}) as Record<string, unknown>;
+  const direction = stringField(value, 'direction').toLowerCase() || 'outgoing';
+  if (direction !== 'incoming' && direction !== 'outgoing') {
+    throw httpError(400, 'direction must be incoming or outgoing');
+  }
+
+  const input: ItemRelationshipInput = {
+    direction,
+    link_type: stringField(value, 'link_type').toLowerCase(),
+    related_item_id: positiveIntegerBodyField(body, 'related_item_id'),
+    source: stringField(value, 'source') || 'admin',
+    source_ref: stringField(value, 'source_ref')
+  };
+
+  if (!input.link_type) {
+    throw httpError(400, 'link_type is required');
+  }
+
+  return input;
+}
+
 function parseItemCandidateInput(body: unknown): ItemCandidateInput {
   const value = (body ?? {}) as Record<string, unknown>;
   const input: ItemCandidateInput = {
@@ -2242,28 +2455,32 @@ function itemTypeFromCandidate(candidate: Record<string, unknown>): 'base_game' 
 
 function parseCreateItemFromCandidateOptions(body: unknown): {
   bggId: number | null;
+  extendsItem: boolean;
+  extendsItemId: number | null;
   implementsBggItem: boolean;
   matchPayload: Record<string, unknown>;
 } {
   const value = (body ?? {}) as Record<string, unknown>;
   const implementsBggItem = booleanField(value, 'implements');
-  if (!implementsBggItem) {
-    return {
-      bggId: null,
-      implementsBggItem,
-      matchPayload: { source: 'admin_manual_create_item' }
-    };
+  const extendsItem = booleanField(value, 'extends');
+  const bggId = implementsBggItem ? positiveIntegerBodyField(body, 'bgg_id') : null;
+  const extendsItemId = extendsItem ? positiveIntegerBodyField(body, 'extends_item_id') : null;
+  const matchPayload: Record<string, unknown> = {};
+  if (implementsBggItem && bggId !== null) {
+    matchPayload.bgg_id = bggId;
+    matchPayload.implements = true;
   }
-
-  const bggId = positiveIntegerBodyField(body, 'bgg_id');
+  if (extendsItem && extendsItemId !== null) {
+    matchPayload.extends = true;
+    matchPayload.extends_item_id = extendsItemId;
+  }
+  matchPayload.source = 'admin_manual_create_item';
   return {
     bggId,
+    extendsItem,
+    extendsItemId,
     implementsBggItem,
-    matchPayload: {
-      bgg_id: bggId,
-      implements: true,
-      source: 'admin_manual_create_item'
-    }
+    matchPayload
   };
 }
 

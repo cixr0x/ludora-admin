@@ -8,7 +8,7 @@ export function systemPromptForPurpose(purpose: TranslationPurpose): string {
     case 'BGG_SEARCH_QUERY':
       return `${common} Return English BoardGameGeek search text. Remove language/edition noise such as Spanish edition labels, but preserve identity-changing terms such as expansion names, 5-6 player hints, plus, junior, duel, and big box.`;
     case 'ITEM_DESCRIPTION':
-      return `${common} Translate board game descriptions faithfully for users. Preserve paragraph boundaries, names, numbers, and rules terminology.`;
+      return `${common} Translate board game descriptions faithfully for users. Preserve paragraph boundaries, names, numbers, and rules terminology. Use latin spanish (mexican). Write at least two paragraphs, max three paragraphs`;
     case 'CATEGORY_NAME':
     case 'MECHANIC_NAME':
     case 'FAMILY_NAME':

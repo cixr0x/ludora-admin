@@ -7,6 +7,14 @@ export type Config = {
   bggApiToken?: string;
   openAiApiKey?: string;
   openAiTranslationModel: string;
+  localCoverWorkflow: {
+    gimpPath: string;
+    publicBaseUrl: string;
+    s3Bucket: string;
+    s3Prefix: string;
+    s3Region: string;
+    workDir: string;
+  };
   port: number;
   databaseUrl?: string;
   corsOrigin: string[];
@@ -23,10 +31,22 @@ export function loadConfig(): Config {
     bggApiToken: process.env.BGG_API_TOKEN,
     openAiApiKey: process.env.OPENAI_API_KEY,
     openAiTranslationModel: process.env.OPENAI_TRANSLATION_MODEL ?? 'gpt-5.4-nano',
+    localCoverWorkflow: readLocalCoverWorkflowConfig(),
     port,
     databaseUrl: process.env.LUDORA_DATABASE_URL,
     corsOrigin: readCorsOrigins(),
     discoveryApiUrl: process.env.LUDORA_DISCOVERY_API_URL ?? 'http://localhost:8001'
+  };
+}
+
+function readLocalCoverWorkflowConfig(): Config['localCoverWorkflow'] {
+  return {
+    gimpPath: process.env.LUDORA_COVER_GIMP_PATH ?? 'gimp-3.exe',
+    publicBaseUrl: process.env.LUDORA_COVER_PUBLIC_BASE_URL ?? 'https://ludora.s3.us-east-2.amazonaws.com',
+    s3Bucket: process.env.LUDORA_COVER_S3_BUCKET ?? 'ludora',
+    s3Prefix: process.env.LUDORA_COVER_S3_PREFIX ?? 'boardgame',
+    s3Region: process.env.LUDORA_COVER_S3_REGION ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-2',
+    workDir: process.env.LUDORA_COVER_WORK_DIR ?? 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame'
   };
 }
 

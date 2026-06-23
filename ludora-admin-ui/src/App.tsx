@@ -78,10 +78,16 @@ function frontPageCategoryProductsHash(option: FrontPageCategoryOption) {
   return `#front-page-category-products?${params.toString()}`;
 }
 
+function itemHash(itemId: string) {
+  const params = new URLSearchParams({ id: itemId });
+  return `#items?${params.toString()}`;
+}
+
 function renderSection(
   route: AdminRoute,
   navigate: (section: AdminSection) => void,
-  navigateToFrontPageCategoryProducts: (option: FrontPageCategoryOption) => void
+  navigateToFrontPageCategoryProducts: (option: FrontPageCategoryOption) => void,
+  navigateToItem: (itemId: string) => void
 ) {
   const selectedId = route.params.get('id') ?? undefined;
 
@@ -91,7 +97,13 @@ function renderSection(
     case 'stores':
       return <StoresPage />;
     case 'listings':
-      return <ListingCandidatesPage selectedCandidateId={selectedId} onClearSelectedCandidateId={() => navigate('listings')} />;
+      return (
+        <ListingCandidatesPage
+          selectedCandidateId={selectedId}
+          onClearSelectedCandidateId={() => navigate('listings')}
+          onOpenItem={navigateToItem}
+        />
+      );
     case 'reviews':
       return <ReviewTasksPage />;
     case 'operations':
@@ -148,11 +160,15 @@ export default function App() {
     navigateToHash(frontPageCategoryProductsHash(option));
   }
 
+  function navigateToItem(itemId: string) {
+    navigateToHash(itemHash(itemId));
+  }
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <AdminLayout activeSection={route.section} onNavigate={navigate}>
-        {renderSection(route, navigate, navigateToFrontPageCategoryProducts)}
+        {renderSection(route, navigate, navigateToFrontPageCategoryProducts, navigateToItem)}
       </AdminLayout>
     </ThemeProvider>
   );

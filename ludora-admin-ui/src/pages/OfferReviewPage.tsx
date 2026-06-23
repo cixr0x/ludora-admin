@@ -107,6 +107,15 @@ function itemNameLink(record: AdminRecord) {
   return internalLink(itemDisplayName(record), itemId ? `#items?id=${encodeURIComponent(itemId)}` : '');
 }
 
+function titleWithoutTrailingLanguage(value: string) {
+  const languageMarker =
+    '(?:español|espanol|spanish|castellano|es|esp|inglés|ingles|english|en)';
+  return value
+    .replace(new RegExp(`\\s*[\\(\\[\\{]\\s*${languageMarker}\\s*[\\)\\]\\}]\\s*$`, 'i'), '')
+    .replace(new RegExp(`\\s*[-–—:]\\s*${languageMarker}\\s*$`, 'i'), '')
+    .trim();
+}
+
 function setSpanishNameAction(
   record: AdminRecord,
   onSetSpanishName: (row: AdminRecord) => void,
@@ -144,9 +153,9 @@ function generateSpanishDescriptionAction(
   const itemDescriptionEs = field(record, ['item_description_es'], '');
   const itemId = field(record, ['item_id'], '');
   const isGenerating = candidateId !== '' && candidateId === generatingCandidateId;
-  const hasSourceDescriptions = Boolean(
-    itemDescription && itemDescription !== '-' && candidateDescription && candidateDescription !== '-'
-  );
+  const hasCandidateDescription = Boolean(candidateDescription && candidateDescription !== '-');
+  const hasItemDescription = Boolean(itemDescription && itemDescription !== '-');
+  const hasSourceDescriptions = hasItemDescription || hasCandidateDescription;
   const isMissingSpanishDescription = !itemDescriptionEs || itemDescriptionEs === '-';
   const isEnabled = Boolean(itemId && hasSourceDescriptions && isMissingSpanishDescription && !isGenerating);
   const title = isMissingSpanishDescription
@@ -390,7 +399,7 @@ function buildOfferReviewColumns(
 }
 
 export function OfferReviewPage() {
-  const table = useServerTableState('candidate_name');
+  const table = useServerTableState('candidate_name', 'asc', { store_item_listing_status: 'PENDING' });
   const [saveError, setSaveError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [generatingDescriptionCandidateId, setGeneratingDescriptionCandidateId] = useState('');
@@ -404,9 +413,10 @@ export function OfferReviewPage() {
     async (row: AdminRecord) => {
       const candidateId = field(row, ['candidate_id'], '');
       const candidateName = field(row, ['candidate_name'], '');
+      const spanishName = titleWithoutTrailingLanguage(candidateName);
       const itemId = field(row, ['item_id'], '');
 
-      if (!itemId || !candidateName || candidateName === '-') {
+      if (!itemId || !candidateName || candidateName === '-' || !spanishName) {
         return;
       }
 
@@ -418,10 +428,10 @@ export function OfferReviewPage() {
         const item = await adminApi.getItem(itemId);
         const savedItem = await adminApi.updateItem(itemId, {
           ...item,
-          canonical_name_es: candidateName,
+          canonical_name_es: spanishName,
           normalized_name_es: ''
         });
-        const savedSpanishName = field(savedItem, ['canonical_name_es'], candidateName);
+        const savedSpanishName = field(savedItem, ['canonical_name_es'], spanishName);
 
         setRows((currentRows) =>
           currentRows.map((currentRow, index) =>
@@ -480,8 +490,10 @@ export function OfferReviewPage() {
       const itemDescription = field(row, ['item_description'], '');
       const itemId = field(row, ['item_id'], '');
       const itemName = field(row, ['item_name_es'], '') || field(row, ['item_name'], '');
+      const candidateSourceDescription = candidateDescription === '-' ? '' : candidateDescription;
+      const itemSourceDescription = itemDescription === '-' ? '' : itemDescription;
 
-      if (!itemId || !itemName || !itemDescription || itemDescription === '-' || !candidateDescription || candidateDescription === '-') {
+      if (!itemId || !itemName || (!itemSourceDescription && !candidateSourceDescription)) {
         return;
       }
 
@@ -492,8 +504,8 @@ export function OfferReviewPage() {
       try {
         const generated = await adminApi.generateDescription({
           boardgame_name: itemName,
-          description_1: itemDescription,
-          description_2: candidateDescription
+          description_1: itemSourceDescription,
+          description_2: candidateSourceDescription
         });
         const item = await adminApi.getItem(itemId);
         const savedItem = await adminApi.updateItem(itemId, {

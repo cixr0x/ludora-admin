@@ -2,6 +2,7 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
 import CancelIcon from '@mui/icons-material/Cancel';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import SaveIcon from '@mui/icons-material/Save';
 import {
   Alert,
@@ -23,7 +24,7 @@ import {
   Typography
 } from '@mui/material';
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
-import { adminApi, type AdminRecord } from '../api/client';
+import { adminApi, type AdminRecord, type CreateItemFromCandidateInput, type LocalCoverWorkflow } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
@@ -454,10 +455,11 @@ function batchSelectionColumn(options: BatchSelectionOptions): DataTableColumn<A
 
 type ListingCandidatesPageProps = {
   onClearSelectedCandidateId?: () => void;
+  onOpenItem?: (itemId: string) => void;
   selectedCandidateId?: string;
 };
 
-export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCandidateId }: ListingCandidatesPageProps = {}) {
+export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, selectedCandidateId }: ListingCandidatesPageProps = {}) {
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [detailState, setDetailState] = useState<LoadState>('ready');
   const [isBatchConfirming, setIsBatchConfirming] = useState(false);
@@ -465,11 +467,14 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
   const [isCreatingBggItem, setIsCreatingBggItem] = useState(false);
   const [isCreatingItem, setIsCreatingItem] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [localCoverWorkflow, setLocalCoverWorkflow] = useState<LocalCoverWorkflow | null>(null);
+  const [localCoverWorkflowError, setLocalCoverWorkflowError] = useState('');
   const [updatingBoardgameCandidateId, setUpdatingBoardgameCandidateId] = useState('');
   const [saveError, setSaveError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [selectedBatchCandidateIds, setSelectedBatchCandidateIds] = useState<Set<string>>(() => new Set());
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
+  const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const table = useServerTableState('title');
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
@@ -612,6 +617,8 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
   useEffect(() => {
     if (!selectedCandidateId) {
       setDetailState('ready');
+      setLocalCoverWorkflow(null);
+      setLocalCoverWorkflowError('');
       setSaveError('');
       setSaveMessage('');
       setSelectedCandidate(null);
@@ -621,6 +628,8 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
 
     let ignore = false;
     setDetailState('loading');
+    setLocalCoverWorkflow(null);
+    setLocalCoverWorkflowError('');
     setSaveError('');
     setSaveMessage('');
     setViewMode('form');
@@ -669,7 +678,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
     }
   }
 
-  async function handleCreateItemFromCandidate(input: { bgg_id?: string; implements?: boolean } = {}) {
+  async function handleCreateItemFromCandidate(input: CreateItemFromCandidateInput = {}) {
     if (!selectedCandidate) {
       return;
     }
@@ -686,6 +695,10 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
       );
       setSelectedCandidate(savedCandidate);
       setSaveMessage('Item created from candidate.');
+      const itemId = field(savedCandidate, ['item_id'], '');
+      if (itemId) {
+        onOpenItem?.(itemId);
+      }
     } catch {
       setSaveError('Item could not be created from candidate.');
     } finally {
@@ -710,10 +723,36 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
       );
       setSelectedCandidate(savedCandidate);
       setSaveMessage('Item created from BGG ID.');
+      const itemId = field(savedCandidate, ['item_id'], '');
+      if (itemId) {
+        onOpenItem?.(itemId);
+      }
     } catch {
       setSaveError('Item could not be created from BGG ID.');
     } finally {
       setIsCreatingBggItem(false);
+    }
+  }
+
+  async function handleStartLocalCoverWorkflow(candidate: AdminRecord) {
+    const candidateId = field(candidate, ['id'], '');
+    if (!candidateId) {
+      return;
+    }
+
+    setStartingCoverWorkflowId(candidateId);
+    setLocalCoverWorkflow(null);
+    setLocalCoverWorkflowError('');
+    setSaveError('');
+    setSaveMessage('');
+
+    try {
+      const workflow = await adminApi.startLocalCoverWorkflow(candidateId);
+      setLocalCoverWorkflow(workflow);
+    } catch {
+      setLocalCoverWorkflowError('Cover workflow could not be started.');
+    } finally {
+      setStartingCoverWorkflowId('');
     }
   }
 
@@ -796,9 +835,13 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
           isCreatingBggItem={isCreatingBggItem}
           isCreatingItem={isCreatingItem}
           isSaving={isSaving}
+          localCoverWorkflow={localCoverWorkflow}
+          localCoverWorkflowError={localCoverWorkflowError}
           onBack={() => {
             setSelectedCandidate(null);
             setDetailState('ready');
+            setLocalCoverWorkflow(null);
+            setLocalCoverWorkflowError('');
             setSaveError('');
             setSaveMessage('');
             setViewMode('table');
@@ -807,7 +850,9 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
           onCreateItemFromBggId={handleCreateItemFromBggId}
           onSave={handleSaveCandidate}
           onCreateItem={handleCreateItemFromCandidate}
+          onStartLocalCoverWorkflow={handleStartLocalCoverWorkflow}
           saveError={saveError}
+          startingCoverWorkflowId={startingCoverWorkflowId}
         />
       ) : null}
 
@@ -819,6 +864,8 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, selectedCand
           minWidth={isBatchModeEnabled ? 3746 : 3674}
           onRowDoubleClick={(row) => {
             setDetailState('ready');
+            setLocalCoverWorkflow(null);
+            setLocalCoverWorkflowError('');
             setSaveError('');
             setSaveMessage('');
             setSelectedCandidate(row);
@@ -846,24 +893,34 @@ function ItemCandidateForm({
   isCreatingBggItem,
   isCreatingItem,
   isSaving,
+  localCoverWorkflow,
+  localCoverWorkflowError,
   onBack,
   onCreateItemFromBggId,
   onCreateItem,
   onSave,
-  saveError
+  onStartLocalCoverWorkflow,
+  saveError,
+  startingCoverWorkflowId
 }: {
   candidate: AdminRecord;
   isCreatingBggItem: boolean;
   isCreatingItem: boolean;
   isSaving: boolean;
+  localCoverWorkflow: LocalCoverWorkflow | null;
+  localCoverWorkflowError: string;
   onBack: () => void;
   onCreateItemFromBggId: (bggId: string) => void;
-  onCreateItem: (input?: { bgg_id?: string; implements?: boolean }) => Promise<void>;
+  onCreateItem: (input?: CreateItemFromCandidateInput) => Promise<void>;
   onSave: (input: AdminRecord) => void;
+  onStartLocalCoverWorkflow: (candidate: AdminRecord) => void;
   saveError: string;
+  startingCoverWorkflowId: string;
 }) {
   const title = field(candidate, ['title'], 'Item candidate');
+  const candidateIdValue = field(candidate, ['id'], '');
   const imageUrl = field(candidate, ['image_url'], '');
+  const itemId = field(candidate, ['item_id'], '');
   const matchedBggId = field(candidate, ['matched_bgg_id'], '');
   const sourceUrl = field(candidate, ['source_url'], '');
   const formKey = itemCandidateDetailFields.map((detailField) => detailValue(candidate, detailField.key)).join('\u001f');
@@ -871,6 +928,8 @@ function ItemCandidateForm({
   const [isBggDialogOpen, setIsBggDialogOpen] = useState(false);
   const [isCandidateDialogOpen, setIsCandidateDialogOpen] = useState(false);
   const [candidateDialogBggId, setCandidateDialogBggId] = useState(matchedBggId);
+  const [candidateExtends, setCandidateExtends] = useState(false);
+  const [candidateExtendsItemId, setCandidateExtendsItemId] = useState('');
   const [candidateImplements, setCandidateImplements] = useState(false);
 
   useEffect(() => {
@@ -885,7 +944,13 @@ function ItemCandidateForm({
 
   const canConfirmBggDialog = Boolean(bggDialogBggId.trim()) && !isSaving && !isCreatingBggItem && !isCreatingItem;
   const canConfirmCandidateDialog =
-    !isSaving && !isCreatingBggItem && !isCreatingItem && (!candidateImplements || Boolean(candidateDialogBggId.trim()));
+    !isSaving &&
+    !isCreatingBggItem &&
+    !isCreatingItem &&
+    (!candidateImplements || Boolean(candidateDialogBggId.trim())) &&
+    (!candidateExtends || Boolean(candidateExtendsItemId.trim()));
+  const isStartingCoverWorkflow = Boolean(candidateIdValue && candidateIdValue === startingCoverWorkflowId);
+  const canStartCoverWorkflow = Boolean(candidateIdValue && imageUrl && itemId && !isStartingCoverWorkflow);
 
   async function handleConfirmBggDialog() {
     await onCreateItemFromBggId(bggDialogBggId);
@@ -895,6 +960,8 @@ function ItemCandidateForm({
   async function handleConfirmCandidateDialog() {
     await onCreateItem({
       bgg_id: candidateDialogBggId.trim(),
+      extends: candidateExtends,
+      extends_item_id: candidateExtendsItemId.trim(),
       implements: candidateImplements
     });
     setIsCandidateDialogOpen(false);
@@ -913,6 +980,21 @@ function ItemCandidateForm({
             </Typography>
           </Box>
           <Stack direction={{ sm: 'row', xs: 'column' }} spacing={1} sx={{ width: { sm: 'auto', xs: '100%' } }}>
+            <Tooltip title={canStartCoverWorkflow ? 'Start cover workflow' : 'Requires a linked item and image'}>
+              <span>
+                <Button
+                  aria-label={`Start cover workflow for ${title}`}
+                  disabled={!canStartCoverWorkflow}
+                  startIcon={isStartingCoverWorkflow ? <CircularProgress size={18} /> : <ImageSearchIcon />}
+                  sx={{ width: { sm: 'auto', xs: '100%' } }}
+                  type="button"
+                  variant="outlined"
+                  onClick={() => onStartLocalCoverWorkflow(candidate)}
+                >
+                  {isStartingCoverWorkflow ? 'Starting...' : 'Start cover workflow'}
+                </Button>
+              </span>
+            </Tooltip>
             <Button disabled={isSaving} startIcon={<SaveIcon />} type="submit" variant="contained">
               {isSaving ? 'Saving...' : 'Save Store Item'}
             </Button>
@@ -943,6 +1025,8 @@ function ItemCandidateForm({
             variant="outlined"
             onClick={() => {
               setCandidateDialogBggId(matchedBggId);
+              setCandidateExtends(false);
+              setCandidateExtendsItemId('');
               setCandidateImplements(false);
               setIsCandidateDialogOpen(true);
             }}
@@ -952,6 +1036,24 @@ function ItemCandidateForm({
         </Stack>
 
         {saveError ? <Alert severity="error">{saveError}</Alert> : null}
+        {localCoverWorkflowError ? <Alert severity="error">{localCoverWorkflowError}</Alert> : null}
+        {localCoverWorkflow ? (
+          <Alert severity="success">
+            <Stack spacing={0.5}>
+              <Typography variant="body2">Cover workflow started for {localCoverWorkflow.filename}.</Typography>
+              <Typography color="text.secondary" variant="caption">
+                Save the edited cover to one of:
+              </Typography>
+              {(localCoverWorkflow.expected_paths?.length ? localCoverWorkflow.expected_paths : [localCoverWorkflow.expected_path]).map(
+                (expectedPath) => (
+                  <Typography component="code" key={expectedPath} sx={{ fontFamily: 'monospace', overflowWrap: 'anywhere' }} variant="body2">
+                    {expectedPath}
+                  </Typography>
+                )
+              )}
+            </Stack>
+          </Alert>
+        ) : null}
 
         <Stack alignItems={{ md: 'flex-start', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={2}>
           {imageUrl ? (
@@ -1062,6 +1164,18 @@ function ItemCandidateForm({
               label="BGG ID"
               value={candidateDialogBggId}
               onChange={(event) => setCandidateDialogBggId(event.target.value)}
+            />
+            <FormControlLabel
+              control={
+                <Checkbox checked={candidateExtends} onChange={(event) => setCandidateExtends(event.target.checked)} />
+              }
+              label="Extends"
+            />
+            <TextField
+              fullWidth
+              label="Extends Item ID"
+              value={candidateExtendsItemId}
+              onChange={(event) => setCandidateExtendsItemId(event.target.value)}
             />
           </Stack>
         </DialogContent>

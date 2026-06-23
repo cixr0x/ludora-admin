@@ -17,13 +17,13 @@ export function userPromptForDescriptionGeneration(request: DescriptionGeneratio
   return [
     `Board game name: ${request.boardgameName}`,
     '',
-    'Description 1, usually factual or BGG-style:',
+    'Description 1, usually factual or BGG-style; may be blank if unavailable:',
     request.description1,
     '',
-    'Description 2, usually store-provided with tone, setting, or ambience:',
+    'Description 2, usually store-provided with tone, setting, or ambience; may be blank if unavailable:',
     request.description2,
     '',
-    'Create one new Spanish description that mixes both sources. Preserve concrete facts from the inputs, but make the result approachable and vivid.',
+    'Create one new Spanish description from the available source descriptions. If both sources are provided, mix them. Preserve concrete facts from the inputs, but make the result approachable and vivid.',
     'If the sources conflict or one source is too thin, mention the issue only in metadata warnings, not in the description text.'
   ].join('\n');
 }

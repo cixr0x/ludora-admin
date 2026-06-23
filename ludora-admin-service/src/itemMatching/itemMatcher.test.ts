@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { scoreBggThing, scoreLocalItem } from './itemMatcher.js';
+import { normalizeTitleVariants, scoreBggThing, scoreLocalItem } from './itemMatcher.js';
 
 describe('item matcher', () => {
   it('scores exact BGG alternate name matches as strong matches', () => {
@@ -83,5 +83,43 @@ describe('item matcher', () => {
 
     expect(result.matchScore).toBeGreaterThanOrEqual(0.9);
     expect(result.matchReasons).toContain('exact local item name match after ignoring language edition');
+  });
+
+  it('scores bare trailing language suffixes as strong local and BGG matches', () => {
+    const title = 'Gloomhaven en ESPA\u00d1OL';
+
+    expect(normalizeTitleVariants(title)).toEqual(['gloomhaven en espanol', 'gloomhaven']);
+
+    const localResult = scoreLocalItem(
+      { title, itemType: 'base_game' },
+      {
+        aliases: [],
+        bggId: 174430,
+        id: 88,
+        itemType: 'base_game',
+        name: 'Gloomhaven',
+        normalizedName: 'gloomhaven'
+      }
+    );
+
+    expect(localResult.matchScore).toBeGreaterThanOrEqual(0.9);
+    expect(localResult.matchReasons).toContain('exact local item name match after ignoring language edition');
+
+    const bggResult = scoreBggThing(
+      { title, itemType: 'base_game' },
+      {
+        alternateNames: [],
+        bggId: 174430,
+        maxPlayers: 4,
+        minPlayers: 1,
+        name: 'Gloomhaven',
+        publishers: [],
+        type: 'boardgame',
+        yearPublished: 2017
+      }
+    );
+
+    expect(bggResult.matchScore).toBeGreaterThanOrEqual(0.9);
+    expect(bggResult.matchReasons).toContain('exact BGG primary name match after ignoring language edition');
   });
 });

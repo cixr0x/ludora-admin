@@ -480,6 +480,66 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByRole('table', { name: 'Store items' })).toBeInTheDocument();
   });
 
+  it('starts a local cover workflow from the store item form', async () => {
+    const user = userEvent.setup();
+    const originalCandidate = {
+      availability: 'available',
+      id: '3365',
+      image_url: 'https://store.mx/kitchen-rush.jpg',
+      is_boardgame: true,
+      is_boardgame_confirmed: true,
+      item_id: 77,
+      listing_status: 'LISTED',
+      source_url: 'https://store.mx/products/kitchen-rush',
+      store_id: 42,
+      title: 'Kitchen Rush'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/discovery/listings' && !init) {
+        return jsonResponse([originalCandidate], 200, { page: 0, page_size: 100, total: 1 });
+      }
+      if (pathOf(url) === '/admin/local-cover-workflows' && init?.method === 'POST') {
+        return jsonResponse({
+          expected_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\kitchenrush.es.webp',
+          expected_paths: [
+            'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\kitchenrush.en.webp',
+            'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\kitchenrush.es.webp'
+          ],
+          filename: 'kitchenrush.es.webp',
+          item_id: 77,
+          public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/kitchenrush.es.webp',
+          source_path: 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\kitchenrush.source.jpg',
+          status: 'waiting_for_edit',
+          target_field: null,
+          store_item_id: 3365
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    const titleCells = await screen.findAllByText('Kitchen Rush');
+    await user.dblClick(titleCells[0]);
+    await user.click(screen.getByRole('button', { name: 'Start cover workflow for Kitchen Rush' }));
+
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([url, init]) => pathOf(String(url)) === '/admin/local-cover-workflows' && init?.method === 'POST'
+        )
+      ).toBe(true)
+    );
+    const workflowCall = fetchMock.mock.calls.find(
+      ([url, init]) => pathOf(String(url)) === '/admin/local-cover-workflows' && init?.method === 'POST'
+    );
+    expect(JSON.parse(String(workflowCall?.[1]?.body))).toEqual({ store_item_id: '3365' });
+    expect(await screen.findByText('Cover workflow started for kitchenrush.es.webp.')).toBeInTheDocument();
+    expect(screen.getByText('C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\kitchenrush.en.webp')).toBeInTheDocument();
+    expect(screen.getByText('C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\kitchenrush.es.webp')).toBeInTheDocument();
+  });
+
   it('edits and saves store items from the form view', async () => {
     const user = userEvent.setup();
     const originalCandidate = {
@@ -541,7 +601,6 @@ describe('ListingCandidatesPage', () => {
       }
       throw new Error(`Unexpected request: ${url}`);
     });
-
     render(<ListingCandidatesPage />);
 
     const titleCells = await screen.findAllByText('Kitchen Rush');
@@ -604,8 +663,9 @@ describe('ListingCandidatesPage', () => {
       }
       throw new Error(`Unexpected request: ${url}`);
     });
+    const onOpenItem = vi.fn();
 
-    render(<ListingCandidatesPage />);
+    render(<ListingCandidatesPage onOpenItem={onOpenItem} />);
 
     const titleCells = await screen.findAllByText('Kitchen Rush');
     await user.dblClick(titleCells[0]);
@@ -618,6 +678,7 @@ describe('ListingCandidatesPage', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create Item' }));
 
     expect(await screen.findByText('Item created from candidate.')).toBeInTheDocument();
+    expect(onOpenItem).toHaveBeenCalledWith('77');
     expect(screen.getByLabelText('Item ID')).toHaveValue('77');
     expect(screen.getByDisplayValue('PENDING')).toBeInTheDocument();
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create Item from Candidate' })).not.toBeInTheDocument());
@@ -625,6 +686,58 @@ describe('ListingCandidatesPage', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/create-item', {
       body: JSON.stringify({ bgg_id: '223953', implements: true }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  }, 10000);
+
+  it('creates a curated item from the candidate form with an extension relationship', async () => {
+    const user = userEvent.setup();
+    const originalCandidate = {
+      availability: 'available',
+      description: 'An expansion for Kitchen Rush.',
+      id: '3366',
+      image_url: 'https://store.mx/kitchen-rush-expansion.jpg',
+      item_id: null,
+      item_type: 'expansion',
+      language: 'en',
+      matched_bgg_id: '',
+      source_url: 'https://store.mx/products/kitchen-rush-expansion',
+      listing_status: 'PENDING',
+      store_id: 42,
+      title: 'Kitchen Rush Expansion'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/discovery/listings' && !init) {
+        return jsonResponse([originalCandidate], 200, { page: 0, page_size: 100, total: 1 });
+      }
+      if (pathOf(url) === '/discovery/listings/3366/create-item' && init?.method === 'POST') {
+        return jsonResponse({
+          ...originalCandidate,
+          item_id: 78,
+          match_source: 'MANUAL',
+          listing_status: 'PENDING'
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    render(<ListingCandidatesPage />);
+
+    const titleCells = await screen.findAllByText('Kitchen Rush Expansion');
+    await user.dblClick(titleCells[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Create Item from Candidate' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create Item from Candidate' });
+    expect(within(dialog).getByLabelText('Extends')).not.toBeChecked();
+
+    fireEvent.click(within(dialog).getByLabelText('Extends'));
+    await user.type(within(dialog).getByLabelText('Extends Item ID'), '77');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create Item' }));
+
+    expect(await screen.findByText('Item created from candidate.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Item ID')).toHaveValue('78');
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3366/create-item', {
+      body: JSON.stringify({ bgg_id: '', implements: false, extends: true, extends_item_id: '77' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -670,8 +783,9 @@ describe('ListingCandidatesPage', () => {
       }
       throw new Error(`Unexpected request: ${url}`);
     });
+    const onOpenItem = vi.fn();
 
-    render(<ListingCandidatesPage />);
+    render(<ListingCandidatesPage onOpenItem={onOpenItem} />);
 
     const titleCells = await screen.findAllByText('Cafe Barista');
     await user.dblClick(titleCells[0]);
@@ -684,6 +798,7 @@ describe('ListingCandidatesPage', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create BGG Item' }));
 
     expect(await screen.findByText('Item created from BGG ID.')).toBeInTheDocument();
+    expect(onOpenItem).toHaveBeenCalledWith('77');
     expect(screen.getByLabelText('Item ID')).toHaveValue('77');
     expect(screen.getByLabelText('Matched BGG ID')).toHaveValue('377061');
     expect(screen.getByDisplayValue('PENDING')).toBeInTheDocument();
