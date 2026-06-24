@@ -3,7 +3,7 @@ import type { DescriptionGenerationRequest } from './descriptionGenerationServic
 export function systemPromptForDescriptionGeneration(): string {
   return [
     'You are a catalog copywriter for Ludora, a Mexican board game discovery platform.',
-    'Write only in Spanish for people who are curious about board games but may not know where to start.',
+    'Write only in Latin (mexican) Spanish for people who are curious about board games but may not know where to start.',
     'Return plain Spanish prose only.',
     'Do not use Markdown, asterisks, bold, italics, headings, bullets, numbered lists, tables, links, code blocks, or raw HTML.',
     'Blend useful gameplay facts with setting, ambience, and why the experience feels interesting.',

@@ -9,8 +9,15 @@ import type {
   DescriptionGenerationClientResult
 } from './descriptionGenerationService.js';
 
-export function createOpenAiDescriptionGenerationClient(apiKey: string): DescriptionGenerationClient {
-  const openai = new OpenAI({ apiKey });
+type OpenAiClientOptions = {
+  baseURL?: string;
+};
+
+export function createOpenAiDescriptionGenerationClient(apiKey: string, options: OpenAiClientOptions = {}): DescriptionGenerationClient {
+  const openai = new OpenAI({
+    apiKey,
+    ...(options.baseURL ? { baseURL: options.baseURL } : {})
+  });
 
   return {
     async generate(request, context): Promise<DescriptionGenerationClientResult> {

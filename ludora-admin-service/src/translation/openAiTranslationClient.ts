@@ -3,8 +3,15 @@ import OpenAI from 'openai';
 import { systemPromptForPurpose, userPromptForTranslation } from './translationPrompts.js';
 import type { TranslationClient, TranslationClientResult } from './translationService.js';
 
-export function createOpenAiTranslationClient(apiKey: string): TranslationClient {
-  const openai = new OpenAI({ apiKey });
+type OpenAiClientOptions = {
+  baseURL?: string;
+};
+
+export function createOpenAiTranslationClient(apiKey: string, options: OpenAiClientOptions = {}): TranslationClient {
+  const openai = new OpenAI({
+    apiKey,
+    ...(options.baseURL ? { baseURL: options.baseURL } : {})
+  });
 
   return {
     async translate(request, context): Promise<TranslationClientResult> {

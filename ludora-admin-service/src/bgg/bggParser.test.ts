@@ -75,6 +75,7 @@ describe('BGG XML parser', () => {
           <link type="boardgameartist" id="157654" value="Siwon Hwang" />
           <link type="boardgamepublisher" id="8291" value="Korea Boardgames" />
           <link type="boardgameexpansion" id="411435" value="Coffee Rush: Piece of Cake" inbound="true" />
+          <link type="boardgameexpansion" id="440981" value="Coffee Rush: Christmas Promo Cards 2" />
           <link type="boardgameimplementation" id="999001" value="Coffee Rush Dice" />
           <statistics page="1">
             <ratings>
@@ -93,6 +94,10 @@ describe('BGG XML parser', () => {
       categories: [{ bggId: 1021, name: 'Economic' }],
       description: 'A coffee shop game.',
       designers: [{ bggId: 150113, name: 'Euijin Han' }],
+      expansionLinks: [
+        { bggId: 411435, inbound: true, name: 'Coffee Rush: Piece of Cake' },
+        { bggId: 440981, inbound: false, name: 'Coffee Rush: Christmas Promo Cards 2' }
+      ],
       families: [{ bggId: 46953, name: 'Food & Drink: Coffee' }],
       image: 'https://example.com/original.jpg',
       maxPlayers: 4,

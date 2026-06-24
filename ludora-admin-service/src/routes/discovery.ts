@@ -270,7 +270,9 @@ const randomFrontPageCategoryAssignmentsSql = `
     left join lateral (
       select ai.id as item_id
       from active_item ai
-      where ${frontPageCategoryAssignmentCandidatePredicateSql}
+      where ai.has_approved_listing = true
+        and ai.is_expansion = false
+        and ${frontPageCategoryAssignmentCandidatePredicateSql}
       order by random()
       limit 1
     ) candidate on true
@@ -293,7 +295,9 @@ const randomFrontPageCategoryAssignmentsSql = `
     left join lateral (
       select ai.id as item_id
       from active_item ai
-      where ${frontPageCategoryAssignmentCandidatePredicateSql}
+      where ai.has_approved_listing = true
+        and ai.is_expansion = false
+        and ${frontPageCategoryAssignmentCandidatePredicateSql}
         and not (ai.id = any(previous.assigned_item_ids))
       order by random()
       limit 1
@@ -1453,7 +1457,7 @@ export function createDiscoveryRouter(
             candidate.title,
             $2,
             $3,
-            null,
+            $9::bigint,
             null,
             '',
             null,
@@ -2070,11 +2074,7 @@ function frontPageCategoryOptionsSql(onlyUnlinkedGames: boolean): string {
 
   return `
     with qualified_items as (
-      select distinct item_id
-      from store_items
-      where item_id is not null
-        and is_boardgame = true
-        and is_boardgame_confirmed = true
+      ${frontPageCategoryQualifiedItemsSql()}
     ),
     countable_items as (
       select qi.item_id
@@ -2172,11 +2172,7 @@ function frontPageCategoryProductsSql(categoryType: string): string {
 function frontPageCategoryProductsSqlFor(relationSql: string, itemIdSql: string, categoryIdSql: string): string {
   return `
     with qualified_items as (
-      select distinct item_id
-      from store_items
-      where item_id is not null
-        and is_boardgame = true
-        and is_boardgame_confirmed = true
+      ${frontPageCategoryQualifiedItemsSql()}
     )
     select
       i.id,
@@ -2193,6 +2189,15 @@ function frontPageCategoryProductsSqlFor(relationSql: string, itemIdSql: string,
     order by i.canonical_name asc
     limit 500
   `;
+}
+
+function frontPageCategoryQualifiedItemsSql(): string {
+  return `
+      select ai.id as item_id
+      from active_item ai
+      where ai.has_approved_listing = true
+        and ai.is_expansion = false
+  `.trim();
 }
 
 function parseStoreCandidateInput(body: unknown): StoreCandidateInput {

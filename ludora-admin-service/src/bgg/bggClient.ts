@@ -10,6 +10,10 @@ export type BggClient = {
   search(query: string): Promise<BggSearchItem[]>;
 };
 
+export type BggThingXmlClient = BggClient & {
+  fetchThingXml(bggId: number): Promise<string>;
+};
+
 export class BggApiError extends Error {
   constructor(
     message: string,
@@ -28,7 +32,7 @@ export function createBggClient({
 }: {
   apiToken: string;
   baseUrl?: string;
-}): BggClient {
+}): BggThingXmlClient {
   const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
   let requestQueue: Promise<void> = Promise.resolve();
   let lastRequestStartedAt: number | null = null;
@@ -83,16 +87,22 @@ export function createBggClient({
     lastRequestStartedAt = Date.now();
   }
 
+  async function fetchThingXml(bggId: number): Promise<string> {
+    return getXml(
+      'thing',
+      new URLSearchParams({
+        id: String(bggId),
+        stats: '1',
+        type: 'boardgame,boardgameexpansion'
+      })
+    );
+  }
+
   return {
+    fetchThingXml,
+
     async fetchThing(bggId: number): Promise<BggThingResult | null> {
-      const xml = await getXml(
-        'thing',
-        new URLSearchParams({
-          id: String(bggId),
-          stats: '1',
-          type: 'boardgame,boardgameexpansion'
-        })
-      );
+      const xml = await fetchThingXml(bggId);
       const details = parseBggThingResponse(xml);
       return details ? { details, rawXml: xml } : null;
     },

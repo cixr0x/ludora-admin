@@ -19,6 +19,7 @@ describe('ItemsPage', () => {
           item_type: 'base_game',
           max_players: 4,
           min_players: 2,
+          rating: '7.37125',
           status: 'active',
           year_published: 2023
         }
@@ -32,6 +33,7 @@ describe('ItemsPage', () => {
     const firstRowCells = within(within(itemsTable).getAllByRole('row')[2]).getAllByRole('cell');
 
     expect(headers[0]).toContain('ID');
+    expect(headers.join(' ')).toContain('Rating');
     expect(firstRowCells[0]).toHaveTextContent('1');
     expect(screen.getByRole('img', { name: 'Coffee Rush thumbnail' })).toHaveAttribute(
       'src',
@@ -40,6 +42,7 @@ describe('ItemsPage', () => {
     expect(screen.getByText('Coffee Rush')).toBeInTheDocument();
     expect(screen.getByText('base_game')).toBeInTheDocument();
     expect(screen.getByText('2023')).toBeInTheDocument();
+    expect(screen.getByText('7.37125')).toBeInTheDocument();
   });
 
   it('opens a form view from the item table and saves changes', async () => {
@@ -66,6 +69,7 @@ describe('ItemsPage', () => {
       normalized_name: 'coffee rush',
       normalized_name_es: 'cafe barista',
       parent_item_id: null,
+      rating: '7.37125',
       status: 'active',
       updated_at: '2026-05-29T09:53:38.466Z',
       year_published: 2023
@@ -109,6 +113,7 @@ describe('ItemsPage', () => {
 
     expect(screen.getByRole('heading', { name: 'Item Details' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://boardgamegeek.com/boardgame/377061/coffee-rush')).toBeInTheDocument();
+    expect(screen.getByLabelText('Rating')).toHaveValue('7.37125');
     expect(screen.getByRole('img', { name: 'Coffee Rush item image' })).toHaveAttribute(
       'src',
       'https://cf.geekdo-images.com/coffee.jpg'

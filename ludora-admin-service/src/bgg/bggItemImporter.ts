@@ -3,6 +3,8 @@ import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggClient } from './bggClient.js';
 import type { BggNamedLink, BggRelatedLink, BggThingDetails } from './bggParser.js';
 
+const BGG_IMPORT_REFRESH_AFTER_MS = 180 * 24 * 60 * 60 * 1000;
+
 export type BggItemImporter = {
   importBggId(bggId: number): Promise<number | null>;
 };
@@ -10,6 +12,11 @@ export type BggItemImporter = {
 export function createBggItemImporter(database: Database, bggClient?: BggClient): BggItemImporter {
   return {
     async importBggId(bggId: number): Promise<number | null> {
+      const cachedItemId = await freshExistingItemId(database, bggId);
+      if (cachedItemId !== null) {
+        return cachedItemId;
+      }
+
       if (!bggClient) {
         return null;
       }
@@ -146,7 +153,8 @@ async function upsertRelatedItems(
     if (!parentId) {
       continue;
     }
-    await upsertItemRelationship(database, itemId, 'extension', parentId, String(parentLink.bggId));
+    const [itemAId, itemBId] = bggRelationshipItemIds(itemId, parentId, parentLink);
+    await upsertItemRelationship(database, itemAId, 'extension', itemBId, String(parentLink.bggId));
     await updateParentItem(database, itemId, parentId);
   }
 
@@ -155,8 +163,13 @@ async function upsertRelatedItems(
     if (!implementationId) {
       continue;
     }
-    await upsertItemRelationship(database, itemId, 'implementation', implementationId, String(implementationLink.bggId));
+    const [itemAId, itemBId] = bggRelationshipItemIds(itemId, implementationId, implementationLink);
+    await upsertItemRelationship(database, itemAId, 'implementation', itemBId, String(implementationLink.bggId));
   }
+}
+
+function bggRelationshipItemIds(currentItemId: number, linkedItemId: number, link: BggRelatedLink): [number, number] {
+  return link.inbound ? [currentItemId, linkedItemId] : [linkedItemId, currentItemId];
 }
 
 async function importLinkedThing(
@@ -165,6 +178,11 @@ async function importLinkedThing(
   link: BggRelatedLink,
   visited: Set<number>
 ): Promise<number | null> {
+  const cachedItemId = await freshExistingItemId(database, link.bggId);
+  if (cachedItemId !== null) {
+    return cachedItemId;
+  }
+
   const fetched = await bggClient.fetchThing(link.bggId);
   if (!fetched) {
     return null;
@@ -386,6 +404,24 @@ function dedupeByNormalizedName(values: string[]) {
 async function existingItemId(database: Database, bggId: number): Promise<number | null> {
   const existing = await database.query('select id from items where bgg_id = $1', [bggId]);
   return idFromRows(existing.rows);
+}
+
+async function freshExistingItemId(database: Database, bggId: number): Promise<number | null> {
+  const existing = await database.query('select id, bgg_last_sync_at from items where bgg_id = $1', [bggId]);
+  const row = existing.rows[0] as Record<string, unknown> | undefined;
+  if (!row || !isFreshBggSync(row.bgg_last_sync_at)) {
+    return null;
+  }
+  return idFromRows([row]);
+}
+
+function isFreshBggSync(value: unknown): boolean {
+  if (!value) {
+    return false;
+  }
+
+  const syncedAt = value instanceof Date ? value.getTime() : new Date(String(value)).getTime();
+  return Number.isFinite(syncedAt) && Date.now() - syncedAt <= BGG_IMPORT_REFRESH_AFTER_MS;
 }
 
 function idFromRows(rows: unknown[]): number | null {

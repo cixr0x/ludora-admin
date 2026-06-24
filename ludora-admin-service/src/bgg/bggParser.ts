@@ -24,6 +24,7 @@ export type BggThingDetails = {
   categories: BggNamedLink[];
   description: string;
   designers: BggNamedLink[];
+  expansionLinks: BggRelatedLink[];
   families: BggNamedLink[];
   image: string;
   maxPlayers: number | null;
@@ -79,6 +80,7 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
   if (!item) {
     return null;
   }
+  const expansionLinks = relatedLinksByType(item, 'boardgameexpansion');
 
   return {
     alternateNames: namesByType(item, 'alternate'),
@@ -87,6 +89,7 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
     categories: linksByType(item, 'boardgamecategory'),
     description: stringValue(item.description),
     designers: linksByType(item, 'boardgamedesigner'),
+    expansionLinks,
     families: linksByType(item, 'boardgamefamily'),
     image: stringValue(item.image),
     maxPlayers: numberValue(item.maxplayers?.value),
@@ -96,7 +99,7 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
     minPlayers: numberValue(item.minplayers?.value),
     minPlaytime: numberValue(item.minplaytime?.value),
     name: primaryName(item),
-    parentLinks: relatedLinksByType(item, 'boardgameexpansion').filter((link) => link.inbound),
+    parentLinks: expansionLinks.filter((link) => link.inbound),
     playingTime: numberValue(item.playingtime?.value),
     publishers: linksByType(item, 'boardgamepublisher'),
     rating: numberValue(item.statistics?.ratings?.average?.value),

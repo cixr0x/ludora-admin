@@ -49,10 +49,12 @@ describe('loadConfig', () => {
 
   it('loads optional OpenAI translation configuration', () => {
     vi.stubEnv('OPENAI_API_KEY', 'test-openai-key');
+    vi.stubEnv('OPENAI_BASE_URL', 'http://127.0.0.1:3001/v1');
     vi.stubEnv('OPENAI_TRANSLATION_MODEL', 'gpt-5.4-nano');
 
     expect(loadConfig()).toMatchObject({
       openAiApiKey: 'test-openai-key',
+      openAiBaseUrl: 'http://127.0.0.1:3001/v1',
       openAiTranslationModel: 'gpt-5.4-nano'
     });
   });

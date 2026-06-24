@@ -108,11 +108,13 @@ function itemNameLink(record: AdminRecord) {
 }
 
 function titleWithoutTrailingLanguage(value: string) {
+  const spanishLanguageMarker = '(?:español|espanol)';
   const languageMarker =
     '(?:español|espanol|spanish|castellano|es|esp|inglés|ingles|english|en)';
   return value
     .replace(new RegExp(`\\s*[\\(\\[\\{]\\s*${languageMarker}\\s*[\\)\\]\\}]\\s*$`, 'i'), '')
     .replace(new RegExp(`\\s*[-–—:]\\s*${languageMarker}\\s*$`, 'i'), '')
+    .replace(new RegExp(`\\s+en\\s+${spanishLanguageMarker}\\s*$`, 'i'), '')
     .trim();
 }
 

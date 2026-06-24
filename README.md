@@ -19,6 +19,14 @@ npm run dev
 Set `LUDORA_DATABASE_URL` in `.env` before running database-backed routes.
 Set `LUDORA_DISCOVERY_API_URL` when using the Operations page. For local development it defaults to `http://localhost:8001`.
 
+OpenAI-backed admin translation and description generation use the official OpenAI API by default. To point those calls at a local OpenAI-compatible simulator, set:
+
+```text
+OPENAI_BASE_URL=http://127.0.0.1:3001/v1
+```
+
+Unset `OPENAI_BASE_URL` to use the default OpenAI API endpoint again.
+
 ### Local Cover Workflow
 
 The item details page can start a local cover workflow from the item image itself or from a linked store item row, and the store item details page can start the same flow directly. The admin service downloads the selected source image, opens it in GIMP, and waits for either `<normalized-name>.en.webp` or `<normalized-name>.es.webp` in the work directory. The `.en.webp` file updates `items.image_url`; the `.es.webp` file updates `items.image_url_es`.

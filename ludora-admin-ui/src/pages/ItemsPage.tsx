@@ -176,6 +176,7 @@ const itemDetailFields: ItemDetailField[] = [
   { gridColumn: { md: 'span 2' }, key: 'bgg_url', label: 'BGG URL' },
   { key: 'bgg_last_sync_at', label: 'BGG Last Sync At', readOnly: true },
   { key: 'year_published', label: 'Year Published' },
+  { key: 'rating', label: 'Rating' },
   { key: 'min_players', label: 'Min Players' },
   { key: 'max_players', label: 'Max Players' },
   { key: 'min_minutes', label: 'Min Minutes' },
@@ -247,6 +248,14 @@ const itemColumns: DataTableColumn<AdminRecord>[] = [
     minWidth: 90,
     render: (row) => field(row, ['year_published']),
     sortValue: (row) => numericField(row, ['year_published']) ?? field(row, ['year_published'])
+  },
+  {
+    filterValue: (row) => field(row, ['rating']),
+    id: 'rating',
+    label: 'Rating',
+    minWidth: 100,
+    render: (row) => field(row, ['rating']),
+    sortValue: (row) => numericField(row, ['rating']) ?? field(row, ['rating'])
   },
   {
     filterValue: (row) => playersLabel(row),

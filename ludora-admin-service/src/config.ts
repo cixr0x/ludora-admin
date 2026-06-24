@@ -6,6 +6,7 @@ export type Config = {
   bggApiBaseUrl: string;
   bggApiToken?: string;
   openAiApiKey?: string;
+  openAiBaseUrl?: string;
   openAiTranslationModel: string;
   localCoverWorkflow: {
     gimpPath: string;
@@ -30,6 +31,7 @@ export function loadConfig(): Config {
     bggApiBaseUrl: process.env.BGG_API_BASE_URL ?? 'https://boardgamegeek.com/xmlapi2',
     bggApiToken: process.env.BGG_API_TOKEN,
     openAiApiKey: process.env.OPENAI_API_KEY,
+    openAiBaseUrl: readOptionalEnv('OPENAI_BASE_URL'),
     openAiTranslationModel: process.env.OPENAI_TRANSLATION_MODEL ?? 'gpt-5.4-nano',
     localCoverWorkflow: readLocalCoverWorkflowConfig(),
     port,
@@ -37,6 +39,11 @@ export function loadConfig(): Config {
     corsOrigin: readCorsOrigins(),
     discoveryApiUrl: process.env.LUDORA_DISCOVERY_API_URL ?? 'http://localhost:8001'
   };
+}
+
+function readOptionalEnv(key: string): string | undefined {
+  const value = process.env[key]?.trim();
+  return value ? value : undefined;
 }
 
 function readLocalCoverWorkflowConfig(): Config['localCoverWorkflow'] {

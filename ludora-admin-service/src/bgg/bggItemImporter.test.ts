@@ -5,6 +5,172 @@ import { createBggItemImporter } from './bggItemImporter.js';
 import type { Database } from '../db.js';
 
 describe('BGG item importer', () => {
+  it('uses a recently synced local item before fetching BGG item metadata', async () => {
+    const fetchedBggIds: number[] = [];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        const normalized = normalizeSql(sql);
+
+        if (normalized.startsWith('select id')) {
+          return { rows: [{ bgg_last_sync_at: new Date(), id: 77 }] };
+        }
+        return { rows: [] };
+      }
+    };
+    const bggClient: BggClient = {
+      fetchThing: async (bggId) => {
+        fetchedBggIds.push(bggId);
+        return null;
+      },
+      search: async () => []
+    };
+
+    const itemId = await createBggItemImporter(database, bggClient).importBggId(377061);
+
+    expect(itemId).toBe(77);
+    expect(fetchedBggIds).toEqual([]);
+    expect(queries).toHaveLength(1);
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain('bgg_last_sync_at');
+  });
+
+  it('refreshes local BGG items when the last sync is older than 180 days', async () => {
+    const events: string[] = [];
+    const staleSyncDate = new Date(Date.now() - 181 * 24 * 60 * 60 * 1000);
+    const database: Database = {
+      query: async (sql) => {
+        const normalized = normalizeSql(sql);
+
+        if (normalized.startsWith('select id')) {
+          events.push('cache lookup');
+          return { rows: [{ bgg_last_sync_at: staleSyncDate, id: 77 }] };
+        }
+        if (normalized.startsWith('update items')) {
+          return { rows: [{ id: 77 }] };
+        }
+        return { rows: [] };
+      }
+    };
+    const bggClient: BggClient = {
+      fetchThing: async (bggId) => {
+        events.push(`fetch ${bggId}`);
+        return {
+          details: {
+            alternateNames: [],
+            artists: [],
+            bggId,
+            categories: [],
+            description: 'Refreshed description.',
+            designers: [],
+            families: [],
+            image: '',
+            maxPlayers: null,
+            maxPlaytime: null,
+            mechanics: [],
+            minAge: null,
+            minPlayers: null,
+            minPlaytime: null,
+            name: 'Coffee Rush',
+            parentLinks: [],
+            playingTime: null,
+            publishers: [],
+            rating: null,
+            thumbnail: '',
+            type: 'boardgame',
+            implementationLinks: [],
+            weight: null,
+            yearPublished: 2023
+          },
+          rawXml: '<items />'
+        };
+      },
+      search: async () => []
+    };
+
+    const itemId = await createBggItemImporter(database, bggClient).importBggId(377061);
+
+    expect(itemId).toBe(77);
+    expect(events.slice(0, 2)).toEqual(['cache lookup', 'fetch 377061']);
+  });
+
+  it('uses recently synced local related items before fetching linked BGG metadata', async () => {
+    const fetchedBggIds: number[] = [];
+    const recentSyncDate = new Date();
+    const database: Database = {
+      query: async (sql, params) => {
+        const normalized = normalizeSql(sql);
+        const bggId = Number(params?.[0]);
+
+        if (normalized.startsWith('select id, bgg_last_sync_at')) {
+          return { rows: bggId === 13 ? [{ bgg_last_sync_at: recentSyncDate, id: 78 }] : [] };
+        }
+        if (normalized.startsWith('select id from items where bgg_id')) {
+          return { rows: [] };
+        }
+        if (normalized.startsWith('insert into items')) {
+          return { rows: [{ id: 77 }] };
+        }
+        if (normalized.startsWith('insert into item_aliases')) {
+          return { rows: [] };
+        }
+        if (normalized.startsWith('insert into item_relationships')) {
+          return { rows: [] };
+        }
+        if (normalized.startsWith('update items set parent_item_id')) {
+          return { rows: [] };
+        }
+        if (normalized.startsWith('select id from publishers where bgg_id')) {
+          return { rows: [] };
+        }
+        if (normalized.startsWith('select id from publishers where name')) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }
+    };
+    const bggClient: BggClient = {
+      fetchThing: async (bggId) => {
+        fetchedBggIds.push(bggId);
+        return {
+          details: {
+            alternateNames: [],
+            artists: [],
+            bggId,
+            categories: [],
+            description: `${bggId} description`,
+            designers: [],
+            families: [],
+            image: '',
+            maxPlayers: null,
+            maxPlaytime: null,
+            mechanics: [],
+            minAge: null,
+            minPlayers: null,
+            minPlaytime: null,
+            name: 'Catan: 5-6 Player Extension',
+            parentLinks: [{ bggId: 13, inbound: true, name: 'Catan' }],
+            playingTime: null,
+            publishers: [],
+            rating: null,
+            thumbnail: '',
+            type: 'boardgameexpansion',
+            implementationLinks: [],
+            weight: null,
+            yearPublished: null
+          },
+          rawXml: '<items />'
+        };
+      },
+      search: async () => []
+    };
+
+    const itemId = await createBggItemImporter(database, bggClient).importBggId(34691);
+
+    expect(itemId).toBe(77);
+    expect(fetchedBggIds).toEqual([34691]);
+  });
+
   it('imports BGG item metadata into catalog tables', async () => {
     const fetchedBggIds: number[] = [];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
@@ -190,7 +356,7 @@ describe('BGG item importer', () => {
     const relationshipQueries = queries.filter((query) => normalizeSql(query.sql).includes('insert into item_relationships'));
     expect(relationshipQueries.map((query) => query.params)).toEqual([
       [77, 'extension', 78, '13'],
-      [77, 'implementation', 79, '999001']
+      [79, 'implementation', 77, '999001']
     ]);
     const extensionRelationshipQuery = relationshipQueries.find((query) => query.params?.[1] === 'extension');
     expect(normalizeSql(extensionRelationshipQuery?.sql ?? '')).toContain("relationship_input.link_type in ('extension', 'implementation')");
@@ -198,7 +364,91 @@ describe('BGG item importer', () => {
     expect(parentUpdate?.params).toEqual([78, 77]);
   });
 
-  it('cleans up reciprocal implementation relationships during recursive BGG imports', async () => {
+  it('imports BGG implementation links without inbound as implemented-by relationships', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const insertedItemIdsByBggId = new Map<number, number>();
+    const itemIdsByBggId = new Map<number, number>([
+      [377061, 77],
+      [452335, 88]
+    ]);
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        const normalized = normalizeSql(sql);
+
+        if (normalized.startsWith('select id from items where bgg_id')) {
+          const itemId = insertedItemIdsByBggId.get(Number(params?.[0]));
+          return { rows: itemId ? [{ id: itemId }] : [] };
+        }
+        if (normalized.startsWith('insert into items')) {
+          const bggId = Number(params?.[4]);
+          const itemId = itemIdsByBggId.get(bggId);
+          if (itemId) {
+            insertedItemIdsByBggId.set(bggId, itemId);
+          }
+          return { rows: [{ id: itemId }] };
+        }
+        if (normalized.startsWith('insert into item_aliases')) {
+          return { rows: [] };
+        }
+        if (normalized.startsWith('select id from publishers where bgg_id')) {
+          return { rows: [] };
+        }
+        if (normalized.startsWith('select id from publishers where name')) {
+          return { rows: [] };
+        }
+        return { rows: [] };
+      }
+    };
+    const bggClient: BggClient = {
+      fetchThing: async (bggId) => ({
+        details: {
+          alternateNames: [],
+          artists: [],
+          bggId,
+          categories: [],
+          description: `${bggId} description`,
+          designers: [],
+          families: [],
+          image: '',
+          maxPlayers: null,
+          maxPlaytime: null,
+          mechanics: [],
+          minAge: null,
+          minPlayers: null,
+          minPlaytime: null,
+          name: bggId === 377061 ? 'Coffee Rush' : 'Coffee Rush: Grab & Go',
+          parentLinks: [],
+          playingTime: null,
+          publishers: [],
+          rating: null,
+          thumbnail: '',
+          type: 'boardgame',
+          implementationLinks:
+            bggId === 377061
+              ? [{ bggId: 452335, inbound: false, name: 'Coffee Rush: Grab & Go' }]
+              : [{ bggId: 377061, inbound: true, name: 'Coffee Rush' }],
+          weight: null,
+          yearPublished: null
+        },
+        rawXml: '<items />'
+      }),
+      search: async () => []
+    };
+
+    const itemId = await createBggItemImporter(database, bggClient).importBggId(377061);
+
+    expect(itemId).toBe(77);
+    const relationshipQueries = queries.filter(
+      (query) => normalizeSql(query.sql).includes('insert into item_relationships') && query.params?.[1] === 'implementation'
+    );
+    expect(relationshipQueries.map((query) => query.params)).toEqual([
+      [88, 'implementation', 77, '377061'],
+      [88, 'implementation', 77, '452335']
+    ]);
+  });
+
+  it('keeps implementation relationship direction consistent during recursive BGG imports', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const insertedItemIdsByBggId = new Map<number, number>();
     const itemIdsByBggId = new Map<number, number>([
@@ -278,7 +528,7 @@ describe('BGG item importer', () => {
     );
     expect(relationshipQueries.map((query) => query.params)).toEqual([
       [88, 'implementation', 77, '100'],
-      [77, 'implementation', 88, '200']
+      [88, 'implementation', 77, '200']
     ]);
     expect(relationshipQueries.every((query) => normalizeSql(query.sql).includes('removed_inverse_relationship as'))).toBe(true);
     expect(relationshipQueries.every((query) => normalizeSql(query.sql).includes('delete from item_relationships inverse_relationship'))).toBe(

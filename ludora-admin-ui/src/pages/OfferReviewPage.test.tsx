@@ -247,106 +247,109 @@ describe('OfferReviewPage', () => {
     expect(screen.getByText('Azul')).toBeInTheDocument();
   });
 
-  it('sets the item Spanish name from the candidate name without a trailing language suffix', async () => {
-    const user = userEvent.setup();
-    const item = {
-      bgg_id: 377061,
-      bgg_url: 'https://boardgamegeek.com/boardgame/377061/los-gatos-de-schrodinger',
-      canonical_name: "Schrodinger's Cats",
-      canonical_name_es: '',
-      complexity: '1.75',
-      description: 'Serve coffee fast.',
-      description_es: '',
-      id: 77,
-      image_url: 'https://cf.geekdo-images.com/coffee.jpg',
-      image_url_es: '',
-      item_type: 'base_game',
-      max_minutes: 45,
-      max_players: 4,
-      min_age: 8,
-      min_minutes: 30,
-      min_players: 2,
-      normalized_name: 'schrodingers cats',
-      normalized_name_es: '',
-      parent_item_id: null,
-      status: 'active',
-      year_published: 2023
-    };
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
-      const url = new URL(String(input));
+  it.each(['Los Gatos de Schröndinger (Español)', 'Los Gatos de Schröndinger en español'])(
+    'sets the item Spanish name from the candidate name without a trailing language suffix: %s',
+    async (candidateName) => {
+      const user = userEvent.setup();
+      const item = {
+        bgg_id: 377061,
+        bgg_url: 'https://boardgamegeek.com/boardgame/377061/los-gatos-de-schrodinger',
+        canonical_name: "Schrodinger's Cats",
+        canonical_name_es: '',
+        complexity: '1.75',
+        description: 'Serve coffee fast.',
+        description_es: '',
+        id: 77,
+        image_url: 'https://cf.geekdo-images.com/coffee.jpg',
+        image_url_es: '',
+        item_type: 'base_game',
+        max_minutes: 45,
+        max_players: 4,
+        min_age: 8,
+        min_minutes: 30,
+        min_players: 2,
+        normalized_name: 'schrodingers cats',
+        normalized_name_es: '',
+        parent_item_id: null,
+        status: 'active',
+        year_published: 2023
+      };
+      const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = new URL(String(input));
 
-      if (url.pathname.endsWith('/discovery/offer-reviews')) {
-        return new Response(
-          JSON.stringify({
-            data: [
-              {
-                candidate_id: 920,
-                candidate_name: 'Los Gatos de Schröndinger (Español)',
-                candidate_url: 'https://store.mx/products/los-gatos-de-schrodinger',
-                item_bgg_id: 377061,
-                item_id: 77,
-                item_image_url: 'https://bgg.example/los-gatos-de-schrodinger.jpg',
-                item_name: "Schrodinger's Cats",
-                item_name_es: ''
-              }
-            ],
-            meta: { page: 0, page_size: 100, total: 1 }
-          }),
-          {
-            headers: { 'Content-Type': 'application/json' },
-            status: 200
-          }
-        );
-      }
-
-      if (url.pathname.endsWith('/items/77') && (!init?.method || init.method === 'GET')) {
-        return new Response(JSON.stringify({ data: item }), {
-          headers: { 'Content-Type': 'application/json' },
-          status: 200
-        });
-      }
-
-      if (url.pathname.endsWith('/items/77') && init?.method === 'PATCH') {
-        return new Response(
-          JSON.stringify({
-            data: {
-              ...item,
-              canonical_name_es: 'Los Gatos de Schröndinger',
-              normalized_name_es: 'los gatos de schrodinger'
+        if (url.pathname.endsWith('/discovery/offer-reviews')) {
+          return new Response(
+            JSON.stringify({
+              data: [
+                {
+                  candidate_id: 920,
+                  candidate_name: candidateName,
+                  candidate_url: 'https://store.mx/products/los-gatos-de-schrodinger',
+                  item_bgg_id: 377061,
+                  item_id: 77,
+                  item_image_url: 'https://bgg.example/los-gatos-de-schrodinger.jpg',
+                  item_name: "Schrodinger's Cats",
+                  item_name_es: ''
+                }
+              ],
+              meta: { page: 0, page_size: 100, total: 1 }
+            }),
+            {
+              headers: { 'Content-Type': 'application/json' },
+              status: 200
             }
-          }),
-          {
+          );
+        }
+
+        if (url.pathname.endsWith('/items/77') && (!init?.method || init.method === 'GET')) {
+          return new Response(JSON.stringify({ data: item }), {
             headers: { 'Content-Type': 'application/json' },
             status: 200
-          }
-        );
-      }
+          });
+        }
 
-      throw new Error(`Unexpected request: ${String(input)}`);
-    });
+        if (url.pathname.endsWith('/items/77') && init?.method === 'PATCH') {
+          return new Response(
+            JSON.stringify({
+              data: {
+                ...item,
+                canonical_name_es: 'Los Gatos de Schröndinger',
+                normalized_name_es: 'los gatos de schrodinger'
+              }
+            }),
+            {
+              headers: { 'Content-Type': 'application/json' },
+              status: 200
+            }
+          );
+        }
 
-    render(<OfferReviewPage />);
-
-    expect(await screen.findByRole('columnheader', { name: 'ES' })).toBeInTheDocument();
-    expect(screen.queryByRole('columnheader', { name: 'Spanish name' })).not.toBeInTheDocument();
-    expect(screen.getByText('->')).toBeInTheDocument();
-
-    await user.click(await screen.findByRole('button', { name: 'Use candidate name as Spanish item name' }));
-
-    await waitFor(() => {
-      const patchCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH');
-      expect(patchCall).toBeDefined();
-      expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
-        canonical_name_es: 'Los Gatos de Schröndinger',
-        normalized_name_es: ''
+        throw new Error(`Unexpected request: ${String(input)}`);
       });
-    });
-    expect(screen.getByRole('link', { name: "Schrodinger's Cats (Los Gatos de Schröndinger)" })).toHaveAttribute(
-      'href',
-      '#items?id=77'
-    );
-    expect(screen.getByText('Spanish item name saved.')).toBeInTheDocument();
-  });
+
+      render(<OfferReviewPage />);
+
+      expect(await screen.findByRole('columnheader', { name: 'ES' })).toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: 'Spanish name' })).not.toBeInTheDocument();
+      expect(screen.getByText('->')).toBeInTheDocument();
+
+      await user.click(await screen.findByRole('button', { name: 'Use candidate name as Spanish item name' }));
+
+      await waitFor(() => {
+        const patchCall = fetchMock.mock.calls.find(([, init]) => init?.method === 'PATCH');
+        expect(patchCall).toBeDefined();
+        expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
+          canonical_name_es: 'Los Gatos de Schröndinger',
+          normalized_name_es: ''
+        });
+      });
+      expect(screen.getByRole('link', { name: "Schrodinger's Cats (Los Gatos de Schröndinger)" })).toHaveAttribute(
+        'href',
+        '#items?id=77'
+      );
+      expect(screen.getByText('Spanish item name saved.')).toBeInTheDocument();
+    }
+  );
 
   it('generates and saves a Spanish item description from review row source descriptions', async () => {
     const user = userEvent.setup();

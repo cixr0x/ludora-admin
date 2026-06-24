@@ -356,11 +356,10 @@ describe('ludora admin service', () => {
     expect(sql).toContain('from item_categories');
     expect(sql).toContain('from item_mechanics');
     expect(sql).toContain('from item_families');
-    expect(sql).toContain('from store_items');
-    expect(sql).toContain('select distinct item_id');
-    expect(sql).toContain('item_id is not null');
-    expect(sql).toContain('is_boardgame = true');
-    expect(sql).toContain('is_boardgame_confirmed = true');
+    expect(sql).toContain('from active_item ai');
+    expect(sql).toContain('select ai.id as item_id');
+    expect(sql).toContain('ai.has_approved_listing = true');
+    expect(sql).toContain('ai.is_expansion = false');
     expect(sql).toContain('game_count');
     expect(sql).toContain("where category_type = 'category'");
     expect(sql).toContain("where category_type = 'mechanic'");
@@ -394,6 +393,9 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0].sql);
     expect(sql).toContain('countable_items as');
+    expect(sql).toContain('from active_item ai');
+    expect(sql).toContain('ai.has_approved_listing = true');
+    expect(sql).toContain('ai.is_expansion = false');
     expect(sql).toContain('from qualified_items qi');
     expect(sql).toContain('from item_categories existing_ic');
     expect(sql).toContain("existing_category_fpc.category_type = 'category'");
@@ -438,10 +440,10 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0].sql);
     expect(sql).toContain('with qualified_items as');
-    expect(sql).toContain('from store_items');
-    expect(sql).toContain('item_id is not null');
-    expect(sql).toContain('is_boardgame = true');
-    expect(sql).toContain('is_boardgame_confirmed = true');
+    expect(sql).toContain('from active_item ai');
+    expect(sql).toContain('select ai.id as item_id');
+    expect(sql).toContain('ai.has_approved_listing = true');
+    expect(sql).toContain('ai.is_expansion = false');
     expect(sql).toContain('from item_categories ic');
     expect(sql).toContain('join qualified_items qi on qi.item_id = ic.item_id');
     expect(sql).toContain('join items i on i.id = ic.item_id');
@@ -491,6 +493,8 @@ describe('ludora admin service', () => {
     expect(sql).toContain('generate_series(1, 32) as cycle_number');
     expect(sql).toContain('row_number() over (order by cycle_number asc, category_position asc)');
     expect(sql).toContain('from active_item ai');
+    expect(sql).toContain('ai.has_approved_listing = true');
+    expect(sql).toContain('ai.is_expansion = false');
     expect(sql).toContain('from item_categories ic');
     expect(sql).toContain('from item_families ifa');
     expect(sql).toContain('from item_mechanics im');
@@ -1571,7 +1575,7 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(mutation.sql);
     expect(sql).toContain('insert into items');
     expect(sql).toContain('rating');
-    expect(sql).toContain('select candidate.title, $2, $3, null, null, \'\', null, 5');
+    expect(sql).toContain('select candidate.title, $2, $3, $9::bigint, null, \'\', null, 5');
     expect(sql).toContain('insert into publishers');
     expect(sql).toContain('insert into item_publishers');
     expect(sql).not.toContain('insert into offers');
@@ -1699,6 +1703,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('extension_relationship as');
     expect(sql).toContain("'extension'");
     expect(sql).toContain("'admin'");
+    expect(sql).toContain('candidate.title, $2, $3, $9::bigint');
     expect(mutation.params).toEqual([
       '922',
       'cafe barista expansion',
