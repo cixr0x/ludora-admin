@@ -63,10 +63,20 @@ function inputFromForm(form: FrontPageCategoryFormState): FrontPageCategoryInput
 function categoryNameLabel(record: AdminRecord) {
   const name = optionalValueFor(record, ['category_name']);
   const nameEs = optionalValueFor(record, ['category_name_es']);
-  if (nameEs && nameEs !== name) {
-    return `${nameEs} (${name})`;
+  return nameEs || name || '-';
+}
+
+function categoryTitleLabel(record: AdminRecord) {
+  const title = optionalValueFor(record, ['title']);
+  const name = optionalValueFor(record, ['category_name']);
+  const nameEs = optionalValueFor(record, ['category_name_es']);
+  if (!title) {
+    return categoryNameLabel(record);
   }
-  return name || '-';
+  if (nameEs && name && title === name) {
+    return nameEs;
+  }
+  return title;
 }
 
 function frontPageCategoryColumns(): DataTableColumn<AdminRecord>[] {
@@ -80,12 +90,12 @@ function frontPageCategoryColumns(): DataTableColumn<AdminRecord>[] {
       sortValue: (row) => Number(valueFor(row, ['order'], '0'))
     },
     {
-      filterValue: (row) => valueFor(row, ['title']),
+      filterValue: (row) => categoryTitleLabel(row),
       id: 'title',
       label: 'Title',
       minWidth: 220,
-      render: (row) => valueFor(row, ['title']),
-      sortValue: (row) => valueFor(row, ['title'])
+      render: (row) => categoryTitleLabel(row),
+      sortValue: (row) => categoryTitleLabel(row)
     },
     {
       filterValue: (row) => valueFor(row, ['category_type']),

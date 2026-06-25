@@ -42,7 +42,7 @@ describe('FrontPageCategoryOptionsPage', () => {
             category_type: 'category',
             id: 100,
             order: 0,
-            title: 'Party Game'
+            title: 'Juego de fiesta'
           },
           201
         );
@@ -52,15 +52,15 @@ describe('FrontPageCategoryOptionsPage', () => {
 
     render(<FrontPageCategoryOptionsPage onOpenProducts={handleOpenProducts} />);
 
-    expect(await screen.findByText('Juego de fiesta (Party Game)')).toBeInTheDocument();
-    expect(screen.getByText('Gestión de mano (Hand Management)')).toBeInTheDocument();
+    expect(await screen.findByText('Juego de fiesta')).toBeInTheDocument();
+    expect(screen.getByText('Gestión de mano')).toBeInTheDocument();
     expect(screen.getByText('Games')).toBeInTheDocument();
     expect(screen.getByText('42')).toBeInTheDocument();
     expect(screen.queryByText('BGG ID')).not.toBeInTheDocument();
     expect(screen.queryByText('Category ID')).not.toBeInTheDocument();
     expect(screen.getByText('Added')).toBeInTheDocument();
 
-    await user.click(screen.getByText('Juego de fiesta (Party Game)'));
+    await user.click(screen.getByText('Juego de fiesta'));
 
     expect(handleOpenProducts).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -70,14 +70,14 @@ describe('FrontPageCategoryOptionsPage', () => {
       })
     );
 
-    await user.click(screen.getByRole('button', { name: 'Add Party Game' }));
+    await user.click(screen.getByRole('button', { name: 'Add Juego de fiesta' }));
 
     const postCall = fetchMock.mock.calls.find(([url, init]) => pathOf(String(url)) === '/front-page-categories' && init?.method === 'POST');
     expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({
       category_id: 5,
       category_type: 'category',
       order: 0,
-      title: 'Party Game'
+      title: 'Juego de fiesta'
     });
     expect(handleOpenProducts).toHaveBeenCalledTimes(1);
     expect(await screen.findByText('Front page category added.')).toBeInTheDocument();

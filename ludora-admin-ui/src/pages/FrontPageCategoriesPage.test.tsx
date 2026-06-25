@@ -33,7 +33,7 @@ describe('FrontPageCategoriesPage', () => {
     expect(await screen.findByText('Need a laugh?')).toBeInTheDocument();
     expect(screen.getByText('category')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
-    expect(screen.getByText('Juego de fiesta (Party Game)')).toBeInTheDocument();
+    expect(screen.getByText('Juego de fiesta')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
       'http://localhost:4001/front-page-categories?page=0&page_size=100&sort=order&sort_direction=asc'
     );

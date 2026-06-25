@@ -614,11 +614,11 @@ describe('ItemsPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Item Details' })).toBeInTheDocument();
     expect(screen.getByText('Categories')).toBeInTheDocument();
-    expect(screen.getByText('Economico (Economic)')).toBeInTheDocument();
+    expect(screen.getByText('Economico')).toBeInTheDocument();
     expect(screen.getByText('Mechanics')).toBeInTheDocument();
-    expect(screen.getByText('Contratos (Contracts)')).toBeInTheDocument();
+    expect(screen.getByText('Contratos')).toBeInTheDocument();
     expect(screen.getByText('Families')).toBeInTheDocument();
-    expect(screen.getByText('Cafe (Food & Drink: Coffee)')).toBeInTheDocument();
+    expect(screen.getByText('Cafe')).toBeInTheDocument();
   });
 
   it('renders item relationships and adds a new relationship', async () => {
@@ -812,9 +812,9 @@ describe('ItemsPage', () => {
     await user.click(within(addRelationshipForm).getByRole('button', { name: 'Add Relationship' }));
 
     expect(await screen.findByText('Relationship added.')).toBeInTheDocument();
-    expect(await screen.findByText('Economico (Economic)')).toBeInTheDocument();
-    expect(screen.getByText('Contratos (Contracts)')).toBeInTheDocument();
-    expect(screen.getByText('Cafe (Food & Drink: Coffee)')).toBeInTheDocument();
+    expect(await screen.findByText('Economico')).toBeInTheDocument();
+    expect(screen.getByText('Contratos')).toBeInTheDocument();
+    expect(screen.getByText('Cafe')).toBeInTheDocument();
     expect(taxonomyRequests).toBe(2);
 
     const postCall = fetchMock.mock.calls.find(

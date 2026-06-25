@@ -73,7 +73,7 @@ function frontPageCategoryProductsHash(option: FrontPageCategoryOption) {
   const params = new URLSearchParams({
     category_id: String(option.category_id),
     category_type: option.category_type,
-    name: String(option.name ?? '').trim() || String(option.name_es ?? '').trim()
+    name: String(option.name_es ?? '').trim() || String(option.name ?? '').trim()
   });
   return `#front-page-category-products?${params.toString()}`;
 }

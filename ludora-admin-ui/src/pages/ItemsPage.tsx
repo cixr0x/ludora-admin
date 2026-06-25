@@ -1409,10 +1409,7 @@ function TaxonomySection({ records, title }: { records: AdminRecord[]; title: st
 function taxonomyLabel(record: AdminRecord) {
   const value = field(record, ['value', 'name'], '');
   const valueEs = field(record, ['value_es', 'name_es'], '');
-  if (valueEs && valueEs !== value) {
-    return `${valueEs} (${value})`;
-  }
-  return value || '-';
+  return valueEs || value || '-';
 }
 
 function relationshipTypeLabel(record: AdminRecord) {

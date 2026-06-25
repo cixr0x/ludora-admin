@@ -55,9 +55,9 @@ describe('FrontPagePreviewPage', () => {
     render(<FrontPagePreviewPage />);
 
     expect(await screen.findByRole('heading', { name: 'Front Page Preview' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Party Game' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Juego de fiesta' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Solo Picks' })).toBeInTheDocument();
-    expect(screen.getByLabelText('Party Game products')).toBeInTheDocument();
+    expect(screen.getByLabelText('Juego de fiesta products')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Cafeteria' })).toHaveAttribute('src', 'https://cdn.example/cafe.jpg');
     expect(screen.getByText('Cafeteria')).toBeInTheDocument();
     expect(screen.getByText('Kitchen Rush')).toBeInTheDocument();

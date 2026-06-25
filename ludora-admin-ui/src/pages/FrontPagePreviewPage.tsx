@@ -196,8 +196,15 @@ function ProductTile({ product }: { product: FrontPageCategoryProduct }) {
 
 function categoryTitle(category: FrontPagePreviewCategory) {
   const title = String(category.title ?? '').trim();
-  const categoryName = String(category.category_name_es ?? category.category_name ?? '').trim();
-  return title || categoryName || `Front page category ${category.id}`;
+  const categoryName = String(category.category_name ?? '').trim();
+  const translatedCategoryName = String(category.category_name_es ?? '').trim();
+  if (!title) {
+    return translatedCategoryName || categoryName || `Front page category ${category.id}`;
+  }
+  if (translatedCategoryName && categoryName && title === categoryName) {
+    return translatedCategoryName;
+  }
+  return title;
 }
 
 function productLabel(product: FrontPageCategoryProduct) {

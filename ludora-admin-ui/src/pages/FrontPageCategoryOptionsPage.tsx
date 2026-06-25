@@ -23,14 +23,11 @@ function optionNameEs(option: FrontPageCategoryOption) {
 function optionLabel(option: FrontPageCategoryOption) {
   const name = optionName(option);
   const nameEs = optionNameEs(option);
-  if (nameEs && nameEs !== name) {
-    return `${nameEs} (${name})`;
-  }
-  return name || nameEs || '-';
+  return nameEs || name || '-';
 }
 
 function titleForOption(option: FrontPageCategoryOption) {
-  return optionName(option) || optionNameEs(option);
+  return optionNameEs(option) || optionName(option);
 }
 
 function isAlreadyAdded(option: FrontPageCategoryOption) {
@@ -78,7 +75,7 @@ function taxonomyOptionColumns(
           <Chip color="success" icon={<CheckCircleIcon />} label="Added" size="small" variant="outlined" />
         ) : (
           <Button
-            aria-label={`Add ${optionName(row) || optionNameEs(row)}`}
+            aria-label={`Add ${optionLabel(row)}`}
             disabled={addingKey === optionKey(row)}
             size="small"
             startIcon={<AddIcon />}
