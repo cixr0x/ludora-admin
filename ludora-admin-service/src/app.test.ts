@@ -551,7 +551,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('jsonb_build_object');
     expect(sql).toContain('filter (where i.id is not null)');
     expect(sql).toContain('group by fpc.id');
-    expect(sql).toContain('order by fpci.item_order asc, i.canonical_name asc, i.id asc');
+    expect(sql).toContain('order by i.rating desc nulls last, fpci.item_order asc, i.canonical_name asc, i.id asc');
     expect(sql).toContain('order by fpc."order" asc, fpc.id asc');
     expect(queries[0].params).toBeUndefined();
   });

@@ -362,7 +362,7 @@ const frontPagePreviewSql = `
           'item_type', i.item_type,
           'year_published', i.year_published
         )
-        order by fpci.item_order asc, i.canonical_name asc, i.id asc
+        order by i.rating desc nulls last, fpci.item_order asc, i.canonical_name asc, i.id asc
       ) filter (where i.id is not null),
       '[]'::jsonb
     ) as products
