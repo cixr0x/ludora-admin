@@ -9,6 +9,11 @@ import { createOpenAiDescriptionGenerationClient } from './descriptionGeneration
 import { createDiscoveryOperationsClient } from './discoveryOperationsClient.js';
 import { createItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { createLocalCoverWorkflowManager, createNodeLocalCoverWorkflowDependencies } from './localCoverWorkflow.js';
+import { createOpenAiProductDetailsExtractionClient } from './productDetailsExtraction/openAiProductDetailsExtractionClient.js';
+import {
+  createProductDetailsEnrichmentService,
+  createProductDetailsExtractionService
+} from './productDetailsExtraction/productDetailsExtractionService.js';
 import { createOpenAiTranslationClient } from './translation/openAiTranslationClient.js';
 import { createTranslationService } from './translation/translationService.js';
 
@@ -38,6 +43,15 @@ const descriptionGenerationClient = config.openAiApiKey
 const descriptionGenerationService = descriptionGenerationClient
   ? createDescriptionGenerationService(descriptionGenerationClient, { model: config.openAiTranslationModel })
   : undefined;
+const productDetailsExtractionClient = config.openAiApiKey
+  ? createOpenAiProductDetailsExtractionClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
+  : undefined;
+const productDetailsExtractionService = productDetailsExtractionClient
+  ? createProductDetailsExtractionService(productDetailsExtractionClient, { model: config.openAiTranslationModel })
+  : undefined;
+const productDetailsEnrichmentService = productDetailsExtractionService
+  ? createProductDetailsEnrichmentService(database, productDetailsExtractionService)
+  : undefined;
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
 const itemMatchingService = createItemMatchingService(database, bggClient, translationService, bggItemImporter);
 const operationsClient = createDiscoveryOperationsClient(config.discoveryApiUrl);
@@ -53,6 +67,7 @@ const app = createApp({
   itemMatchingService,
   localCoverWorkflowManager,
   operationsClient,
+  productDetailsEnrichmentService,
   translationService
 });
 

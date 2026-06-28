@@ -7,6 +7,7 @@ import type { Database } from './db.js';
 import { DiscoveryApiError, type DiscoveryOperationsClient, type StoreDiscoveryRun } from './discoveryOperationsClient.js';
 import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { LocalCoverWorkflowError, type LocalCoverWorkflowManager, type LocalCoverWorkflowState } from './localCoverWorkflow.js';
+import type { ProductDetailsEnrichmentService } from './productDetailsExtraction/productDetailsExtractionService.js';
 import type { TranslationRequest, TranslationService } from './translation/translationService.js';
 
 describe('ludora admin service', () => {
@@ -1601,6 +1602,139 @@ describe('ludora admin service', () => {
     ]);
   });
 
+  it('enriches missing product details when creating a curated item from a candidate', async () => {
+    const candidate = {
+      availability: 'available',
+      description: 'Juego para 2-4 jugadores, 30-45 minutos, edad 8+.',
+      id: '920',
+      image_url: 'https://store.mx/cafe-barista.jpg',
+      item_id: null,
+      item_type: 'unknown',
+      language: 'es',
+      max_minutes: null,
+      max_players: null,
+      min_age: null,
+      min_minutes: null,
+      min_players: null,
+      price: '899.00',
+      publisher: 'Local Publisher',
+      raw_payload: { specs: '2-4 jugadores | 30-45 min | 8+' },
+      source_url: 'https://store.mx/products/cafe-barista',
+      listing_status: 'PENDING',
+      store_id: 42,
+      title: 'Cafe Barista'
+    };
+    const enrichedCandidate = {
+      ...candidate,
+      max_minutes: 45,
+      max_players: 4,
+      min_age: 8,
+      min_minutes: 30,
+      min_players: 2
+    };
+    const updatedCandidate = {
+      ...enrichedCandidate,
+      item_id: 77,
+      listing_status: 'PENDING'
+    };
+    const enrichmentCalls: Array<{ id: number; options?: { updateLinkedItem?: boolean } }> = [];
+    const productDetailsEnrichmentService: ProductDetailsEnrichmentService = {
+      enrichCandidate: async (id, options) => {
+        enrichmentCalls.push({ id, options });
+        return {
+          candidate: enrichedCandidate,
+          extraction: {
+            details: {
+              maxMinutes: 45,
+              maxPlayers: 4,
+              minAge: 8,
+              minMinutes: 30,
+              minPlayers: 2
+            },
+            extractedDetails: {
+              maxMinutes: 45,
+              maxPlayers: 4,
+              minAge: 8,
+              minMinutes: 30,
+              minPlayers: 2
+            },
+            metadata: {
+              confidence: 0.9,
+              evidence: ['2-4 jugadores'],
+              warnings: []
+            },
+            model: 'gpt-5.4-nano',
+            promptVersion: 'product-details-v1',
+            skipped: false
+          }
+        };
+      }
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).startsWith('select')) {
+          return { rows: [candidate] };
+        }
+        return { rows: [updatedCandidate] };
+      }
+    };
+
+    const response = await request(createApp({ database, productDetailsEnrichmentService })).post(
+      '/discovery/listings/920/create-item'
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ data: updatedCandidate });
+    expect(enrichmentCalls).toEqual([{ id: 920, options: { updateLinkedItem: false } }]);
+    expect(normalizeSql(queries[1].sql)).toContain('insert into items');
+  });
+
+  it('does not enrich product details during item creation when all details already exist', async () => {
+    const candidate = {
+      description: 'Already enriched.',
+      id: '920',
+      image_url: 'https://store.mx/cafe-barista.jpg',
+      item_id: null,
+      item_type: 'base_game',
+      max_minutes: 45,
+      max_players: 4,
+      min_age: 8,
+      min_minutes: 30,
+      min_players: 2,
+      publisher: 'Local Publisher',
+      source_url: 'https://store.mx/products/cafe-barista',
+      store_id: 42,
+      title: 'Cafe Barista'
+    };
+    const updatedCandidate = {
+      ...candidate,
+      item_id: 77,
+      listing_status: 'PENDING'
+    };
+    const productDetailsEnrichmentService: ProductDetailsEnrichmentService = {
+      enrichCandidate: async () => {
+        throw new Error('should not enrich complete details');
+      }
+    };
+    const database: Database = {
+      query: async (sql) => {
+        if (normalizeSql(sql).startsWith('select')) {
+          return { rows: [candidate] };
+        }
+        return { rows: [updatedCandidate] };
+      }
+    };
+
+    const response = await request(createApp({ database, productDetailsEnrichmentService })).post(
+      '/discovery/listings/920/create-item'
+    );
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ data: updatedCandidate });
+  });
+
   it('creates a curated item with an implementation relationship to a BGG item', async () => {
     const candidate = {
       description: 'A local edition that BGG tracks as an alternate name.',
@@ -2596,6 +2730,99 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ data: run });
+  });
+
+  it('returns 503 when product details extraction is not configured', async () => {
+    const response = await request(createApp({ database: idleDatabase() })).post(
+      '/admin/discovery/item-candidates/920/product-details'
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: {
+        message: 'Product details extraction service is not configured'
+      }
+    });
+  });
+
+  it('enriches product details for an existing linked item candidate', async () => {
+    const candidate = {
+      id: 920,
+      item_id: 77,
+      max_minutes: 45,
+      max_players: 4,
+      min_age: 8,
+      min_minutes: 30,
+      min_players: 2,
+      title: 'Cafe Barista'
+    };
+    const calls: Array<{ id: number; options?: { updateLinkedItem?: boolean } }> = [];
+    const productDetailsEnrichmentService: ProductDetailsEnrichmentService = {
+      enrichCandidate: async (id, options) => {
+        calls.push({ id, options });
+        return {
+          candidate,
+          extraction: {
+            details: {
+              maxMinutes: 45,
+              maxPlayers: 4,
+              minAge: 8,
+              minMinutes: 30,
+              minPlayers: 2
+            },
+            extractedDetails: {
+              maxMinutes: 45,
+              maxPlayers: 4,
+              minAge: 8,
+              minMinutes: 30,
+              minPlayers: 2
+            },
+            metadata: {
+              confidence: 0.91,
+              evidence: ['2-4 jugadores', '30-45 minutos'],
+              warnings: []
+            },
+            model: 'gpt-5.4-nano',
+            promptVersion: 'product-details-v1',
+            skipped: false
+          }
+        };
+      }
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), productDetailsEnrichmentService })).post(
+      '/admin/discovery/item-candidates/920/product-details'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: candidate,
+      extraction: {
+        details: {
+          max_minutes: 45,
+          max_players: 4,
+          min_age: 8,
+          min_minutes: 30,
+          min_players: 2
+        },
+        extracted_details: {
+          max_minutes: 45,
+          max_players: 4,
+          min_age: 8,
+          min_minutes: 30,
+          min_players: 2
+        },
+        metadata: {
+          confidence: 0.91,
+          evidence: ['2-4 jugadores', '30-45 minutos'],
+          warnings: []
+        },
+        model: 'gpt-5.4-nano',
+        prompt_version: 'product-details-v1',
+        skipped: false
+      }
+    });
+    expect(calls).toEqual([{ id: 920, options: { updateLinkedItem: true } }]);
   });
 
   it('preserves discovery API conflicts when store discovery is already running', async () => {

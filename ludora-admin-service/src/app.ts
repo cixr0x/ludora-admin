@@ -14,6 +14,7 @@ import { createOperationsRouter } from './routes/operations.js';
 import { createTranslationRouter } from './routes/translation.js';
 import type { TranslationService } from './translation/translationService.js';
 import type { LocalCoverWorkflowManager } from './localCoverWorkflow.js';
+import type { ProductDetailsEnrichmentService } from './productDetailsExtraction/productDetailsExtractionService.js';
 
 type HttpError = Error & {
   status?: number;
@@ -28,6 +29,7 @@ type CreateAppOptions = {
   itemMatchingService?: ItemMatchingService;
   localCoverWorkflowManager?: LocalCoverWorkflowManager;
   operationsClient?: DiscoveryOperationsClient;
+  productDetailsEnrichmentService?: ProductDetailsEnrichmentService;
   translationService?: TranslationService;
 };
 
@@ -39,6 +41,7 @@ export function createApp({
   itemMatchingService,
   localCoverWorkflowManager,
   operationsClient,
+  productDetailsEnrichmentService,
   translationService
 }: CreateAppOptions): Express {
   const app = express();
@@ -46,7 +49,7 @@ export function createApp({
   app.use(cors({ origin: corsOrigin }));
   app.use(express.json());
   app.use(createHealthRouter());
-  app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter));
+  app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter, productDetailsEnrichmentService));
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
   app.use(createTranslationRouter(translationService));
   if (localCoverWorkflowManager) {

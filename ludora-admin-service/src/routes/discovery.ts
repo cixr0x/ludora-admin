@@ -3,6 +3,12 @@ import { Router } from 'express';
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import type { Database } from '../db.js';
 import type { ItemMatchingService } from '../itemMatching/itemMatchingService.js';
+import {
+  hasMissingProductDetails,
+  type ProductDetails,
+  type ProductDetailsEnrichmentService,
+  type ProductDetailsExtractionResult
+} from '../productDetailsExtraction/productDetailsExtractionService.js';
 
 type StoreCandidateInput = {
   canonical_domain: string;
@@ -653,7 +659,8 @@ const reviewTasksTableConfig: TableQueryConfig = {
 export function createDiscoveryRouter(
   database: Database,
   itemMatchingService?: ItemMatchingService,
-  bggItemImporter?: BggItemImporter
+  bggItemImporter?: BggItemImporter,
+  productDetailsEnrichmentService?: ProductDetailsEnrichmentService
 ): Router {
   const router = Router();
 
@@ -1426,6 +1433,10 @@ export function createDiscoveryRouter(
         }
       }
 
+      if (productDetailsEnrichmentService && hasMissingProductDetails(productDetailsFromCandidate(candidate))) {
+        await productDetailsEnrichmentService.enrichCandidate(integerPathParam(request.params.id), { updateLinkedItem: false });
+      }
+
       const result = await database.query(
         `
         with candidate as (
@@ -1793,6 +1804,25 @@ export function createDiscoveryRouter(
          order by dic.last_updated desc`
       );
       response.json({ data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/admin/discovery/item-candidates/:id/product-details', async (request, response, next) => {
+    try {
+      if (!productDetailsEnrichmentService) {
+        throw httpError(503, 'Product details extraction service is not configured');
+      }
+
+      const result = await productDetailsEnrichmentService.enrichCandidate(integerPathParam(request.params.id), {
+        updateLinkedItem: true
+      });
+
+      response.json({
+        data: result.candidate,
+        extraction: productDetailsExtractionPayload(result.extraction)
+      });
     } catch (error) {
       next(error);
     }
@@ -2448,6 +2478,46 @@ function booleanField(value: Record<string, unknown>, key: string): boolean {
 function rowString(value: Record<string, unknown>, key: string): string {
   const field = value[key];
   return typeof field === 'string' || typeof field === 'number' ? String(field).trim() : '';
+}
+
+function rowInteger(value: Record<string, unknown>, key: string): number | null {
+  const field = value[key];
+  if (field === null || field === undefined || field === '') {
+    return null;
+  }
+  const parsed = typeof field === 'number' ? field : Number(field);
+  return Number.isInteger(parsed) ? parsed : null;
+}
+
+function productDetailsFromCandidate(candidate: Record<string, unknown>): ProductDetails {
+  return {
+    maxMinutes: rowInteger(candidate, 'max_minutes'),
+    maxPlayers: rowInteger(candidate, 'max_players'),
+    minAge: rowInteger(candidate, 'min_age'),
+    minMinutes: rowInteger(candidate, 'min_minutes'),
+    minPlayers: rowInteger(candidate, 'min_players')
+  };
+}
+
+function productDetailsExtractionPayload(result: ProductDetailsExtractionResult): Record<string, unknown> {
+  return {
+    details: productDetailsPayload(result.details),
+    extracted_details: productDetailsPayload(result.extractedDetails),
+    metadata: result.metadata,
+    model: result.model,
+    prompt_version: result.promptVersion,
+    skipped: result.skipped
+  };
+}
+
+function productDetailsPayload(details: ProductDetails): Record<string, number | null> {
+  return {
+    max_minutes: details.maxMinutes,
+    max_players: details.maxPlayers,
+    min_age: details.minAge,
+    min_minutes: details.minMinutes,
+    min_players: details.minPlayers
+  };
 }
 
 function hasRowValue(value: unknown): boolean {
