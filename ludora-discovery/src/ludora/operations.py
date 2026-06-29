@@ -1,0 +1,652 @@
+from __future__ import annotations
+
+import os
+import inspect
+import threading
+import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Literal
+
+from ludora.admin_matching import AdminItemMatcher
+from ludora.ai_item_classification import OpenAIItemClassifier
+from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
+from ludora.collector import collect_stores
+from ludora.config import (
+    resolve_ai_classifier_enabled,
+    resolve_admin_api_url,
+    resolve_brave_api_key,
+    resolve_browser_fetch_enabled,
+    resolve_classifier_model,
+    resolve_database_url,
+    resolve_embedding_model,
+    resolve_openai_base_url,
+    resolve_openai_api_key,
+)
+from ludora.database import DiscoveryRepository, connect_database
+from ludora.embeddings import OpenAIEmbeddingClient, build_item_embedding_text, source_text_hash
+from ludora.inventory import collect_store_inventory, update_confirmed_store_items
+from ludora.item_classification import apply_item_classification
+from ludora.models import DiscoveryItemCandidateRecord
+
+
+RunStatus = Literal["running", "cancelling", "cancelled", "completed", "failed"]
+EmbeddingRefreshMode = Literal["missing", "full"]
+ItemClassifierCallable = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidateRecord]
+
+
+class OperationAlreadyRunning(RuntimeError):
+    pass
+
+
+class OperationNotRunning(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class StoreDiscoveryRunResult:
+    searched_queries: int
+    candidate_domains: int
+    accepted_stores: int
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "searched_queries": self.searched_queries,
+            "candidate_domains": self.candidate_domains,
+            "accepted_stores": self.accepted_stores,
+        }
+
+
+@dataclass(frozen=True)
+class ItemDiscoveryRunResult:
+    store_id: int
+    website_url: str
+    item_candidates: int
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "store_id": self.store_id,
+            "website_url": self.website_url,
+            "item_candidates": self.item_candidates,
+        }
+
+
+@dataclass(frozen=True)
+class ItemUpdateRunResult:
+    updated_items: int
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "updated_items": self.updated_items,
+        }
+
+
+@dataclass(frozen=True)
+class ItemEmbeddingRunResult:
+    refresh_mode: str
+    selected_items: int
+    embedded_items: int
+    model: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "refresh_mode": self.refresh_mode,
+            "selected_items": self.selected_items,
+            "embedded_items": self.embedded_items,
+            "model": self.model,
+        }
+
+
+@dataclass
+class StoreDiscoveryRun:
+    id: str
+    status: RunStatus
+    started_at: datetime
+    run_type: str = "store_discovery"
+    completed_at: datetime | None = None
+    result: StoreDiscoveryRunResult | ItemDiscoveryRunResult | ItemUpdateRunResult | ItemEmbeddingRunResult | None = None
+    error: str | None = None
+    cancellation_token: CancellationToken | None = None
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "type": self.run_type,
+            "status": self.status,
+            "started_at": _format_datetime(self.started_at),
+            "completed_at": _format_datetime(self.completed_at) if self.completed_at else None,
+            "result": self.result.to_dict() if self.result else None,
+            "error": self.error,
+        }
+
+
+def run_store_discovery(
+    *,
+    env: Mapping[str, str] | None = None,
+    env_file: str = ".env",
+    cancellation_token: CancellationToken | None = None,
+) -> StoreDiscoveryRunResult:
+    current_env = env if env is not None else os.environ
+    api_key = resolve_brave_api_key(None, env=current_env, dotenv_path=env_file)
+    if not api_key:
+        raise RuntimeError("Missing Brave API key")
+
+    database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
+    if not database_url:
+        raise RuntimeError("Missing database URL")
+
+    connection = connect_database(database_url)
+    try:
+        repository = DiscoveryRepository(connection)
+        collect_kwargs = {}
+        if cancellation_token is not None:
+            collect_kwargs["cancellation_token"] = cancellation_token
+        summary = collect_stores(
+            api_key=api_key,
+            query_scope="expanded",
+            max_queries=None,
+            count=20,
+            pages=1,
+            request_delay=1.1,
+            website_delay=0.3,
+            max_enrichment_pages=3,
+            include_low_confidence=False,
+            verbose=False,
+            discovery_repository=repository,
+            export_files=False,
+            **collect_kwargs,
+        )
+        return StoreDiscoveryRunResult(
+            searched_queries=summary.searched_queries,
+            candidate_domains=summary.candidate_domains,
+            accepted_stores=len(summary.records),
+        )
+    finally:
+        connection.close()
+
+
+def run_item_discovery(
+    *,
+    store_id: int,
+    website_url: str,
+    env: Mapping[str, str] | None = None,
+    env_file: str = ".env",
+    cancellation_token: CancellationToken | None = None,
+) -> ItemDiscoveryRunResult:
+    current_env = env if env is not None else os.environ
+    database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
+    if not database_url:
+        raise RuntimeError("Missing database URL")
+    browser_sitemap_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
+    admin_api_url = resolve_admin_api_url(env=current_env, dotenv_path=env_file)
+    item_classifier = _resolve_item_classifier(current_env, env_file)
+
+    connection = connect_database(database_url)
+    try:
+        repository = DiscoveryRepository(connection)
+        item_processor = AdminItemMatcher(admin_api_url, repository)
+        collect_kwargs = {}
+        if cancellation_token is not None:
+            collect_kwargs["cancellation_token"] = cancellation_token
+        records = collect_store_inventory(
+            website_url,
+            store_id,
+            repository,
+            browser_sitemap_fetch_enabled=browser_sitemap_fetch_enabled,
+            item_classifier=item_classifier,
+            item_processor=item_processor,
+            **collect_kwargs,
+        )
+        return ItemDiscoveryRunResult(
+            store_id=store_id,
+            website_url=website_url,
+            item_candidates=len(records),
+        )
+    finally:
+        connection.close()
+
+
+def _resolve_item_classifier(current_env: Mapping[str, str], env_file: str) -> ItemClassifierCallable:
+    if not resolve_ai_classifier_enabled(env=current_env, dotenv_path=env_file):
+        return apply_item_classification
+
+    openai_api_key = resolve_openai_api_key(env=current_env, dotenv_path=env_file)
+    if not openai_api_key:
+        raise RuntimeError("Missing OpenAI API key for AI item classifier")
+
+    return OpenAIItemClassifier(
+        api_key=openai_api_key,
+        model=resolve_classifier_model(env=current_env, dotenv_path=env_file),
+        base_url=resolve_openai_base_url(env=current_env, dotenv_path=env_file),
+    ).apply_item_classification
+
+
+def run_item_update(
+    *,
+    env: Mapping[str, str] | None = None,
+    env_file: str = ".env",
+    cancellation_token: CancellationToken | None = None,
+) -> ItemUpdateRunResult:
+    current_env = env if env is not None else os.environ
+    database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
+    if not database_url:
+        raise RuntimeError("Missing database URL")
+    browser_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
+
+    connection = connect_database(database_url)
+    try:
+        repository = DiscoveryRepository(connection)
+        update_kwargs = {}
+        if cancellation_token is not None:
+            update_kwargs["cancellation_token"] = cancellation_token
+        records = update_confirmed_store_items(
+            repository,
+            browser_fetch_enabled=browser_fetch_enabled,
+            **update_kwargs,
+        )
+        return ItemUpdateRunResult(updated_items=len(records))
+    finally:
+        connection.close()
+
+
+def run_item_embeddings(
+    *,
+    refresh_mode: EmbeddingRefreshMode = "missing",
+    env: Mapping[str, str] | None = None,
+    env_file: str = ".env",
+    cancellation_token: CancellationToken | None = None,
+) -> ItemEmbeddingRunResult:
+    current_env = env if env is not None else os.environ
+    database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
+    if not database_url:
+        raise RuntimeError("Missing database URL")
+    openai_api_key = resolve_openai_api_key(env=current_env, dotenv_path=env_file)
+    if not openai_api_key:
+        raise RuntimeError("Missing OpenAI API key")
+    embedding_model = resolve_embedding_model(env=current_env, dotenv_path=env_file)
+
+    connection = connect_database(database_url)
+    try:
+        repository = DiscoveryRepository(connection)
+        client = OpenAIEmbeddingClient(api_key=openai_api_key, model=embedding_model)
+        sources = repository.list_item_search_embedding_sources(refresh_mode=refresh_mode)
+        embedded_items = 0
+        for source in sources:
+            raise_if_cancelled(cancellation_token)
+            source_text = build_item_embedding_text(source)
+            embedding = client.create_embedding(source_text)
+            repository.upsert_item_search_embedding(
+                item_id=source.item_id,
+                embedding=embedding,
+                source_text=source_text,
+                source_hash=source_text_hash(source_text),
+                model=embedding_model,
+            )
+            embedded_items += 1
+
+        return ItemEmbeddingRunResult(
+            refresh_mode=refresh_mode,
+            selected_items=len(sources),
+            embedded_items=embedded_items,
+            model=embedding_model,
+        )
+    finally:
+        connection.close()
+
+
+class StoreDiscoveryRunManager:
+    def __init__(
+        self,
+        runner: Callable[[], StoreDiscoveryRunResult] | None = None,
+        item_runner: Callable[[int, str], ItemDiscoveryRunResult] | None = None,
+        item_update_runner: Callable[[], ItemUpdateRunResult] | None = None,
+        item_embedding_runner: Callable[[EmbeddingRefreshMode], ItemEmbeddingRunResult] | None = None,
+        *,
+        background: bool = True,
+        env_file: str = ".env",
+    ) -> None:
+        self.runner = (
+            _store_runner_with_token(runner)
+            if runner is not None
+            else (lambda cancellation_token: run_store_discovery(env_file=env_file, cancellation_token=cancellation_token))
+        )
+        self.item_runner = (
+            _item_runner_with_token(item_runner)
+            if item_runner is not None
+            else (
+                lambda store_id, website_url, cancellation_token: run_item_discovery(
+                store_id=store_id,
+                website_url=website_url,
+                env_file=env_file,
+                cancellation_token=cancellation_token,
+            )
+        )
+        )
+        self.item_update_runner = (
+            _update_runner_with_token(item_update_runner)
+            if item_update_runner is not None
+            else (lambda cancellation_token: run_item_update(env_file=env_file, cancellation_token=cancellation_token))
+        )
+        self.item_embedding_runner = (
+            _embedding_runner_with_token(item_embedding_runner)
+            if item_embedding_runner is not None
+            else (
+                lambda refresh_mode, cancellation_token: run_item_embeddings(
+                    refresh_mode=refresh_mode,
+                    env_file=env_file,
+                    cancellation_token=cancellation_token,
+                )
+            )
+        )
+        self.background = background
+        self.lock = threading.Lock()
+        self.runs: dict[str, StoreDiscoveryRun] = {}
+        self.latest_run_id: str | None = None
+        self.active_run_id: str | None = None
+
+    def start_store_discovery(self) -> StoreDiscoveryRun:
+        with self.lock:
+            if self.active_run_id:
+                raise OperationAlreadyRunning("Store discovery is already running")
+
+            cancellation_token = CancellationToken()
+            run = StoreDiscoveryRun(
+                id=str(uuid.uuid4()),
+                status="running",
+                started_at=_utc_now(),
+                cancellation_token=cancellation_token,
+            )
+            self.runs[run.id] = run
+            self.latest_run_id = run.id
+            self.active_run_id = run.id
+
+        if self.background:
+            thread = threading.Thread(target=self._execute_run, args=(run.id,), daemon=True)
+            thread.start()
+        else:
+            self._execute_run(run.id)
+
+        return self.get_run(run.id) or run
+
+    def start_item_discovery(self, store_id: int, website_url: str) -> StoreDiscoveryRun:
+        with self.lock:
+            if self.active_run_id:
+                raise OperationAlreadyRunning("Discovery operation is already running")
+
+            cancellation_token = CancellationToken()
+            run = StoreDiscoveryRun(
+                id=str(uuid.uuid4()),
+                status="running",
+                started_at=_utc_now(),
+                run_type="item_discovery",
+                cancellation_token=cancellation_token,
+            )
+            self.runs[run.id] = run
+            self.latest_run_id = run.id
+            self.active_run_id = run.id
+
+        if self.background:
+            thread = threading.Thread(target=self._execute_item_run, args=(run.id, store_id, website_url), daemon=True)
+            thread.start()
+        else:
+            self._execute_item_run(run.id, store_id, website_url)
+
+        return self.get_run(run.id) or run
+
+    def start_item_update(self) -> StoreDiscoveryRun:
+        with self.lock:
+            if self.active_run_id:
+                raise OperationAlreadyRunning("Discovery operation is already running")
+
+            cancellation_token = CancellationToken()
+            run = StoreDiscoveryRun(
+                id=str(uuid.uuid4()),
+                status="running",
+                started_at=_utc_now(),
+                run_type="item_update",
+                cancellation_token=cancellation_token,
+            )
+            self.runs[run.id] = run
+            self.latest_run_id = run.id
+            self.active_run_id = run.id
+
+        if self.background:
+            thread = threading.Thread(target=self._execute_item_update_run, args=(run.id,), daemon=True)
+            thread.start()
+        else:
+            self._execute_item_update_run(run.id)
+
+        return self.get_run(run.id) or run
+
+    def start_item_embeddings(self, refresh_mode: EmbeddingRefreshMode) -> StoreDiscoveryRun:
+        with self.lock:
+            if self.active_run_id:
+                raise OperationAlreadyRunning("Discovery operation is already running")
+
+            cancellation_token = CancellationToken()
+            run = StoreDiscoveryRun(
+                id=str(uuid.uuid4()),
+                status="running",
+                started_at=_utc_now(),
+                run_type="item_embeddings",
+                cancellation_token=cancellation_token,
+            )
+            self.runs[run.id] = run
+            self.latest_run_id = run.id
+            self.active_run_id = run.id
+
+        if self.background:
+            thread = threading.Thread(target=self._execute_item_embedding_run, args=(run.id, refresh_mode), daemon=True)
+            thread.start()
+        else:
+            self._execute_item_embedding_run(run.id, refresh_mode)
+
+        return self.get_run(run.id) or run
+
+    def get_run(self, run_id: str) -> StoreDiscoveryRun | None:
+        with self.lock:
+            return self.runs.get(run_id)
+
+    def get_latest_run(self) -> StoreDiscoveryRun | None:
+        with self.lock:
+            if not self.latest_run_id:
+                return None
+            return self.runs.get(self.latest_run_id)
+
+    def cancel_run(self, run_id: str) -> StoreDiscoveryRun | None:
+        with self.lock:
+            run = self.runs.get(run_id)
+            if run is None:
+                return None
+            if self.active_run_id != run_id or run.status not in {"running", "cancelling"}:
+                raise OperationNotRunning("Run is not running")
+            if run.cancellation_token is not None:
+                run.cancellation_token.cancel()
+            run.status = "cancelling"
+            return run
+
+    def _execute_run(self, run_id: str) -> None:
+        try:
+            result = self.runner(self._cancellation_token_for(run_id))
+        except OperationCancelled:
+            self._mark_run_cancelled(run_id)
+            return
+        except Exception as exc:  # pragma: no cover - message behavior is tested through manager.
+            with self.lock:
+                run = self.runs[run_id]
+                run.status = "failed"
+                run.error = str(exc)
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+            return
+
+        with self.lock:
+            run = self.runs[run_id]
+            if run.status == "cancelling":
+                run.status = "cancelled"
+                run.result = None
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+                return
+            run.status = "completed"
+            run.result = result
+            run.completed_at = _utc_now()
+            self.active_run_id = None
+
+    def _execute_item_run(self, run_id: str, store_id: int, website_url: str) -> None:
+        try:
+            result = self.item_runner(store_id, website_url, self._cancellation_token_for(run_id))
+        except OperationCancelled:
+            self._mark_run_cancelled(run_id)
+            return
+        except Exception as exc:  # pragma: no cover - message behavior is tested through manager.
+            with self.lock:
+                run = self.runs[run_id]
+                run.status = "failed"
+                run.error = str(exc)
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+            return
+
+        with self.lock:
+            run = self.runs[run_id]
+            if run.status == "cancelling":
+                run.status = "cancelled"
+                run.result = None
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+                return
+            run.status = "completed"
+            run.result = result
+            run.completed_at = _utc_now()
+            self.active_run_id = None
+
+    def _execute_item_update_run(self, run_id: str) -> None:
+        try:
+            result = self.item_update_runner(self._cancellation_token_for(run_id))
+        except OperationCancelled:
+            self._mark_run_cancelled(run_id)
+            return
+        except Exception as exc:  # pragma: no cover - message behavior is tested through manager.
+            with self.lock:
+                run = self.runs[run_id]
+                run.status = "failed"
+                run.error = str(exc)
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+            return
+
+        with self.lock:
+            run = self.runs[run_id]
+            if run.status == "cancelling":
+                run.status = "cancelled"
+                run.result = None
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+                return
+            run.status = "completed"
+            run.result = result
+            run.completed_at = _utc_now()
+            self.active_run_id = None
+
+    def _execute_item_embedding_run(self, run_id: str, refresh_mode: EmbeddingRefreshMode) -> None:
+        try:
+            result = self.item_embedding_runner(refresh_mode, self._cancellation_token_for(run_id))
+        except OperationCancelled:
+            self._mark_run_cancelled(run_id)
+            return
+        except Exception as exc:  # pragma: no cover - message behavior is tested through manager.
+            with self.lock:
+                run = self.runs[run_id]
+                run.status = "failed"
+                run.error = str(exc)
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+            return
+
+        with self.lock:
+            run = self.runs[run_id]
+            if run.status == "cancelling":
+                run.status = "cancelled"
+                run.result = None
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+                return
+            run.status = "completed"
+            run.result = result
+            run.completed_at = _utc_now()
+            self.active_run_id = None
+
+    def _cancellation_token_for(self, run_id: str) -> CancellationToken:
+        with self.lock:
+            token = self.runs[run_id].cancellation_token
+        if token is None:
+            raise RuntimeError("Run is missing cancellation token")
+        return token
+
+    def _mark_run_cancelled(self, run_id: str) -> None:
+        with self.lock:
+            run = self.runs[run_id]
+            run.status = "cancelled"
+            run.result = None
+            run.completed_at = _utc_now()
+            self.active_run_id = None
+
+
+def _store_runner_with_token(runner: Callable[..., StoreDiscoveryRunResult]) -> Callable[[CancellationToken], StoreDiscoveryRunResult]:
+    if _accepts_cancellation_token(runner, positional_before_token=0):
+        return lambda cancellation_token: runner(cancellation_token)
+    return lambda cancellation_token: runner()
+
+
+def _item_runner_with_token(
+    runner: Callable[..., ItemDiscoveryRunResult],
+) -> Callable[[int, str, CancellationToken], ItemDiscoveryRunResult]:
+    if _accepts_cancellation_token(runner, positional_before_token=2):
+        return lambda store_id, website_url, cancellation_token: runner(store_id, website_url, cancellation_token)
+    return lambda store_id, website_url, cancellation_token: runner(store_id, website_url)
+
+
+def _update_runner_with_token(runner: Callable[..., ItemUpdateRunResult]) -> Callable[[CancellationToken], ItemUpdateRunResult]:
+    if _accepts_cancellation_token(runner, positional_before_token=0):
+        return lambda cancellation_token: runner(cancellation_token)
+    return lambda cancellation_token: runner()
+
+
+def _embedding_runner_with_token(
+    runner: Callable[..., ItemEmbeddingRunResult],
+) -> Callable[[EmbeddingRefreshMode, CancellationToken], ItemEmbeddingRunResult]:
+    if _accepts_cancellation_token(runner, positional_before_token=1):
+        return lambda refresh_mode, cancellation_token: runner(refresh_mode, cancellation_token)
+    return lambda refresh_mode, cancellation_token: runner(refresh_mode)
+
+
+def _accepts_cancellation_token(runner: Callable[..., object], positional_before_token: int) -> bool:
+    try:
+        signature = inspect.signature(runner)
+    except (TypeError, ValueError):
+        return False
+
+    parameters = list(signature.parameters.values())
+    if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+        return True
+    if any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters):
+        return True
+    if "cancellation_token" in signature.parameters:
+        return True
+
+    positional = [
+        parameter
+        for parameter in parameters
+        if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+    ]
+    return len(positional) > positional_before_token
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _format_datetime(value: datetime) -> str:
+    return value.isoformat().replace("+00:00", "Z")

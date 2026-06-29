@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ludora"
+version = "0.1.0"
+description = "Collect Mexican online boardgame store listings with Brave Search API."
+requires-python = ">=3.10"
+dependencies = [
+    "playwright>=1.44,<2",
+    "psycopg[binary]>=3.2,<4",
+    "boto3>=1.34,<2",
+    "numpy>=1.26,<3",
+    "opencv-python-headless>=4.9,<5",
+]
+
+[project.scripts]
+ludora-collect-stores = "ludora.cli:main"
+ludora-discovery-api = "ludora.api:main"
+ludora-cover-asset = "ludora.cover_asset_workflow:main"
+ludora-tiktok-discover = "ludora.tiktok_discovery:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
