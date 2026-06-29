@@ -77,16 +77,16 @@ export function createLocalDiscoveryOperationsClient({
     });
     child.on('close', (code, signal) => {
       if (run.status === 'cancelling' || signal) {
-        finishRun(run, 'cancelled', null, null);
+        finishRun(run, 'cancelled', null, null, now());
         activeRunId = null;
         return;
       }
       if (code === 0) {
-        finishRun(run, 'completed', parseResult(stdout), null);
+        finishRun(run, 'completed', parseResult(stdout), null, now());
         activeRunId = null;
         return;
       }
-      finishRun(run, 'failed', null, errorMessage(stderr, stdout, code));
+      finishRun(run, 'failed', null, errorMessage(stderr, stdout, code), now());
       activeRunId = null;
     });
 
@@ -137,10 +137,11 @@ function finishRun(
   run: ManagedRun,
   status: StoreDiscoveryRunStatus,
   result: StoreDiscoveryRun['result'],
-  error: string | null
+  error: string | null,
+  completedAt: Date
 ): void {
   run.child = undefined;
-  run.completed_at = formatDate(new Date());
+  run.completed_at = formatDate(completedAt);
   run.error = error;
   run.result = result;
   run.status = status;

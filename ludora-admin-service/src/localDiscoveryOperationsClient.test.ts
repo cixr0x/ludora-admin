@@ -71,6 +71,7 @@ describe('local discovery operations client', () => {
 
     const completed = await client.getStoreDiscoveryRun(run.id);
     expect(completed?.status).toBe('completed');
+    expect(completed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
     expect(completed?.result).toEqual({
       accepted_stores: 2,
       candidate_domains: 4,
@@ -108,6 +109,7 @@ describe('local discovery operations client', () => {
 
     const failed = await client.getStoreDiscoveryRun(run.id);
     expect(failed?.status).toBe('failed');
+    expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
     expect(failed?.error).toBe('Missing database URL');
   });
 
