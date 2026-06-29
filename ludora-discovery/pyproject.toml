@@ -18,6 +18,7 @@ dependencies = [
 [project.scripts]
 ludora-collect-stores = "ludora.cli:main"
 ludora-discovery-api = "ludora.api:main"
+ludora-operation = "ludora.operation_cli:main"
 ludora-cover-asset = "ludora.cover_asset_workflow:main"
 ludora-tiktok-discover = "ludora.tiktok_discovery:main"
 
