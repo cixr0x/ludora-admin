@@ -23,6 +23,15 @@ class FakeChildProcess extends EventEmitter {
     this.stderr.emit('data', Buffer.from(JSON.stringify({ error: { message } })));
     this.emit('close', 1, null);
   }
+
+  failToSpawn(error: Error): void {
+    this.emit('error', error);
+  }
+
+  succeedWithRawStdout(stdout: string): void {
+    this.stdout.emit('data', Buffer.from(stdout));
+    this.emit('close', 0, null);
+  }
 }
 
 function createClient() {
@@ -55,6 +64,12 @@ describe('local discovery operations client', () => {
     expect(spawned[0].args).toContain('ludora.operation_cli');
     expect(spawned[0].args).toContain('store-discovery');
     expect(spawned[0].args).toContain('--env-file');
+    expect(spawned[0].options).toMatchObject({
+      cwd: 'C:/PROJECTS/ludora/ludora-admin/ludora-discovery',
+      env: expect.objectContaining({
+        PYTHONPATH: 'C:\\PROJECTS\\ludora\\ludora-admin\\ludora-discovery\\src'
+      })
+    });
   });
 
   it('marks a completed run with parsed Python result', async () => {
@@ -111,6 +126,41 @@ describe('local discovery operations client', () => {
     expect(failed?.status).toBe('failed');
     expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
     expect(failed?.error).toBe('Missing database URL');
+  });
+
+  it('marks the run failed when the child process emits an error', async () => {
+    const { client, spawned } = createClient();
+    const run = await client.startItemUpdateRun();
+
+    expect(() => spawned[0].child.failToSpawn(new Error('spawn ENOENT'))).not.toThrow();
+
+    const failed = await client.getStoreDiscoveryRun(run.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
+    expect(failed?.error).toBe('spawn ENOENT');
+
+    await expect(client.startStoreDiscoveryRun()).resolves.toMatchObject({
+      status: 'running',
+      type: 'store_discovery'
+    });
+  });
+
+  it('marks the run failed when successful stdout is not valid JSON', async () => {
+    const { client, spawned } = createClient();
+    const run = await client.startStoreDiscoveryRun();
+
+    expect(() => spawned[0].child.succeedWithRawStdout('not json')).not.toThrow();
+
+    const failed = await client.getStoreDiscoveryRun(run.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
+    expect(failed?.error).toContain('Failed to parse discovery operation result');
+    expect(failed?.result).toBeNull();
+
+    await expect(client.startItemUpdateRun()).resolves.toMatchObject({
+      status: 'running',
+      type: 'item_update'
+    });
   });
 
   it('returns 404-style error when cancelling an unknown run', async () => {

@@ -75,19 +75,39 @@ export function createLocalDiscoveryOperationsClient({
     child.stderr.on('data', (chunk) => {
       stderr += String(chunk);
     });
+    let settled = false;
+    const settleRun = (
+      status: StoreDiscoveryRunStatus,
+      result: StoreDiscoveryRun['result'],
+      error: string | null
+    ): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      finishRun(run, status, result, error, now());
+      if (activeRunId === run.id) {
+        activeRunId = null;
+      }
+    };
+    child.on('error', (error) => {
+      settleRun('failed', null, error.message);
+    });
     child.on('close', (code, signal) => {
       if (run.status === 'cancelling' || signal) {
-        finishRun(run, 'cancelled', null, null, now());
-        activeRunId = null;
+        settleRun('cancelled', null, null);
         return;
       }
       if (code === 0) {
-        finishRun(run, 'completed', parseResult(stdout), null, now());
-        activeRunId = null;
+        const parsedResult = tryParseResult(stdout);
+        if (parsedResult.ok) {
+          settleRun('completed', parsedResult.result, null);
+          return;
+        }
+        settleRun('failed', null, parsedResult.error);
         return;
       }
-      finishRun(run, 'failed', null, errorMessage(stderr, stdout, code), now());
-      activeRunId = null;
+      settleRun('failed', null, errorMessage(stderr, stdout, code));
     });
 
     return publicRun(run);
@@ -147,8 +167,8 @@ function finishRun(
   run.status = status;
 }
 
-function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null;
 function publicRun(run: ManagedRun): StoreDiscoveryRun;
+function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null;
 function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null {
   if (!run) {
     return null;
@@ -160,6 +180,17 @@ function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null {
 function parseResult(stdout: string): StoreDiscoveryRun['result'] {
   const parsed = JSON.parse(stdout.trim()) as { result?: StoreDiscoveryRun['result'] };
   return parsed.result ?? null;
+}
+
+function tryParseResult(
+  stdout: string
+): { ok: true; result: StoreDiscoveryRun['result'] } | { ok: false; error: string } {
+  try {
+    return { ok: true, result: parseResult(stdout) };
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { ok: false, error: `Failed to parse discovery operation result: ${detail}` };
+  }
 }
 
 function errorMessage(stderr: string, stdout: string, code: number | null): string {
