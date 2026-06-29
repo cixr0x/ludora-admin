@@ -94,8 +94,12 @@ export function createLocalDiscoveryOperationsClient({
       settleRun('failed', null, error.message);
     });
     child.on('close', (code, signal) => {
-      if (run.status === 'cancelling' || signal) {
+      if (run.status === 'cancelling') {
         settleRun('cancelled', null, null);
+        return;
+      }
+      if (signal) {
+        settleRun('failed', null, `Discovery operation exited with signal ${signal}`);
         return;
       }
       if (code === 0) {
@@ -178,8 +182,16 @@ function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null {
 }
 
 function parseResult(stdout: string): StoreDiscoveryRun['result'] {
-  const parsed = JSON.parse(stdout.trim()) as { result?: StoreDiscoveryRun['result'] };
-  return parsed.result ?? null;
+  const parsed = JSON.parse(stdout.trim()) as unknown;
+  if (
+    !parsed ||
+    typeof parsed !== 'object' ||
+    !Object.hasOwn(parsed, 'result') ||
+    (parsed as { result: unknown }).result === null
+  ) {
+    throw new Error('Malformed discovery operation result: expected non-null result property');
+  }
+  return (parsed as { result: StoreDiscoveryRun['result'] }).result;
 }
 
 function tryParseResult(
@@ -189,6 +201,9 @@ function tryParseResult(
     return { ok: true, result: parseResult(stdout) };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+    if (detail.startsWith('Malformed discovery operation result:')) {
+      return { ok: false, error: detail };
+    }
     return { ok: false, error: `Failed to parse discovery operation result: ${detail}` };
   }
 }

@@ -32,6 +32,10 @@ class FakeChildProcess extends EventEmitter {
     this.stdout.emit('data', Buffer.from(stdout));
     this.emit('close', 0, null);
   }
+
+  exitWithSignal(signal: NodeJS.Signals): void {
+    this.emit('close', null, signal);
+  }
 }
 
 function createClient() {
@@ -155,6 +159,44 @@ describe('local discovery operations client', () => {
     expect(failed?.status).toBe('failed');
     expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
     expect(failed?.error).toContain('Failed to parse discovery operation result');
+    expect(failed?.result).toBeNull();
+
+    await expect(client.startItemUpdateRun()).resolves.toMatchObject({
+      status: 'running',
+      type: 'item_update'
+    });
+  });
+
+  it('marks the run failed when successful stdout does not include a valid non-null result', async () => {
+    for (const payload of [{}, { ok: true }, { result: null }]) {
+      const { client, spawned } = createClient();
+      const run = await client.startStoreDiscoveryRun();
+
+      expect(() => spawned[0].child.succeedWithRawStdout(JSON.stringify(payload))).not.toThrow();
+
+      const failed = await client.getStoreDiscoveryRun(run.id);
+      expect(failed?.status).toBe('failed');
+      expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
+      expect(failed?.error).toBe('Malformed discovery operation result: expected non-null result property');
+      expect(failed?.result).toBeNull();
+
+      await expect(client.startItemUpdateRun()).resolves.toMatchObject({
+        status: 'running',
+        type: 'item_update'
+      });
+    }
+  });
+
+  it('marks an unrequested signal exit as failed and clears the active run', async () => {
+    const { client, spawned } = createClient();
+    const run = await client.startStoreDiscoveryRun();
+
+    spawned[0].child.exitWithSignal('SIGTERM');
+
+    const failed = await client.getStoreDiscoveryRun(run.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
+    expect(failed?.error).toBe('Discovery operation exited with signal SIGTERM');
     expect(failed?.result).toBeNull();
 
     await expect(client.startItemUpdateRun()).resolves.toMatchObject({
