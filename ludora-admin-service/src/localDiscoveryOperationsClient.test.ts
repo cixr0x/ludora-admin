@@ -187,6 +187,51 @@ describe('local discovery operations client', () => {
     }
   });
 
+  it('marks store discovery failed when successful stdout has a malformed result shape', async () => {
+    const { client, spawned } = createClient();
+    const run = await client.startStoreDiscoveryRun();
+
+    expect(() => spawned[0].child.succeed({ result: { candidate_domains: 4, searched_queries: 3 } })).not.toThrow();
+
+    const failed = await client.getStoreDiscoveryRun(run.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
+    expect(failed?.error).toBe('Malformed discovery operation result for store_discovery');
+    expect(failed?.result).toBeNull();
+
+    await expect(client.startItemUpdateRun()).resolves.toMatchObject({
+      status: 'running',
+      type: 'item_update'
+    });
+  });
+
+  it('marks item embeddings failed when successful stdout has an invalid refresh mode', async () => {
+    const { client, spawned } = createClient();
+    const run = await client.startItemEmbeddingRun('missing');
+
+    expect(() =>
+      spawned[0].child.succeed({
+        result: {
+          embedded_items: 2,
+          model: 'text-embedding-3-small',
+          refresh_mode: 'partial',
+          selected_items: 3
+        }
+      })
+    ).not.toThrow();
+
+    const failed = await client.getStoreDiscoveryRun(run.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.completed_at).toBe('2026-06-29T20:00:00.000Z');
+    expect(failed?.error).toBe('Malformed discovery operation result for item_embeddings');
+    expect(failed?.result).toBeNull();
+
+    await expect(client.startStoreDiscoveryRun()).resolves.toMatchObject({
+      status: 'running',
+      type: 'store_discovery'
+    });
+  });
+
   it('marks an unrequested signal exit as failed and clears the active run', async () => {
     const { client, spawned } = createClient();
     const run = await client.startStoreDiscoveryRun();

@@ -103,7 +103,7 @@ export function createLocalDiscoveryOperationsClient({
         return;
       }
       if (code === 0) {
-        const parsedResult = tryParseResult(stdout);
+        const parsedResult = tryParseResult(stdout, run.type);
         if (parsedResult.ok) {
           settleRun('completed', parsedResult.result, null);
           return;
@@ -181,7 +181,7 @@ function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null {
   return { ...payload };
 }
 
-function parseResult(stdout: string): StoreDiscoveryRun['result'] {
+function parseResult(stdout: string, type: StoreDiscoveryRun['type']): StoreDiscoveryRun['result'] {
   const parsed = JSON.parse(stdout.trim()) as unknown;
   if (
     !parsed ||
@@ -191,21 +191,63 @@ function parseResult(stdout: string): StoreDiscoveryRun['result'] {
   ) {
     throw new Error('Malformed discovery operation result: expected non-null result property');
   }
-  return (parsed as { result: StoreDiscoveryRun['result'] }).result;
+  const result = (parsed as { result: unknown }).result;
+  if (!isResultForRunType(type, result)) {
+    throw new Error(`Malformed discovery operation result for ${type}`);
+  }
+  return result;
 }
 
 function tryParseResult(
-  stdout: string
+  stdout: string,
+  type: StoreDiscoveryRun['type']
 ): { ok: true; result: StoreDiscoveryRun['result'] } | { ok: false; error: string } {
   try {
-    return { ok: true, result: parseResult(stdout) };
+    return { ok: true, result: parseResult(stdout, type) };
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    if (detail.startsWith('Malformed discovery operation result:')) {
+    if (
+      detail.startsWith('Malformed discovery operation result:') ||
+      detail.startsWith('Malformed discovery operation result for ')
+    ) {
       return { ok: false, error: detail };
     }
     return { ok: false, error: `Failed to parse discovery operation result: ${detail}` };
   }
+}
+
+function isResultForRunType(type: StoreDiscoveryRun['type'], result: unknown): result is NonNullable<StoreDiscoveryRun['result']> {
+  if (!isRecord(result)) {
+    return false;
+  }
+
+  switch (type) {
+    case 'store_discovery':
+      return (
+        isNumber(result.accepted_stores) &&
+        isNumber(result.candidate_domains) &&
+        isNumber(result.searched_queries)
+      );
+    case 'item_discovery':
+      return isNumber(result.item_candidates) && isNumber(result.store_id) && typeof result.website_url === 'string';
+    case 'item_update':
+      return isNumber(result.updated_items);
+    case 'item_embeddings':
+      return (
+        isNumber(result.embedded_items) &&
+        typeof result.model === 'string' &&
+        (result.refresh_mode === 'full' || result.refresh_mode === 'missing') &&
+        isNumber(result.selected_items)
+      );
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function isNumber(value: unknown): value is number {
+  return typeof value === 'number';
 }
 
 function errorMessage(stderr: string, stdout: string, code: number | null): string {
