@@ -1,6 +1,11 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import dotenv from 'dotenv';
 
 dotenv.config({ quiet: true });
+
+type DiscoveryRunnerMode = 'local' | 'http';
 
 export type Config = {
   bggApiBaseUrl: string;
@@ -19,7 +24,13 @@ export type Config = {
   port: number;
   databaseUrl?: string;
   corsOrigin: string[];
-  discoveryApiUrl: string;
+  discoveryRunner: {
+    apiUrl: string;
+    envFile: string;
+    mode: DiscoveryRunnerMode;
+    packageDir: string;
+    pythonExecutable: string;
+  };
 };
 
 const DEFAULT_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
@@ -37,7 +48,7 @@ export function loadConfig(): Config {
     port,
     databaseUrl: process.env.LUDORA_DATABASE_URL,
     corsOrigin: readCorsOrigins(),
-    discoveryApiUrl: process.env.LUDORA_DISCOVERY_API_URL ?? 'http://localhost:8001'
+    discoveryRunner: readDiscoveryRunnerConfig()
   };
 }
 
@@ -55,6 +66,32 @@ function readLocalCoverWorkflowConfig(): Config['localCoverWorkflow'] {
     s3Region: process.env.LUDORA_COVER_S3_REGION ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-2',
     workDir: process.env.LUDORA_COVER_WORK_DIR ?? 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame'
   };
+}
+
+function readDiscoveryRunnerConfig(): Config['discoveryRunner'] {
+  return {
+    apiUrl: process.env.LUDORA_DISCOVERY_API_URL ?? 'http://localhost:8001',
+    envFile: process.env.LUDORA_DISCOVERY_ENV_FILE ?? path.resolve(process.cwd(), '.env'),
+    mode: readDiscoveryRunnerMode(),
+    packageDir: process.env.LUDORA_DISCOVERY_PACKAGE_DIR ?? defaultDiscoveryPackageDir(),
+    pythonExecutable: process.env.LUDORA_DISCOVERY_PYTHON ?? 'python'
+  };
+}
+
+function readDiscoveryRunnerMode(): DiscoveryRunnerMode {
+  const rawMode = process.env.LUDORA_DISCOVERY_RUNNER?.trim().toLowerCase();
+  if (!rawMode || rawMode === 'local') {
+    return 'local';
+  }
+  if (rawMode === 'http') {
+    return 'http';
+  }
+  throw new Error('LUDORA_DISCOVERY_RUNNER must be local or http');
+}
+
+function defaultDiscoveryPackageDir(): string {
+  const currentFile = fileURLToPath(import.meta.url);
+  return path.resolve(path.dirname(currentFile), '..', '..', 'ludora-discovery');
 }
 
 function readPort(): number {

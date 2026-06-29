@@ -8,6 +8,7 @@ import { createDescriptionGenerationService } from './descriptionGeneration/desc
 import { createOpenAiDescriptionGenerationClient } from './descriptionGeneration/openAiDescriptionGenerationClient.js';
 import { createDiscoveryOperationsClient } from './discoveryOperationsClient.js';
 import { createItemMatchingService } from './itemMatching/itemMatchingService.js';
+import { createLocalDiscoveryOperationsClient } from './localDiscoveryOperationsClient.js';
 import { createLocalCoverWorkflowManager, createNodeLocalCoverWorkflowDependencies } from './localCoverWorkflow.js';
 import { createOpenAiProductDetailsExtractionClient } from './productDetailsExtraction/openAiProductDetailsExtractionClient.js';
 import {
@@ -54,7 +55,14 @@ const productDetailsEnrichmentService = productDetailsExtractionService
   : undefined;
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
 const itemMatchingService = createItemMatchingService(database, bggClient, translationService, bggItemImporter);
-const operationsClient = createDiscoveryOperationsClient(config.discoveryApiUrl);
+const operationsClient =
+  config.discoveryRunner.mode === 'http'
+    ? createDiscoveryOperationsClient(config.discoveryRunner.apiUrl)
+    : createLocalDiscoveryOperationsClient({
+        envFile: config.discoveryRunner.envFile,
+        packageDir: config.discoveryRunner.packageDir,
+        pythonExecutable: config.discoveryRunner.pythonExecutable
+      });
 const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   database,
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)

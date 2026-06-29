@@ -19,10 +19,40 @@ describe('loadConfig', () => {
     expect(() => loadConfig()).toThrow('PORT must be a positive integer');
   });
 
-  it('uses the discovery API URL from env when provided', () => {
-    vi.stubEnv('LUDORA_DISCOVERY_API_URL', 'http://localhost:8001/');
+  it('defaults discovery runner config to local discovery', () => {
+    vi.stubEnv('LUDORA_DISCOVERY_API_URL', undefined);
+    vi.stubEnv('LUDORA_DISCOVERY_ENV_FILE', undefined);
+    vi.stubEnv('LUDORA_DISCOVERY_PACKAGE_DIR', undefined);
+    vi.stubEnv('LUDORA_DISCOVERY_PYTHON', undefined);
+    vi.stubEnv('LUDORA_DISCOVERY_RUNNER', undefined);
 
-    expect(loadConfig().discoveryApiUrl).toBe('http://localhost:8001/');
+    const config = loadConfig();
+
+    expect(config.discoveryRunner).toEqual({
+      apiUrl: 'http://localhost:8001',
+      envFile: expect.stringContaining('ludora-admin-service'),
+      mode: 'local',
+      packageDir: expect.stringContaining('ludora-discovery'),
+      pythonExecutable: 'python'
+    });
+  });
+
+  it('loads discovery runner config from environment overrides', () => {
+    vi.stubEnv('LUDORA_DISCOVERY_RUNNER', 'http');
+    vi.stubEnv('LUDORA_DISCOVERY_API_URL', 'http://127.0.0.1:9009');
+    vi.stubEnv('LUDORA_DISCOVERY_PYTHON', 'py');
+    vi.stubEnv('LUDORA_DISCOVERY_PACKAGE_DIR', 'C:\\tmp\\ludora-discovery');
+    vi.stubEnv('LUDORA_DISCOVERY_ENV_FILE', 'C:\\tmp\\admin.env');
+
+    const config = loadConfig();
+
+    expect(config.discoveryRunner).toEqual({
+      apiUrl: 'http://127.0.0.1:9009',
+      envFile: 'C:\\tmp\\admin.env',
+      mode: 'http',
+      packageDir: 'C:\\tmp\\ludora-discovery',
+      pythonExecutable: 'py'
+    });
   });
 
   it('allows both localhost and 127.0.0.1 UI origins by default', () => {
