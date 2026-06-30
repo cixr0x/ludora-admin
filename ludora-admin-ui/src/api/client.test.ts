@@ -88,6 +88,18 @@ describe('fetchRows', () => {
     });
   });
 
+  it('rejects with the backend error message when an admin request fails', async () => {
+    const { adminApi } = await importClient();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Discovery operation is already running' } }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 409
+      })
+    );
+
+    await expect(adminApi.startStoreDiscoveryRun()).rejects.toThrow('Discovery operation is already running');
+  });
+
   it('starts local cover workflows with a JSON body', async () => {
     const workflow = {
       error: null,

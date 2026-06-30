@@ -97,10 +97,23 @@ async function shutdown(): Promise<void> {
     return;
   }
   isShuttingDown = true;
-  await shutdownOperationsClient();
-  server.close(() => {
-    process.exit(0);
+  const closeServer = new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
   });
+  try {
+    await shutdownOperationsClient();
+    await closeServer;
+    process.exit(0);
+  } catch (error) {
+    console.error(error);
+    process.exit(1);
+  }
 }
 
 process.on('SIGINT', () => {

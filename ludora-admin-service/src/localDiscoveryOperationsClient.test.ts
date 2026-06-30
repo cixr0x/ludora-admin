@@ -321,9 +321,23 @@ describe('local discovery operations client', () => {
     await shutdown;
 
     expect((await client.getStoreDiscoveryRun(run.id))?.status).toBe('cancelled');
-    await expect(client.startItemUpdateRun()).resolves.toMatchObject({
-      status: 'running',
-      type: 'item_update'
+  });
+
+  it('rejects new operations after shutdown has started', async () => {
+    const { client, spawned } = createClient();
+    const run = await client.startStoreDiscoveryRun();
+
+    const shutdown = client.shutdown();
+    spawned[0].child.emit('close', null, 'SIGTERM');
+    await shutdown;
+
+    await expect(client.startItemUpdateRun()).rejects.toMatchObject({
+      message: 'Discovery operations client is shutting down',
+      status: 503
     });
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({
+      status: 'cancelled'
+    });
+    expect(spawned).toHaveLength(1);
   });
 });

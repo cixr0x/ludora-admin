@@ -9,6 +9,11 @@ type DataResponse<T> = {
     total?: number;
   };
 };
+type ErrorResponse = {
+  error?: {
+    message?: string;
+  };
+};
 
 export type AdminRecord = Record<string, unknown>;
 
@@ -214,10 +219,22 @@ async function fetchEnvelope<T>(path: string, init?: RequestInit): Promise<DataR
   const response = init ? await fetch(url, init) : await fetch(url);
 
   if (!response.ok) {
-    throw new Error(`Request failed with ${response.status}`);
+    throw new Error(await readErrorMessage(response));
   }
 
   return (await response.json()) as DataResponse<T>;
+}
+
+async function readErrorMessage(response: Response): Promise<string> {
+  try {
+    const payload = (await response.json()) as ErrorResponse;
+    if (payload.error?.message) {
+      return payload.error.message;
+    }
+  } catch {
+    // Fall back to the status code when the server does not return a JSON error envelope.
+  }
+  return `Request failed with ${response.status}`;
 }
 
 async function fetchPagedRows<T extends AdminRecord>(

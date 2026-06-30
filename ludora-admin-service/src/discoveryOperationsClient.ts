@@ -33,8 +33,16 @@ export function createDiscoveryOperationsClient(baseUrl: string): DiscoveryOpera
         method: 'POST'
       }),
     getLatestStoreDiscoveryRun: () => requestData<StoreDiscoveryRun | null>(baseUrl, '/operations/store-discovery-runs/latest'),
-    getStoreDiscoveryRun: (runId: string) =>
-      requestData<StoreDiscoveryRun | null>(baseUrl, `/operations/store-discovery-runs/${encodeURIComponent(runId)}`),
+    getStoreDiscoveryRun: async (runId: string) => {
+      try {
+        return await requestData<StoreDiscoveryRun | null>(baseUrl, `/operations/store-discovery-runs/${encodeURIComponent(runId)}`);
+      } catch (error) {
+        if (error instanceof DiscoveryOperationError && error.status === 404) {
+          return null;
+        }
+        throw error;
+      }
+    },
     startItemDiscoveryRun: (storeId: number, websiteUrl: string) =>
       requestData<StoreDiscoveryRun>(baseUrl, `/operations/stores/${encodeURIComponent(storeId)}/item-discovery-runs`, {
         body: JSON.stringify({ website_url: websiteUrl }),

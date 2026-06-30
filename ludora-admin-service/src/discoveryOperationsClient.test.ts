@@ -45,6 +45,19 @@ describe('createDiscoveryOperationsClient', () => {
     );
   });
 
+  it('returns null when the discovery API cannot find a requested run', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Run not found' } }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 404
+      })
+    );
+
+    await expect(createDiscoveryOperationsClient('http://localhost:8001').getStoreDiscoveryRun('missing')).resolves.toBeNull();
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8001/operations/store-discovery-runs/missing', undefined);
+  });
+
   it('starts item discovery runs for one clean store', async () => {
     const run = {
       completed_at: null,

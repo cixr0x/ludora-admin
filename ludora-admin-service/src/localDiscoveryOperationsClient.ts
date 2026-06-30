@@ -45,8 +45,12 @@ export function createLocalDiscoveryOperationsClient({
   const runs = new Map<string, ManagedRun>();
   let latestRunId: string | null = null;
   let activeRunId: string | null = null;
+  let isShuttingDown = false;
 
   function startRun(type: StoreDiscoveryRun['type'], commandArgs: string[]): StoreDiscoveryRun {
+    if (isShuttingDown) {
+      throw new DiscoveryOperationError('Discovery operations client is shutting down', 503);
+    }
     if (activeRunId) {
       throw new DiscoveryOperationError('Discovery operation is already running', 409);
     }
@@ -169,6 +173,7 @@ export function createLocalDiscoveryOperationsClient({
       return startRun('store_discovery', ['store-discovery']);
     },
     async shutdown(): Promise<void> {
+      isShuttingDown = true;
       const run = activeRunId ? runs.get(activeRunId) : null;
       if (!run) {
         return;
