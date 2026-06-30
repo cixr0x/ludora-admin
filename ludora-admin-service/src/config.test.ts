@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { loadConfig } from './config.js';
@@ -30,9 +32,9 @@ describe('loadConfig', () => {
 
     expect(config.discoveryRunner).toEqual({
       apiUrl: 'http://localhost:8001',
-      envFile: expect.stringContaining('ludora-admin-service'),
+      envFile: path.resolve(process.cwd(), '.env'),
       mode: 'local',
-      packageDir: expect.stringContaining('ludora-discovery'),
+      packageDir: path.resolve(process.cwd(), '..', 'ludora-discovery'),
       pythonExecutable: 'python'
     });
   });
@@ -53,6 +55,58 @@ describe('loadConfig', () => {
       packageDir: 'C:\\tmp\\ludora-discovery',
       pythonExecutable: 'py'
     });
+  });
+
+  it('trims discovery runner environment overrides', () => {
+    vi.stubEnv('LUDORA_DISCOVERY_RUNNER', ' http ');
+    vi.stubEnv('LUDORA_DISCOVERY_API_URL', ' http://127.0.0.1:9009 ');
+    vi.stubEnv('LUDORA_DISCOVERY_PYTHON', ' py ');
+    vi.stubEnv('LUDORA_DISCOVERY_PACKAGE_DIR', ' C:\\tmp\\ludora-discovery ');
+    vi.stubEnv('LUDORA_DISCOVERY_ENV_FILE', ' C:\\tmp\\admin.env ');
+
+    const config = loadConfig();
+
+    expect(config.discoveryRunner).toEqual({
+      apiUrl: 'http://127.0.0.1:9009',
+      envFile: 'C:\\tmp\\admin.env',
+      mode: 'http',
+      packageDir: 'C:\\tmp\\ludora-discovery',
+      pythonExecutable: 'py'
+    });
+  });
+
+  it('treats blank discovery runner environment overrides as unset', () => {
+    vi.stubEnv('LUDORA_DISCOVERY_RUNNER', '   ');
+    vi.stubEnv('LUDORA_DISCOVERY_API_URL', '   ');
+    vi.stubEnv('LUDORA_DISCOVERY_PYTHON', '   ');
+    vi.stubEnv('LUDORA_DISCOVERY_PACKAGE_DIR', '   ');
+    vi.stubEnv('LUDORA_DISCOVERY_ENV_FILE', '   ');
+
+    const config = loadConfig();
+
+    expect(config.discoveryRunner).toEqual({
+      apiUrl: 'http://localhost:8001',
+      envFile: path.resolve(process.cwd(), '.env'),
+      mode: 'local',
+      packageDir: path.resolve(process.cwd(), '..', 'ludora-discovery'),
+      pythonExecutable: 'python'
+    });
+  });
+
+  it.each([
+    ['LOCAL', 'local'],
+    ['Http', 'http'],
+    ['   ', 'local']
+  ])('normalizes discovery runner mode %j to %s', (runner, mode) => {
+    vi.stubEnv('LUDORA_DISCOVERY_RUNNER', runner);
+
+    expect(loadConfig().discoveryRunner.mode).toBe(mode);
+  });
+
+  it('rejects invalid discovery runner mode', () => {
+    vi.stubEnv('LUDORA_DISCOVERY_RUNNER', 'sidecar');
+
+    expect(() => loadConfig()).toThrow('LUDORA_DISCOVERY_RUNNER must be local or http');
   });
 
   it('allows both localhost and 127.0.0.1 UI origins by default', () => {

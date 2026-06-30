@@ -70,12 +70,16 @@ function readLocalCoverWorkflowConfig(): Config['localCoverWorkflow'] {
 
 function readDiscoveryRunnerConfig(): Config['discoveryRunner'] {
   return {
-    apiUrl: process.env.LUDORA_DISCOVERY_API_URL ?? 'http://localhost:8001',
-    envFile: process.env.LUDORA_DISCOVERY_ENV_FILE ?? path.resolve(process.cwd(), '.env'),
+    apiUrl: readEnvWithDefault('LUDORA_DISCOVERY_API_URL', 'http://localhost:8001'),
+    envFile: readEnvWithDefault('LUDORA_DISCOVERY_ENV_FILE', path.resolve(process.cwd(), '.env')),
     mode: readDiscoveryRunnerMode(),
-    packageDir: process.env.LUDORA_DISCOVERY_PACKAGE_DIR ?? defaultDiscoveryPackageDir(),
-    pythonExecutable: process.env.LUDORA_DISCOVERY_PYTHON ?? 'python'
+    packageDir: readEnvWithDefault('LUDORA_DISCOVERY_PACKAGE_DIR', defaultDiscoveryPackageDir()),
+    pythonExecutable: readEnvWithDefault('LUDORA_DISCOVERY_PYTHON', 'python')
   };
+}
+
+function readEnvWithDefault(key: string, defaultValue: string): string {
+  return readOptionalEnv(key) ?? defaultValue;
 }
 
 function readDiscoveryRunnerMode(): DiscoveryRunnerMode {
