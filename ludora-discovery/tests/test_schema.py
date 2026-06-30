@@ -2,10 +2,17 @@ import unittest
 from pathlib import Path
 
 
+def schema_path() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        candidate = parent / "database" / "schema.sql"
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError("database/schema.sql was not found in any parent directory")
+
+
 class SchemaTests(unittest.TestCase):
     def test_schema_contains_mvp_lifecycle_tables(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8")
+        schema = schema_path().read_text(encoding="utf-8")
 
         for table_name in [
             "discovery_store_candidates",
@@ -21,8 +28,7 @@ class SchemaTests(unittest.TestCase):
             self.assertIn(f"create table if not exists {table_name}", schema.casefold())
 
     def test_discovery_store_candidates_matches_store_csv_shape(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
         store_table = schema.split("create table if not exists discovery_store_candidates", 1)[1].split(");", 1)[0]
 
         for column_name in [
@@ -65,15 +71,13 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("alter table discovery_store_candidates drop column if exists accepted", schema)
 
     def test_schema_keeps_bgg_optional_but_unique_when_present(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
 
         self.assertIn("bgg_id bigint", schema)
         self.assertIn("where bgg_id is not null", schema)
 
     def test_items_table_stores_spanish_description(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
         items_table = schema.split("create table if not exists items", 1)[1].split(");", 1)[0]
 
         self.assertIn("canonical_name_es text not null default ''", items_table)
@@ -86,8 +90,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("alter table if exists items add column if not exists image_url_es text not null default ''", schema)
 
     def test_store_items_replaces_listing_candidates(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
         item_candidate_table = schema.split("create table if not exists store_items", 1)[1].split(");", 1)[0]
 
         self.assertNotIn("create table if not exists discovery_listing_candidates", schema)
@@ -186,8 +189,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("alter table if exists store_items drop column if exists offer_id", schema)
 
     def test_schema_contains_active_item_view(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
 
         self.assertIn("create or replace view active_item as", schema)
         self.assertLess(schema.index("create table if not exists item_relationships"), schema.index("create or replace view active_item as"))
@@ -207,8 +209,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("ir.link_type = 'expansion' and ir.item_b_id = i.id", view)
 
     def test_schema_removes_offers_and_keeps_item_relationships(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
 
         self.assertIn("drop table if exists offers", schema)
         self.assertNotIn("create table if not exists offers", schema)
@@ -220,8 +221,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("unique (item_a_id, link_type, item_b_id)", schema)
 
     def test_schema_contains_item_match_candidates(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
         table = schema.split("create table if not exists item_match_candidates", 1)[1].split(");", 1)[0]
 
         for column_name in [
@@ -251,8 +251,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("item_match_candidates_status_idx", schema)
 
     def test_schema_contains_translation_jobs(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
         table = schema.split("create table if not exists translation_jobs", 1)[1].split(");", 1)[0]
 
         for column_name in [
@@ -290,8 +289,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("translation_jobs_source_idx", schema)
 
     def test_schema_contains_item_search_embeddings(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
 
         self.assertIn("create extension if not exists vector", schema)
         self.assertIn("create table if not exists item_search_embeddings", schema)
@@ -322,8 +320,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("on item_search_embeddings (model)", schema)
 
     def test_schema_contains_bgg_metadata_tables(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
 
         for table_name in [
             "boardgame_categories",
@@ -417,8 +414,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("bgg_search_query_results_query_rank_idx", schema)
 
     def test_schema_contains_front_page_categories(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
 
         self.assertIn("create table if not exists front_page_categories", schema)
         table = schema.split("create table if not exists front_page_categories", 1)[1].split(");", 1)[0]
@@ -436,8 +432,7 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("on front_page_categories (category_type, category_id)", schema)
 
     def test_schema_contains_front_page_category_items(self):
-        schema_path = Path(__file__).resolve().parents[2] / "database" / "schema.sql"
-        schema = schema_path.read_text(encoding="utf-8").casefold()
+        schema = schema_path().read_text(encoding="utf-8").casefold()
 
         self.assertIn("create table if not exists front_page_category_items", schema)
         table = schema.split("create table if not exists front_page_category_items", 1)[1].split(");", 1)[0]
