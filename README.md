@@ -14,7 +14,7 @@ Admin application for reviewing dirty discovery data and curating Ludora's canon
 cd .\ludora-admin-service
 copy .env.example .env
 npm install
-npm run dev
+npm run dev:codex
 ```
 
 Set `LUDORA_DATABASE_URL` in `.env` before running database-backed routes.
@@ -50,7 +50,7 @@ AWS credentials are read through the AWS SDK standard environment/profile chain.
 cd .\ludora-admin-ui
 copy .env.example .env
 npm install
-npm run dev
+npm run dev:codex
 ```
 
 The UI expects the service at `VITE_ADMIN_API_URL`, defaulting to `http://localhost:4001`.
