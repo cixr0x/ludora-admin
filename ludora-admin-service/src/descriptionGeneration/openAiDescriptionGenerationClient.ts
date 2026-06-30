@@ -1,5 +1,4 @@
-import OpenAI from 'openai';
-
+import { createOpenAiResponsesClient, type OpenAiClientOptions } from '../ai/openAiResponsesClient.js';
 import {
   systemPromptForDescriptionGeneration,
   userPromptForDescriptionGeneration
@@ -9,19 +8,12 @@ import type {
   DescriptionGenerationClientResult
 } from './descriptionGenerationService.js';
 
-type OpenAiClientOptions = {
-  baseURL?: string;
-};
-
 export function createOpenAiDescriptionGenerationClient(apiKey: string, options: OpenAiClientOptions = {}): DescriptionGenerationClient {
-  const openai = new OpenAI({
-    apiKey,
-    ...(options.baseURL ? { baseURL: options.baseURL } : {})
-  });
+  const responses = createOpenAiResponsesClient(apiKey, options);
 
   return {
     async generate(request, context): Promise<DescriptionGenerationClientResult> {
-      const response = await openai.responses.create({
+      const response = await responses.create({
         model: context.model,
         input: [
           {

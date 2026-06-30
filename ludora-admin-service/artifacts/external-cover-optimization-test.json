@@ -1,0 +1,101 @@
+{
+  "applied": false,
+  "failures": [],
+  "generated_at": "2026-06-24T21:32:47.329Z",
+  "optimized_images": [
+    {
+      "applied": false,
+      "field": "image_url",
+      "item_id": 710,
+      "image_name": "pic4574571.jpg",
+      "new_name": "710-sushiroll.en.webp",
+      "new_size_bytes": 81510,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/710-sushiroll.en.webp",
+      "original_size_bytes": 429098,
+      "original_source": "https://cf.geekdo-images.com/fPyRT9GarW397PFE9Wz7GA__original/img/Hcso8Szmp58YYcyxab0mGog6Js8=/0x0/filters:format(jpeg)/pic4574571.jpg",
+      "s3_key": "boardgame/710-sushiroll.en.webp"
+    },
+    {
+      "applied": false,
+      "field": "image_url",
+      "item_id": 711,
+      "image_name": "pic8894992.jpg",
+      "new_name": "711-wyrmspan.en.webp",
+      "new_size_bytes": 85378,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/711-wyrmspan.en.webp",
+      "original_size_bytes": 257794,
+      "original_source": "https://cf.geekdo-images.com/cNc-FMsYo-mcRTGaXV2qcQ__original/img/K2Y7PB7XtZhou_WS2qgx8y7N_GE=/0x0/filters:format(jpeg)/pic8894992.jpg",
+      "s3_key": "boardgame/711-wyrmspan.en.webp"
+    },
+    {
+      "applied": false,
+      "field": "image_url",
+      "item_id": 712,
+      "image_name": "pic4458123.jpg",
+      "new_name": "712-wingspan.en.webp",
+      "new_size_bytes": 54846,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/712-wingspan.en.webp",
+      "original_size_bytes": 224632,
+      "original_source": "https://cf.geekdo-images.com/yLZJCVLlIx4c7eJEWUNJ7w__original/img/cI782Zis9cT66j2MjSHKJGnFPNw=/0x0/filters:format(jpeg)/pic4458123.jpg",
+      "s3_key": "boardgame/712-wingspan.en.webp"
+    },
+    {
+      "applied": false,
+      "field": "image_url",
+      "item_id": 713,
+      "image_name": "pic8634453.jpg",
+      "new_name": "713-finspan.en.webp",
+      "new_size_bytes": 98396,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/713-finspan.en.webp",
+      "original_size_bytes": 374667,
+      "original_source": "https://cf.geekdo-images.com/BBefMnVYBDS3EbJ9fPaC8A__original/img/E2VsUBa6HUU0QKlp4eQOsbP1wUo=/0x0/filters:format(jpeg)/pic8634453.jpg",
+      "s3_key": "boardgame/713-finspan.en.webp"
+    }
+  ],
+  "skipped": [
+    {
+      "field": "image_url",
+      "itemId": 708,
+      "reason": "within_limit",
+      "sizeBytes": 69897,
+      "sourceUrl": "https://cf.geekdo-images.com/2f9uTicUSXkdPp2Yks6zFw__original/img/WQcFmlhYBMIp8f6gNNVhnnue1w4=/0x0/filters:format(jpeg)/pic5885689.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 708,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 710,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 711,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 712,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 713,
+      "reason": "blank"
+    }
+  ],
+  "summary": {
+    "downloadedImages": 4,
+    "failedImages": 0,
+    "imageFields": 10,
+    "itemsScanned": 5,
+    "optimizedImages": 4,
+    "skippedBlank": 5,
+    "skippedManaged": 0,
+    "skippedWithinLimit": 1,
+    "updatedRows": 0,
+    "uploadedImages": 0
+  }
+}

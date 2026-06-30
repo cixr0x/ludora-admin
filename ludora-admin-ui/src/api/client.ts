@@ -77,6 +77,7 @@ export type StoreInput = {
   instagram_url?: string;
   logo_url?: string;
   name: string;
+  platform?: string;
   state?: string;
   status?: string;
   website_url: string;

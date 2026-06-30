@@ -30,6 +30,7 @@ type StoreFormState = {
   instagram_url: string;
   logo_url: string;
   name: string;
+  platform: string;
   state: string;
   status: string;
   website_url: string;
@@ -43,6 +44,7 @@ const emptyFormState: StoreFormState = {
   instagram_url: '',
   logo_url: '',
   name: '',
+  platform: '',
   state: '',
   status: 'active',
   website_url: ''
@@ -85,6 +87,7 @@ function formStateFromRecord(record: AdminRecord): StoreFormState {
     instagram_url: optionalValueFor(record, ['instagram_url']),
     logo_url: optionalValueFor(record, ['logo_url']),
     name: optionalValueFor(record, ['name']),
+    platform: optionalValueFor(record, ['platform']),
     state: optionalValueFor(record, ['state']),
     status: optionalValueFor(record, ['status']) || 'active',
     website_url: optionalValueFor(record, ['website_url'])
@@ -100,6 +103,7 @@ function inputFromForm(form: StoreFormState): StoreInput {
     instagram_url: form.instagram_url.trim(),
     logo_url: form.logo_url.trim(),
     name: form.name.trim(),
+    platform: form.platform.trim(),
     state: form.state.trim(),
     status: form.status.trim() || 'active',
     website_url: form.website_url.trim()
@@ -140,6 +144,14 @@ function storeColumns(): DataTableColumn<AdminRecord>[] {
         );
       },
       sortValue: (row) => valueFor(row, ['website_url'])
+    },
+    {
+      filterValue: (row) => valueFor(row, ['platform']),
+      id: 'platform',
+      label: 'Platform',
+      minWidth: 110,
+      render: (row) => valueFor(row, ['platform']),
+      sortValue: (row) => valueFor(row, ['platform'])
     },
     {
       filterValue: (row) => valueFor(row, ['instagram_url']),
@@ -392,6 +404,12 @@ export function StoresPage() {
                 />
                 <TextField
                   fullWidth
+                  label="Platform"
+                  value={formState.platform}
+                  onChange={(event) => handleFieldChange('platform', event.target.value)}
+                />
+                <TextField
+                  fullWidth
                   label="Instagram URL"
                   value={formState.instagram_url}
                   onChange={(event) => handleFieldChange('instagram_url', event.target.value)}
@@ -482,7 +500,7 @@ export function StoresPage() {
           columns={storeColumns()}
           defaultSortColumnId="canonical_domain"
           getRowKey={(row, index) => valueFor(row, ['id'], String(index))}
-          minWidth={1470}
+          minWidth={1580}
           onRowDoubleClick={handleEditStore}
           serverSide
           tableState={table.tableState}

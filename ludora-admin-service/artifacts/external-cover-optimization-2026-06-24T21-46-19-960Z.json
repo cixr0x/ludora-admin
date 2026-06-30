@@ -1,0 +1,1593 @@
+{
+  "applied": true,
+  "failures": [],
+  "generated_at": "2026-06-24T21:46:19.960Z",
+  "optimized_images": [
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 710,
+      "image_name": "pic4574571.jpg",
+      "new_name": "710-sushiroll.en.webp",
+      "new_size_bytes": 81510,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/710-sushiroll.en.webp",
+      "original_size_bytes": 429098,
+      "original_source": "https://cf.geekdo-images.com/fPyRT9GarW397PFE9Wz7GA__original/img/Hcso8Szmp58YYcyxab0mGog6Js8=/0x0/filters:format(jpeg)/pic4574571.jpg",
+      "s3_key": "boardgame/710-sushiroll.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 711,
+      "image_name": "pic8894992.jpg",
+      "new_name": "711-wyrmspan.en.webp",
+      "new_size_bytes": 85378,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/711-wyrmspan.en.webp",
+      "original_size_bytes": 257794,
+      "original_source": "https://cf.geekdo-images.com/cNc-FMsYo-mcRTGaXV2qcQ__original/img/K2Y7PB7XtZhou_WS2qgx8y7N_GE=/0x0/filters:format(jpeg)/pic8894992.jpg",
+      "s3_key": "boardgame/711-wyrmspan.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 712,
+      "image_name": "pic4458123.jpg",
+      "new_name": "712-wingspan.en.webp",
+      "new_size_bytes": 54846,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/712-wingspan.en.webp",
+      "original_size_bytes": 224632,
+      "original_source": "https://cf.geekdo-images.com/yLZJCVLlIx4c7eJEWUNJ7w__original/img/cI782Zis9cT66j2MjSHKJGnFPNw=/0x0/filters:format(jpeg)/pic4458123.jpg",
+      "s3_key": "boardgame/712-wingspan.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 713,
+      "image_name": "pic8634453.jpg",
+      "new_name": "713-finspan.en.webp",
+      "new_size_bytes": 98396,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/713-finspan.en.webp",
+      "original_size_bytes": 374667,
+      "original_source": "https://cf.geekdo-images.com/BBefMnVYBDS3EbJ9fPaC8A__original/img/E2VsUBa6HUU0QKlp4eQOsbP1wUo=/0x0/filters:format(jpeg)/pic8634453.jpg",
+      "s3_key": "boardgame/713-finspan.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 714,
+      "image_name": "pic7158377.jpg",
+      "new_name": "714-pequenosgrandescrimenes.en.webp",
+      "new_size_bytes": 81776,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/714-pequenosgrandescrimenes.en.webp",
+      "original_size_bytes": 453075,
+      "original_source": "https://cf.geekdo-images.com/xg70q74Hp0yd9gMFyWEong__original/img/cRYHGTUjwwN-ZuNXhZOtOG7saIE=/0x0/filters:format(jpeg)/pic7158377.jpg",
+      "s3_key": "boardgame/714-pequenosgrandescrimenes.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 716,
+      "image_name": "pic3118416.jpg",
+      "new_name": "716-notalone.en.webp",
+      "new_size_bytes": 88832,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/716-notalone.en.webp",
+      "original_size_bytes": 242096,
+      "original_source": "https://cf.geekdo-images.com/2nPAI9x1rOjj2fq30qRFvQ__original/img/Sc9SmhfC5cLiDdXeY9HOQphCKcQ=/0x0/filters:format(jpeg)/pic3118416.jpg",
+      "s3_key": "boardgame/716-notalone.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 717,
+      "image_name": "pic9594533.jpg",
+      "new_name": "717-notalone.en.webp",
+      "new_size_bytes": 55134,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/717-notalone.en.webp",
+      "original_size_bytes": 177607,
+      "original_source": "https://cf.geekdo-images.com/eDc5Dx2ID6eYPEQ0JfOF9w__original/img/rx-UZ5ijapjiZNBA_qQYUViFF9c=/0x0/filters:format(jpeg)/pic9594533.jpg",
+      "s3_key": "boardgame/717-notalone.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 718,
+      "image_name": "pic5253079.jpg",
+      "new_name": "718-abalone.en.webp",
+      "new_size_bytes": 21748,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/718-abalone.en.webp",
+      "original_size_bytes": 506113,
+      "original_source": "https://cf.geekdo-images.com/UzH1jAlqYUH9VEq2Wtvzjw__original/img/pURND_gEV9F5VLeUWLqYFP3UQAQ=/0x0/filters:format(jpeg)/pic5253079.jpg",
+      "s3_key": "boardgame/718-abalone.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 719,
+      "image_name": "pic4463258.jpg",
+      "new_name": "719-abalonejunior.en.webp",
+      "new_size_bytes": 67668,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/719-abalonejunior.en.webp",
+      "original_size_bytes": 670616,
+      "original_source": "https://cf.geekdo-images.com/mdH8Melk2-xwOIxO9km5_g__original/img/EdRGm8yHm-6kzxnq2gKdMYMQLL8=/0x0/filters:format(jpeg)/pic4463258.jpg",
+      "s3_key": "boardgame/719-abalonejunior.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 721,
+      "image_name": "pic1224503.jpg",
+      "new_name": "721-offboard.en.webp",
+      "new_size_bytes": 78712,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/721-offboard.en.webp",
+      "original_size_bytes": 236700,
+      "original_source": "https://cf.geekdo-images.com/XcRDoPPrlVlTSmqrtwYqrg__original/img/BF16cEA_u8eMvabsu3V7vrX2NeA=/0x0/filters:format(jpeg)/pic1224503.jpg",
+      "s3_key": "boardgame/721-offboard.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 724,
+      "image_name": "pic8007487.jpg",
+      "new_name": "724-regicidelegacy.en.webp",
+      "new_size_bytes": 34744,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/724-regicidelegacy.en.webp",
+      "original_size_bytes": 919516,
+      "original_source": "https://cf.geekdo-images.com/g2vsMxa3sLYNk_jKL7QmoQ__original/img/KCcUyUZnE8eaZjnEySoCbPE3YmU=/0x0/filters:format(jpeg)/pic8007487.jpg",
+      "s3_key": "boardgame/724-regicidelegacy.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 728,
+      "image_name": "pic6983608.jpg",
+      "new_name": "728-regroupchickenarmy.en.webp",
+      "new_size_bytes": 84102,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/728-regroupchickenarmy.en.webp",
+      "original_size_bytes": 851965,
+      "original_source": "https://cf.geekdo-images.com/kodOl_ef_-__fhAbjf_19g__original/img/m1Pz_00AsUf8HVRk9zSg09l1iQA=/0x0/filters:format(jpeg)/pic6983608.jpg",
+      "s3_key": "boardgame/728-regroupchickenarmy.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 729,
+      "image_name": "pic8790407.png",
+      "new_name": "729-regrouppandacrew.en.webp",
+      "new_size_bytes": 91426,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/729-regrouppandacrew.en.webp",
+      "original_size_bytes": 491273,
+      "original_source": "https://cf.geekdo-images.com/0onRLR_geFsJraefuUkIVg__original/img/ZUEez4gXVGMS2O4cjWYt7cLj0JU=/0x0/filters:format(png)/pic8790407.png",
+      "s3_key": "boardgame/729-regrouppandacrew.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 730,
+      "image_name": "pic8445137.png",
+      "new_name": "730-monkeypalace.en.webp",
+      "new_size_bytes": 86598,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/730-monkeypalace.en.webp",
+      "original_size_bytes": 1899789,
+      "original_source": "https://cf.geekdo-images.com/E0_jjeKtADvRnn0vSVGgeQ__original/img/47wS0eCENy1h2sD223YMs4aq0Vg=/0x0/filters:format(png)/pic8445137.png",
+      "s3_key": "boardgame/730-monkeypalace.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 731,
+      "image_name": "pic8378939.jpg",
+      "new_name": "731-elsenordelosanilloseldueloporlatierramedia.en.webp",
+      "new_size_bytes": 95560,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/731-elsenordelosanilloseldueloporlatierramedia.en.webp",
+      "original_size_bytes": 123492,
+      "original_source": "https://cf.geekdo-images.com/EybxJlUc9rz7F7HVFLqsdw__original/img/Ts4M5eOW38r2oTvJmkx0uwNodv4=/0x0/filters:format(jpeg)/pic8378939.jpg",
+      "s3_key": "boardgame/731-elsenordelosanilloseldueloporlatierramedia.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 733,
+      "image_name": "pic7149798.jpg",
+      "new_name": "733-7wonders.en.webp",
+      "new_size_bytes": 98524,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/733-7wonders.en.webp",
+      "original_size_bytes": 450933,
+      "original_source": "https://cf.geekdo-images.com/35h9Za_JvMMMtx_92kT0Jg__original/img/jt70jJDZ1y1FWJs4ZQf5FI8APVY=/0x0/filters:format(jpeg)/pic7149798.jpg",
+      "s3_key": "boardgame/733-7wonders.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 734,
+      "image_name": "pic7416519.jpg",
+      "new_name": "734-7wonderssecondedition.en.webp",
+      "new_size_bytes": 72034,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/734-7wonderssecondedition.en.webp",
+      "original_size_bytes": 1089373,
+      "original_source": "https://cf.geekdo-images.com/Naw8y8J_s-8cvq1GoTON6w__original/img/8wVEVzdf5BoPvSiscnGvCAPNe2Q=/0x0/filters:format(jpeg)/pic7416519.jpg",
+      "s3_key": "boardgame/734-7wonderssecondedition.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 735,
+      "image_name": "pic7416525.jpg",
+      "new_name": "735-7wondersarchitects.en.webp",
+      "new_size_bytes": 69106,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/735-7wondersarchitects.en.webp",
+      "original_size_bytes": 803717,
+      "original_source": "https://cf.geekdo-images.com/BGtYtHbLgYhYyNMoyOm1RA__original/img/05P7xaW8B4ueCvItryBjO5wVA5s=/0x0/filters:format(jpeg)/pic7416525.jpg",
+      "s3_key": "boardgame/735-7wondersarchitects.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 736,
+      "image_name": "pic8871909.jpg",
+      "new_name": "736-7wondersdice.en.webp",
+      "new_size_bytes": 101748,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/736-7wondersdice.en.webp",
+      "original_size_bytes": 313168,
+      "original_source": "https://cf.geekdo-images.com/FJtnBtuDIkRO95pGLSd5aA__original/img/phjoEbQy9HWmWWkH0ocU-Cquv9s=/0x0/filters:format(jpeg)/pic8871909.jpg",
+      "s3_key": "boardgame/736-7wondersdice.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 737,
+      "image_name": "pic5182751.png",
+      "new_name": "737-dodosridingdinos.en.webp",
+      "new_size_bytes": 89026,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/737-dodosridingdinos.en.webp",
+      "original_size_bytes": 3411166,
+      "original_source": "https://cf.geekdo-images.com/qqpMTyv4vy-q7qYpl0NLFA__original/img/zOuoaKc0Q3Zc8m1gJLxGJlqvrXI=/0x0/filters:format(png)/pic5182751.png",
+      "s3_key": "boardgame/737-dodosridingdinos.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 738,
+      "image_name": "pic8197350.jpg",
+      "new_name": "738-dodosridingdinosfirstrace.en.webp",
+      "new_size_bytes": 99138,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/738-dodosridingdinosfirstrace.en.webp",
+      "original_size_bytes": 776491,
+      "original_source": "https://cf.geekdo-images.com/q9sQeO1_s64Nx-BgeWmG_g__original/img/l9AwqTsITvziQK5DAMBn5tyFfX4=/0x0/filters:format(jpeg)/pic8197350.jpg",
+      "s3_key": "boardgame/738-dodosridingdinosfirstrace.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 739,
+      "image_name": "pic7388959.jpg",
+      "new_name": "739-timelinetwist.en.webp",
+      "new_size_bytes": 71168,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/739-timelinetwist.en.webp",
+      "original_size_bytes": 280409,
+      "original_source": "https://cf.geekdo-images.com/Sfr_DlsgJQxQl1NFPCbYjg__original/img/x0olzCgsTBsCKEj3gZU0_FuDtuE=/0x0/filters:format(jpeg)/pic7388959.jpg",
+      "s3_key": "boardgame/739-timelinetwist.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 740,
+      "image_name": "pic9273469.jpg",
+      "new_name": "740-timeline.en.webp",
+      "new_size_bytes": 76064,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/740-timeline.en.webp",
+      "original_size_bytes": 330091,
+      "original_source": "https://cf.geekdo-images.com/T8QVWsAG7GwZxsBIxElTTg__original/img/fFazGVKZgil0lY0Qy75a04hO3DY=/0x0/filters:format(jpeg)/pic9273469.jpg",
+      "s3_key": "boardgame/740-timeline.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 741,
+      "image_name": "pic7547396.png",
+      "new_name": "741-legotimeline.en.webp",
+      "new_size_bytes": 42546,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/741-legotimeline.en.webp",
+      "original_size_bytes": 199937,
+      "original_source": "https://cf.geekdo-images.com/mLGnSVDihG0yAsnUfu3Asg__original/img/0RmuPdeVKpVBlhsmxdgm_8Dmph0=/0x0/filters:format(png)/pic7547396.png",
+      "s3_key": "boardgame/741-legotimeline.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 742,
+      "image_name": "pic7926816.jpg",
+      "new_name": "742-starwarstimelinetwist.en.webp",
+      "new_size_bytes": 65464,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/742-starwarstimelinetwist.en.webp",
+      "original_size_bytes": 151362,
+      "original_source": "https://cf.geekdo-images.com/-Or7VMSlC6235YNq8zV4Yg__original/img/NXVTs81QQ2GOuyvVtMLBauPhbl4=/0x0/filters:format(jpeg)/pic7926816.jpg",
+      "s3_key": "boardgame/742-starwarstimelinetwist.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 744,
+      "image_name": "pic7630976.png",
+      "new_name": "744-explodingkittenscatburglaredition.en.webp",
+      "new_size_bytes": 48246,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/744-explodingkittenscatburglaredition.en.webp",
+      "original_size_bytes": 412819,
+      "original_source": "https://cf.geekdo-images.com/x1mf3zxuHbtIzhvvsCujuQ__original/img/AvGj7t3S27eJAvmx4COlv9veDOc=/0x0/filters:format(png)/pic7630976.png",
+      "s3_key": "boardgame/744-explodingkittenscatburglaredition.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 745,
+      "image_name": "pic8615581.jpg",
+      "new_name": "745-explodingkittensduels.en.webp",
+      "new_size_bytes": 48416,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/745-explodingkittensduels.en.webp",
+      "original_size_bytes": 314051,
+      "original_source": "https://cf.geekdo-images.com/tw_D2ZRlucdAdJiGtrPrUw__original/img/6dMLMiqvzl3K7iK4rN8Pt2SzDp4=/0x0/filters:format(jpeg)/pic8615581.jpg",
+      "s3_key": "boardgame/745-explodingkittensduels.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 746,
+      "image_name": "pic7633899.png",
+      "new_name": "746-explodingkittenselbiencontraelmal.en.webp",
+      "new_size_bytes": 50084,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/746-explodingkittenselbiencontraelmal.en.webp",
+      "original_size_bytes": 146192,
+      "original_source": "https://cf.geekdo-images.com/VwOSk5hqgFJLDPPbX0lqDQ__original/img/hRuMCnc1ltpFnqQwW1mdU1tNzM8=/0x0/filters:format(png)/pic7633899.png",
+      "s3_key": "boardgame/746-explodingkittenselbiencontraelmal.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 747,
+      "image_name": "pic8699480.jpg",
+      "new_name": "747-explodingkittensgrabandgame.en.webp",
+      "new_size_bytes": 59026,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/747-explodingkittensgrabandgame.en.webp",
+      "original_size_bytes": 567385,
+      "original_source": "https://cf.geekdo-images.com/GMQDAp1dsbWJjJ1I1Lea2w__original/img/NkHTFpFSDRk-7O00SiZA5Ea4OlQ=/0x0/filters:format(jpeg)/pic8699480.jpg",
+      "s3_key": "boardgame/747-explodingkittensgrabandgame.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 748,
+      "image_name": "pic7583400.jpg",
+      "new_name": "748-explodingkittensnewbieedition.en.webp",
+      "new_size_bytes": 68142,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/748-explodingkittensnewbieedition.en.webp",
+      "original_size_bytes": 986207,
+      "original_source": "https://cf.geekdo-images.com/BAJPie6KN5cg6cbotqIJ0g__original/img/9m2G19IYzex-OREMqvyRlUoWO58=/0x0/filters:format(jpeg)/pic7583400.jpg",
+      "s3_key": "boardgame/748-explodingkittensnewbieedition.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 749,
+      "image_name": "pic5940391.png",
+      "new_name": "749-explodingkittenspartypack.en.webp",
+      "new_size_bytes": 48196,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/749-explodingkittenspartypack.en.webp",
+      "original_size_bytes": 162463,
+      "original_source": "https://cf.geekdo-images.com/TTsbFSWQjf6ALCmct9Q02g__original/img/X5tRRwzB7DK-hkna5VocAS6Kx0w=/0x0/filters:format(png)/pic5940391.png",
+      "s3_key": "boardgame/749-explodingkittenspartypack.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 750,
+      "image_name": "pic6305890.jpg",
+      "new_name": "750-explodingkittensrecetasdeldesastre.en.webp",
+      "new_size_bytes": 37366,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/750-explodingkittensrecetasdeldesastre.en.webp",
+      "original_size_bytes": 1134787,
+      "original_source": "https://cf.geekdo-images.com/gbw-3lRou0Xa3hXhGmxLyw__original/img/WoPpM4Wc9MK-wgC8kNyMV-RrESg=/0x0/filters:format(jpeg)/pic6305890.jpg",
+      "s3_key": "boardgame/750-explodingkittensrecetasdeldesastre.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 751,
+      "image_name": "pic6702309.png",
+      "new_name": "751-explodingminions.en.webp",
+      "new_size_bytes": 47650,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/751-explodingminions.en.webp",
+      "original_size_bytes": 949011,
+      "original_source": "https://cf.geekdo-images.com/mQnQJ_AcabdhDz7zNHPGWQ__original/img/f6-1SKXoGJufMmX1QZ-jKlumDoM=/0x0/filters:format(png)/pic6702309.png",
+      "s3_key": "boardgame/751-explodingminions.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 752,
+      "image_name": "pic7959893.png",
+      "new_name": "752-powerhungrypets.en.webp",
+      "new_size_bytes": 75672,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/752-powerhungrypets.en.webp",
+      "original_size_bytes": 1489857,
+      "original_source": "https://cf.geekdo-images.com/L3Ag19WXRFKjKmRSCMI9UQ__original/img/kwbHLZQFzMcHuzZ-dsCYuDwxXdo=/0x0/filters:format(png)/pic7959893.png",
+      "s3_key": "boardgame/752-powerhungrypets.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 753,
+      "image_name": "pic1401448.jpg",
+      "new_name": "753-loveletter.en.webp",
+      "new_size_bytes": 99944,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/753-loveletter.en.webp",
+      "original_size_bytes": 502076,
+      "original_source": "https://cf.geekdo-images.com/T1ltXwapFUtghS9A7_tf4g__original/img/xIAzJY7rl-mtPStRZSqnTVsAr8Y=/0x0/filters:format(jpeg)/pic1401448.jpg",
+      "s3_key": "boardgame/753-loveletter.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 756,
+      "image_name": "pic3031296.jpg",
+      "new_name": "756-harapalbcontinuaunjocloveletter.en.webp",
+      "new_size_bytes": 59496,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/756-harapalbcontinuaunjocloveletter.en.webp",
+      "original_size_bytes": 139845,
+      "original_source": "https://cf.geekdo-images.com/zRdN1Ipi-ZL3tudc_LuC-A__original/img/mUoU4E9WLgYCd_8pXO9ZIBbc_Ms=/0x0/filters:format(jpeg)/pic3031296.jpg",
+      "s3_key": "boardgame/756-harapalbcontinuaunjocloveletter.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 757,
+      "image_name": "pic5509189.png",
+      "new_name": "757-infinitygauntletalovelettergame.en.webp",
+      "new_size_bytes": 94624,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/757-infinitygauntletalovelettergame.en.webp",
+      "original_size_bytes": 286538,
+      "original_source": "https://cf.geekdo-images.com/z0VOKlGc9AcsXj_ywL6Alw__original/img/GpfxJ-7qUM-LSbzYD141infQkfs=/0x0/filters:format(png)/pic5509189.png",
+      "s3_key": "boardgame/757-infinitygauntletalovelettergame.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 758,
+      "image_name": "pic1998163.jpg",
+      "new_name": "758-lostlegacyflyinggarden.en.webp",
+      "new_size_bytes": 74818,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/758-lostlegacyflyinggarden.en.webp",
+      "original_size_bytes": 228877,
+      "original_source": "https://cf.geekdo-images.com/1Zm4GQ769FTRGyCS9RkLzA__original/img/xbYX7KZvXxG7qPtYuLop4Wfrfa8=/0x0/filters:format(jpeg)/pic1998163.jpg",
+      "s3_key": "boardgame/758-lostlegacyflyinggarden.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 759,
+      "image_name": "pic1998162.jpg",
+      "new_name": "759-lostlegacythestarship.en.webp",
+      "new_size_bytes": 65018,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/759-lostlegacythestarship.en.webp",
+      "original_size_bytes": 191800,
+      "original_source": "https://cf.geekdo-images.com/aOB_o5UdsJorNJXl-cSP8w__original/img/x2vwRidRBfSKXHtK41U0L8zeG4k=/0x0/filters:format(jpeg)/pic1998162.jpg",
+      "s3_key": "boardgame/759-lostlegacythestarship.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 760,
+      "image_name": "pic4766499.png",
+      "new_name": "760-loveletter.en.webp",
+      "new_size_bytes": 64722,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/760-loveletter.en.webp",
+      "original_size_bytes": 955134,
+      "original_source": "https://cf.geekdo-images.com/V7WQjhAh0AatPXTYOrXtCQ__original/img/peOFPtAkzWUSpOSVTJu3pTDv2ck=/0x0/filters:format(png)/pic4766499.png",
+      "s3_key": "boardgame/760-loveletter.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 762,
+      "image_name": "pic6583306.jpg",
+      "new_name": "762-starwarsjabbaspalacealovelettergame.en.webp",
+      "new_size_bytes": 71400,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/762-starwarsjabbaspalacealovelettergame.en.webp",
+      "original_size_bytes": 130835,
+      "original_source": "https://cf.geekdo-images.com/J8wVWdlnRJfZbHYpF4GLLQ__original/img/CfCmdvcJHtE54vrmzMujr-8ovjg=/0x0/filters:format(jpeg)/pic6583306.jpg",
+      "s3_key": "boardgame/762-starwarsjabbaspalacealovelettergame.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 763,
+      "image_name": "pic7008267.jpg",
+      "new_name": "763-loveletter2ndedition.en.webp",
+      "new_size_bytes": 68798,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/763-loveletter2ndedition.en.webp",
+      "original_size_bytes": 851108,
+      "original_source": "https://cf.geekdo-images.com/-iRoU57HCuJWoar8ZzgmFw__original/img/yXFLSliM_ivgIsLztpl2J50cOuY=/0x0/filters:format(jpeg)/pic7008267.jpg",
+      "s3_key": "boardgame/763-loveletter2ndedition.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 764,
+      "image_name": "pic8842089.png",
+      "new_name": "764-loveletterstories.en.webp",
+      "new_size_bytes": 59002,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/764-loveletterstories.en.webp",
+      "original_size_bytes": 193064,
+      "original_source": "https://cf.geekdo-images.com/d7EbVHtyirU5prEl2PvxaA__original/img/QLe3Nkm1TDuhbb44A_ji5uwWUVU=/0x0/filters:format(png)/pic8842089.png",
+      "s3_key": "boardgame/764-loveletterstories.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 768,
+      "image_name": "pic6314061.png",
+      "new_name": "768-loveletterprincessprincesseverafter.en.webp",
+      "new_size_bytes": 77592,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/768-loveletterprincessprincesseverafter.en.webp",
+      "original_size_bytes": 297517,
+      "original_source": "https://cf.geekdo-images.com/plh_c0BkmJc3tU5k4rV_Xw__original/img/3iVnbyzrxM7y0PAzJuWQ1Bmpq1A=/0x0/filters:format(png)/pic6314061.png",
+      "s3_key": "boardgame/768-loveletterprincessprincesseverafter.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 770,
+      "image_name": "pic3485528.png",
+      "new_name": "770-lovecraftletter.en.webp",
+      "new_size_bytes": 95532,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/770-lovecraftletter.en.webp",
+      "original_size_bytes": 3093581,
+      "original_source": "https://cf.geekdo-images.com/iRDSJ4wnIjbcZnYYmxrS7w__original/img/bSIutW2D3GSfc8vFkkio4NW2pEw=/0x0/filters:format(png)/pic3485528.png",
+      "s3_key": "boardgame/770-lovecraftletter.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 771,
+      "image_name": "pic8544768.png",
+      "new_name": "771-arkhamhorrorlovecraftletter.en.webp",
+      "new_size_bytes": 78658,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/771-arkhamhorrorlovecraftletter.en.webp",
+      "original_size_bytes": 1031559,
+      "original_source": "https://cf.geekdo-images.com/hLfQAtkN8m06_L3xAtqXEQ__original/img/EdWsCpTM0VqDLQuSTsTuGjGUuKY=/0x0/filters:format(png)/pic8544768.png",
+      "s3_key": "boardgame/771-arkhamhorrorlovecraftletter.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 772,
+      "image_name": "pic5062982.png",
+      "new_name": "772-laspruebasmagicasdelatelierofwitchhat.en.webp",
+      "new_size_bytes": 95752,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/772-laspruebasmagicasdelatelierofwitchhat.en.webp",
+      "original_size_bytes": 169963,
+      "original_source": "https://cf.geekdo-images.com/1qXUDDRil1fcvdenpdWAMw__original/img/jB2Utp2qEBvRQIcFmlus9XF2_00=/0x0/filters:format(png)/pic5062982.png",
+      "s3_key": "boardgame/772-laspruebasmagicasdelatelierofwitchhat.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 773,
+      "image_name": "pic2263739.jpg",
+      "new_name": "773-secretmoon.en.webp",
+      "new_size_bytes": 60626,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/773-secretmoon.en.webp",
+      "original_size_bytes": 471425,
+      "original_source": "https://cf.geekdo-images.com/xMb_KckvwXHnyNSjzijO_A__original/img/A9fDKvB8y6Rykjt9mmZ4QWjFDyk=/0x0/filters:format(jpeg)/pic2263739.jpg",
+      "s3_key": "boardgame/773-secretmoon.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 774,
+      "image_name": "pic8822732.png",
+      "new_name": "774-stitchthefixfor626.en.webp",
+      "new_size_bytes": 90930,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/774-stitchthefixfor626.en.webp",
+      "original_size_bytes": 1266559,
+      "original_source": "https://cf.geekdo-images.com/C3Z-e9ZZKOpU9P5CWZWVLQ__original/img/c9vr88mocudd-dLZnZ2_FCFcXec=/0x0/filters:format(png)/pic8822732.png",
+      "s3_key": "boardgame/774-stitchthefixfor626.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 775,
+      "image_name": "pic6617084.jpg",
+      "new_name": "775-touhoubomblettertodokedanmaku.en.webp",
+      "new_size_bytes": 87016,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/775-touhoubomblettertodokedanmaku.en.webp",
+      "original_size_bytes": 549949,
+      "original_source": "https://cf.geekdo-images.com/rCF1AUGHrwDLWf8l6mASWw__original/img/PUgUb6MFtvgPvK1FaQplYV4fXTU=/0x0/filters:format(jpeg)/pic6617084.jpg",
+      "s3_key": "boardgame/775-touhoubomblettertodokedanmaku.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 778,
+      "image_name": "pic6392771.jpg",
+      "new_name": "778-maltrago.en.webp",
+      "new_size_bytes": 88454,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/778-maltrago.en.webp",
+      "original_size_bytes": 274920,
+      "original_source": "https://cf.geekdo-images.com/smmJxPUCOXPSWfZI3cxNMA__original/img/ZUm-S8p3AX6ndATHvjB2tvrFcVs=/0x0/filters:format(jpeg)/pic6392771.jpg",
+      "s3_key": "boardgame/778-maltrago.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 781,
+      "image_name": "pic8249526.jpg",
+      "new_name": "781-witchdom.en.webp",
+      "new_size_bytes": 88706,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/781-witchdom.en.webp",
+      "original_size_bytes": 188875,
+      "original_source": "https://cf.geekdo-images.com/8jJ06e_kKaHiUrWP2NUzcQ__original/img/W7oMzcnfJdwGSci88e73OAB7f4I=/0x0/filters:format(jpeg)/pic8249526.jpg",
+      "s3_key": "boardgame/781-witchdom.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 783,
+      "image_name": "pic7642174.jpg",
+      "new_name": "783-herdmentalitymoosicandmoovies.en.webp",
+      "new_size_bytes": 86128,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/783-herdmentalitymoosicandmoovies.en.webp",
+      "original_size_bytes": 128301,
+      "original_source": "https://cf.geekdo-images.com/xaYmtVYp1bm_pYtOK_bCAQ__original/img/E8jKEkAl-Pa9sSro_rGyRC_S7hw=/0x0/filters:format(jpeg)/pic7642174.jpg",
+      "s3_key": "boardgame/783-herdmentalitymoosicandmoovies.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 785,
+      "image_name": "pic9299636.jpg",
+      "new_name": "785-santacookieelfcandysnowman.en.webp",
+      "new_size_bytes": 92472,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/785-santacookieelfcandysnowman.en.webp",
+      "original_size_bytes": 369529,
+      "original_source": "https://cf.geekdo-images.com/c479S1mf_4Rk2tnKi1roSQ__original/img/RmV0fEGcaqMS8Eu0VL4nWMij0uc=/0x0/filters:format(jpeg)/pic9299636.jpg",
+      "s3_key": "boardgame/785-santacookieelfcandysnowman.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 789,
+      "image_name": "pic6609478.jpg",
+      "new_name": "789-tacocatgoatcheesepizzahalloweenspecialedition.en.webp",
+      "new_size_bytes": 66684,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/789-tacocatgoatcheesepizzahalloweenspecialedition.en.webp",
+      "original_size_bytes": 102560,
+      "original_source": "https://cf.geekdo-images.com/G0cclUfspRINowEtCWY5DQ__original/img/kd_2edJOt4kdCxseCv8dhM0HNpM=/0x0/filters:format(jpeg)/pic6609478.jpg",
+      "s3_key": "boardgame/789-tacocatgoatcheesepizzahalloweenspecialedition.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 792,
+      "image_name": "pic7600274.jpg",
+      "new_name": "792-tacokittenpizza.en.webp",
+      "new_size_bytes": 34242,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/792-tacokittenpizza.en.webp",
+      "original_size_bytes": 118870,
+      "original_source": "https://cf.geekdo-images.com/5Incaw4eylaaKsZVFOPlgg__original/img/FO7b_Q2BKnmukQsiB8eNJXHgNgw=/0x0/filters:format(jpeg)/pic7600274.jpg",
+      "s3_key": "boardgame/792-tacokittenpizza.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 793,
+      "image_name": "pic9079255.png",
+      "new_name": "793-tacoplushgoatcheesepizza.en.webp",
+      "new_size_bytes": 66786,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/793-tacoplushgoatcheesepizza.en.webp",
+      "original_size_bytes": 1914609,
+      "original_source": "https://cf.geekdo-images.com/ghOprnbSpQlPFDF1P-Id8g__original/img/5qBo29EnNTpHYDrNMZeuP3fDZ-k=/0x0/filters:format(png)/pic9079255.png",
+      "s3_key": "boardgame/793-tacoplushgoatcheesepizza.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 794,
+      "image_name": "pic7736173.png",
+      "new_name": "794-tacopuckmaplesyrupcanoe.en.webp",
+      "new_size_bytes": 42998,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/794-tacopuckmaplesyrupcanoe.en.webp",
+      "original_size_bytes": 151809,
+      "original_source": "https://cf.geekdo-images.com/twD7RsrPPDNVZyAEHdCZLw__original/img/gshlQMwkbQZ8xo5A7gJ2ql_eF8w=/0x0/filters:format(png)/pic7736173.png",
+      "s3_key": "boardgame/794-tacopuckmaplesyrupcanoe.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 797,
+      "image_name": "pic4496538.jpg",
+      "new_name": "797-6nimmt25jahre.en.webp",
+      "new_size_bytes": 93628,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/797-6nimmt25jahre.en.webp",
+      "original_size_bytes": 288427,
+      "original_source": "https://cf.geekdo-images.com/DFeZsC973xdZ1CKUzmjAUw__original/img/Tq8bVKV-ihLPfFPpf8FjfTpXiZk=/0x0/filters:format(jpeg)/pic4496538.jpg",
+      "s3_key": "boardgame/797-6nimmt25jahre.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 798,
+      "image_name": "pic8548496.jpg",
+      "new_name": "798-6nimmtbaronoxx.en.webp",
+      "new_size_bytes": 68766,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/798-6nimmtbaronoxx.en.webp",
+      "original_size_bytes": 210474,
+      "original_source": "https://cf.geekdo-images.com/J7rsZnOYY1Bzc11UjdZSNg__original/img/hCSpwzNjpBoXQ3z4McCvy9OV53M=/0x0/filters:format(jpeg)/pic8548496.jpg",
+      "s3_key": "boardgame/798-6nimmtbaronoxx.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 800,
+      "image_name": "pic7679268.jpg",
+      "new_name": "800-danceofibexes.en.webp",
+      "new_size_bytes": 51368,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/800-danceofibexes.en.webp",
+      "original_size_bytes": 246079,
+      "original_source": "https://cf.geekdo-images.com/clb-nd3z9_8ns7nmvi9KpQ__original/img/EDpFTuv8O5BXw6exxbBEY2Q-jjw=/0x0/filters:format(jpeg)/pic7679268.jpg",
+      "s3_key": "boardgame/800-danceofibexes.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 801,
+      "image_name": "pic452291.jpg",
+      "new_name": "801-6nimmtjunior.en.webp",
+      "new_size_bytes": 100496,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/801-6nimmtjunior.en.webp",
+      "original_size_bytes": 191125,
+      "original_source": "https://cf.geekdo-images.com/OW9X1SONZkhS_WeHGPQcvg__original/img/X-CD3s10nELFtxVreQmklXdyI48=/0x0/filters:format(jpeg)/pic452291.jpg",
+      "s3_key": "boardgame/801-6nimmtjunior.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 802,
+      "image_name": "pic256707.jpg",
+      "new_name": "802-slide5.en.webp",
+      "new_size_bytes": 84478,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/802-slide5.en.webp",
+      "original_size_bytes": 220355,
+      "original_source": "https://cf.geekdo-images.com/PJ_VsH4tMZjWJDt4vpL_4A__original/img/pxvAFqD_NYwB5zgkAmJpQY_RAzc=/0x0/filters:format(jpeg)/pic256707.jpg",
+      "s3_key": "boardgame/802-slide5.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 805,
+      "image_name": "pic3126004.jpg",
+      "new_name": "805-xnimmt.en.webp",
+      "new_size_bytes": 71392,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/805-xnimmt.en.webp",
+      "original_size_bytes": 218733,
+      "original_source": "https://cf.geekdo-images.com/uSz1S0vlBzK9hsgC5WLKxw__original/img/2IV5gkZF8Y7qjn7Kwsx7o4DAGRQ=/0x0/filters:format(jpeg)/pic3126004.jpg",
+      "s3_key": "boardgame/805-xnimmt.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 806,
+      "image_name": "pic5759223.jpg",
+      "new_name": "806-starwarsescapegame.en.webp",
+      "new_size_bytes": 96854,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/806-starwarsescapegame.en.webp",
+      "original_size_bytes": 998282,
+      "original_source": "https://cf.geekdo-images.com/KTa-65f1B6P4OoFg7B5qzg__original/img/u2aLHmnn49c2NxmO04MGmwnBVUM=/0x0/filters:format(jpeg)/pic5759223.jpg",
+      "s3_key": "boardgame/806-starwarsescapegame.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 807,
+      "image_name": "pic8403253.png",
+      "new_name": "807-catfe.en.webp",
+      "new_size_bytes": 64326,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/807-catfe.en.webp",
+      "original_size_bytes": 367334,
+      "original_source": "https://cf.geekdo-images.com/ztd4EjgMlGdMYxQ1z1mkAQ__original/img/xagHVOve4oRQKmH9H8H1w3GphH8=/0x0/filters:format(png)/pic8403253.png",
+      "s3_key": "boardgame/807-catfe.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 808,
+      "image_name": "pic8647210.jpg",
+      "new_name": "808-heatvisiondetunel.en.webp",
+      "new_size_bytes": 99996,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/808-heatvisiondetunel.en.webp",
+      "original_size_bytes": 192488,
+      "original_source": "https://cf.geekdo-images.com/ez01nzXEqZgLn0lx714eqA__original/img/T5g0_z266YqhJzy2RKn61G4cqqU=/0x0/filters:format(jpeg)/pic8647210.jpg",
+      "s3_key": "boardgame/808-heatvisiondetunel.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 809,
+      "image_name": "pic6940449.png",
+      "new_name": "809-heatpedaltothemetal.en.webp",
+      "new_size_bytes": 100326,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/809-heatpedaltothemetal.en.webp",
+      "original_size_bytes": 1212790,
+      "original_source": "https://cf.geekdo-images.com/-vOrd4bOspibyohYExLqWg__original/img/iXU8a9WaVlwrkiEiOxWN06y9y5g=/0x0/filters:format(png)/pic6940449.png",
+      "s3_key": "boardgame/809-heatpedaltothemetal.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 810,
+      "image_name": "pic8489936.jpg",
+      "new_name": "810-fantasmablitzmini.en.webp",
+      "new_size_bytes": 98782,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/810-fantasmablitzmini.en.webp",
+      "original_size_bytes": 250331,
+      "original_source": "https://cf.geekdo-images.com/ur7Biqrakm-IrWUh3MkJYA__original/img/DQPJIuCQrcYSjeUOcQxGeUQzyUs=/0x0/filters:format(jpeg)/pic8489936.jpg",
+      "s3_key": "boardgame/810-fantasmablitzmini.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 811,
+      "image_name": "pic2034769.jpg",
+      "new_name": "811-fantasmablitz.en.webp",
+      "new_size_bytes": 74398,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/811-fantasmablitz.en.webp",
+      "original_size_bytes": 532450,
+      "original_source": "https://cf.geekdo-images.com/tvZTjFnPvt2LrY6NGSbeuQ__original/img/iYrL_UZ6fhDNi8GdEjdq29yDguw=/0x0/filters:format(jpeg)/pic2034769.jpg",
+      "s3_key": "boardgame/811-fantasmablitz.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 812,
+      "image_name": "pic5955664.jpg",
+      "new_name": "812-geistesblitzwurfelblitz.en.webp",
+      "new_size_bytes": 88478,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/812-geistesblitzwurfelblitz.en.webp",
+      "original_size_bytes": 381910,
+      "original_source": "https://cf.geekdo-images.com/fmDbfV5dIn7RAsUOkDpOaw__original/img/vZRZI9YFLgnUFbVDg3a6_-yBPwo=/0x0/filters:format(jpeg)/pic5955664.jpg",
+      "s3_key": "boardgame/812-geistesblitzwurfelblitz.en.webp"
+    },
+    {
+      "applied": true,
+      "field": "image_url",
+      "item_id": 813,
+      "image_name": "pic4310138.jpg",
+      "new_name": "813-geistesblitzgratisdemospiel.en.webp",
+      "new_size_bytes": 39752,
+      "new_source": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/813-geistesblitzgratisdemospiel.en.webp",
+      "original_size_bytes": 210445,
+      "original_source": "https://cf.geekdo-images.com/7gxlCoziwOY_6ii4cTDLCA__original/img/xVOBq7Rg3NPA4xFkyGO5l_G0D9s=/0x0/filters:format(jpeg)/pic4310138.jpg",
+      "s3_key": "boardgame/813-geistesblitzgratisdemospiel.en.webp"
+    }
+  ],
+  "skipped": [
+    {
+      "field": "image_url",
+      "itemId": 708,
+      "reason": "within_limit",
+      "sizeBytes": 69897,
+      "sourceUrl": "https://cf.geekdo-images.com/2f9uTicUSXkdPp2Yks6zFw__original/img/WQcFmlhYBMIp8f6gNNVhnnue1w4=/0x0/filters:format(jpeg)/pic5885689.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 708,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 710,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 711,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 712,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 713,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 714,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/pequenosgrandescrimenes.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 716,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 717,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 718,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 719,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 720,
+      "reason": "within_limit",
+      "sizeBytes": 62973,
+      "sourceUrl": "https://cf.geekdo-images.com/_CPIv67GL5io-1543d_S-w__original/img/C0B3XFEQYf1Tqu47QMo8xPsGvns=/0x0/filters:format(jpeg)/pic2867374.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 720,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 721,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 722,
+      "reason": "within_limit",
+      "sizeBytes": 52332,
+      "sourceUrl": "https://cf.geekdo-images.com/1YU-52NTwvnyna1PY3F64w__original/img/i9zUX0eig6GgeOMzWH8zhlb2lYA=/0x0/filters:format(jpeg)/pic107581.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 722,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 723,
+      "reason": "within_limit",
+      "sizeBytes": 86621,
+      "sourceUrl": "https://cf.geekdo-images.com/C9U2E51tkzLljewFEGQ74g__original/img/Q-a5lAydzhwNLLhy8n326tlxuYE=/0x0/filters:format(jpeg)/pic5837347.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 723,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 724,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 725,
+      "reason": "within_limit",
+      "sizeBytes": 49110,
+      "sourceUrl": "https://cf.geekdo-images.com/R4er4w-fkVE3_3KWG5a_Dg__original/img/I1eM939Z480MV1k9Jcu4qVFWf2c=/0x0/filters:format(png)/pic9477154.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 725,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 726,
+      "reason": "within_limit",
+      "sizeBytes": 8662,
+      "sourceUrl": "https://cf.geekdo-images.com/1HkZdc5OaeBpv7rTHNLzCg__original/img/mih_l_gdMG6Evyb55wWfSlc_djw=/0x0/filters:format(png)/pic6489791.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 726,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 728,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 729,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 730,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 731,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/elsenordelosanilloseldueloporlatierramedia.es.webp"
+    },
+    {
+      "field": "image_url",
+      "itemId": 732,
+      "reason": "within_limit",
+      "sizeBytes": 98218,
+      "sourceUrl": "https://cf.geekdo-images.com/zdagMskTF7wJBPjX74XsRw__original/img/Ju836WNSaW7Mab9Vjq2TJ_FqhWQ=/0x0/filters:format(jpeg)/pic2576399.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 732,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 733,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 734,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 735,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 736,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 737,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 738,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 739,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 740,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 741,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 742,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 743,
+      "reason": "within_limit",
+      "sizeBytes": 42421,
+      "sourceUrl": "https://cf.geekdo-images.com/N8bL53-pRU7zaXDTrEaYrw__original/img/0ciN1VZYifUd0qIDO0e8cGXmiss=/0x0/filters:format(png)/pic2691976.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 743,
+      "reason": "within_limit",
+      "sizeBytes": 73123,
+      "sourceUrl": "https://cf.geekdo-images.com/CICXgYXpZjVjDp1ZjktQXw__imagepage/img/lqu85gWJoK5aWn_TaZhpMVOt2Vg=/fit-in/900x600/filters:no_upscale():strip_icc()/pic8563118.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 744,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 745,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 746,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/explodingkittenselbiencontraelmal.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 747,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 748,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 749,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 750,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/explodingkittensrecipesfordisaster.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 751,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 752,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 753,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 754,
+      "reason": "within_limit",
+      "sizeBytes": 44159,
+      "sourceUrl": "https://cf.geekdo-images.com/ANjCdBN2NE5dSZA2HTI29g__original/img/uLhwVA-9bOloKELRW5s7hqQGLJU=/0x0/filters:format(jpeg)/pic2986375.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 754,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 755,
+      "reason": "within_limit",
+      "sizeBytes": 42535,
+      "sourceUrl": "https://cf.geekdo-images.com/2FwRBgONaQS826jAM8MoFQ__original/img/nA_MRgH2v8_Hj2mzIRNl3E452RU=/0x0/filters:format(jpeg)/pic7668128.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 755,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 756,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 757,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 758,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 759,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 760,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 761,
+      "reason": "within_limit",
+      "sizeBytes": 53524,
+      "sourceUrl": "https://cf.geekdo-images.com/R_TQ9j-mH91UZhZULgUysw__original/img/N7dIbZiaLGiwG3fVAa9PcPUJVDI=/0x0/filters:format(jpeg)/pic8028555.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 761,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 762,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 763,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 764,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 765,
+      "reason": "within_limit",
+      "sizeBytes": 64134,
+      "sourceUrl": "https://cf.geekdo-images.com/klYGMliTYyE56nwjfQFSyA__original/img/LqOfFaAMu_UJ8t_6fWDtNQmYO40=/0x0/filters:format(jpeg)/pic2491956.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 765,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 766,
+      "reason": "within_limit",
+      "sizeBytes": 84116,
+      "sourceUrl": "https://cf.geekdo-images.com/PWa3bk0_hc3h9wes51e2gA__original/img/IQtAddXlLb6o6sqaem7J4n7NL5g=/0x0/filters:format(jpeg)/pic2290765.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 766,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 767,
+      "reason": "within_limit",
+      "sizeBytes": 47989,
+      "sourceUrl": "https://cf.geekdo-images.com/40eKIHpHIDO6VBsZtHAXpA__original/img/y4Y-3-AoDIyo5p9hJPPd6V20-xM=/0x0/filters:format(jpeg)/pic3124998.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 767,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 768,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 769,
+      "reason": "within_limit",
+      "sizeBytes": 79195,
+      "sourceUrl": "https://cf.geekdo-images.com/iy6oeQxUBfAVQuJ8R-EHow__original/img/yw6L7KOre4zDtZsUPgXDo-wJfOw=/0x0/filters:format(jpeg)/pic2293327.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 769,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 770,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 771,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 772,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 773,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 774,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 775,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 776,
+      "reason": "within_limit",
+      "sizeBytes": 81327,
+      "sourceUrl": "https://cf.geekdo-images.com/WpL8t5oULRu5MlmQ4ZKU7Q__original/img/jYzeE9TKdW_DkzJ8gAgaWnplK9U=/0x0/filters:format(jpeg)/pic8009908.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 776,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 777,
+      "reason": "within_limit",
+      "sizeBytes": 84243,
+      "sourceUrl": "https://cf.geekdo-images.com/cq0f92F_fWvkiQQWFGiQTw__original/img/uQBD92eipLnu4R0besFsMauPtmA=/0x0/filters:format(jpeg)/pic2796242.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 777,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 778,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 781,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 782,
+      "reason": "within_limit",
+      "sizeBytes": 46184,
+      "sourceUrl": "https://cf.geekdo-images.com/85hYrpSl9Aoh2TgMf4CiDA__original/img/QPcr2EfpZjJzvNGjfQZwRbs-kMo=/0x0/filters:format(png)/pic5509026.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 782,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/herdmentality.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 783,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 784,
+      "reason": "within_limit",
+      "sizeBytes": 19614,
+      "sourceUrl": "https://cf.geekdo-images.com/GHrnr-Khb0LvBU_QkrC_qA__original/img/1BR5aHWIz_v4ki-YB2IiMuS-uIs=/0x0/filters:format(png)/pic7192024.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 784,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/tacogatocabraquesopizza.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 785,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 786,
+      "reason": "within_limit",
+      "sizeBytes": 67927,
+      "sourceUrl": "https://cf.geekdo-images.com/savBfgO05TQCEA9njQfEXw__original/img/7ywGAkzWyqT1wZJ3LBADC62RXhU=/0x0/filters:format(jpeg)/pic5519335.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 786,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 787,
+      "reason": "within_limit",
+      "sizeBytes": 96848,
+      "sourceUrl": "https://cf.geekdo-images.com/g2kdvTHxXU9EU8u-fcnUsA__original/img/QqwSq7CDDOaDmM7Z2t8bZqRmVw8=/0x0/filters:format(jpeg)/pic7479967.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 787,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 788,
+      "reason": "within_limit",
+      "sizeBytes": 45794,
+      "sourceUrl": "https://cf.geekdo-images.com/K9HioeaV2on3QvCrNn-BsA__original/img/euChX22gVvios-I22HpDEw7Bepk=/0x0/filters:format(png)/pic7174636.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 788,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 789,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 790,
+      "reason": "within_limit",
+      "sizeBytes": 17273,
+      "sourceUrl": "https://cf.geekdo-images.com/I0C1_Al5KTJI9m39g0crfg__original/img/S6PGRBzc7WM1JVh1g8l-Ih6YRKg=/0x0/filters:format(png)/pic9413810.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 790,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 791,
+      "reason": "within_limit",
+      "sizeBytes": 47729,
+      "sourceUrl": "https://cf.geekdo-images.com/nqkt7fUY1v6Sm1dMc7H8qg__original/img/Owy-iC61izhpij_afxjZiu8mC1E=/0x0/filters:format(png)/pic6191346.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 791,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/tacohatcakegiftpizza.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 792,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 793,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 794,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 795,
+      "reason": "within_limit",
+      "sizeBytes": 57068,
+      "sourceUrl": "https://cf.geekdo-images.com/wYXPzUMmMaZIV_iCMcdeDQ__original/img/7LPJOODHncUr6theQfMwLi3F1yo=/0x0/filters:format(png)/pic8223315.png"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 795,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 797,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 798,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 799,
+      "reason": "within_limit",
+      "sizeBytes": 80520,
+      "sourceUrl": "https://cf.geekdo-images.com/1OBsuvvNteTAXejvCqlFPA__original/img/jAIfjYaEkVBuu_U0JxAio-Nck2Q=/0x0/filters:format(jpeg)/pic4894307.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 799,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 800,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 801,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 802,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 803,
+      "reason": "within_limit",
+      "sizeBytes": 49561,
+      "sourceUrl": "https://cf.geekdo-images.com/zlQWc50FPDG44QagA2mfhw__original/img/pPfU3O54II2jM58xqdF3YxMTYUo=/0x0/filters:format(jpeg)/pic586627.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 803,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url",
+      "itemId": 804,
+      "reason": "within_limit",
+      "sizeBytes": 55378,
+      "sourceUrl": "https://cf.geekdo-images.com/wiu7dj8iSB4GLLZ18epxcA__original/img/CdytkWid9L7SqZudrAIft1x58Nw=/0x0/filters:format(jpeg)/pic1594490.jpg"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 804,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 805,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 806,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/starwarsescapegame.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 807,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 808,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 809,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 810,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/fantasmablitzmini.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 811,
+      "reason": "managed",
+      "sourceUrl": "https://ludora.s3.us-east-2.amazonaws.com/boardgame/fantasmablitz.es.webp"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 812,
+      "reason": "blank"
+    },
+    {
+      "field": "image_url_es",
+      "itemId": 813,
+      "reason": "blank"
+    }
+  ],
+  "summary": {
+    "downloadedImages": 72,
+    "failedImages": 0,
+    "imageFields": 200,
+    "itemsScanned": 100,
+    "optimizedImages": 72,
+    "skippedBlank": 89,
+    "skippedManaged": 10,
+    "skippedWithinLimit": 29,
+    "updatedRows": 72,
+    "uploadedImages": 72
+  }
+}

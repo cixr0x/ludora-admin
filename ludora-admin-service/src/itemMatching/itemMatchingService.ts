@@ -83,7 +83,13 @@ export function createItemMatchingService(
       try {
         const localMatch = bestMatchAboveThreshold(await generateLocalMatches(database, candidate));
         if (localMatch?.itemId) {
-          await linkStoreItemMatch(database, discoveryItemCandidateId, localMatch, localMatch.itemId);
+          await linkStoreItemMatch(
+            database,
+            discoveryItemCandidateId,
+            localMatch,
+            localMatch.itemId,
+            shouldConfirmBoardgameMatch(localMatch, isAdminConfirmation)
+          );
           return;
         }
 
@@ -124,7 +130,13 @@ export function createItemMatchingService(
           return;
         }
 
-        await linkStoreItemMatch(database, discoveryItemCandidateId, bggMatch, itemId);
+        await linkStoreItemMatch(
+          database,
+          discoveryItemCandidateId,
+          bggMatch,
+          itemId,
+          shouldConfirmBoardgameMatch(bggMatch, isAdminConfirmation)
+        );
       } catch (error) {
         await markStoreItemProcessingError(
           database,
@@ -207,6 +219,10 @@ function bestMatchAboveThreshold(matches: GeneratedMatchCandidate[]): GeneratedM
   return match && match.matchScore >= AUTO_MATCH_SCORE_THRESHOLD ? match : null;
 }
 
+function shouldConfirmBoardgameMatch(match: GeneratedMatchCandidate, isAdminConfirmation: boolean): boolean {
+  return isAdminConfirmation || match.bggId !== null;
+}
+
 async function confirmStoreItemAsBoardgame(
   database: Database,
   discoveryItemCandidateId: number,
@@ -229,14 +245,15 @@ async function linkStoreItemMatch(
   database: Database,
   discoveryItemCandidateId: number,
   match: GeneratedMatchCandidate,
-  itemId: number
+  itemId: number,
+  isBoardgameConfirmed: boolean
 ): Promise<void> {
   await database.query(
     `
     update store_items
     set item_id = $1,
         is_boardgame = true,
-        is_boardgame_confirmed = true,
+        is_boardgame_confirmed = ${isBoardgameConfirmed ? 'true' : 'false'},
         match_source = $2,
         matched_bgg_id = $3,
         matched_name = $4,

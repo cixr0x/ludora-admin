@@ -20,6 +20,7 @@ describe('StoresPage', () => {
               id: 12,
               logo_url: 'https://example.mx/logo.png',
               name: 'Example Juegos',
+              platform: 'shopify',
               state: 'CDMX',
               status: 'active',
               updated_at: '2026-05-25T20:00:00Z',
@@ -36,10 +37,11 @@ describe('StoresPage', () => {
 
     render(<StoresPage />);
 
-    for (const heading of ['Name', 'Domain', 'Website', 'City', 'State', 'Country', 'Logo', 'Status', 'Updated']) {
+    for (const heading of ['Name', 'Domain', 'Website', 'Platform', 'City', 'State', 'Country', 'Logo', 'Status', 'Updated']) {
       expect(await screen.findByRole('columnheader', { name: heading })).toBeInTheDocument();
     }
     expect(await screen.findByText('Example Juegos')).toBeInTheDocument();
+    expect(screen.getByText('shopify')).toBeInTheDocument();
     expect(screen.getByText('CDMX')).toBeInTheDocument();
     const link = screen.getByRole('link', { name: 'example.mx' });
     expect(link).toHaveAttribute('href', 'https://example.mx/');
@@ -61,6 +63,7 @@ describe('StoresPage', () => {
             country: 'Mexico',
             id: 12,
             name: 'Example Juegos',
+            platform: 'amazon',
             state: 'CDMX',
             status: 'active',
             website_url: 'https://example.mx/'
@@ -71,12 +74,13 @@ describe('StoresPage', () => {
         return jsonResponse({
           canonical_domain: 'example.mx',
           city: 'Ciudad de Mexico',
-          country: 'Mexico',
-          id: 12,
-          name: 'Example Updated',
-          state: 'CDMX',
-          status: 'active',
-          website_url: 'https://example.mx/'
+            country: 'Mexico',
+            id: 12,
+            name: 'Example Updated',
+            platform: 'shopify',
+            state: 'CDMX',
+            status: 'active',
+            website_url: 'https://example.mx/'
         });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -89,12 +93,16 @@ describe('StoresPage', () => {
 
     await user.clear(screen.getByLabelText('Name'));
     await user.type(screen.getByLabelText('Name'), 'Example Updated');
+    expect(screen.getByLabelText('Platform')).toHaveValue('amazon');
+    await user.clear(screen.getByLabelText('Platform'));
+    await user.type(screen.getByLabelText('Platform'), 'shopify');
     await user.click(screen.getByRole('button', { name: 'Save Store' }));
 
     expect(await screen.findByText('Example Updated')).toBeInTheDocument();
     const patchCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/stores/12') && init?.method === 'PATCH');
     expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
       name: 'Example Updated',
+      platform: 'shopify',
       website_url: 'https://example.mx/'
     });
   });

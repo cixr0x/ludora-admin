@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
 
@@ -10,7 +12,41 @@ from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
 def connect_database(database_url: str):
     import psycopg
 
-    return psycopg.connect(database_url)
+    normalized_url, connect_kwargs = _psycopg_connection_args(database_url)
+    return psycopg.connect(normalized_url, **connect_kwargs)
+
+
+def _psycopg_connection_args(database_url: str) -> tuple[str, dict[str, str]]:
+    normalized_url = _normalize_url_sslmode(database_url)
+    if _url_has_sslmode(normalized_url):
+        return normalized_url, {}
+    if os.environ.get("PGSSLMODE", "").strip().casefold() == "no-verify":
+        return normalized_url, {"sslmode": "require"}
+    return normalized_url, {}
+
+
+def _normalize_url_sslmode(database_url: str) -> str:
+    parsed = urlparse(database_url)
+    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+    if not query_pairs:
+        return database_url
+
+    changed = False
+    normalized_pairs: list[tuple[str, str]] = []
+    for key, value in query_pairs:
+        if key.casefold() == "sslmode" and value.strip().casefold() == "no-verify":
+            normalized_pairs.append((key, "require"))
+            changed = True
+        else:
+            normalized_pairs.append((key, value))
+    if not changed:
+        return database_url
+    return urlunparse(parsed._replace(query=urlencode(normalized_pairs)))
+
+
+def _url_has_sslmode(database_url: str) -> bool:
+    parsed = urlparse(database_url)
+    return any(key.casefold() == "sslmode" for key, _value in parse_qsl(parsed.query, keep_blank_values=True))
 
 
 @dataclass(frozen=True)

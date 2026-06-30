@@ -56,12 +56,17 @@ class DiscoveryApiTests(unittest.TestCase):
         self.assertEqual(get_payload["data"]["id"], run_id)
 
     def test_starts_item_discovery_run_for_one_store(self):
+        calls = []
+
         manager = StoreDiscoveryRunManager(
             runner=lambda: StoreDiscoveryRunResult(0, 0, 0),
-            item_runner=lambda store_id, website_url: ItemDiscoveryRunResult(
-                store_id=store_id,
-                website_url=website_url,
-                item_candidates=5,
+            item_runner=lambda store_id, website_url, platform: (
+                calls.append((store_id, website_url, platform))
+                or ItemDiscoveryRunResult(
+                    store_id=store_id,
+                    website_url=website_url,
+                    item_candidates=5,
+                )
             ),
             background=False,
         )
@@ -70,7 +75,7 @@ class DiscoveryApiTests(unittest.TestCase):
             "POST",
             "/operations/stores/12/item-discovery-runs",
             manager,
-            {"website_url": "https://example.mx/"},
+            {"website_url": "https://example.mx/", "platform": "amazon"},
         )
 
         self.assertEqual(status, 202)
@@ -79,6 +84,7 @@ class DiscoveryApiTests(unittest.TestCase):
         self.assertEqual(payload["data"]["result"]["store_id"], 12)
         self.assertEqual(payload["data"]["result"]["website_url"], "https://example.mx/")
         self.assertEqual(payload["data"]["result"]["item_candidates"], 5)
+        self.assertEqual(calls, [(12, "https://example.mx/", "amazon")])
 
     def test_starts_item_update_run(self):
         manager = StoreDiscoveryRunManager(

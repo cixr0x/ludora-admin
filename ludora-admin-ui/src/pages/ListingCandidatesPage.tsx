@@ -118,9 +118,8 @@ function boardgameConfirmationActions(
   updatingBoardgameCandidateId: string
 ) {
   const candidateId = field(record, ['id'], '');
-  const isConfirmed = field(record, ['is_boardgame_confirmed'], '').toLowerCase() === 'true';
   const isUpdating = candidateId !== '' && candidateId === updatingBoardgameCandidateId;
-  const isDisabled = !candidateId || isConfirmed || isUpdating;
+  const isDisabled = !candidateId || isUpdating;
 
   return (
     <Stack direction="row" spacing={0.5} sx={{ minWidth: 104 }} onDoubleClick={(event) => event.stopPropagation()}>
@@ -476,7 +475,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('table');
-  const table = useServerTableState('title');
+  const table = useServerTableState('last_updated', 'desc');
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
     table,
     adminApi.getItemCandidatesPage
@@ -535,7 +534,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     });
   }, []);
 
-  async function handleBatchConfirmSelected() {
+  async function handleBatchConfirmSelected(isBoardgame: boolean) {
     const candidatesById = new Map(rows.map((row) => [candidateId(row), row]));
     const candidatesToConfirm = [...selectedBatchCandidateIds]
       .map((id) => candidatesById.get(id))
@@ -558,7 +557,13 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
         setUpdatingBoardgameCandidateId(id);
 
         try {
-          const savedCandidate = await adminApi.confirmItemCandidateBoardgame(id);
+          const savedCandidate = isBoardgame
+            ? await adminApi.confirmItemCandidateBoardgame(id)
+            : await adminApi.updateItemCandidate(id, {
+                ...candidate,
+                is_boardgame: false,
+                is_boardgame_confirmed: true
+              });
           successCount += 1;
           setRows((currentRows) =>
             currentRows.map((row, rowIndex) => (field(row, ['id'], String(rowIndex)) === id ? savedCandidate : row))
@@ -577,7 +582,8 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
       }
 
       if (successCount > 0) {
-        setSaveMessage(`Confirmed ${successCount} store ${successCount === 1 ? 'item' : 'items'} as boardgames.`);
+        const classificationLabel = isBoardgame ? 'boardgames' : 'not boardgames';
+        setSaveMessage(`Confirmed ${successCount} store ${successCount === 1 ? 'item' : 'items'} as ${classificationLabel}.`);
       }
       if (failureCount > 0) {
         setSaveError(`Batch confirmation completed with ${failureCount} failed ${failureCount === 1 ? 'item' : 'items'}.`);
@@ -794,9 +800,22 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
                     disabled={selectedBatchCandidateIds.size === 0 || isBatchConfirming}
                     type="button"
                     variant="contained"
-                    onClick={handleBatchConfirmSelected}
+                    onClick={() => {
+                      void handleBatchConfirmSelected(true);
+                    }}
                   >
                     {isBatchConfirming ? 'Confirming...' : 'Confirm selected boardgames'}
+                  </Button>
+                  <Button
+                    color="error"
+                    disabled={selectedBatchCandidateIds.size === 0 || isBatchConfirming}
+                    type="button"
+                    variant="outlined"
+                    onClick={() => {
+                      void handleBatchConfirmSelected(false);
+                    }}
+                  >
+                    {isBatchConfirming ? 'Confirming...' : 'Mark selected not boardgames'}
                   </Button>
                   <Typography color="text.secondary" variant="body2">
                     {batchProgress

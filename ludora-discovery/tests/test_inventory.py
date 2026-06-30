@@ -110,6 +110,29 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records[0].source_url, "https://example.mx/products/catan")
         self.assertEqual(repository.item_records[0].source_listing_url, "https://example.mx/")
 
+    def test_collect_store_inventory_routes_amazon_platform_to_amazon_crawler(self):
+        repository = FakeRepository()
+        expected_records = [DiscoveryItemCandidateRecord(store_id=12, source_url="https://www.amazon.com.mx/dp/B0DZL3YFC5", title="Catfe")]
+
+        with patch("ludora.inventory.crawl_amazon_store_inventory", return_value=expected_records) as amazon_crawler, patch(
+            "ludora.inventory.crawl_store_product_details"
+        ) as generic_crawler:
+            records = collect_store_inventory(
+                "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2",
+                12,
+                repository,
+                platform="amazon",
+            )
+
+        self.assertEqual(records, expected_records)
+        generic_crawler.assert_not_called()
+        amazon_crawler.assert_called_once()
+        self.assertEqual(amazon_crawler.call_args.args[:3], (
+            "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2",
+            12,
+            repository,
+        ))
+
     def test_crawl_store_product_details_uses_browser_for_blocked_detail_page(self):
         challenge_html = """
         <!DOCTYPE html>

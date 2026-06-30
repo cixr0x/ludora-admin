@@ -2,6 +2,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
+import type { AmazonTitleExtractionRequest, AmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
 import type { DescriptionGenerationRequest, DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
 import { DiscoveryOperationError, type DiscoveryOperationsClient, type StoreDiscoveryRun } from './discoveryOperations.js';
@@ -89,7 +90,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0] ?? '');
     expect(sql).toContain(
-      'select id, name, canonical_domain, website_url, instagram_url, facebook_url, city, state, country, logo_url, status, created_at, updated_at'
+      'select id, name, canonical_domain, website_url, platform, instagram_url, facebook_url, city, state, country, logo_url, status, created_at, updated_at'
     );
     expect(sql).toContain('from stores');
     expect(sql).toContain('order by canonical_domain asc');
@@ -137,6 +138,7 @@ describe('ludora admin service', () => {
       canonical_domain: 'example.mx',
       id: 12,
       name: 'Example Updated',
+      platform: 'shopify',
       website_url: 'https://example.mx/'
     };
     const database: Database = {
@@ -154,6 +156,7 @@ describe('ludora admin service', () => {
       instagram_url: 'https://instagram.com/example',
       logo_url: 'https://example.mx/logo.png',
       name: 'Example Updated',
+      platform: 'shopify',
       state: 'CDMX',
       status: 'active',
       website_url: 'https://example.mx/'
@@ -164,11 +167,12 @@ describe('ludora admin service', () => {
     const query = queries[0];
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('update stores');
-    expect(sql).toContain('where id = $11');
+    expect(sql).toContain('where id = $12');
     expect(query.params).toEqual([
       'Example Updated',
       'example.mx',
       'https://example.mx/',
+      'shopify',
       'https://instagram.com/example',
       'https://facebook.com/example',
       'Ciudad de Mexico',
@@ -2384,7 +2388,7 @@ describe('ludora admin service', () => {
       listing_status: 'PENDING',
       title: 'Coffee Rush'
     };
-    const calls: number[] = [];
+    const calls: Array<{ id: number; options: { confirmationSource?: 'admin' | 'automated' } | undefined }> = [];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -2408,6 +2412,36 @@ describe('ludora admin service', () => {
     expect(normalizeSql(queries[0].sql)).toContain('from store_items');
     expect(normalizeSql(queries[0].sql)).toContain('where id = $1');
     expect(queries[0].params).toEqual([42]);
+  });
+
+  it('passes automated confirmation source to boardgame matching', async () => {
+    const row = {
+      id: 42,
+      is_boardgame: true,
+      is_boardgame_confirmed: false,
+      item_id: null,
+      match_source: 'NONE',
+      listing_status: 'PENDING',
+      title: 'False Positive'
+    };
+    const calls: Array<{ id: number; options: { confirmationSource?: 'admin' | 'automated' } | undefined }> = [];
+    const database: Database = {
+      query: async () => ({ rows: [row] })
+    };
+    const itemMatchingService: ItemMatchingService = {
+      confirmBoardgameAndMatch: async (id, options) => {
+        calls.push({ id, options });
+      },
+      generateMatchCandidates: async () => [],
+      listMatchCandidates: async () => []
+    };
+
+    const response = await request(createApp({ database, itemMatchingService }))
+      .post('/discovery/listings/42/confirm-boardgame')
+      .send({ confirmation_source: 'automated' });
+
+    expect(response.status).toBe(200);
+    expect(calls).toEqual([{ id: 42, options: { confirmationSource: 'automated' } }]);
   });
 
   it('lists item match candidates through the item matching service', async () => {
@@ -2749,6 +2783,80 @@ describe('ludora admin service', () => {
     });
   });
 
+  it('extracts Amazon game titles through the configured admin AI service', async () => {
+    const calls: AmazonTitleExtractionRequest[] = [];
+    const amazonTitleExtractionService: AmazonTitleExtractionService = {
+      extract: async (input) => {
+        calls.push(input);
+        return {
+          gameTitle: 'Yokai Pagoda',
+          metadata: {
+            confidence: 0.96,
+            removedNoise: ['La Compania de los Juegos', 'marketing copy'],
+            warnings: []
+          },
+          model: 'gpt-5.4-nano',
+          promptVersion: 'amazon-title-v1'
+        };
+      }
+    };
+
+    const response = await request(createApp({ amazonTitleExtractionService, database: idleDatabase() }))
+      .post('/admin/ai/amazon-title-extractions')
+      .send({
+        amazon_title:
+          'La Compania de los Juegos | Yokai Pagoda | Juega Cartas para Evitar Recibir Puntos Negativos | Juego en Espanol',
+        raw_payload: {
+          amazon: {
+            asin: 'B0TEST1234'
+          }
+        },
+        source_url: 'https://www.amazon.com.mx/dp/B0TEST1234'
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      data: {
+        game_title: 'Yokai Pagoda',
+        metadata: {
+          confidence: 0.96,
+          removedNoise: ['La Compania de los Juegos', 'marketing copy'],
+          warnings: []
+        },
+        model: 'gpt-5.4-nano',
+        prompt_version: 'amazon-title-v1'
+      }
+    });
+    expect(calls).toEqual([
+      {
+        amazonTitle:
+          'La Compania de los Juegos | Yokai Pagoda | Juega Cartas para Evitar Recibir Puntos Negativos | Juego en Espanol',
+        rawPayload: {
+          amazon: {
+            asin: 'B0TEST1234'
+          }
+        },
+        sourceUrl: 'https://www.amazon.com.mx/dp/B0TEST1234'
+      }
+    ]);
+  });
+
+  it('returns 503 when Amazon title extraction is not configured', async () => {
+    const response = await request(createApp({ database: idleDatabase() }))
+      .post('/admin/ai/amazon-title-extractions')
+      .send({
+        amazon_title: 'La Compania de los Juegos | Yokai Pagoda | Juego en Espanol',
+        source_url: 'https://www.amazon.com.mx/dp/B0TEST1234'
+      });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: {
+        message: 'Amazon title extraction service is not configured'
+      }
+    });
+  });
+
   it('enriches product details for an existing linked item candidate', async () => {
     const candidate = {
       id: 920,
@@ -2905,20 +3013,21 @@ describe('ludora admin service', () => {
       status: 'running',
       type: 'item_discovery'
     };
-    const calls: Array<{ storeId: number; websiteUrl: string }> = [];
+    const calls: Array<{ storeId: number; websiteUrl: string; platform: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
         expect(normalizeSql(sql)).toContain('from stores');
+        expect(normalizeSql(sql)).toContain('platform');
         expect(params).toEqual(['12']);
-        return { rows: [{ id: 12, website_url: 'https://example.mx/' }] };
+        return { rows: [{ id: 12, platform: 'amazon', website_url: 'https://example.mx/' }] };
       }
     };
     const operationsClient: DiscoveryOperationsClient = {
       cancelStoreDiscoveryRun: async () => run,
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => run,
-      startItemDiscoveryRun: async (storeId, websiteUrl) => {
-        calls.push({ storeId, websiteUrl });
+      startItemDiscoveryRun: async (storeId, websiteUrl, platform) => {
+        calls.push({ storeId, platform, websiteUrl });
         return run;
       },
       startItemEmbeddingRun: async () => run,
@@ -2932,7 +3041,7 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(202);
     expect(response.body).toEqual({ data: run });
-    expect(calls).toEqual([{ storeId: 12, websiteUrl: 'https://example.mx/' }]);
+    expect(calls).toEqual([{ storeId: 12, platform: 'amazon', websiteUrl: 'https://example.mx/' }]);
   });
 
   it('starts item update runs through the discovery operations client', async () => {

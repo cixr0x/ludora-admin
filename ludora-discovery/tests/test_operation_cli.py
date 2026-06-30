@@ -42,6 +42,8 @@ class OperationCliTests(unittest.TestCase):
                     "12",
                     "--website-url",
                     "https://store.test",
+                    "--platform",
+                    "amazon",
                 ]
             )
 
@@ -49,6 +51,7 @@ class OperationCliTests(unittest.TestCase):
         runner.assert_called_once()
         self.assertEqual(runner.call_args.kwargs["store_id"], 12)
         self.assertEqual(runner.call_args.kwargs["website_url"], "https://store.test")
+        self.assertEqual(runner.call_args.kwargs["platform"], "amazon")
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["result"]["item_candidates"], 5)
 

@@ -117,6 +117,28 @@ describe('local discovery operations client', () => {
     });
   });
 
+  it('starts item discovery with the store URL and platform', async () => {
+    const { client, spawned } = createClient();
+
+    const run = await client.startItemDiscoveryRun(12, 'https://example.mx/', 'amazon');
+
+    expect(run.status).toBe('running');
+    expect(run.type).toBe('item_discovery');
+    expect(spawned[0].args).toEqual([
+      '-m',
+      'ludora.operation_cli',
+      '--env-file',
+      'C:/PROJECTS/ludora/ludora-admin/ludora-admin-service/.env',
+      'item-discovery',
+      '--store-id',
+      '12',
+      '--website-url',
+      'https://example.mx/',
+      '--platform',
+      'amazon'
+    ]);
+  });
+
   it('cancels the active child process and marks the run cancelled', async () => {
     const { client, spawned } = createClient();
     const run = await client.startStoreDiscoveryRun();

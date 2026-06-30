@@ -677,6 +677,47 @@ describe('item matching service', () => {
     ]);
   });
 
+  it('links but does not confirm an automatic local match without a BGG id', async () => {
+    const updates: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 54,
+        item_type: 'base_game',
+        max_players: 4,
+        min_players: 2,
+        publisher: '',
+        title: 'Local Manual Game'
+      },
+      [
+        {
+          aliases: [],
+          bgg_id: null,
+          canonical_name: 'Local Manual Game',
+          id: 91,
+          item_type: 'base_game',
+          normalized_name: 'local manual game'
+        }
+      ],
+      {
+        onStoreItemUpdate: (sql, params) => updates.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async () => {
+        throw new Error('BGG fetch should not run when local match is high confidence');
+      },
+      search: async () => {
+        throw new Error('BGG search should not run when local match is high confidence');
+      }
+    };
+
+    await createItemMatchingService(database, bggClient).confirmBoardgameAndMatch?.(54);
+
+    const linkedUpdate = updates.find((update) => normalizeSql(update.sql).includes('set item_id = $1'));
+    expect(normalizeSql(linkedUpdate?.sql ?? '')).toContain('is_boardgame_confirmed = false');
+    expect(linkedUpdate?.params?.slice(0, 4)).toEqual([91, 'LOCAL', null, 'Local Manual Game']);
+  });
+
   it('confirms, imports, and links a cached BGG match before calling the BGG search API', async () => {
     const importedBggIds: number[] = [];
     const updates: Array<{ params?: unknown[]; sql: string }> = [];

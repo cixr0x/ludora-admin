@@ -142,6 +142,24 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByText('Catan Ingles')).toBeInTheDocument();
   });
 
+  it('loads store items by last updated descending by default', async () => {
+    const listingRequests: string[] = [];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (pathOf(url) === '/discovery/listings') {
+        listingRequests.push(url);
+        return jsonResponse([{ id: 'item-candidate-1', title: 'Azul MX' }], 200, { page: 0, page_size: 100, total: 1 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    expect(await screen.findByText('Azul MX')).toBeInTheDocument();
+    expect(listingRequests[0]).toContain('sort=last_updated');
+    expect(listingRequests[0]).toContain('sort_direction=desc');
+  });
+
   it('updates boardgame confirmation from table actions', async () => {
     const user = userEvent.setup();
     const originalCandidate = {
@@ -205,8 +223,8 @@ describe('ListingCandidatesPage', () => {
       match_source: 'LOCAL'
     });
     expect(await screen.findByText('Store item marked as boardgame.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Mark as boardgame' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Mark as not boardgame' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark as boardgame' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark as not boardgame' })).not.toBeDisabled();
   });
 
   it('batch confirms selected store items sequentially', async () => {
@@ -280,6 +298,83 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByRole('checkbox', { name: 'Select Second Game' })).not.toBeChecked();
   });
 
+  it('batch marks selected store items as not boardgames sequentially', async () => {
+    const user = userEvent.setup();
+    const originalCandidates = [
+      {
+        availability: 'available',
+        id: '201',
+        is_boardgame: false,
+        is_boardgame_confirmed: false,
+        listing_status: 'PENDING',
+        source_url: 'https://store.mx/products/sleeves',
+        store_id: 42,
+        title: 'Card Sleeves'
+      },
+      {
+        availability: 'available',
+        id: '202',
+        is_boardgame: false,
+        is_boardgame_confirmed: false,
+        listing_status: 'PENDING',
+        source_url: 'https://store.mx/products/paint',
+        store_id: 42,
+        title: 'Miniature Paint'
+      }
+    ];
+    let currentCandidates = originalCandidates;
+    const patchCalls: Array<{ id: string; body: Record<string, unknown> }> = [];
+    let resolveFirstUpdate: (() => void) | undefined;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const path = pathOf(url);
+      if (path === '/discovery/listings' && !init) {
+        return jsonResponse(currentCandidates, 200, { page: 0, page_size: 100, total: currentCandidates.length });
+      }
+      if (path === '/discovery/listings/201' && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body));
+        patchCalls.push({ body, id: '201' });
+        return new Promise<Response>((resolve) => {
+          resolveFirstUpdate = () => {
+            const updated = { ...originalCandidates[0], ...body };
+            currentCandidates = [updated, currentCandidates[1]];
+            resolve(jsonResponse(updated));
+          };
+        });
+      }
+      if (path === '/discovery/listings/202' && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body));
+        patchCalls.push({ body, id: '202' });
+        const updated = { ...originalCandidates[1], ...body };
+        currentCandidates = [currentCandidates[0], updated];
+        return jsonResponse(updated);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    expect(await screen.findByText('Card Sleeves')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Batch confirmation' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Card Sleeves' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select Miniature Paint' }));
+    await user.click(screen.getByRole('button', { name: 'Mark selected not boardgames' }));
+
+    await waitFor(() => expect(patchCalls.map((call) => call.id)).toEqual(['201']));
+    expect(screen.getByText('Confirming 1 / 2')).toBeInTheDocument();
+
+    resolveFirstUpdate?.();
+
+    await waitFor(() => expect(patchCalls.map((call) => call.id)).toEqual(['201', '202']));
+    expect(patchCalls.map((call) => call.body)).toEqual([
+      expect.objectContaining({ is_boardgame: false, is_boardgame_confirmed: true }),
+      expect.objectContaining({ is_boardgame: false, is_boardgame_confirmed: true })
+    ]);
+    expect(await screen.findByText('Confirmed 2 store items as not boardgames.')).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Select Card Sleeves' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Miniature Paint' })).not.toBeChecked();
+  });
+
   it('marks unconfirmed store items as not boardgame from table actions', async () => {
     const user = userEvent.setup();
     const originalCandidate = {
@@ -328,8 +423,8 @@ describe('ListingCandidatesPage', () => {
       is_boardgame_confirmed: true
     });
     expect(await screen.findByText('Store item marked as not boardgame.')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Mark as boardgame' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Mark as not boardgame' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark as boardgame' })).not.toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Mark as not boardgame' })).not.toBeDisabled();
   });
 
   it('refreshes store items with active filters after boardgame table actions', async () => {
@@ -384,8 +479,8 @@ describe('ListingCandidatesPage', () => {
 
     expect(await screen.findByText('Kitchen Rush Refreshed')).toBeInTheDocument();
     expect(listingRequests.at(-1)).toContain('filter_title=kitchen');
-    expect(listingRequests.at(-1)).toContain('sort=title');
-    expect(listingRequests.at(-1)).toContain('sort_direction=asc');
+    expect(listingRequests.at(-1)).toContain('sort=last_updated');
+    expect(listingRequests.at(-1)).toContain('sort_direction=desc');
   }, 10000);
 
   it('opens a form view with all item candidate fields on row double click', async () => {
@@ -847,7 +942,7 @@ describe('ListingCandidatesPage', () => {
     expect(await screen.findByText('Second Page Item')).toBeInTheDocument();
     expect(screen.getByText('First Page Item')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'http://localhost:4001/discovery/listings?page=1&page_size=100&sort=title&sort_direction=asc'
+      'http://localhost:4001/discovery/listings?page=1&page_size=100&sort=last_updated&sort_direction=desc'
     );
   });
 

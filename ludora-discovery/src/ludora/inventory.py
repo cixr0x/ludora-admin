@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Protocol
 
 from ludora.cancellation import CancellationToken
 from ludora.models import DiscoveryItemCandidateRecord
+from ludora.amazon_discovery import crawl_amazon_store_inventory
 from ludora.product_crawler import (
     ItemCandidateProcessor,
     ItemClassifier,
@@ -32,8 +34,22 @@ def collect_store_inventory(
     browser_sitemap_fetch_enabled: bool = False,
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
+    item_title_extractor: Callable[[DiscoveryItemCandidateRecord], str] | None = None,
     cancellation_token: CancellationToken | None = None,
+    platform: str = "",
 ) -> list[DiscoveryItemCandidateRecord]:
+    if platform.strip().casefold() == "amazon":
+        return crawl_amazon_store_inventory(
+            store_url,
+            store_id,
+            repository,
+            limit=limit,
+            item_classifier=item_classifier,
+            item_processor=item_processor,
+            item_title_extractor=item_title_extractor,
+            cancellation_token=cancellation_token,
+        )
+
     return crawl_store_product_details(
         store_url,
         store_id,

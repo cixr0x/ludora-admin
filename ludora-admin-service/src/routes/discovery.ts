@@ -32,6 +32,7 @@ type StoreInput = {
   instagram_url: string;
   logo_url: string;
   name: string;
+  platform: string;
   state: string;
   status: string;
   website_url: string;
@@ -140,7 +141,7 @@ const storeCandidateSelect = `
 `;
 
 const storeSelect = `
-  id, name, canonical_domain, website_url, instagram_url,
+  id, name, canonical_domain, website_url, platform, instagram_url,
   facebook_url, city, state, country, logo_url, status, created_at, updated_at
 `;
 
@@ -419,6 +420,7 @@ const cleanStoresTableConfig: TableQueryConfig = {
     instagram_url: columnSql('instagram_url'),
     logo_url: columnSql('logo_url'),
     name: columnSql('name'),
+    platform: columnSql('platform'),
     state: columnSql('state'),
     status: columnSql('status'),
     updated_at: columnSql('updated_at'),
@@ -693,15 +695,16 @@ export function createDiscoveryRouter(
         set name = $1,
             canonical_domain = $2,
             website_url = $3,
-            instagram_url = $4,
-            facebook_url = $5,
-            city = $6,
-            state = $7,
-            country = $8,
-            logo_url = $9,
-            status = $10,
+            platform = $4,
+            instagram_url = $5,
+            facebook_url = $6,
+            city = $7,
+            state = $8,
+            country = $9,
+            logo_url = $10,
+            status = $11,
             updated_at = now()
-        where id = $11
+        where id = $12
         returning ${storeSelect}
         `,
         [...storeParams(input), request.params.id]
@@ -1685,7 +1688,9 @@ export function createDiscoveryRouter(
       }
 
       const candidateId = integerPathParam(request.params.id);
-      await itemMatchingService.confirmBoardgameAndMatch(candidateId, { confirmationSource: 'admin' });
+      await itemMatchingService.confirmBoardgameAndMatch(candidateId, {
+        confirmationSource: parseConfirmationSource(request.body)
+      });
 
       const result = await database.query(
         `select ${itemCandidateSelect}
@@ -2021,6 +2026,7 @@ function parseStoreInput(body: unknown): StoreInput {
     instagram_url: stringField(value, 'instagram_url'),
     logo_url: stringField(value, 'logo_url'),
     name: stringField(value, 'name'),
+    platform: stringField(value, 'platform'),
     state: stringField(value, 'state'),
     status: stringField(value, 'status') || 'active',
     website_url: stringField(value, 'website_url')
@@ -2038,6 +2044,7 @@ function storeParams(input: StoreInput): unknown[] {
     input.name,
     input.canonical_domain,
     input.website_url,
+    input.platform,
     input.instagram_url,
     input.facebook_url,
     input.city,
@@ -2474,6 +2481,18 @@ function booleanField(value: Record<string, unknown>, key: string): boolean {
     return normalized === 'true' || normalized === '1' || normalized === 'on' || normalized === 'yes';
   }
   return false;
+}
+
+function parseConfirmationSource(body: unknown): 'admin' | 'automated' {
+  const value = body && typeof body === 'object' && !Array.isArray(body) ? (body as Record<string, unknown>) : {};
+  const source = stringField(value, 'confirmation_source').toLowerCase();
+  if (!source || source === 'admin') {
+    return 'admin';
+  }
+  if (source === 'automated') {
+    return 'automated';
+  }
+  throw httpError(400, 'confirmation_source must be admin or automated');
 }
 
 function rowString(value: Record<string, unknown>, key: string): string {

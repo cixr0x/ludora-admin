@@ -19,13 +19,21 @@ npm run dev:codex
 
 Set `LUDORA_DATABASE_URL` in `.env` before running database-backed routes.
 
-OpenAI-backed admin translation and description generation use the official OpenAI API by default. To point those calls at a local OpenAI-compatible simulator, set:
+### Admin AI Flow
+
+OpenAI-backed admin features use the shared OpenAI Responses client in `ludora-admin-service/src/ai/openAiResponsesClient.ts`. Current callers include translation, description generation, product detail extraction, and Amazon title extraction.
+
+Configure those calls in `ludora-admin-service/.env`:
 
 ```text
+OPENAI_API_KEY=your_openai_or_codexapi_key
+OPENAI_TRANSLATION_MODEL=gpt-5.4-nano
 OPENAI_BASE_URL=http://127.0.0.1:3001/v1
 ```
 
-Unset `OPENAI_BASE_URL` to use the default OpenAI API endpoint again.
+`OPENAI_API_KEY` enables the AI-backed services. `OPENAI_BASE_URL` is optional: leave it unset to use the official OpenAI API, or set it to a local Codex/OpenAI-compatible `/v1` endpoint. `OPENAI_TRANSLATION_MODEL` is currently the shared text model setting for the admin AI clients.
+
+New AI requests should be implemented in admin-service with this same flow. Discovery package code should call admin-service endpoints for new AI tasks instead of adding separate API-key handling. More detail is in `docs/ai-api-flow.md`.
 
 ### Local Cover Workflow
 

@@ -105,11 +105,13 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch(
             "ludora.operations.AdminItemMatcher", return_value=item_processor
         ) as admin_item_matcher, patch(
+            "ludora.operations.AdminAmazonTitleExtractor"
+        ) as admin_title_extractor, patch(
             "ludora.operations.OpenAIItemClassifier", return_value=ai_classifier
         ) as openai_item_classifier, patch(
             "ludora.operations.collect_store_inventory", return_value=records
         ) as collect_store_inventory:
-            result = run_item_discovery(store_id=12, website_url="https://example.mx/", env_file="custom.env")
+            result = run_item_discovery(store_id=12, website_url="https://example.mx/", platform="amazon", env_file="custom.env")
 
         resolve_database_url.assert_called_once()
         self.assertEqual(resolve_database_url.call_args.kwargs["dotenv_path"], "custom.env")
@@ -136,9 +138,11 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             "https://example.mx/",
             12,
             repository,
+            platform="amazon",
             browser_sitemap_fetch_enabled=True,
             item_classifier=ai_classifier.apply_item_classification,
             item_processor=item_processor,
+            item_title_extractor=admin_title_extractor.return_value.extract_title,
         )
         connection.close.assert_called_once_with()
         self.assertEqual(result.store_id, 12)
@@ -295,7 +299,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
     def test_manager_records_successful_item_discovery_run_result(self):
         manager = StoreDiscoveryRunManager(
             runner=lambda: StoreDiscoveryRunResult(0, 0, 0),
-            item_runner=lambda store_id, website_url: ItemDiscoveryRunResult(
+            item_runner=lambda store_id, website_url, platform: ItemDiscoveryRunResult(
                 store_id=store_id,
                 website_url=website_url,
                 item_candidates=4,
@@ -303,7 +307,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             background=False,
         )
 
-        run = manager.start_item_discovery(12, "https://example.mx/")
+        run = manager.start_item_discovery(12, "https://example.mx/", "amazon")
 
         self.assertEqual(run.status, "completed")
         self.assertEqual(run.run_type, "item_discovery")
@@ -362,7 +366,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             manager = StoreDiscoveryRunManager(env_file="custom.env", background=False)
 
             manager.start_store_discovery()
-            manager.start_item_discovery(12, "https://example.mx/")
+            manager.start_item_discovery(12, "https://example.mx/", "amazon")
             manager.start_item_update()
             manager.start_item_embeddings("missing")
 
@@ -370,6 +374,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         item_runner.assert_called_once_with(
             store_id=12,
             website_url="https://example.mx/",
+            platform="amazon",
             env_file="custom.env",
             cancellation_token=ANY,
         )

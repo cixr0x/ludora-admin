@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from ludora.admin_matching import AdminItemMatcher
+from ludora.admin_title_extraction import AdminAmazonTitleExtractor
 from ludora.ai_item_classification import OpenAIItemClassifier
 from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
 from ludora.collector import collect_stores
@@ -170,6 +171,7 @@ def run_item_discovery(
     *,
     store_id: int,
     website_url: str,
+    platform: str = "",
     env: Mapping[str, str] | None = None,
     env_file: str = ".env",
     cancellation_token: CancellationToken | None = None,
@@ -186,6 +188,9 @@ def run_item_discovery(
     try:
         repository = DiscoveryRepository(connection)
         item_processor = AdminItemMatcher(admin_api_url, repository)
+        item_title_extractor = (
+            AdminAmazonTitleExtractor(admin_api_url).extract_title if platform.strip().casefold() == "amazon" else None
+        )
         collect_kwargs = {}
         if cancellation_token is not None:
             collect_kwargs["cancellation_token"] = cancellation_token
@@ -193,9 +198,11 @@ def run_item_discovery(
             website_url,
             store_id,
             repository,
+            platform=platform,
             browser_sitemap_fetch_enabled=browser_sitemap_fetch_enabled,
             item_classifier=item_classifier,
             item_processor=item_processor,
+            item_title_extractor=item_title_extractor,
             **collect_kwargs,
         )
         return ItemDiscoveryRunResult(
@@ -299,7 +306,7 @@ class StoreDiscoveryRunManager:
     def __init__(
         self,
         runner: Callable[[], StoreDiscoveryRunResult] | None = None,
-        item_runner: Callable[[int, str], ItemDiscoveryRunResult] | None = None,
+        item_runner: Callable[[int, str, str], ItemDiscoveryRunResult] | None = None,
         item_update_runner: Callable[[], ItemUpdateRunResult] | None = None,
         item_embedding_runner: Callable[[EmbeddingRefreshMode], ItemEmbeddingRunResult] | None = None,
         *,
@@ -315,13 +322,14 @@ class StoreDiscoveryRunManager:
             _item_runner_with_token(item_runner)
             if item_runner is not None
             else (
-                lambda store_id, website_url, cancellation_token: run_item_discovery(
-                store_id=store_id,
-                website_url=website_url,
-                env_file=env_file,
-                cancellation_token=cancellation_token,
+                lambda store_id, website_url, platform, cancellation_token: run_item_discovery(
+                    store_id=store_id,
+                    website_url=website_url,
+                    platform=platform,
+                    env_file=env_file,
+                    cancellation_token=cancellation_token,
+                )
             )
-        )
         )
         self.item_update_runner = (
             _update_runner_with_token(item_update_runner)
@@ -369,7 +377,7 @@ class StoreDiscoveryRunManager:
 
         return self.get_run(run.id) or run
 
-    def start_item_discovery(self, store_id: int, website_url: str) -> StoreDiscoveryRun:
+    def start_item_discovery(self, store_id: int, website_url: str, platform: str = "") -> StoreDiscoveryRun:
         with self.lock:
             if self.active_run_id:
                 raise OperationAlreadyRunning("Discovery operation is already running")
@@ -387,10 +395,10 @@ class StoreDiscoveryRunManager:
             self.active_run_id = run.id
 
         if self.background:
-            thread = threading.Thread(target=self._execute_item_run, args=(run.id, store_id, website_url), daemon=True)
+            thread = threading.Thread(target=self._execute_item_run, args=(run.id, store_id, website_url, platform), daemon=True)
             thread.start()
         else:
-            self._execute_item_run(run.id, store_id, website_url)
+            self._execute_item_run(run.id, store_id, website_url, platform)
 
         return self.get_run(run.id) or run
 
@@ -494,9 +502,9 @@ class StoreDiscoveryRunManager:
             run.completed_at = _utc_now()
             self.active_run_id = None
 
-    def _execute_item_run(self, run_id: str, store_id: int, website_url: str) -> None:
+    def _execute_item_run(self, run_id: str, store_id: int, website_url: str, platform: str) -> None:
         try:
-            result = self.item_runner(store_id, website_url, self._cancellation_token_for(run_id))
+            result = self.item_runner(store_id, website_url, platform, self._cancellation_token_for(run_id))
         except OperationCancelled:
             self._mark_run_cancelled(run_id)
             return
@@ -602,10 +610,28 @@ def _store_runner_with_token(runner: Callable[..., StoreDiscoveryRunResult]) -> 
 
 def _item_runner_with_token(
     runner: Callable[..., ItemDiscoveryRunResult],
-) -> Callable[[int, str, CancellationToken], ItemDiscoveryRunResult]:
-    if _accepts_cancellation_token(runner, positional_before_token=2):
-        return lambda store_id, website_url, cancellation_token: runner(store_id, website_url, cancellation_token)
-    return lambda store_id, website_url, cancellation_token: runner(store_id, website_url)
+) -> Callable[[int, str, str, CancellationToken], ItemDiscoveryRunResult]:
+    accepts_platform = _accepts_named_parameter(runner, "platform") or _accepts_platform_positional(runner)
+    accepts_cancellation_token = _accepts_named_parameter(runner, "cancellation_token") or _accepts_cancellation_token(
+        runner,
+        positional_before_token=3 if accepts_platform else 2,
+    )
+    accepts_kwargs = _accepts_var_keyword(runner)
+
+    def run(store_id: int, website_url: str, platform: str, cancellation_token: CancellationToken) -> ItemDiscoveryRunResult:
+        args: list[object] = [store_id, website_url]
+        kwargs: dict[str, object] = {}
+        if accepts_kwargs or _accepts_named_parameter(runner, "platform"):
+            kwargs["platform"] = platform
+        elif accepts_platform:
+            args.append(platform)
+        if accepts_kwargs or _accepts_named_parameter(runner, "cancellation_token"):
+            kwargs["cancellation_token"] = cancellation_token
+        elif accepts_cancellation_token:
+            args.append(cancellation_token)
+        return runner(*args, **kwargs)
+
+    return run
 
 
 def _update_runner_with_token(runner: Callable[..., ItemUpdateRunResult]) -> Callable[[CancellationToken], ItemUpdateRunResult]:
@@ -642,6 +668,38 @@ def _accepts_cancellation_token(runner: Callable[..., object], positional_before
         if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
     ]
     return len(positional) > positional_before_token
+
+
+def _accepts_named_parameter(runner: Callable[..., object], name: str) -> bool:
+    try:
+        signature = inspect.signature(runner)
+    except (TypeError, ValueError):
+        return False
+    return name in signature.parameters
+
+
+def _accepts_var_keyword(runner: Callable[..., object]) -> bool:
+    try:
+        signature = inspect.signature(runner)
+    except (TypeError, ValueError):
+        return False
+    return any(parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in signature.parameters.values())
+
+
+def _accepts_platform_positional(runner: Callable[..., object]) -> bool:
+    try:
+        signature = inspect.signature(runner)
+    except (TypeError, ValueError):
+        return False
+    parameters = list(signature.parameters.values())
+    if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+        return True
+    positional = [
+        parameter
+        for parameter in parameters
+        if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
+    ]
+    return len(positional) >= 3 and positional[2].name not in {"cancellation_token", "token"}
 
 
 def _utc_now() -> datetime:

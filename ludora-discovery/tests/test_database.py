@@ -1,12 +1,15 @@
 import json
+import os
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.database import DiscoveryRepository, ItemSearchEmbeddingSource, TutorialLinkUpsertResult
+from ludora.database import DiscoveryRepository, ItemSearchEmbeddingSource, TutorialLinkUpsertResult, connect_database
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
 
 
@@ -49,6 +52,25 @@ class FakeConnection:
 
 
 class DatabaseRepositoryTests(unittest.TestCase):
+    def test_connect_database_maps_pgsslmode_no_verify_to_psycopg_require(self):
+        fake_psycopg = SimpleNamespace(connect=Mock(return_value="connection"))
+
+        with patch.dict(sys.modules, {"psycopg": fake_psycopg}), patch.dict(os.environ, {"PGSSLMODE": "no-verify"}):
+            connection = connect_database("postgresql://ludora")
+
+        self.assertEqual(connection, "connection")
+        fake_psycopg.connect.assert_called_once_with("postgresql://ludora", sslmode="require")
+
+    def test_connect_database_rewrites_url_sslmode_no_verify(self):
+        fake_psycopg = SimpleNamespace(connect=Mock(return_value="connection"))
+
+        with patch.dict(sys.modules, {"psycopg": fake_psycopg}), patch.dict(os.environ, {"PGSSLMODE": "no-verify"}):
+            connect_database("postgresql://ludora.example/db?sslmode=no-verify&application_name=ludora")
+
+        fake_psycopg.connect.assert_called_once_with(
+            "postgresql://ludora.example/db?sslmode=require&application_name=ludora"
+        )
+
     def test_upsert_store_candidate_writes_dirty_store_record(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)

@@ -90,7 +90,7 @@ Browser fallback uses the installed Chrome executable when available. You can ov
 $env:LUDORA_BROWSER_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'
 ```
 
-Item discovery uses the AI classifier by default. It calls the OpenAI-compatible `/responses` endpoint, stores the returned reasoning in `classification_reasons`, and fails the discovery run if the classifier request or response contract fails:
+Item discovery uses the AI classifier by default. It calls the OpenAI-compatible `/responses` endpoint, stores the returned reasoning in `classification_reasons`, and fails the discovery run if the classifier request or response contract fails. This uses the same `OPENAI_BASE_URL` toggle as admin-service AI calls, although the classifier itself runs inside the Python discovery operation:
 
 ```text
 AI_ENABLED_CLASSIFIER=true
@@ -100,6 +100,12 @@ OPENAI_CLASSIFIER_MODEL=gpt-5.4-mini
 ```
 
 Set `AI_ENABLED_CLASSIFIER=false` to use the older heuristic classifier.
+
+Amazon store item discovery calls the admin-service AI endpoint to normalize Amazon product titles before saving `store_items`. The route is `POST /admin/ai/amazon-title-extractions`, and it uses the shared admin-service AI configuration described in `..\docs\ai-api-flow.md`.
+
+Item embeddings use the official OpenAI embeddings endpoint only. CodexAPI does not support embeddings, so `OPENAI_BASE_URL` is not used for embedding runs; configure `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL`.
+
+For new AI-backed discovery tasks, add the prompt and OpenAI client to admin-service, expose an admin endpoint, and call that endpoint from Python. The direct Python classifier is an existing operation internal that still uses the OpenAI-compatible Responses endpoint toggle; embeddings remain OpenAI-only by design.
 
 Classifier results with `LIKELY_NON_BOARDGAME` and confidence greater than `60` are auto-confirmed as not boardgames.
 

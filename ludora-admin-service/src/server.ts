@@ -1,6 +1,8 @@
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
 import { createApp } from './app.js';
+import { createAmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
+import { createOpenAiAmazonTitleExtractionClient } from './amazonTitleExtraction/openAiAmazonTitleExtractionClient.js';
 import { createBggClient } from './bgg/bggClient.js';
 import { createCachedBggClient } from './bgg/cachedBggClient.js';
 import { createBggItemImporter } from './bgg/bggItemImporter.js';
@@ -32,6 +34,12 @@ const rawBggClient = config.bggApiToken
     })
   : undefined;
 const bggClient = rawBggClient ? createCachedBggClient(database, rawBggClient) : undefined;
+const amazonTitleExtractionClient = config.openAiApiKey
+  ? createOpenAiAmazonTitleExtractionClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
+  : undefined;
+const amazonTitleExtractionService = amazonTitleExtractionClient
+  ? createAmazonTitleExtractionService(amazonTitleExtractionClient, { model: config.openAiTranslationModel })
+  : undefined;
 const translationClient = config.openAiApiKey
   ? createOpenAiTranslationClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
   : undefined;
@@ -75,6 +83,7 @@ const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
 );
 const app = createApp({
+  amazonTitleExtractionService,
   bggItemImporter,
   database,
   corsOrigin: config.corsOrigin,

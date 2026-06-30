@@ -1,5 +1,4 @@
-import OpenAI from 'openai';
-
+import { createOpenAiResponsesClient, type OpenAiClientOptions } from '../ai/openAiResponsesClient.js';
 import {
   systemPromptForProductDetailsExtraction,
   userPromptForProductDetailsExtraction
@@ -10,22 +9,15 @@ import {
   type ProductDetailsExtractionClientResult
 } from './productDetailsExtractionService.js';
 
-type OpenAiClientOptions = {
-  baseURL?: string;
-};
-
 export function createOpenAiProductDetailsExtractionClient(
   apiKey: string,
   options: OpenAiClientOptions = {}
 ): ProductDetailsExtractionClient {
-  const openai = new OpenAI({
-    apiKey,
-    ...(options.baseURL ? { baseURL: options.baseURL } : {})
-  });
+  const responses = createOpenAiResponsesClient(apiKey, options);
 
   return {
     async extract(request, context): Promise<ProductDetailsExtractionClientResult> {
-      const response = await openai.responses.create({
+      const response = await responses.create({
         model: context.model,
         input: [
           {

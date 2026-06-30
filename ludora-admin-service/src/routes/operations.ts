@@ -44,13 +44,17 @@ export function createOperationsRouter(operationsClient: DiscoveryOperationsClie
 
   router.post('/admin/operations/stores/:storeId/item-discovery-runs', async (request, response, next) => {
     try {
-      const result = await database.query('select id, website_url from stores where id = $1', [request.params.storeId]);
-      const store = result.rows[0] as { id?: number; website_url?: string } | undefined;
+      const result = await database.query('select id, website_url, platform from stores where id = $1', [request.params.storeId]);
+      const store = result.rows[0] as { id?: number; platform?: string; website_url?: string } | undefined;
       if (!store) {
         throw httpError(404, 'Store not found');
       }
 
-      const run = await operationsClient.startItemDiscoveryRun(Number(store.id), String(store.website_url ?? ''));
+      const run = await operationsClient.startItemDiscoveryRun(
+        Number(store.id),
+        String(store.website_url ?? ''),
+        String(store.platform ?? '')
+      );
       response.status(202).json({ data: run });
     } catch (error) {
       next(error);

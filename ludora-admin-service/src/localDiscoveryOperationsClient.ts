@@ -154,14 +154,19 @@ export function createLocalDiscoveryOperationsClient({
     async getStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun | null> {
       return publicRun(runs.get(runId) ?? null);
     },
-    async startItemDiscoveryRun(storeId: number, websiteUrl: string): Promise<StoreDiscoveryRun> {
-      return startRun('item_discovery', [
+    async startItemDiscoveryRun(storeId: number, websiteUrl: string, platform = ''): Promise<StoreDiscoveryRun> {
+      const args = [
         'item-discovery',
         '--store-id',
         String(storeId),
         '--website-url',
         websiteUrl
-      ]);
+      ];
+      const normalizedPlatform = platform.trim().toLowerCase();
+      if (normalizedPlatform) {
+        args.push('--platform', normalizedPlatform);
+      }
+      return startRun('item_discovery', args);
     },
     async startItemEmbeddingRun(refreshMode: 'full' | 'missing'): Promise<StoreDiscoveryRun> {
       return startRun('item_embeddings', ['item-embeddings', '--refresh-mode', refreshMode]);

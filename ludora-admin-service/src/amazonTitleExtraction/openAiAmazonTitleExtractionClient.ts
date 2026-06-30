@@ -1,73 +1,76 @@
 import { createOpenAiResponsesClient, type OpenAiClientOptions } from '../ai/openAiResponsesClient.js';
-import { systemPromptForPurpose, userPromptForTranslation } from './translationPrompts.js';
-import type { TranslationClient, TranslationClientResult } from './translationService.js';
+import {
+  systemPromptForAmazonTitleExtraction,
+  userPromptForAmazonTitleExtraction
+} from './amazonTitleExtractionPrompts.js';
+import type {
+  AmazonTitleExtractionClient,
+  AmazonTitleExtractionClientResult
+} from './amazonTitleExtractionService.js';
 
-export function createOpenAiTranslationClient(apiKey: string, options: OpenAiClientOptions = {}): TranslationClient {
+export function createOpenAiAmazonTitleExtractionClient(
+  apiKey: string,
+  options: OpenAiClientOptions = {}
+): AmazonTitleExtractionClient {
   const responses = createOpenAiResponsesClient(apiKey, options);
 
   return {
-    async translate(request, context): Promise<TranslationClientResult> {
+    async extract(request, context): Promise<AmazonTitleExtractionClientResult> {
       const response = await responses.create({
         model: context.model,
         input: [
           {
             role: 'system',
-            content: systemPromptForPurpose(request.purpose)
+            content: systemPromptForAmazonTitleExtraction()
           },
           {
             role: 'user',
-            content: userPromptForTranslation(request)
+            content: userPromptForAmazonTitleExtraction(request)
           }
         ],
         text: {
           format: {
             type: 'json_schema',
-            name: 'translation_result',
+            name: 'amazon_title_extraction_result',
             strict: true,
             schema: {
               type: 'object',
               additionalProperties: false,
               properties: {
-                alternates: {
-                  type: 'array',
-                  items: { type: 'string' }
-                },
+                gameTitle: { type: 'string' },
                 metadata: {
                   type: 'object',
                   additionalProperties: false,
                   properties: {
                     confidence: { type: 'number' },
-                    notes: { type: 'string' },
-                    preserved_identity_terms: {
+                    removedNoise: {
                       type: 'array',
                       items: { type: 'string' }
                     },
-                    removed_noise: {
+                    warnings: {
                       type: 'array',
                       items: { type: 'string' }
                     }
                   },
-                  required: ['confidence', 'notes', 'preserved_identity_terms', 'removed_noise']
-                },
-                translatedText: { type: 'string' }
+                  required: ['confidence', 'removedNoise', 'warnings']
+                }
               },
-              required: ['translatedText', 'alternates', 'metadata']
+              required: ['gameTitle', 'metadata']
             }
           }
         }
       });
 
-      return parseTranslationOutput(response.output_text);
+      return parseAmazonTitleExtractionOutput(response.output_text);
     }
   };
 }
 
-export function parseTranslationOutput(output: string): TranslationClientResult {
-  const parsed = JSON.parse(output) as Partial<TranslationClientResult>;
+export function parseAmazonTitleExtractionOutput(output: string): AmazonTitleExtractionClientResult {
+  const parsed = JSON.parse(output) as Record<string, unknown>;
   return {
-    alternates: Array.isArray(parsed.alternates) ? parsed.alternates.map(String).filter(Boolean) : [],
-    metadata: normalizeMetadata(parsed.metadata),
-    translatedText: typeof parsed.translatedText === 'string' ? parsed.translatedText : ''
+    gameTitle: typeof parsed.gameTitle === 'string' ? parsed.gameTitle.trim() : '',
+    metadata: normalizeMetadata(parsed.metadata)
   };
 }
 
@@ -76,9 +79,8 @@ function normalizeMetadata(value: unknown): Record<string, unknown> {
   const confidence = typeof metadata.confidence === 'number' ? metadata.confidence : Number(metadata.confidence);
   return {
     confidence: Number.isFinite(confidence) ? confidence : 0,
-    notes: typeof metadata.notes === 'string' ? metadata.notes : '',
-    preserved_identity_terms: stringList(metadata.preserved_identity_terms),
-    removed_noise: stringList(metadata.removed_noise)
+    removedNoise: stringList(metadata.removedNoise),
+    warnings: stringList(metadata.warnings)
   };
 }
 
