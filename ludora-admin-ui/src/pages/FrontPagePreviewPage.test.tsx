@@ -37,6 +37,7 @@ describe('FrontPagePreviewPage', () => {
               year_published: 2017
             }
           ],
+          title_display: '',
           title: 'Party Game'
         },
         {
@@ -47,6 +48,7 @@ describe('FrontPagePreviewPage', () => {
           id: 2,
           order: 20,
           products: [],
+          title_display: 'En solitario',
           title: 'Solo Picks'
         }
       ])
@@ -56,7 +58,8 @@ describe('FrontPagePreviewPage', () => {
 
     expect(await screen.findByRole('heading', { name: 'Front Page Preview' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Juego de fiesta' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Solo Picks' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'En solitario' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Solo Picks' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Juego de fiesta products')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Cafeteria' })).toHaveAttribute('src', 'https://cdn.example/cafe.jpg');
     expect(screen.getByText('Cafeteria')).toBeInTheDocument();

@@ -348,6 +348,7 @@ const frontPagePreviewSql = `
     fpc.category_type,
     fpc.category_id,
     fpc.title,
+    fpc.title_display,
     fpc."order",
     coalesce(bc.name, bf.name, bm.name, '') as category_name,
     coalesce(bc.name_es, bf.name_es, bm.name_es, '') as category_name_es,

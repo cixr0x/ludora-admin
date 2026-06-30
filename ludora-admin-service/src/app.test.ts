@@ -528,7 +528,8 @@ describe('ludora admin service', () => {
             year_published: 2023
           }
         ],
-        title: 'Party Game'
+        title: 'Party Game',
+        title_display: 'Para empezar la noche'
       }
     ];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
@@ -545,6 +546,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0].sql);
     expect(sql).toContain('from front_page_categories fpc');
+    expect(sql).toContain('fpc.title_display');
     expect(sql).toContain('left join front_page_category_items fpci on fpci.front_page_category_id = fpc.id');
     expect(sql).toContain('left join active_item i on i.id = fpci.item_id');
     expect(sql).toContain('jsonb_agg');

@@ -195,6 +195,11 @@ function ProductTile({ product }: { product: FrontPageCategoryProduct }) {
 }
 
 function categoryTitle(category: FrontPagePreviewCategory) {
+  const titleDisplay = String(category.title_display ?? '').trim();
+  if (titleDisplay) {
+    return titleDisplay;
+  }
+
   const title = String(category.title ?? '').trim();
   const categoryName = String(category.category_name ?? '').trim();
   const translatedCategoryName = String(category.category_name_es ?? '').trim();
