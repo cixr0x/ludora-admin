@@ -55,14 +55,21 @@ const productDetailsEnrichmentService = productDetailsExtractionService
   : undefined;
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
 const itemMatchingService = createItemMatchingService(database, bggClient, translationService, bggItemImporter);
-const operationsClient =
-  config.discoveryRunner.mode === 'http'
-    ? createDiscoveryOperationsClient(config.discoveryRunner.apiUrl)
-    : createLocalDiscoveryOperationsClient({
+const localOperationsClient =
+  config.discoveryRunner.mode === 'local'
+    ? createLocalDiscoveryOperationsClient({
         envFile: config.discoveryRunner.envFile,
         packageDir: config.discoveryRunner.packageDir,
         pythonExecutable: config.discoveryRunner.pythonExecutable
-      });
+      })
+    : undefined;
+const operationsClient =
+  config.discoveryRunner.mode === 'http'
+    ? createDiscoveryOperationsClient(config.discoveryRunner.apiUrl)
+    : localOperationsClient;
+const shutdownOperationsClient = localOperationsClient
+  ? () => localOperationsClient.shutdown()
+  : async () => undefined;
 const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   database,
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
@@ -83,8 +90,23 @@ const server = app.listen(config.port, () => {
   console.log(`ludora-admin-service listening on port ${config.port}`);
 });
 
-process.on('SIGTERM', () => {
+let isShuttingDown = false;
+
+async function shutdown(): Promise<void> {
+  if (isShuttingDown) {
+    return;
+  }
+  isShuttingDown = true;
+  await shutdownOperationsClient();
   server.close(() => {
     process.exit(0);
   });
+}
+
+process.on('SIGINT', () => {
+  void shutdown();
+});
+
+process.on('SIGTERM', () => {
+  void shutdown();
 });

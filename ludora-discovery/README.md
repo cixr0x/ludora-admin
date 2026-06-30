@@ -110,6 +110,8 @@ GET  /health
 POST /operations/store-discovery-runs
 POST /operations/stores/{store_id}/item-discovery-runs
 POST /operations/item-update-runs
+POST /operations/item-embedding-runs
+POST /operations/store-discovery-runs/{run_id}/cancel
 GET  /operations/store-discovery-runs/latest
 GET  /operations/store-discovery-runs/{run_id}
 ```

@@ -16,6 +16,8 @@ export type SpawnDiscoveryProcess = (
 ) => ChildProcessWithoutNullStreams;
 
 type LocalDiscoveryOptions = {
+  cancelEscalationMs?: number;
+  cancelForceFailMs?: number;
   envFile: string;
   now?: () => Date;
   packageDir: string;
@@ -24,16 +26,22 @@ type LocalDiscoveryOptions = {
 };
 
 type ManagedRun = StoreDiscoveryRun & {
+  cancelEscalationTimer?: ReturnType<typeof setTimeout>;
+  cancelForceFailTimer?: ReturnType<typeof setTimeout>;
   child?: ChildProcessWithoutNullStreams;
+  settleRun?: (status: StoreDiscoveryRunStatus, result: StoreDiscoveryRun['result'], error: string | null) => void;
+  waiters?: Array<() => void>;
 };
 
 export function createLocalDiscoveryOperationsClient({
+  cancelEscalationMs = 10_000,
+  cancelForceFailMs = 5_000,
   envFile,
   now = () => new Date(),
   packageDir,
   pythonExecutable,
   spawnProcess = spawn
-}: LocalDiscoveryOptions): DiscoveryOperationsClient {
+}: LocalDiscoveryOptions): LocalDiscoveryOperationsClient {
   const runs = new Map<string, ManagedRun>();
   let latestRunId: string | null = null;
   let activeRunId: string | null = null;
@@ -85,11 +93,18 @@ export function createLocalDiscoveryOperationsClient({
         return;
       }
       settled = true;
+      clearCancellationTimers(run);
       finishRun(run, status, result, error, now());
       if (activeRunId === run.id) {
         activeRunId = null;
       }
+      const waiters = run.waiters ?? [];
+      run.waiters = [];
+      for (const waiter of waiters) {
+        waiter();
+      }
     };
+    run.settleRun = settleRun;
     child.on('error', (error) => {
       settleRun('failed', null, error.message);
     });
@@ -126,8 +141,7 @@ export function createLocalDiscoveryOperationsClient({
       if (activeRunId !== runId || !['running', 'cancelling'].includes(run.status)) {
         throw new DiscoveryOperationError('Run is not running', 409);
       }
-      run.status = 'cancelling';
-      run.child?.kill('SIGTERM');
+      requestCancellation(run);
       return publicRun(run);
     },
     async getLatestStoreDiscoveryRun(): Promise<StoreDiscoveryRun | null> {
@@ -153,9 +167,70 @@ export function createLocalDiscoveryOperationsClient({
     },
     async startStoreDiscoveryRun(): Promise<StoreDiscoveryRun> {
       return startRun('store_discovery', ['store-discovery']);
+    },
+    async shutdown(): Promise<void> {
+      const run = activeRunId ? runs.get(activeRunId) : null;
+      if (!run) {
+        return;
+      }
+      requestCancellation(run);
+      await waitForRunToSettle(run, cancelEscalationMs + cancelForceFailMs + 100);
     }
   };
+
+  function requestCancellation(run: ManagedRun): void {
+    if (run.status === 'running') {
+      run.status = 'cancelling';
+      run.child?.kill('SIGTERM');
+    }
+    scheduleCancellationEscalation(run);
+  }
+
+  function scheduleCancellationEscalation(run: ManagedRun): void {
+    clearCancellationTimers(run);
+    run.cancelEscalationTimer = setTimeout(() => {
+      run.cancelEscalationTimer = undefined;
+      if (activeRunId !== run.id || run.status !== 'cancelling') {
+        return;
+      }
+      run.child?.kill('SIGKILL');
+      run.cancelForceFailTimer = setTimeout(() => {
+        run.cancelForceFailTimer = undefined;
+        if (activeRunId === run.id && run.status === 'cancelling') {
+          run.settleRun?.('failed', null, 'Discovery operation did not exit after cancellation');
+        }
+      }, cancelForceFailMs);
+      run.cancelForceFailTimer.unref?.();
+    }, cancelEscalationMs);
+    run.cancelEscalationTimer.unref?.();
+  }
+
+  function waitForRunToSettle(run: ManagedRun, timeoutMs: number): Promise<void> {
+    if (activeRunId !== run.id) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const timeout = setTimeout(() => {
+        const waiters = run.waiters ?? [];
+        run.waiters = waiters.filter((waiter) => waiter !== resolve);
+        if (activeRunId === run.id && run.status === 'cancelling') {
+          run.settleRun?.('failed', null, 'Discovery operation did not exit during shutdown');
+        }
+        resolve();
+      }, timeoutMs);
+      timeout.unref?.();
+      const waiter = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      run.waiters = [...(run.waiters ?? []), waiter];
+    });
+  }
 }
+
+export type LocalDiscoveryOperationsClient = DiscoveryOperationsClient & {
+  shutdown(): Promise<void>;
+};
 
 function finishRun(
   run: ManagedRun,
@@ -169,6 +244,7 @@ function finishRun(
   run.error = error;
   run.result = result;
   run.status = status;
+  run.settleRun = undefined;
 }
 
 function publicRun(run: ManagedRun): StoreDiscoveryRun;
@@ -177,8 +253,26 @@ function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null {
   if (!run) {
     return null;
   }
-  const { child: _child, ...payload } = run;
+  const {
+    cancelEscalationTimer: _cancelEscalationTimer,
+    cancelForceFailTimer: _cancelForceFailTimer,
+    child: _child,
+    settleRun: _settleRun,
+    waiters: _waiters,
+    ...payload
+  } = run;
   return { ...payload };
+}
+
+function clearCancellationTimers(run: ManagedRun): void {
+  if (run.cancelEscalationTimer) {
+    clearTimeout(run.cancelEscalationTimer);
+    run.cancelEscalationTimer = undefined;
+  }
+  if (run.cancelForceFailTimer) {
+    clearTimeout(run.cancelForceFailTimer);
+    run.cancelForceFailTimer = undefined;
+  }
 }
 
 function parseResult(stdout: string, type: StoreDiscoveryRun['type']): StoreDiscoveryRun['result'] {

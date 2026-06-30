@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DiscoveryOperationError } from './discoveryOperations.js';
 import { createLocalDiscoveryOperationsClient, type SpawnDiscoveryProcess } from './localDiscoveryOperationsClient.js';
@@ -8,9 +8,13 @@ class FakeChildProcess extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
   killedWith: NodeJS.Signals | undefined;
+  killSignals: NodeJS.Signals[] = [];
 
   kill(signal?: NodeJS.Signals): boolean {
     this.killedWith = signal;
+    if (signal) {
+      this.killSignals.push(signal);
+    }
     return true;
   }
 
@@ -38,7 +42,7 @@ class FakeChildProcess extends EventEmitter {
   }
 }
 
-function createClient() {
+function createClient(overrides: Partial<Parameters<typeof createLocalDiscoveryOperationsClient>[0]> = {}) {
   const spawned: Array<{ command: string; args: string[]; child: FakeChildProcess; options: unknown }> = [];
   const spawnProcess: SpawnDiscoveryProcess = (command, args, options) => {
     const child = new FakeChildProcess();
@@ -50,12 +54,17 @@ function createClient() {
     now: () => new Date('2026-06-29T20:00:00.000Z'),
     packageDir: 'C:/PROJECTS/ludora/ludora-admin/ludora-discovery',
     pythonExecutable: 'python',
-    spawnProcess
+    spawnProcess,
+    ...overrides
   });
   return { client, spawned };
 }
 
 describe('local discovery operations client', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('starts store discovery by spawning the colocated Python operation CLI', async () => {
     const { client, spawned } = createClient();
 
@@ -257,6 +266,48 @@ describe('local discovery operations client', () => {
     await expect(client.cancelStoreDiscoveryRun('missing')).rejects.toMatchObject({
       message: 'Run not found',
       status: 404
+    });
+  });
+
+  it('escalates cancellation and frees the active slot when the child never closes', async () => {
+    vi.useFakeTimers();
+    const { client, spawned } = createClient({
+      cancelEscalationMs: 100,
+      cancelForceFailMs: 50
+    });
+    const run = await client.startStoreDiscoveryRun();
+
+    await client.cancelStoreDiscoveryRun(run.id);
+    expect(spawned[0].child.killSignals).toEqual(['SIGTERM']);
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(spawned[0].child.killSignals).toEqual(['SIGTERM', 'SIGKILL']);
+
+    await vi.advanceTimersByTimeAsync(50);
+    const failed = await client.getStoreDiscoveryRun(run.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.error).toBe('Discovery operation did not exit after cancellation');
+
+    await expect(client.startItemUpdateRun()).resolves.toMatchObject({
+      status: 'running',
+      type: 'item_update'
+    });
+  });
+
+  it('shutdown requests cancellation and waits for the active run to close', async () => {
+    const { client, spawned } = createClient();
+    const run = await client.startStoreDiscoveryRun();
+
+    const shutdown = client.shutdown();
+    expect(spawned[0].child.killSignals).toEqual(['SIGTERM']);
+
+    spawned[0].child.emit('close', null, 'SIGTERM');
+    await shutdown;
+
+    expect((await client.getStoreDiscoveryRun(run.id))?.status).toBe('cancelled');
+    await expect(client.startItemUpdateRun()).resolves.toMatchObject({
+      status: 'running',
+      type: 'item_update'
     });
   });
 });
