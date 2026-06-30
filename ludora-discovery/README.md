@@ -22,7 +22,7 @@ The filter is intentionally strict: accepted results must look like Mexican onli
 
 ## Quick Start
 
-From `C:\PROJECTS\ludora`:
+From `C:\PROJECTS\ludora\ludora-admin\ludora-discovery`:
 
 ```powershell
 python .\scripts\collect_boardgame_stores_mx.py --query-scope expanded --verbose
@@ -50,7 +50,7 @@ discovery_store_candidates
 Apply the shared schema before the first database-backed run:
 
 ```powershell
-psql "$env:LUDORA_DATABASE_URL" -f ..\database\schema.sql
+psql "$env:LUDORA_DATABASE_URL" -f ..\..\database\schema.sql
 ```
 
 Store candidates are persisted by default. To also extract raw listing candidates from accepted store homepages:
@@ -61,9 +61,11 @@ python .\scripts\collect_boardgame_stores_mx.py --collect-listings --listing-lim
 
 The database path writes only dirty discovery tables. Curated `stores`, `items`, and `offers` are created by the admin workflow.
 
-## Discovery API
+## Optional Discovery API
 
-Run the local operations API when admin needs to start discovery from the browser:
+The admin service runs discovery operations locally by default. The HTTP API is kept for direct debugging and fallback testing with `LUDORA_DISCOVERY_RUNNER=http`.
+
+Run the local operations API only when you need direct debugging or HTTP fallback testing:
 
 ```powershell
 $env:PYTHONPATH='src'
@@ -73,7 +75,7 @@ python -m ludora.api --host 127.0.0.1 --port 8001
 The API reads `BRAVE_SEARCH_API_KEY`, `LUDORA_DATABASE_URL`, and `BGG_API_TOKEN` from `.env` by default, matching the CLI. For local development you can point it at the admin-service env file if that is where the shared credentials live:
 
 ```powershell
-python -m ludora.api --host 127.0.0.1 --port 8001 --env-file ..\ludora-admin\ludora-admin-service\.env
+python -m ludora.api --host 127.0.0.1 --port 8001 --env-file ..\ludora-admin-service\.env
 ```
 
 Some stores block plain HTTP crawlers but allow a real browser session to read their product sitemap and product pages. Enable the browser-backed fallback before starting the API:

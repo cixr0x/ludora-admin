@@ -6,6 +6,7 @@ Admin application for reviewing dirty discovery data and curating Ludora's canon
 
 - `ludora-admin-service`: Node.js TypeScript Express service for admin APIs and Postgres access.
 - `ludora-admin-ui`: React TypeScript Vite app using MUI.
+- `ludora-discovery`: Python discovery package invoked by the admin service for operations.
 
 ## Service
 
@@ -17,7 +18,6 @@ npm run dev
 ```
 
 Set `LUDORA_DATABASE_URL` in `.env` before running database-backed routes.
-Set `LUDORA_DISCOVERY_API_URL` when using the Operations page. For local development it defaults to `http://localhost:8001`.
 
 OpenAI-backed admin translation and description generation use the official OpenAI API by default. To point those calls at a local OpenAI-compatible simulator, set:
 
@@ -57,17 +57,18 @@ The UI expects the service at `VITE_ADMIN_API_URL`, defaulting to `http://localh
 
 ## Operations
 
-The Operations page can start store discovery through `ludora-discovery`.
+The Operations page runs discovery through `ludora-admin-service`. The Python discovery package lives at `ludora-discovery/` inside this admin repo and is started by the service as a local child process when an operation begins.
 
-Start the discovery API first:
+Install discovery dependencies when setting up admin operations:
 
 ```powershell
-cd ..\ludora-discovery
-$env:PYTHONPATH='src'
-python -m ludora.api --host 127.0.0.1 --port 8001
+cd .\ludora-discovery
+python -m pip install -e .
 ```
 
-Then start `ludora-admin-service` and `ludora-admin-ui` normally.
+Then start `ludora-admin-service` and `ludora-admin-ui` normally. The admin service reads discovery credentials from its own `.env` by default through `LUDORA_DISCOVERY_ENV_FILE`.
+
+Set `LUDORA_DISCOVERY_RUNNER=http` only when intentionally testing against a separately started discovery API.
 
 ## Verification
 
