@@ -4,7 +4,7 @@ import express, { type ErrorRequestHandler, type Express } from 'express';
 import type { BggItemImporter } from './bgg/bggItemImporter.js';
 import type { DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
-import type { DiscoveryOperationsClient } from './discoveryOperationsClient.js';
+import type { DiscoveryOperationsClient } from './discoveryOperations.js';
 import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { createDescriptionGenerationRouter } from './routes/descriptionGeneration.js';
 import { createDiscoveryRouter } from './routes/discovery.js';

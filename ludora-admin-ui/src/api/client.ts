@@ -155,7 +155,7 @@ export type DescriptionGenerationResult = {
   prompt_version: string;
 };
 
-export type StoreDiscoveryRunStatus = 'running' | 'completed' | 'failed';
+export type StoreDiscoveryRunStatus = 'running' | 'cancelling' | 'cancelled' | 'completed' | 'failed';
 
 export type StoreDiscoveryRunResult = {
   accepted_stores: number;
@@ -389,6 +389,10 @@ export const adminApi = {
     }),
   startStoreDiscoveryRun: () =>
     fetchData<StoreDiscoveryRun>('/admin/operations/store-discovery-runs', {
+      method: 'POST'
+    }),
+  cancelStoreDiscoveryRun: (runId: string) =>
+    fetchData<StoreDiscoveryRun>(`/admin/operations/store-discovery-runs/${encodeURIComponent(runId)}/cancel`, {
       method: 'POST'
     })
 };

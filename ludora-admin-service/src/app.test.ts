@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from './app.js';
 import type { DescriptionGenerationRequest, DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
-import { DiscoveryApiError, type DiscoveryOperationsClient, type StoreDiscoveryRun } from './discoveryOperationsClient.js';
+import { DiscoveryOperationError, type DiscoveryOperationsClient, type StoreDiscoveryRun } from './discoveryOperations.js';
 import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { LocalCoverWorkflowError, type LocalCoverWorkflowManager, type LocalCoverWorkflowState } from './localCoverWorkflow.js';
 import type { ProductDetailsEnrichmentService } from './productDetailsExtraction/productDetailsExtractionService.js';
@@ -2685,6 +2685,7 @@ describe('ludora admin service', () => {
       type: 'store_discovery'
     };
     const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async () => run,
@@ -2716,6 +2717,7 @@ describe('ludora admin service', () => {
       type: 'store_discovery'
     };
     const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
       getLatestStoreDiscoveryRun: async () => run,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async () => run,
@@ -2825,21 +2827,57 @@ describe('ludora admin service', () => {
     expect(calls).toEqual([{ id: 920, options: { updateLinkedItem: true } }]);
   });
 
+  it('cancels running discovery operations through the discovery operations client', async () => {
+    const run: StoreDiscoveryRun = {
+      completed_at: null,
+      error: null,
+      id: 'run-1',
+      result: null,
+      started_at: '2026-06-27T08:00:00Z',
+      status: 'cancelling',
+      type: 'item_discovery'
+    };
+    const calls: string[] = [];
+    const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async (runId) => {
+        calls.push(runId);
+        return run;
+      },
+      getLatestStoreDiscoveryRun: async () => run,
+      getStoreDiscoveryRun: async () => run,
+      startItemDiscoveryRun: async () => run,
+      startItemEmbeddingRun: async () => run,
+      startItemUpdateRun: async () => run,
+      startStoreDiscoveryRun: async () => run
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient })).post(
+      '/admin/operations/store-discovery-runs/run-1/cancel'
+    );
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: run });
+    expect(calls).toEqual(['run-1']);
+  });
+
   it('preserves discovery API conflicts when store discovery is already running', async () => {
     const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => {
+        throw new DiscoveryOperationError('Store discovery is already running', 409);
+      },
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => null,
       startItemDiscoveryRun: async () => {
-        throw new DiscoveryApiError('Store discovery is already running', 409);
+        throw new DiscoveryOperationError('Store discovery is already running', 409);
       },
       startItemEmbeddingRun: async () => {
-        throw new DiscoveryApiError('Store discovery is already running', 409);
+        throw new DiscoveryOperationError('Store discovery is already running', 409);
       },
       startItemUpdateRun: async () => {
-        throw new DiscoveryApiError('Store discovery is already running', 409);
+        throw new DiscoveryOperationError('Store discovery is already running', 409);
       },
       startStoreDiscoveryRun: async () => {
-        throw new DiscoveryApiError('Store discovery is already running', 409);
+        throw new DiscoveryOperationError('Store discovery is already running', 409);
       }
     };
 
@@ -2874,6 +2912,7 @@ describe('ludora admin service', () => {
       }
     };
     const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async (storeId, websiteUrl) => {
@@ -2908,6 +2947,7 @@ describe('ludora admin service', () => {
     };
     const calls: string[] = [];
     const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async () => {
@@ -2949,6 +2989,7 @@ describe('ludora admin service', () => {
     };
     const calls: string[] = [];
     const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => run,
       startItemDiscoveryRun: async () => {
@@ -2975,6 +3016,9 @@ describe('ludora admin service', () => {
 
   it('returns 404 when starting item discovery for a missing clean store', async () => {
     const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => {
+        throw new Error('should not call discovery API');
+      },
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => null,
       startItemDiscoveryRun: async () => {

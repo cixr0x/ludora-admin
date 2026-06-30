@@ -201,6 +201,61 @@ describe('OperationsPage', () => {
     });
   });
 
+  it('cancels a running operation from the operations page', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              completed_at: null,
+              error: null,
+              id: 'run-active',
+              result: null,
+              started_at: '2026-06-27T08:00:00Z',
+              status: 'running',
+              type: 'item_discovery'
+            }
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 200
+          }
+        );
+      }
+      if (url.endsWith('/admin/operations/store-discovery-runs/run-active/cancel') && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              completed_at: null,
+              error: null,
+              id: 'run-active',
+              result: null,
+              started_at: '2026-06-27T08:00:00Z',
+              status: 'cancelling',
+              type: 'item_discovery'
+            }
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 202
+          }
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage />);
+
+    await screen.findByText('running');
+    await userEvent.click(screen.getByRole('button', { name: /Stop Operation/i }));
+
+    expect(await screen.findByText('cancelling')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/store-discovery-runs/run-active/cancel', {
+      method: 'POST'
+    });
+  });
+
   it('renders failed operation errors in the operations table', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);

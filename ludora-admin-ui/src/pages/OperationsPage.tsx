@@ -1,4 +1,5 @@
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import StopCircleIcon from '@mui/icons-material/StopCircle';
 import { Alert, Box, Button, Chip, CircularProgress, FormControlLabel, Paper, Radio, RadioGroup, Stack, Typography } from '@mui/material';
 import { useEffect, useState } from 'react';
 import {
@@ -148,6 +149,7 @@ export function OperationsPage() {
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [embeddingRefreshMode, setEmbeddingRefreshMode] = useState<'full' | 'missing'>('missing');
   const [startingOperation, setStartingOperation] = useState<'item_embeddings' | 'item_update' | 'store_discovery' | ''>('');
+  const [stoppingOperation, setStoppingOperation] = useState(false);
   const [error, setError] = useState('');
 
   useEffect(() => {
@@ -174,7 +176,7 @@ export function OperationsPage() {
   }, []);
 
   useEffect(() => {
-    if (run?.status !== 'running') {
+    if (run?.status !== 'running' && run?.status !== 'cancelling') {
       return undefined;
     }
 
@@ -194,7 +196,7 @@ export function OperationsPage() {
     return () => window.clearInterval(timer);
   }, [run?.status]);
 
-  const runIsActive = run?.status === 'running';
+  const runIsActive = run?.status === 'running' || run?.status === 'cancelling';
 
   async function handleStartStoreDiscovery() {
     setStartingOperation('store_discovery');
@@ -238,6 +240,23 @@ export function OperationsPage() {
     }
   }
 
+  async function handleStopOperation() {
+    if (!run || !runIsActive) {
+      return;
+    }
+    setStoppingOperation(true);
+    setError('');
+    try {
+      const cancelledRun = await adminApi.cancelStoreDiscoveryRun(run.id);
+      setRun(cancelledRun);
+      setLoadState('ready');
+    } catch {
+      setError('Operation could not be stopped.');
+    } finally {
+      setStoppingOperation(false);
+    }
+  }
+
   return (
     <Stack spacing={2}>
       <Box>
@@ -250,6 +269,31 @@ export function OperationsPage() {
       </Box>
 
       {error ? <Alert severity="error">{error}</Alert> : null}
+
+      {runIsActive ? (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+            <Box>
+              <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+                Active operation
+              </Typography>
+              <Typography color="text.secondary" variant="body2">
+                {run?.type} is {run?.status}.
+              </Typography>
+            </Box>
+            <Button
+              color="error"
+              disabled={stoppingOperation || run?.status === 'cancelling'}
+              startIcon={stoppingOperation || run?.status === 'cancelling' ? <CircularProgress color="inherit" size={16} /> : <StopCircleIcon />}
+              sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
+              variant="outlined"
+              onClick={handleStopOperation}
+            >
+              Stop Operation
+            </Button>
+          </Stack>
+        </Paper>
+      ) : null}
 
       <Paper variant="outlined" sx={{ p: 2 }}>
         <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>

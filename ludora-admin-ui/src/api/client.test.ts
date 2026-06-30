@@ -889,6 +889,31 @@ describe('fetchRows', () => {
     });
   });
 
+  it('cancels a running discovery operation with a POST request', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-5',
+      result: null,
+      started_at: '2026-06-27T08:00:00Z',
+      status: 'cancelling',
+      type: 'item_discovery'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.cancelStoreDiscoveryRun('run-5')).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/store-discovery-runs/run-5/cancel', {
+      method: 'POST'
+    });
+  });
+
   it('approves store candidates with a POST request', async () => {
     const store = { id: 'store-1', status: 'ACCEPTED', store_name: 'Accepted Store' };
     const { adminApi } = await importClient();

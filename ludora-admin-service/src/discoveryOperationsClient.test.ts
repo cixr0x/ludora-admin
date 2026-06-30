@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { DiscoveryApiError, createDiscoveryOperationsClient } from './discoveryOperationsClient.js';
+import { DiscoveryOperationError } from './discoveryOperations.js';
+import { createDiscoveryOperationsClient } from './discoveryOperationsClient.js';
 
 describe('createDiscoveryOperationsClient', () => {
   afterEach(() => {
@@ -40,7 +41,7 @@ describe('createDiscoveryOperationsClient', () => {
     );
 
     await expect(createDiscoveryOperationsClient('http://localhost:8001').startStoreDiscoveryRun()).rejects.toEqual(
-      new DiscoveryApiError('Store discovery is already running', 409)
+      new DiscoveryOperationError('Store discovery is already running', 409)
     );
   });
 
@@ -118,6 +119,30 @@ describe('createDiscoveryOperationsClient', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8001/operations/item-embedding-runs', {
       body: JSON.stringify({ refresh_mode: 'full' }),
       headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
+  it('cancels a running discovery operation', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-5',
+      result: null,
+      started_at: '2026-06-27T08:00:00Z',
+      status: 'cancelling',
+      type: 'item_discovery'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(createDiscoveryOperationsClient('http://localhost:8001/').cancelStoreDiscoveryRun('run-5')).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8001/operations/store-discovery-runs/run-5/cancel', {
       method: 'POST'
     });
   });

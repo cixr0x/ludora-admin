@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
-import type { DiscoveryOperationsClient } from '../discoveryOperationsClient.js';
+import type { DiscoveryOperationsClient } from '../discoveryOperations.js';
 
 export function createOperationsRouter(operationsClient: DiscoveryOperationsClient, database: Database): Router {
   const router = Router();
@@ -28,6 +28,15 @@ export function createOperationsRouter(operationsClient: DiscoveryOperationsClie
     try {
       const run = await operationsClient.getStoreDiscoveryRun(request.params.runId);
       response.json({ data: run });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/admin/operations/store-discovery-runs/:runId/cancel', async (request, response, next) => {
+    try {
+      const run = await operationsClient.cancelStoreDiscoveryRun(request.params.runId);
+      response.status(202).json({ data: run });
     } catch (error) {
       next(error);
     }
