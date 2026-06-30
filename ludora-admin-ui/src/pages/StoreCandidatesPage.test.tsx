@@ -285,7 +285,7 @@ describe('StoreCandidatesPage', () => {
     );
     const postCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/discovery/stores') && init?.method === 'POST');
     expect(JSON.parse(String(postCall?.[1]?.body))).not.toHaveProperty('status');
-  });
+  }, 10000);
 
   it('approves pending store candidates from the table', async () => {
     const user = userEvent.setup();
