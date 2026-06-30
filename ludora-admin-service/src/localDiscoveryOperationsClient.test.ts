@@ -294,6 +294,22 @@ describe('local discovery operations client', () => {
     });
   });
 
+  it('does not restart the escalation deadline when cancelling an already cancelling run', async () => {
+    vi.useFakeTimers();
+    const { client, spawned } = createClient({
+      cancelEscalationMs: 100,
+      cancelForceFailMs: 50
+    });
+    const run = await client.startStoreDiscoveryRun();
+
+    await client.cancelStoreDiscoveryRun(run.id);
+    await vi.advanceTimersByTimeAsync(90);
+    await client.cancelStoreDiscoveryRun(run.id);
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(spawned[0].child.killSignals).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
   it('shutdown requests cancellation and waits for the active run to close', async () => {
     const { client, spawned } = createClient();
     const run = await client.startStoreDiscoveryRun();

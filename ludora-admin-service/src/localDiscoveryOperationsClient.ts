@@ -182,8 +182,8 @@ export function createLocalDiscoveryOperationsClient({
     if (run.status === 'running') {
       run.status = 'cancelling';
       run.child?.kill('SIGTERM');
+      scheduleCancellationEscalation(run);
     }
-    scheduleCancellationEscalation(run);
   }
 
   function scheduleCancellationEscalation(run: ManagedRun): void {
