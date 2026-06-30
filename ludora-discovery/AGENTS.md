@@ -1,12 +1,15 @@
 # AGENTS.md
 
-## Fixed Local Ports
+## Discovery Package
 
-Use the fixed Codex startup command for the discovery operations API:
+This package is invoked by `ludora-admin-service` for normal admin operations.
 
-- Discovery service: `python scripts/dev_codex.py`
-- Fixed URL: `http://127.0.0.1:8001`
+Run tests from this directory with:
 
-Do not choose another port automatically. If port `8001` is busy, report the owning process and ask before stopping it or using a different port.
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Do not start a separate discovery API unless explicitly testing `LUDORA_DISCOVERY_RUNNER=http`.
 
 Do not run DDL or DML SQL commands without user confirmation.
