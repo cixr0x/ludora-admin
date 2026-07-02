@@ -1,5 +1,6 @@
 import AddIcon from '@mui/icons-material/Add';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import BalanceIcon from '@mui/icons-material/Balance';
 import DeleteIcon from '@mui/icons-material/Delete';
 import SaveIcon from '@mui/icons-material/Save';
 import ShuffleIcon from '@mui/icons-material/Shuffle';
@@ -244,6 +245,23 @@ export function FrontPageCategoriesPage() {
     }
   }
 
+  async function handleAssignBalancedItems() {
+    setIsAssigning(true);
+    setAssignmentError('');
+    setSaveMessage('');
+
+    try {
+      const result = await adminApi.assignBalancedFrontPageCategoryItems();
+      setSaveMessage(
+        `Balanced assignments complete: ${result.assigned_count} assigned, ${result.skipped_count} skipped.`
+      );
+    } catch {
+      setAssignmentError('Balanced assignments could not be completed.');
+    } finally {
+      setIsAssigning(false);
+    }
+  }
+
   const isFormMode = formMode !== 'table';
 
   return (
@@ -373,6 +391,14 @@ export function FrontPageCategoriesPage() {
               onClick={handleAssignRandomItems}
             >
               Assign Random Games
+            </Button>
+            <Button
+              disabled={isAssigning || rows.length === 0}
+              startIcon={isAssigning ? <CircularProgress size={16} /> : <BalanceIcon />}
+              variant="outlined"
+              onClick={handleAssignBalancedItems}
+            >
+              Assign Balanced Games
             </Button>
           </Box>
           <DataTable

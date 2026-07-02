@@ -204,6 +204,40 @@ describe('FrontPageCategoriesPage', () => {
     );
     expect(assignmentCall?.[1]).toEqual({ method: 'POST' });
   });
+
+  it('starts balanced item assignment from the table screen', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/front-page-categories' && !init) {
+        return jsonResponse([
+          {
+            category_id: 5,
+            category_name: 'Party Game',
+            category_type: 'category',
+            id: 1,
+            order: 10,
+            title: 'Need a laugh?'
+          }
+        ]);
+      }
+      if (pathOf(url) === '/front-page-categories/balanced-random-item-assignments' && init?.method === 'POST') {
+        return jsonResponse({ assigned_count: 3, skipped_count: 1, replaced_count: 4, removed_count: 1 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<FrontPageCategoriesPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Assign Balanced Games' }));
+
+    expect(await screen.findByText('Balanced assignments complete: 3 assigned, 1 skipped.')).toBeInTheDocument();
+    const assignmentCall = fetchMock.mock.calls.find(
+      ([url, init]) =>
+        pathOf(String(url)) === '/front-page-categories/balanced-random-item-assignments' && init?.method === 'POST'
+    );
+    expect(assignmentCall?.[1]).toEqual({ method: 'POST' });
+  });
 });
 
 function jsonResponse(data: unknown, status = 200) {
