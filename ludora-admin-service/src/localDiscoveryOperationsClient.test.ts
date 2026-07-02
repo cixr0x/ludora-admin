@@ -117,10 +117,10 @@ describe('local discovery operations client', () => {
     });
   });
 
-  it('starts item discovery with the store URL and platform', async () => {
+  it('starts item discovery with the store URL, platform, and store name', async () => {
     const { client, spawned } = createClient();
 
-    const run = await client.startItemDiscoveryRun(12, 'https://example.mx/', 'amazon');
+    const run = await client.startItemDiscoveryRun(12, 'https://example.mx/', 'amazon_brand', 'Hasbro Gaming');
 
     expect(run.status).toBe('running');
     expect(run.type).toBe('item_discovery');
@@ -134,8 +134,10 @@ describe('local discovery operations client', () => {
       '12',
       '--website-url',
       'https://example.mx/',
+      '--store-name',
+      'Hasbro Gaming',
       '--platform',
-      'amazon'
+      'amazon_brand'
     ]);
   });
 

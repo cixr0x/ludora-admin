@@ -103,6 +103,11 @@ Set `AI_ENABLED_CLASSIFIER=false` to use the older heuristic classifier.
 
 Amazon store item discovery calls the admin-service AI endpoint to normalize Amazon product titles before saving `store_items`. The route is `POST /admin/ai/amazon-title-extractions`, and it uses the shared admin-service AI configuration described in `..\docs\ai-api-flow.md`.
 
+Amazon supports two platform modes:
+
+- `amazon`: `website_url` is an Amazon Stores page. Discovery builds the store search URL from the page ID.
+- `amazon_brand`: `website_url` is an Amazon search URL such as `https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming`. Discovery crawls up to 5 result pages and only stores detail pages whose Amazon `Marca` value matches the configured store `name`.
+
 Item embeddings use the official OpenAI embeddings endpoint only. CodexAPI does not support embeddings, so `OPENAI_BASE_URL` is not used for embedding runs; configure `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL`.
 
 For new AI-backed discovery tasks, add the prompt and OpenAI client to admin-service, expose an admin endpoint, and call that endpoint from Python. The direct Python classifier is an existing operation internal that still uses the OpenAI-compatible Responses endpoint toggle; embeddings remain OpenAI-only by design.

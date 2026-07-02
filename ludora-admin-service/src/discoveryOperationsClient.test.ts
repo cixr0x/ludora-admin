@@ -76,11 +76,16 @@ describe('createDiscoveryOperationsClient', () => {
     );
 
     await expect(
-      createDiscoveryOperationsClient('http://localhost:8001/').startItemDiscoveryRun(12, 'https://example.mx/', 'amazon')
+      createDiscoveryOperationsClient('http://localhost:8001/').startItemDiscoveryRun(
+        12,
+        'https://example.mx/',
+        'amazon_brand',
+        'Hasbro Gaming'
+      )
     ).resolves.toEqual(run);
 
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:8001/operations/stores/12/item-discovery-runs', {
-      body: JSON.stringify({ platform: 'amazon', website_url: 'https://example.mx/' }),
+      body: JSON.stringify({ platform: 'amazon_brand', store_name: 'Hasbro Gaming', website_url: 'https://example.mx/' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });

@@ -43,9 +43,9 @@ export function createDiscoveryOperationsClient(baseUrl: string): DiscoveryOpera
         throw error;
       }
     },
-    startItemDiscoveryRun: (storeId: number, websiteUrl: string, platform = '') =>
+    startItemDiscoveryRun: (storeId: number, websiteUrl: string, platform = '', storeName = '') =>
       requestData<StoreDiscoveryRun>(baseUrl, `/operations/stores/${encodeURIComponent(storeId)}/item-discovery-runs`, {
-        body: JSON.stringify(itemDiscoveryRequestBody(websiteUrl, platform)),
+        body: JSON.stringify(itemDiscoveryRequestBody(websiteUrl, platform, storeName)),
         headers: { 'Content-Type': 'application/json' },
         method: 'POST'
       }),
@@ -81,7 +81,16 @@ function buildUrl(baseUrl: string, path: string) {
   return `${baseUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 }
 
-function itemDiscoveryRequestBody(websiteUrl: string, platform: string): { platform?: string; website_url: string } {
+function itemDiscoveryRequestBody(
+  websiteUrl: string,
+  platform: string,
+  storeName: string
+): { platform?: string; store_name?: string; website_url: string } {
   const normalizedPlatform = platform.trim().toLowerCase();
-  return normalizedPlatform ? { platform: normalizedPlatform, website_url: websiteUrl } : { website_url: websiteUrl };
+  const normalizedStoreName = storeName.trim();
+  return {
+    ...(normalizedPlatform ? { platform: normalizedPlatform } : {}),
+    ...(normalizedStoreName ? { store_name: normalizedStoreName } : {}),
+    website_url: websiteUrl
+  };
 }

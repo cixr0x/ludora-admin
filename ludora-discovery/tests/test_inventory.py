@@ -133,6 +133,46 @@ class InventoryTests(unittest.TestCase):
             repository,
         ))
 
+    def test_collect_store_inventory_routes_amazon_brand_platform_to_brand_crawler(self):
+        repository = FakeRepository()
+        expected_records = [DiscoveryItemCandidateRecord(store_id=12, source_url="https://www.amazon.com.mx/dp/B0HASBRO01", title="Clue")]
+
+        with patch("ludora.inventory.crawl_amazon_brand_inventory", return_value=expected_records) as brand_crawler, patch(
+            "ludora.inventory.crawl_store_product_details"
+        ) as generic_crawler:
+            records = collect_store_inventory(
+                "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming",
+                12,
+                repository,
+                platform="amazon_brand",
+                store_name="Hasbro Gaming",
+            )
+
+        self.assertEqual(records, expected_records)
+        generic_crawler.assert_not_called()
+        brand_crawler.assert_called_once()
+        self.assertEqual(brand_crawler.call_args.args[:3], (
+            "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming",
+            12,
+            repository,
+        ))
+        self.assertEqual(brand_crawler.call_args.kwargs["brand_name"], "Hasbro Gaming")
+
+    def test_collect_store_inventory_enables_browser_fetch_for_godaddy_platform(self):
+        repository = FakeRepository()
+
+        with patch("ludora.inventory.crawl_store_product_details", return_value=[]) as generic_crawler:
+            collect_store_inventory(
+                "https://avalonstore.com.mx/",
+                12,
+                repository,
+                platform="godaddy_website_builder",
+                browser_sitemap_fetch_enabled=False,
+            )
+
+        generic_crawler.assert_called_once()
+        self.assertTrue(generic_crawler.call_args.kwargs["browser_sitemap_fetch_enabled"])
+
     def test_crawl_store_product_details_uses_browser_for_blocked_detail_page(self):
         challenge_html = """
         <!DOCTYPE html>

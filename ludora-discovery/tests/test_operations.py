@@ -111,7 +111,13 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ) as openai_item_classifier, patch(
             "ludora.operations.collect_store_inventory", return_value=records
         ) as collect_store_inventory:
-            result = run_item_discovery(store_id=12, website_url="https://example.mx/", platform="amazon", env_file="custom.env")
+            result = run_item_discovery(
+                store_id=12,
+                website_url="https://example.mx/",
+                platform="amazon_brand",
+                store_name="Hasbro Gaming",
+                env_file="custom.env",
+            )
 
         resolve_database_url.assert_called_once()
         self.assertEqual(resolve_database_url.call_args.kwargs["dotenv_path"], "custom.env")
@@ -138,7 +144,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             "https://example.mx/",
             12,
             repository,
-            platform="amazon",
+            platform="amazon_brand",
+            store_name="Hasbro Gaming",
             browser_sitemap_fetch_enabled=True,
             item_classifier=ai_classifier.apply_item_classification,
             item_processor=item_processor,
@@ -375,6 +382,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             store_id=12,
             website_url="https://example.mx/",
             platform="amazon",
+            store_name="",
             env_file="custom.env",
             cancellation_token=ANY,
         )

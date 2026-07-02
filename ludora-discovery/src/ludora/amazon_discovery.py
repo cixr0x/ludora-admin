@@ -5,7 +5,7 @@ import time
 import unicodedata
 from collections.abc import Callable, Iterable
 from html.parser import HTMLParser
-from urllib.parse import urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from ludora.cancellation import CancellationToken, raise_if_cancelled
 from ludora.item_classification import apply_item_classification
@@ -16,6 +16,7 @@ from ludora.webfetch import FetchResult
 
 
 DEFAULT_AMAZON_STORE_SEARCH_TERMS = ("jue",)
+DEFAULT_AMAZON_BRAND_MAX_PAGES = 5
 ItemTitleExtractor = Callable[[DiscoveryItemCandidateRecord], str]
 ASIN_RE = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?#]|$)", re.IGNORECASE)
 GENERIC_LINK_TEXT = {
@@ -77,6 +78,73 @@ def crawl_amazon_store_inventory(
     cancellation_token: CancellationToken | None = None,
     delay_seconds: float = 1.0,
 ) -> list[DiscoveryItemCandidateRecord]:
+    search_urls = [
+        build_amazon_store_search_url(store_url, str(raw_term).strip())
+        for raw_term in search_terms
+        if str(raw_term).strip()
+    ]
+    return _crawl_amazon_search_inventory(
+        search_urls,
+        store_id,
+        repository,
+        browser_fetcher=browser_fetcher,
+        item_classifier=item_classifier,
+        item_processor=item_processor,
+        item_title_extractor=item_title_extractor,
+        cancellation_token=cancellation_token,
+        delay_seconds=delay_seconds,
+        limit=limit,
+    )
+
+
+def crawl_amazon_brand_inventory(
+    brand_search_url: str,
+    store_id: int | None,
+    repository: ItemCandidateRepository,
+    *,
+    brand_name: str,
+    limit: int | None = None,
+    browser_fetcher: Callable[[str], FetchResult | None] | None = None,
+    item_classifier: ItemClassifier = apply_item_classification,
+    item_processor: ItemCandidateProcessor | None = None,
+    item_title_extractor: ItemTitleExtractor | None = None,
+    cancellation_token: CancellationToken | None = None,
+    delay_seconds: float = 1.0,
+    max_pages: int = DEFAULT_AMAZON_BRAND_MAX_PAGES,
+) -> list[DiscoveryItemCandidateRecord]:
+    if not brand_name.strip():
+        raise ValueError("Amazon brand crawl requires a brand name")
+    return _crawl_amazon_search_inventory(
+        [brand_search_url],
+        store_id,
+        repository,
+        browser_fetcher=browser_fetcher,
+        item_classifier=item_classifier,
+        item_processor=item_processor,
+        item_title_extractor=item_title_extractor,
+        cancellation_token=cancellation_token,
+        delay_seconds=delay_seconds,
+        limit=limit,
+        expected_brand_name=brand_name,
+        max_search_pages=max(1, max_pages),
+    )
+
+
+def _crawl_amazon_search_inventory(
+    search_urls: Iterable[str],
+    store_id: int | None,
+    repository: ItemCandidateRepository,
+    *,
+    browser_fetcher: Callable[[str], FetchResult | None] | None = None,
+    item_classifier: ItemClassifier = apply_item_classification,
+    item_processor: ItemCandidateProcessor | None = None,
+    item_title_extractor: ItemTitleExtractor | None = None,
+    cancellation_token: CancellationToken | None = None,
+    delay_seconds: float = 1.0,
+    limit: int | None = None,
+    expected_brand_name: str = "",
+    max_search_pages: int = 1,
+) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     browser_session = None
     if browser_fetcher is None:
@@ -88,59 +156,70 @@ def crawl_amazon_store_inventory(
     records: list[DiscoveryItemCandidateRecord] = []
     seen_asins: set[str] = set()
     try:
-        for raw_term in search_terms:
+        for raw_search_url in search_urls:
             raise_if_cancelled(cancellation_token)
-            term = str(raw_term).strip()
-            if not term:
+            first_search_url = str(raw_search_url).strip()
+            if not first_search_url:
                 continue
-            search_url = build_amazon_store_search_url(store_url, term)
-            fetched_listing = browser_fetcher(search_url)
-            if fetched_listing is None:
-                continue
-            listing_url = fetched_listing.url or search_url
-            listing_candidates = _extract_amazon_listing_candidates(
-                html=fetched_listing.text,
-                page_url=listing_url,
-                store_id=store_id,
-            )
-            for listing_candidate in listing_candidates:
+            for page_number in range(1, max_search_pages + 1):
                 raise_if_cancelled(cancellation_token)
-                asin = listing_candidate.store_sku
-                if asin in seen_asins:
+                search_url = first_search_url if page_number == 1 else _amazon_search_page_url(first_search_url, page_number)
+                fetched_listing = browser_fetcher(search_url)
+                if fetched_listing is None:
                     continue
-                seen_asins.add(asin)
-                if repository.item_candidate_exists(listing_candidate.store_id, listing_candidate.source_url):
-                    continue
+                listing_url = fetched_listing.url or search_url
+                listing_candidates = _extract_amazon_listing_candidates(
+                    html=fetched_listing.text,
+                    page_url=listing_url,
+                    store_id=store_id,
+                )
+                if not listing_candidates:
+                    break
+                for listing_candidate in listing_candidates:
+                    raise_if_cancelled(cancellation_token)
+                    asin = listing_candidate.store_sku
+                    if asin in seen_asins:
+                        continue
+                    seen_asins.add(asin)
+                    if repository.item_candidate_exists(listing_candidate.store_id, listing_candidate.source_url):
+                        continue
 
-                fetched_detail = browser_fetcher(listing_candidate.source_url)
-                if fetched_detail is not None:
-                    detail_candidate = _extract_amazon_detail_candidate(
-                        html=fetched_detail.text,
-                        product_url=listing_candidate.source_url,
-                        store_id=store_id,
-                        source_listing_url=listing_url,
-                        search_title=listing_candidate.title,
-                    )
-                else:
-                    detail_candidate = listing_candidate
-                    detail_candidate.raw_payload = {
-                        "amazon": {
-                            "asin": asin,
-                            "search_title": listing_candidate.title,
+                    fetched_detail = browser_fetcher(listing_candidate.source_url)
+                    if fetched_detail is None:
+                        if expected_brand_name:
+                            continue
+                        detail_candidate = listing_candidate
+                        detail_candidate.raw_payload = {
+                            "amazon": {
+                                "asin": asin,
+                                "search_title": listing_candidate.title,
+                            }
                         }
-                    }
+                    else:
+                        detail_candidate = _extract_amazon_detail_candidate(
+                            html=fetched_detail.text,
+                            product_url=listing_candidate.source_url,
+                            store_id=store_id,
+                            source_listing_url=listing_url,
+                            search_title=listing_candidate.title,
+                        )
 
-                raise_if_cancelled(cancellation_token)
-                _apply_item_title_extractor(detail_candidate, item_title_extractor)
-                item_classifier(detail_candidate)
-                upsert_result = repository.upsert_item_candidate(detail_candidate)
-                if item_processor is not None and getattr(upsert_result, "should_process", False):
-                    item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
-                records.append(detail_candidate)
+                    if expected_brand_name and not _amazon_brand_matches(detail_candidate, expected_brand_name):
+                        continue
+
+                    raise_if_cancelled(cancellation_token)
+                    _apply_item_title_extractor(detail_candidate, item_title_extractor)
+                    item_classifier(detail_candidate)
+                    upsert_result = repository.upsert_item_candidate(detail_candidate)
+                    if item_processor is not None and getattr(upsert_result, "should_process", False):
+                        item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
+                    records.append(detail_candidate)
+                    if limit is not None and len(records) >= limit:
+                        return records
+                    if delay_seconds > 0:
+                        time.sleep(delay_seconds)
                 if limit is not None and len(records) >= limit:
                     return records
-                if delay_seconds > 0:
-                    time.sleep(delay_seconds)
         return records
     finally:
         if browser_session is not None:
@@ -449,9 +528,12 @@ def _extract_amazon_detail_candidate(
             "Edad",
         )
     )
+    brand = _detail_value(parser.product_details, "Marca", "Nombre de la marca", "Brand")
+    manufacturer = _detail_value(parser.product_details, "Fabricante", "Manufacturer")
     raw_payload: dict[str, object] = {
         "amazon": {
             "asin": asin,
+            "brand": brand,
             "bullets": parser.bullets,
             "product_title": title,
             "product_details": parser.product_details,
@@ -464,10 +546,7 @@ def _extract_amazon_detail_candidate(
         source_url=canonical_url,
         source_listing_url=source_listing_url,
         title=title,
-        publisher=_first_text(
-            _detail_value(parser.product_details, "Fabricante", "Manufacturer"),
-            _detail_value(parser.product_details, "Marca", "Nombre de la marca", "Brand"),
-        ),
+        publisher=_first_text(manufacturer, brand),
         description=description,
         item_type=_infer_item_type(title, canonical_url),
         min_players=min_players,
@@ -505,6 +584,39 @@ def _apply_item_title_extractor(
         amazon_payload["extracted_game_title"] = extracted_title
     record.title = extracted_title
     record.item_type = _infer_item_type(record.title, record.source_url)
+
+
+def _amazon_brand_matches(record: DiscoveryItemCandidateRecord, expected_brand_name: str) -> bool:
+    expected = _normalize_words(expected_brand_name)
+    if not expected:
+        return False
+    actual = _normalize_words(_amazon_brand(record))
+    return actual == expected
+
+
+def _amazon_brand(record: DiscoveryItemCandidateRecord) -> str:
+    amazon_payload = record.raw_payload.get("amazon")
+    if not isinstance(amazon_payload, dict):
+        return ""
+    brand = amazon_payload.get("brand")
+    if isinstance(brand, str) and brand.strip():
+        return brand
+    product_details = amazon_payload.get("product_details")
+    if isinstance(product_details, dict):
+        return _detail_value(
+            {str(label): str(value) for label, value in product_details.items()},
+            "Marca",
+            "Nombre de la marca",
+            "Brand",
+        )
+    return ""
+
+
+def _amazon_search_page_url(search_url: str, page_number: int) -> str:
+    parsed = urlparse(search_url)
+    query_pairs = [(key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True) if key != "page"]
+    query_pairs.append(("page", str(page_number)))
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, urlencode(query_pairs), parsed.fragment))
 
 
 def _store_page_id(path: str) -> str:

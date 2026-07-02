@@ -13,7 +13,7 @@ class RunManager(Protocol):
     def start_store_discovery(self):
         ...
 
-    def start_item_discovery(self, store_id: int, website_url: str, platform: str = ""):
+    def start_item_discovery(self, store_id: int, website_url: str, platform: str = "", store_name: str = ""):
         ...
 
     def start_item_update(self):
@@ -56,12 +56,13 @@ def route_request(
         request_body = body or {}
         website_url = str(request_body.get("website_url", "")).strip()
         platform = str(request_body.get("platform", "")).strip().casefold()
+        store_name = str(request_body.get("store_name", "")).strip()
         if store_id <= 0:
             return 400, {"error": {"message": "store id must be a positive integer"}}
         if not website_url:
             return 400, {"error": {"message": "website_url is required"}}
         try:
-            run = manager.start_item_discovery(store_id, website_url, platform)
+            run = manager.start_item_discovery(store_id, website_url, platform, store_name)
         except OperationAlreadyRunning as exc:
             return 409, {"error": {"message": str(exc)}}
         return 202, {"data": run.to_dict()}

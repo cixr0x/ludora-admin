@@ -5,7 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.amazon_discovery import build_amazon_store_search_url, crawl_amazon_store_inventory
+from ludora.amazon_discovery import build_amazon_store_search_url, crawl_amazon_brand_inventory, crawl_amazon_store_inventory
 from ludora.database import ItemCandidateUpsertResult
 from ludora.webfetch import FetchResult
 
@@ -170,6 +170,130 @@ class AmazonDiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(records[0].raw_payload["amazon"]["extracted_game_title"], "Yokai Pagoda")
 
+    def test_crawls_brand_search_and_stores_only_matching_brand_products(self):
+        brand_search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"
+        search_html = """
+        <html><body>
+          <a href="/Hasbro-Gaming-Clue/dp/B0HASBRO01">Hasbro Gaming | Clue | Juego de mesa</a>
+          <a href="/Mattel-Games-Uno/dp/B0MATTEL01">Mattel Games | UNO</a>
+        </body></html>
+        """
+        hasbro_product_html = """
+        <html><body>
+          <span id="productTitle">Hasbro Gaming | Clue | Juego de misterio</span>
+          <table>
+            <tr><th>Marca</th><td>Hasbro Gaming</td></tr>
+            <tr><th>ASIN</th><td>B0HASBRO01</td></tr>
+          </table>
+        </body></html>
+        """
+        mattel_product_html = """
+        <html><body>
+          <span id="productTitle">Mattel Games | UNO | Juego de cartas</span>
+          <table>
+            <tr><th>Marca</th><td>Mattel Games</td></tr>
+            <tr><th>ASIN</th><td>B0MATTEL01</td></tr>
+          </table>
+        </body></html>
+        """
+        fetched_urls = []
+
+        def fetcher(url):
+            fetched_urls.append(url)
+            if url == brand_search_url:
+                return FetchResult(url=url, text=search_html)
+            if "/s?" in url:
+                return FetchResult(url=url, text="<html><body>No more results</body></html>")
+            if url.endswith("/B0HASBRO01"):
+                return FetchResult(url=url, text=hasbro_product_html)
+            return FetchResult(url=url, text=mattel_product_html)
+
+        classified = []
+
+        def classifier(record):
+            classified.append(record.title)
+            return record
+
+        repository = FakeRepository()
+        records = crawl_amazon_brand_inventory(
+            brand_search_url,
+            12,
+            repository,
+            brand_name="Hasbro Gaming",
+            browser_fetcher=fetcher,
+            item_classifier=classifier,
+            item_title_extractor=lambda record: "Clue",
+            delay_seconds=0,
+        )
+
+        self.assertEqual(
+            fetched_urls,
+            [
+                brand_search_url,
+                "https://www.amazon.com.mx/dp/B0HASBRO01",
+                "https://www.amazon.com.mx/dp/B0MATTEL01",
+                "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming&page=2",
+            ],
+        )
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].title, "Clue")
+        self.assertEqual(records[0].publisher, "Hasbro Gaming")
+        self.assertEqual(records[0].raw_payload["amazon"]["brand"], "Hasbro Gaming")
+        self.assertEqual(records[0].raw_payload["amazon"]["extracted_game_title"], "Clue")
+        self.assertEqual(classified, ["Clue"])
+        self.assertEqual([record.source_url for record in repository.item_records], ["https://www.amazon.com.mx/dp/B0HASBRO01"])
+
+    def test_crawls_brand_search_up_to_five_pages(self):
+        brand_search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"
+        fetched_urls = []
+
+        def fetcher(url):
+            fetched_urls.append(url)
+            if "/s?" in url:
+                page = _page_number(url)
+                return FetchResult(
+                    url=url,
+                    text=f'<a href="/Hasbro-Gaming-Game-{page}/dp/B0PAGE{page:04d}">Hasbro Gaming | Game {page}</a>',
+                )
+            asin = url.rsplit("/", 1)[-1]
+            return FetchResult(
+                url=url,
+                text=f"""
+                <html><body>
+                  <span id="productTitle">Hasbro Gaming | Game {asin[-4:]}</span>
+                  <table>
+                    <tr><th>Marca</th><td>Hasbro Gaming</td></tr>
+                    <tr><th>ASIN</th><td>{asin}</td></tr>
+                  </table>
+                </body></html>
+                """,
+            )
+
+        repository = FakeRepository()
+        records = crawl_amazon_brand_inventory(
+            brand_search_url,
+            12,
+            repository,
+            brand_name="Hasbro Gaming",
+            browser_fetcher=fetcher,
+            delay_seconds=0,
+        )
+
+        search_urls = [url for url in fetched_urls if "/s?" in url]
+        self.assertEqual(
+            search_urls,
+            [
+                brand_search_url,
+                "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming&page=2",
+                "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming&page=3",
+                "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming&page=4",
+                "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming&page=5",
+            ],
+        )
+        self.assertEqual(len(records), 5)
+        self.assertEqual(len(repository.item_records), 5)
+        self.assertNotIn("page=6", " ".join(fetched_urls))
+
     def test_skips_existing_asins_before_fetching_details(self):
         product_url = "https://www.amazon.com.mx/dp/B0DZL3YFC5"
         repository = FakeRepository(existing_urls={(12, product_url)})
@@ -193,6 +317,12 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(records, [])
         self.assertEqual(repository.exists_checks, [(12, product_url)])
         self.assertEqual(len(fetched_urls), 1)
+
+
+def _page_number(url):
+    if "page=" not in url:
+        return 1
+    return int(url.rsplit("page=", 1)[1].split("&", 1)[0])
 
 
 if __name__ == "__main__":

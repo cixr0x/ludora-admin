@@ -154,7 +154,7 @@ export function createLocalDiscoveryOperationsClient({
     async getStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun | null> {
       return publicRun(runs.get(runId) ?? null);
     },
-    async startItemDiscoveryRun(storeId: number, websiteUrl: string, platform = ''): Promise<StoreDiscoveryRun> {
+    async startItemDiscoveryRun(storeId: number, websiteUrl: string, platform = '', storeName = ''): Promise<StoreDiscoveryRun> {
       const args = [
         'item-discovery',
         '--store-id',
@@ -162,6 +162,10 @@ export function createLocalDiscoveryOperationsClient({
         '--website-url',
         websiteUrl
       ];
+      const normalizedStoreName = storeName.trim();
+      if (normalizedStoreName) {
+        args.push('--store-name', normalizedStoreName);
+      }
       const normalizedPlatform = platform.trim().toLowerCase();
       if (normalizedPlatform) {
         args.push('--platform', normalizedPlatform);

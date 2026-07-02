@@ -25,6 +25,7 @@ def build_parser() -> argparse.ArgumentParser:
     item_discovery = subparsers.add_parser("item-discovery")
     item_discovery.add_argument("--store-id", type=int, required=True)
     item_discovery.add_argument("--website-url", required=True)
+    item_discovery.add_argument("--store-name", default="")
     item_discovery.add_argument("--platform", default="")
 
     subparsers.add_parser("item-update")
@@ -60,6 +61,7 @@ def _run_command(args: argparse.Namespace, cancellation_token: CancellationToken
         return run_item_discovery(
             store_id=args.store_id,
             website_url=args.website_url,
+            store_name=args.store_name,
             platform=args.platform.strip().casefold(),
             env_file=args.env_file,
             cancellation_token=cancellation_token,

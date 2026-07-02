@@ -665,6 +665,193 @@ describe('ludora admin service', () => {
     expect(query.params).toEqual(['77']);
   });
 
+  it('returns the next item for TikTok tutorial curation', async () => {
+    const row = {
+      canonical_name: 'Coffee Rush',
+      canonical_name_es: 'Coffee Rush',
+      description: 'Serve customers and make coffee under pressure.',
+      description_es: 'Atiende clientes y prepara cafe bajo presion.',
+      id: 77,
+      image_url: 'https://example.com/coffee-rush.jpg',
+      image_url_es: 'https://example.com/coffee-rush-es.jpg',
+      item_type: 'base_game'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/admin/tutorial-curation/next');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    const query = queries[0];
+    const sql = normalizeSql(query.sql);
+    expect(sql).toContain('from active_item i');
+    expect(sql).toContain('i.is_expansion = false');
+    expect(sql).toContain('i.description');
+    expect(sql).toContain('i.description_es');
+    expect(sql).toContain('i.image_url');
+    expect(sql).toContain('i.image_url_es');
+    expect(sql).toContain('not exists');
+    expect(sql).toContain('from tutorial_links tl');
+    expect(sql).toContain('tl.item_id = i.id');
+    expect(sql).toContain('tl.source = $1');
+    expect(sql).toContain('i.id <> all($2::bigint[])');
+    expect(sql).toContain("tl.status in ('candidate', 'published')");
+    expect(sql).toContain('limit 1');
+    expect(query.params).toEqual(['tiktok', []]);
+  });
+
+  it('excludes locally skipped items from TikTok tutorial curation', async () => {
+    const row = {
+      canonical_name: 'Azul',
+      canonical_name_es: 'Azul',
+      id: 88,
+      item_type: 'base_game'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).get(
+      '/admin/tutorial-curation/next?exclude_item_ids=77,99'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    const query = queries[0];
+    expect(normalizeSql(query.sql)).toContain('from active_item i');
+    expect(normalizeSql(query.sql)).toContain('i.is_expansion = false');
+    expect(normalizeSql(query.sql)).toContain('i.id <> all($2::bigint[])');
+    expect(query.params).toEqual(['tiktok', [77, 99]]);
+  });
+
+  it('returns null when no TikTok tutorial curation item is available', async () => {
+    const database: Database = {
+      query: async () => ({ rows: [] })
+    };
+
+    const response = await request(createApp({ database })).get('/admin/tutorial-curation/next');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: null });
+  });
+
+  it('creates a published TikTok tutorial link for an item', async () => {
+    const savedRow = {
+      id: 123,
+      item_id: 77,
+      language: 'es',
+      source: 'tiktok',
+      status: 'published',
+      title: 'Como jugar Coffee Rush',
+      url: 'https://www.tiktok.com/@creator/video/7552741217180716308'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        const normalized = normalizeSql(sql);
+        if (normalized.includes('from items')) {
+          return { rows: [{ id: 77 }] };
+        }
+        if (normalized.includes('from tutorial_links') && normalized.includes('limit 1')) {
+          return { rows: [] };
+        }
+        return { rows: [savedRow] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/admin/tutorial-curation/items/77/tutorial-links')
+      .send({
+        title: 'Como jugar Coffee Rush',
+        url: 'https://www.tiktok.com/@creator/video/7552741217180716308'
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({ data: savedRow });
+    expect(queries).toHaveLength(3);
+    expect(normalizeSql(queries[0].sql)).toContain('from items');
+    expect(queries[0].params).toEqual([77]);
+    expect(normalizeSql(queries[1].sql)).toContain('from tutorial_links');
+    expect(queries[1].params).toEqual([77, 'https://www.tiktok.com/@creator/video/7552741217180716308']);
+    const insertQuery = queries[2];
+    expect(normalizeSql(insertQuery.sql)).toContain('insert into tutorial_links');
+    expect(normalizeSql(insertQuery.sql)).toContain('returning id, item_id, url, title, language, source, status, created_at');
+    expect(insertQuery.params).toEqual([
+      77,
+      'https://www.tiktok.com/@creator/video/7552741217180716308',
+      'Como jugar Coffee Rush',
+      'es',
+      'tiktok',
+      'published'
+    ]);
+  });
+
+  it('updates an existing TikTok tutorial link as published for an item url', async () => {
+    const savedRow = {
+      id: 123,
+      item_id: 77,
+      language: 'es',
+      source: 'tiktok',
+      status: 'published',
+      title: 'Coffee Rush overview',
+      url: 'https://www.tiktok.com/@creator/video/7552741217180716308'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        const normalized = normalizeSql(sql);
+        if (normalized.includes('from items')) {
+          return { rows: [{ id: 77 }] };
+        }
+        if (normalized.includes('from tutorial_links') && normalized.includes('limit 1')) {
+          return { rows: [{ id: 123 }] };
+        }
+        return { rows: [savedRow] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/admin/tutorial-curation/items/77/tutorial-links')
+      .send({
+        title: 'Coffee Rush overview',
+        url: 'https://www.tiktok.com/@creator/video/7552741217180716308'
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: savedRow });
+    const updateQuery = queries[2];
+    expect(normalizeSql(updateQuery.sql)).toContain('update tutorial_links');
+    expect(normalizeSql(updateQuery.sql)).toContain('where id = $5');
+    expect(updateQuery.params).toEqual(['Coffee Rush overview', 'es', 'tiktok', 'published', 123]);
+  });
+
+  it('rejects non-TikTok tutorial curation urls', async () => {
+    const database: Database = {
+      query: async () => {
+        throw new Error('should not query database');
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/admin/tutorial-curation/items/77/tutorial-links')
+      .send({ url: 'https://example.com/not-tiktok' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: { message: 'url must be a TikTok video URL' } });
+  });
+
   it('returns discovery item candidates linked to a catalog item', async () => {
     const rows = [
       {
@@ -3013,21 +3200,22 @@ describe('ludora admin service', () => {
       status: 'running',
       type: 'item_discovery'
     };
-    const calls: Array<{ storeId: number; websiteUrl: string; platform: string }> = [];
+    const calls: Array<{ storeId: number; websiteUrl: string; platform: string; storeName: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
         expect(normalizeSql(sql)).toContain('from stores');
+        expect(normalizeSql(sql)).toContain('name');
         expect(normalizeSql(sql)).toContain('platform');
         expect(params).toEqual(['12']);
-        return { rows: [{ id: 12, platform: 'amazon', website_url: 'https://example.mx/' }] };
+        return { rows: [{ id: 12, name: 'Hasbro Gaming', platform: 'amazon_brand', website_url: 'https://example.mx/' }] };
       }
     };
     const operationsClient: DiscoveryOperationsClient = {
       cancelStoreDiscoveryRun: async () => run,
       getLatestStoreDiscoveryRun: async () => null,
       getStoreDiscoveryRun: async () => run,
-      startItemDiscoveryRun: async (storeId, websiteUrl, platform) => {
-        calls.push({ storeId, platform, websiteUrl });
+      startItemDiscoveryRun: async (storeId, websiteUrl, platform, storeName) => {
+        calls.push({ storeId, platform, storeName, websiteUrl });
         return run;
       },
       startItemEmbeddingRun: async () => run,
@@ -3041,7 +3229,7 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(202);
     expect(response.body).toEqual({ data: run });
-    expect(calls).toEqual([{ storeId: 12, platform: 'amazon', websiteUrl: 'https://example.mx/' }]);
+    expect(calls).toEqual([{ storeId: 12, platform: 'amazon_brand', storeName: 'Hasbro Gaming', websiteUrl: 'https://example.mx/' }]);
   });
 
   it('starts item update runs through the discovery operations client', async () => {

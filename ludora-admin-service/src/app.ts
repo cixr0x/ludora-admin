@@ -13,6 +13,7 @@ import { createDiscoveryRouter } from './routes/discovery.js';
 import { createHealthRouter } from './routes/health.js';
 import { createLocalCoverWorkflowRouter } from './routes/localCoverWorkflow.js';
 import { createOperationsRouter } from './routes/operations.js';
+import { createTutorialCurationRouter } from './routes/tutorialCuration.js';
 import { createTranslationRouter } from './routes/translation.js';
 import type { TranslationService } from './translation/translationService.js';
 import type { LocalCoverWorkflowManager } from './localCoverWorkflow.js';
@@ -57,6 +58,7 @@ export function createApp({
   app.use(createAmazonTitleExtractionRouter(amazonTitleExtractionService));
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
   app.use(createTranslationRouter(translationService));
+  app.use(createTutorialCurationRouter(database));
   if (localCoverWorkflowManager) {
     app.use(createLocalCoverWorkflowRouter(localCoverWorkflowManager));
   }

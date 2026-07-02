@@ -5,7 +5,7 @@ from typing import Protocol
 
 from ludora.cancellation import CancellationToken
 from ludora.models import DiscoveryItemCandidateRecord
-from ludora.amazon_discovery import crawl_amazon_store_inventory
+from ludora.amazon_discovery import crawl_amazon_brand_inventory, crawl_amazon_store_inventory
 from ludora.product_crawler import (
     ItemCandidateProcessor,
     ItemClassifier,
@@ -13,6 +13,11 @@ from ludora.product_crawler import (
     update_confirmed_store_item_details,
 )
 from ludora.item_classification import apply_item_classification
+
+
+BROWSER_FETCH_REQUIRED_PLATFORMS = {
+    "godaddy_website_builder",
+}
 
 
 class ItemCandidateRepository(Protocol):
@@ -37,13 +42,28 @@ def collect_store_inventory(
     item_title_extractor: Callable[[DiscoveryItemCandidateRecord], str] | None = None,
     cancellation_token: CancellationToken | None = None,
     platform: str = "",
+    store_name: str = "",
 ) -> list[DiscoveryItemCandidateRecord]:
-    if platform.strip().casefold() == "amazon":
+    normalized_platform = platform.strip().casefold()
+    browser_fetch_enabled = browser_sitemap_fetch_enabled or normalized_platform in BROWSER_FETCH_REQUIRED_PLATFORMS
+    if normalized_platform == "amazon":
         return crawl_amazon_store_inventory(
             store_url,
             store_id,
             repository,
             limit=limit,
+            item_classifier=item_classifier,
+            item_processor=item_processor,
+            item_title_extractor=item_title_extractor,
+            cancellation_token=cancellation_token,
+        )
+    if normalized_platform == "amazon_brand":
+        return crawl_amazon_brand_inventory(
+            store_url,
+            store_id,
+            repository,
+            limit=limit,
+            brand_name=store_name,
             item_classifier=item_classifier,
             item_processor=item_processor,
             item_title_extractor=item_title_extractor,
@@ -55,7 +75,7 @@ def collect_store_inventory(
         store_id,
         repository,
         limit=limit,
-        browser_sitemap_fetch_enabled=browser_sitemap_fetch_enabled,
+        browser_sitemap_fetch_enabled=browser_fetch_enabled,
         item_classifier=item_classifier,
         item_processor=item_processor,
         cancellation_token=cancellation_token,

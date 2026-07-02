@@ -37,7 +37,7 @@ export type DiscoveryOperationsClient = {
   cancelStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun>;
   getLatestStoreDiscoveryRun(): Promise<StoreDiscoveryRun | null>;
   getStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun | null>;
-  startItemDiscoveryRun(storeId: number, websiteUrl: string, platform?: string): Promise<StoreDiscoveryRun>;
+  startItemDiscoveryRun(storeId: number, websiteUrl: string, platform?: string, storeName?: string): Promise<StoreDiscoveryRun>;
   startItemEmbeddingRun(refreshMode: 'full' | 'missing'): Promise<StoreDiscoveryRun>;
   startItemUpdateRun(): Promise<StoreDiscoveryRun>;
   startStoreDiscoveryRun(): Promise<StoreDiscoveryRun>;
