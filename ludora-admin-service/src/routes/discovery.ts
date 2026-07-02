@@ -343,6 +343,142 @@ const randomFrontPageCategoryAssignmentsSql = `
   from upserted
 `;
 
+const balancedRandomFrontPageCategoryAssignmentsSql = `
+  with
+  existing_count as (
+    select count(*)::int as replaced_count
+    from front_page_category_items
+  ),
+  eligible_items as (
+    select
+      ai.id as item_id,
+      row_number() over (order by random()) as position
+    from active_item ai
+    where ai.has_approved_listing = true
+      and ai.is_expansion = false
+  ),
+  matching_categories as (
+    select
+      ei.position,
+      ei.item_id,
+      fpc.id as front_page_category_id,
+      fpc.category_type,
+      fpc.category_id
+    from front_page_categories fpc
+    join eligible_items ei on (
+      (
+        fpc.category_type = 'category'
+        and exists (
+          select 1
+          from item_categories ic
+          where ic.item_id = ei.item_id
+            and ic.category_id = fpc.category_id
+        )
+      )
+      or (
+        fpc.category_type = 'family'
+        and exists (
+          select 1
+          from item_families ifa
+          where ifa.item_id = ei.item_id
+            and ifa.family_id = fpc.category_id
+        )
+      )
+      or (
+        fpc.category_type = 'mechanic'
+        and exists (
+          select 1
+          from item_mechanics im
+          where im.item_id = ei.item_id
+            and im.mechanic_id = fpc.category_id
+        )
+      )
+    )
+  ),
+  ranked_matches as (
+    select
+      mc.position,
+      mc.item_id,
+      mc.front_page_category_id,
+      count(remaining.item_id)::int as remaining_unassigned_count,
+      row_number() over (partition by mc.item_id order by count(remaining.item_id) asc, random()) as category_rank
+    from matching_categories mc
+    join eligible_items remaining
+      on remaining.position >= mc.position
+     and (
+      (
+        mc.category_type = 'category'
+        and exists (
+          select 1
+          from item_categories ic
+          where ic.item_id = remaining.item_id
+            and ic.category_id = mc.category_id
+        )
+      )
+      or (
+        mc.category_type = 'family'
+        and exists (
+          select 1
+          from item_families ifa
+          where ifa.item_id = remaining.item_id
+            and ifa.family_id = mc.category_id
+        )
+      )
+      or (
+        mc.category_type = 'mechanic'
+        and exists (
+          select 1
+          from item_mechanics im
+          where im.item_id = remaining.item_id
+            and im.mechanic_id = mc.category_id
+        )
+      )
+    )
+    group by mc.position, mc.item_id, mc.front_page_category_id
+  ),
+  selected_assignments as (
+    select position, item_id, front_page_category_id
+    from ranked_matches
+    where category_rank = 1
+  ),
+  ordered_assignments as (
+    select
+      front_page_category_id,
+      item_id,
+      row_number() over (partition by front_page_category_id order by position asc)::int as item_order
+    from selected_assignments
+  ),
+  upserted as (
+    insert into front_page_category_items (front_page_category_id, item_id, item_order)
+    select front_page_category_id, item_id, item_order
+    from ordered_assignments
+    on conflict (item_id) do update
+    set front_page_category_id = excluded.front_page_category_id,
+        item_order = excluded.item_order,
+        updated_at = now()
+    returning front_page_category_id, item_id, item_order
+  ),
+  deleted as (
+    delete from front_page_category_items fpci
+    where not exists (
+      select 1
+      from ordered_assignments assigned
+      where assigned.item_id = fpci.item_id
+    )
+    returning item_id
+  ),
+  deleted_count as (
+    select count(*)::int as removed_count
+    from deleted
+  )
+  select
+    count(upserted.item_id)::int as assigned_count,
+    ((select count(*) from eligible_items) - (select count(*) from selected_assignments))::int as skipped_count,
+    (select replaced_count from existing_count)::int as replaced_count,
+    (select removed_count from deleted_count)::int as removed_count
+  from upserted
+`;
+
 const frontPagePreviewSql = `
   select
     fpc.id,
@@ -802,6 +938,23 @@ export function createDiscoveryRouter(
       response.json({
         data: result.rows[0] ?? {
           assigned_count: 0,
+          replaced_count: 0,
+          skipped_count: 0
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/front-page-categories/balanced-random-item-assignments', async (_request, response, next) => {
+    try {
+      const result = await database.query(balancedRandomFrontPageCategoryAssignmentsSql);
+
+      response.json({
+        data: result.rows[0] ?? {
+          assigned_count: 0,
+          removed_count: 0,
           replaced_count: 0,
           skipped_count: 0
         }

@@ -513,6 +513,49 @@ describe('ludora admin service', () => {
     expect(queries[0].params).toBeUndefined();
   });
 
+  it('assigns randomly ordered active items to the least-covered matching front page category', async () => {
+    const rows = [{ assigned_count: 3, skipped_count: 1, replaced_count: 4, removed_count: 1 }];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).post(
+      '/front-page-categories/balanced-random-item-assignments'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows[0] });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('from front_page_category_items');
+    expect(sql).toContain('eligible_items as');
+    expect(sql).toContain('row_number() over (order by random()) as position');
+    expect(sql).toContain('from active_item ai');
+    expect(sql).toContain('ai.has_approved_listing = true');
+    expect(sql).toContain('ai.is_expansion = false');
+    expect(sql).toContain('from front_page_categories fpc');
+    expect(sql).toContain('from item_categories ic');
+    expect(sql).toContain('from item_families ifa');
+    expect(sql).toContain('from item_mechanics im');
+    expect(sql).toContain('remaining.position >= mc.position');
+    expect(sql).toContain('remaining_unassigned_count');
+    expect(sql).toContain(
+      'row_number() over (partition by mc.item_id order by count(remaining.item_id) asc, random()) as category_rank'
+    );
+    expect(sql).toContain('where category_rank = 1');
+    expect(sql).toContain(
+      'row_number() over (partition by front_page_category_id order by position asc)::int as item_order'
+    );
+    expect(sql).toContain('insert into front_page_category_items (front_page_category_id, item_id, item_order)');
+    expect(sql).toContain('on conflict (item_id) do update');
+    expect(sql).toContain('delete from front_page_category_items fpci');
+    expect(sql).not.toContain('generate_series(1, 32) as cycle_number');
+    expect(queries[0].params).toBeUndefined();
+  });
+
   it('lists front page preview rows with assigned active products', async () => {
     const rows = [
       {
