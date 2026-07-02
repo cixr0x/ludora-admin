@@ -639,6 +639,26 @@ describe('fetchRows', () => {
     });
   });
 
+  it('starts balanced front page category item assignment with a POST request', async () => {
+    const result = { assigned_count: 3, skipped_count: 1, replaced_count: 4, removed_count: 1 };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: result }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.assignBalancedFrontPageCategoryItems()).resolves.toEqual(result);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:4001/front-page-categories/balanced-random-item-assignments',
+      {
+        method: 'POST'
+      }
+    );
+  });
+
   it('fetches front page preview rows', async () => {
     const rows = [
       {

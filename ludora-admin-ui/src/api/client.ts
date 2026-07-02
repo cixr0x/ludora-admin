@@ -316,6 +316,10 @@ export const adminApi = {
     fetchData<FrontPageCategoryRandomAssignmentResult>('/front-page-categories/random-item-assignments', {
       method: 'POST'
     }),
+  assignBalancedFrontPageCategoryItems: () =>
+    fetchData<FrontPageCategoryRandomAssignmentResult>('/front-page-categories/balanced-random-item-assignments', {
+      method: 'POST'
+    }),
   getFrontPagePreview: () => fetchRows<FrontPagePreviewCategory>('/front-page-preview'),
   getStoreCandidates: () => fetchRows('/discovery/stores'),
   getStoreCandidatesPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/discovery/stores', query), query),
