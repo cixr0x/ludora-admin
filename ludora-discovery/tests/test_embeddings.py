@@ -17,9 +17,18 @@ class EmbeddingsTests(unittest.TestCase):
             canonical_name_es="Calico",
             description="A puzzly tile-laying game about sewing quilts and attracting cats.",
             description_es="Un juego sobre coser colchas y atraer gatos.",
+            min_players=1,
+            max_players=4,
+            min_minutes=30,
+            max_minutes=40,
+            complexity=1.8,
+            min_age=10,
             categories=["Animals", "Puzzle"],
+            categories_es=["Animales", "Rompecabezas"],
             mechanics=["Tile Placement", "Pattern Building"],
+            mechanics_es=["Colocacion de losetas", "Construccion de patrones"],
             families=["Cats"],
+            families_es=["Gatos"],
         )
 
         text = build_item_embedding_text(source)
@@ -33,8 +42,17 @@ class EmbeddingsTests(unittest.TestCase):
                     "Description: A puzzly tile-laying game about sewing quilts and attracting cats.",
                     "Description_es: Un juego sobre coser colchas y atraer gatos.",
                     "Categories: Animals, Puzzle",
+                    "Categories_es: Animales, Rompecabezas",
                     "Mechanics: Tile Placement, Pattern Building",
+                    "Mechanics_es: Colocacion de losetas, Construccion de patrones",
                     "Families: Cats",
+                    "Families_es: Gatos",
+                    (
+                        "Derived keywords: single player, solo, solitaire, one player, un jugador, "
+                        "juego en solitario, solitario, short duration, quick game, fast game, juego corto, "
+                        "partida rapida, light complexity, easy to learn, beginner friendly, baja complejidad, "
+                        "facil de aprender, ligero, family friendly, families, familiar, para familia"
+                    ),
                 ]
             ),
         )

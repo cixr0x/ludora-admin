@@ -435,9 +435,18 @@ class DatabaseRepositoryTests(unittest.TestCase):
                         "Calico",
                         "A puzzly tile-laying game about sewing quilts and attracting cats.",
                         "Un juego sobre coser colchas y atraer gatos.",
+                        1,
+                        4,
+                        30,
+                        40,
+                        "1.8",
+                        10,
                         ["Animals", "Puzzle"],
+                        ["Animales", "Rompecabezas"],
                         ["Pattern Building", "Tile Placement"],
+                        ["Construccion de patrones", "Colocacion de losetas"],
                         ["Cats"],
+                        ["Gatos"],
                     )
                 ]
             ]
@@ -448,12 +457,15 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         sql, params = connection.cursor_instance.executions[0]
         normalized_sql = sql.casefold()
-        self.assertIn("from items i", normalized_sql)
+        self.assertIn("from active_item i", normalized_sql)
         self.assertIn("left join item_search_embeddings ise", normalized_sql)
         self.assertIn("where ise.item_id is null", normalized_sql)
         self.assertIn("from item_categories", normalized_sql)
+        self.assertIn("bc.name_es", normalized_sql)
         self.assertIn("from item_mechanics", normalized_sql)
+        self.assertIn("bm.name_es", normalized_sql)
         self.assertIn("from item_families", normalized_sql)
+        self.assertIn("bf.name_es", normalized_sql)
         self.assertEqual(params, ())
         self.assertEqual(
             sources,
@@ -464,9 +476,18 @@ class DatabaseRepositoryTests(unittest.TestCase):
                     canonical_name_es="Calico",
                     description="A puzzly tile-laying game about sewing quilts and attracting cats.",
                     description_es="Un juego sobre coser colchas y atraer gatos.",
+                    min_players=1,
+                    max_players=4,
+                    min_minutes=30,
+                    max_minutes=40,
+                    complexity=1.8,
+                    min_age=10,
                     categories=["Animals", "Puzzle"],
+                    categories_es=["Animales", "Rompecabezas"],
                     mechanics=["Pattern Building", "Tile Placement"],
+                    mechanics_es=["Construccion de patrones", "Colocacion de losetas"],
                     families=["Cats"],
+                    families_es=["Gatos"],
                 )
             ],
         )
@@ -478,7 +499,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         repository.list_item_search_embedding_sources(refresh_mode="full")
 
         sql, params = connection.cursor_instance.executions[0]
-        self.assertIn("from items i", sql.casefold())
+        self.assertIn("from active_item i", sql.casefold())
         self.assertNotIn("where ise.item_id is null", sql.casefold())
         self.assertEqual(params, ())
 

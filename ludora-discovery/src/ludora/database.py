@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -64,9 +64,18 @@ class ItemSearchEmbeddingSource:
     canonical_name_es: str
     description: str
     description_es: str
-    categories: list[str]
-    mechanics: list[str]
-    families: list[str]
+    min_players: int | None = None
+    max_players: int | None = None
+    min_minutes: int | None = None
+    max_minutes: int | None = None
+    complexity: float | None = None
+    min_age: int | None = None
+    categories: list[str] = field(default_factory=list)
+    categories_es: list[str] = field(default_factory=list)
+    mechanics: list[str] = field(default_factory=list)
+    mechanics_es: list[str] = field(default_factory=list)
+    families: list[str] = field(default_factory=list)
+    families_es: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -284,25 +293,40 @@ class DiscoveryRepository:
               i.canonical_name_es,
               i.description,
               i.description_es,
+              i.min_players,
+              i.max_players,
+              i.min_minutes,
+              i.max_minutes,
+              i.complexity,
+              i.min_age,
               coalesce(categories.names, '{{}}'::text[]) as categories,
+              coalesce(categories.names_es, '{{}}'::text[]) as categories_es,
               coalesce(mechanics.names, '{{}}'::text[]) as mechanics,
-              coalesce(families.names, '{{}}'::text[]) as families
-            from items i
+              coalesce(mechanics.names_es, '{{}}'::text[]) as mechanics_es,
+              coalesce(families.names, '{{}}'::text[]) as families,
+              coalesce(families.names_es, '{{}}'::text[]) as families_es
+            from active_item i
             left join item_search_embeddings ise on ise.item_id = i.id
             left join lateral (
-              select array_agg(bc.name order by bc.name) as names
+              select
+                array_agg(bc.name order by bc.name) as names,
+                array_agg(bc.name_es order by bc.name) filter (where bc.name_es <> '') as names_es
               from item_categories ic
               join boardgame_categories bc on bc.id = ic.category_id
               where ic.item_id = i.id
             ) categories on true
             left join lateral (
-              select array_agg(bm.name order by bm.name) as names
+              select
+                array_agg(bm.name order by bm.name) as names,
+                array_agg(bm.name_es order by bm.name) filter (where bm.name_es <> '') as names_es
               from item_mechanics im
               join boardgame_mechanics bm on bm.id = im.mechanic_id
               where im.item_id = i.id
             ) mechanics on true
             left join lateral (
-              select array_agg(bf.name order by bf.name) as names
+              select
+                array_agg(bf.name order by bf.name) as names,
+                array_agg(bf.name_es order by bf.name) filter (where bf.name_es <> '') as names_es
               from item_families ifa
               join boardgame_families bf on bf.id = ifa.family_id
               where ifa.item_id = i.id
@@ -320,9 +344,18 @@ class DiscoveryRepository:
                     canonical_name_es=_text(row[2]),
                     description=_text(row[3]),
                     description_es=_text(row[4]),
-                    categories=_string_list(row[5]),
-                    mechanics=_string_list(row[6]),
-                    families=_string_list(row[7]),
+                    min_players=_optional_int(row[5]),
+                    max_players=_optional_int(row[6]),
+                    min_minutes=_optional_int(row[7]),
+                    max_minutes=_optional_int(row[8]),
+                    complexity=_optional_float(row[9]),
+                    min_age=_optional_int(row[10]),
+                    categories=_string_list(row[11]),
+                    categories_es=_string_list(row[12]),
+                    mechanics=_string_list(row[13]),
+                    mechanics_es=_string_list(row[14]),
+                    families=_string_list(row[15]),
+                    families_es=_string_list(row[16]),
                 )
                 for row in cursor.fetchall()
             ]
