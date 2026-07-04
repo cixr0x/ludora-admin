@@ -50,7 +50,7 @@ discovery_store_candidates
 Apply the shared schema before the first database-backed run:
 
 ```powershell
-psql "$env:LUDORA_DATABASE_URL" -f ..\..\database\schema.sql
+psql "$env:LUDORA_DATABASE_URL" -f ..\database\schema.sql
 ```
 
 Store candidates are persisted by default. To also extract raw listing candidates from accepted store homepages:
