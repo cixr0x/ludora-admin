@@ -188,6 +188,18 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("store_items_store_id_source_url_key", schema)
         self.assertIn("alter table if exists store_items drop column if exists offer_id", schema)
 
+    def test_schema_contains_store_item_click_stats(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+
+        self.assertIn("create table if not exists store_item_click_stats", schema)
+        table = schema.split("create table if not exists store_item_click_stats", 1)[1].split(");", 1)[0]
+
+        self.assertIn("store_item_id bigint not null", table)
+        self.assertIn("clicked_hour timestamptz not null", table)
+        self.assertIn("click_count bigint not null default 0", table)
+        self.assertIn("primary key (store_item_id, clicked_hour)", table)
+        self.assertNotIn("references store_items", table)
+
     def test_schema_contains_active_item_view(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()
 
