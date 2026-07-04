@@ -12,6 +12,10 @@ Use the fixed Codex startup commands for local development:
 
 Do not choose another port automatically. If one of these ports is busy, report the owning process and ask before stopping it or using a different port.
 
+## Completion
+
+When a task changes files, commit and push the task changes in each affected Git repository before reporting completion. If unrelated pre-existing changes are present, leave them untouched and report them separately.
+
 ## AI API Flow
 
 Use `docs/ai-api-flow.md` for new AI requests. Admin-service owns prompts, routes, and OpenAI Responses clients through `ludora-admin-service/src/ai/openAiResponsesClient.ts`. Discovery code that needs a new AI task should call an admin-service endpoint and should reuse the existing admin `.env` values instead of creating a separate key flow.
