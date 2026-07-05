@@ -159,8 +159,28 @@ on job_store_item_discovery_log (store_id, started_at desc);
 create index if not exists job_store_item_discovery_log_status_idx
 on job_store_item_discovery_log (status);
 
+create table if not exists job_store_item_update_log (
+    id bigserial primary key,
+    run_id text not null unique,
+    status text not null default 'running' check (status in ('running', 'cancelled', 'completed', 'failed')),
+    error text not null default '',
+    started_at timestamptz not null default now(),
+    completed_at timestamptz,
+    scanned_items integer not null default 0,
+    updated_items integer not null default 0,
+    created_at timestamptz not null default now(),
+    updated_at timestamptz not null default now()
+);
+
+create index if not exists job_store_item_update_log_started_at_idx
+on job_store_item_update_log (started_at desc);
+
+create index if not exists job_store_item_update_log_status_idx
+on job_store_item_update_log (status);
+
 create table if not exists store_item_update_change_log (
     id bigserial primary key,
+    job_id bigint not null references job_store_item_update_log(id) on delete cascade,
     run_id text not null,
     store_item_id bigint not null,
     field_name text not null,
@@ -168,6 +188,27 @@ create table if not exists store_item_update_change_log (
     new_value jsonb not null,
     created_at timestamptz not null default now()
 );
+
+alter table if exists store_item_update_change_log
+add column if not exists job_id bigint;
+
+do $$
+begin
+    if to_regclass('store_item_update_change_log') is not null
+       and not exists (
+           select 1
+           from pg_constraint
+           where conrelid = 'store_item_update_change_log'::regclass
+             and conname = 'store_item_update_change_log_job_id_fkey'
+       ) then
+        alter table store_item_update_change_log
+        add constraint store_item_update_change_log_job_id_fkey
+        foreign key (job_id) references job_store_item_update_log(id) on delete cascade;
+    end if;
+end $$;
+
+create index if not exists store_item_update_change_log_job_id_idx
+on store_item_update_change_log (job_id);
 
 create index if not exists store_item_update_change_log_run_id_idx
 on store_item_update_change_log (run_id);

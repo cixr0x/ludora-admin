@@ -271,6 +271,34 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("completed", "", completed_at, 3, "run-123"))
         self.assertEqual(connection.commits, 2)
 
+    def test_registers_store_item_update_log_start_and_completion(self):
+        connection = FakeConnection(fetchone_rows=[(99,)])
+        repository = DiscoveryRepository(connection)
+        completed_at = datetime(2026, 7, 5, 10, 5, tzinfo=timezone.utc)
+
+        job_id = repository.start_store_item_update_log(run_id="run-123")
+        repository.complete_store_item_update_log(
+            job_id=job_id,
+            status="completed",
+            completed_at=completed_at,
+            scanned_items=5,
+            updated_items=3,
+            error="",
+        )
+
+        insert_sql, insert_params = connection.cursor_instance.executions[0]
+        update_sql, update_params = connection.cursor_instance.executions[1]
+        self.assertEqual(job_id, 99)
+        self.assertIn("insert into job_store_item_update_log", insert_sql.casefold())
+        self.assertIn("returning id", insert_sql.casefold())
+        self.assertEqual(insert_params, ("run-123", "running", "", None, 0, 0))
+        self.assertIn("update job_store_item_update_log", update_sql.casefold())
+        self.assertIn("completed_at = %s", update_sql.casefold())
+        self.assertIn("scanned_items = %s", update_sql.casefold())
+        self.assertIn("updated_items = %s", update_sql.casefold())
+        self.assertEqual(update_params, ("completed", "", completed_at, 5, 3, 99))
+        self.assertEqual(connection.commits, 2)
+
     def test_updates_item_candidate_and_logs_changed_refresh_fields(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)
@@ -300,6 +328,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         result = repository.update_item_candidate_with_change_log(
             existing_record,
             refreshed_record,
+            job_id=99,
             run_id="run-123",
         )
 
@@ -311,16 +340,17 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params[-1], 56)
         self.assertEqual(len(change_entries), 3)
         self.assertEqual(connection.commits, 1)
-        logged_fields = [params[2] for _sql, params in change_entries]
+        logged_fields = [params[3] for _sql, params in change_entries]
         self.assertEqual(logged_fields, ["title", "raw_price", "price"])
         for sql, params in change_entries:
             self.assertIn("insert into store_item_update_change_log", sql.casefold())
-            self.assertEqual(params[0], "run-123")
-            self.assertEqual(params[1], 56)
-        self.assertEqual(json.loads(change_entries[0][1][3]), "Catan")
-        self.assertEqual(json.loads(change_entries[0][1][4]), "Catan Nueva Edicion")
-        self.assertEqual(json.loads(change_entries[2][1][3]), "899.00")
-        self.assertEqual(json.loads(change_entries[2][1][4]), "799.00")
+            self.assertEqual(params[0], 99)
+            self.assertEqual(params[1], "run-123")
+            self.assertEqual(params[2], 56)
+        self.assertEqual(json.loads(change_entries[0][1][4]), "Catan")
+        self.assertEqual(json.loads(change_entries[0][1][5]), "Catan Nueva Edicion")
+        self.assertEqual(json.loads(change_entries[2][1][4]), "899.00")
+        self.assertEqual(json.loads(change_entries[2][1][5]), "799.00")
 
     def test_update_item_candidate_change_log_requires_store_item_id(self):
         connection = FakeConnection()
@@ -335,6 +365,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             repository.update_item_candidate_with_change_log(
                 existing_record,
                 existing_record,
+                job_id=99,
                 run_id="run-123",
             )
 

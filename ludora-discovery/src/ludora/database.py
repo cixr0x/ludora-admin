@@ -220,6 +220,53 @@ class DiscoveryRepository:
             )
         self.connection.commit()
 
+    def start_store_item_update_log(self, *, run_id: str) -> int:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into job_store_item_update_log (
+                    run_id,
+                    status,
+                    error,
+                    completed_at,
+                    scanned_items,
+                    updated_items
+                )
+                values (%s, %s, %s, %s, %s, %s)
+                returning id
+                """,
+                (run_id, "running", "", None, 0, 0),
+            )
+            row = cursor.fetchone()
+        self.connection.commit()
+        return int(row[0]) if row else 0
+
+    def complete_store_item_update_log(
+        self,
+        *,
+        job_id: int,
+        status: str,
+        completed_at: datetime,
+        scanned_items: int,
+        updated_items: int,
+        error: str = "",
+    ) -> None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update job_store_item_update_log
+                set status = %s,
+                    error = %s,
+                    completed_at = %s,
+                    scanned_items = %s,
+                    updated_items = %s,
+                    updated_at = now()
+                where id = %s
+                """,
+                (status, error, completed_at, scanned_items, updated_items, job_id),
+            )
+        self.connection.commit()
+
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> ItemCandidateUpsertResult:
         data = record.to_db_dict()
         with self.connection.cursor() as cursor:
@@ -260,6 +307,7 @@ class DiscoveryRepository:
         existing_record: DiscoveryItemCandidateRecord,
         refreshed_record: DiscoveryItemCandidateRecord,
         *,
+        job_id: int,
         run_id: str,
     ) -> ItemCandidateUpsertResult:
         store_item_id = existing_record.store_item_id or refreshed_record.store_item_id
@@ -282,15 +330,17 @@ class DiscoveryRepository:
                 cursor.execute(
                     """
                     insert into store_item_update_change_log (
+                        job_id,
                         run_id,
                         store_item_id,
                         field_name,
                         old_value,
                         new_value
                     )
-                    values (%s, %s, %s, %s::jsonb, %s::jsonb)
+                    values (%s, %s, %s, %s, %s::jsonb, %s::jsonb)
                     """,
                     (
+                        job_id,
                         run_id,
                         store_item_id,
                         field_name,

@@ -315,14 +315,45 @@ def run_item_update(
     resolved_run_id = run_id or str(uuid.uuid4())
     try:
         repository = DiscoveryRepository(connection)
+        job_id = repository.start_store_item_update_log(run_id=resolved_run_id)
         update_kwargs = {}
         if cancellation_token is not None:
             update_kwargs["cancellation_token"] = cancellation_token
-        records = update_confirmed_store_items(
-            repository,
-            browser_fetch_enabled=browser_fetch_enabled,
-            run_id=resolved_run_id,
-            **update_kwargs,
+        try:
+            records = update_confirmed_store_items(
+                repository,
+                browser_fetch_enabled=browser_fetch_enabled,
+                job_id=job_id,
+                run_id=resolved_run_id,
+                **update_kwargs,
+            )
+        except OperationCancelled:
+            repository.complete_store_item_update_log(
+                job_id=job_id,
+                status="cancelled",
+                completed_at=_utc_now(),
+                scanned_items=0,
+                updated_items=0,
+                error="",
+            )
+            raise
+        except Exception as exc:
+            repository.complete_store_item_update_log(
+                job_id=job_id,
+                status="failed",
+                completed_at=_utc_now(),
+                scanned_items=0,
+                updated_items=0,
+                error=str(exc),
+            )
+            raise
+        repository.complete_store_item_update_log(
+            job_id=job_id,
+            status="completed",
+            completed_at=_utc_now(),
+            scanned_items=len(records),
+            updated_items=len(records),
+            error="",
         )
         return ItemUpdateRunResult(updated_items=len(records))
     finally:

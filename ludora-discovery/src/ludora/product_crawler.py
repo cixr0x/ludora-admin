@@ -31,6 +31,7 @@ class ItemCandidateRepository(Protocol):
         existing_record: DiscoveryItemCandidateRecord,
         refreshed_record: DiscoveryItemCandidateRecord,
         *,
+        job_id: int,
         run_id: str,
     ) -> object | None:
         ...
@@ -125,6 +126,7 @@ def update_confirmed_store_item_details(
     browser_fetch_enabled: bool = False,
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
     cancellation_token: CancellationToken | None = None,
+    job_id: int | None = None,
     run_id: str | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
@@ -147,7 +149,14 @@ def update_confirmed_store_item_details(
             raise_if_cancelled(cancellation_token)
             _preserve_confirmed_item_state(refreshed_record, existing_record)
             if run_id:
-                repository.update_item_candidate_with_change_log(existing_record, refreshed_record, run_id=run_id)
+                if job_id is None:
+                    raise ValueError("job id is required to log update changes")
+                repository.update_item_candidate_with_change_log(
+                    existing_record,
+                    refreshed_record,
+                    job_id=job_id,
+                    run_id=run_id,
+                )
             else:
                 repository.upsert_item_candidate(refreshed_record)
             records.append(refreshed_record)

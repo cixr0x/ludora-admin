@@ -35,6 +35,7 @@ class ItemCandidateRepository(Protocol):
         existing_record: DiscoveryItemCandidateRecord,
         refreshed_record: DiscoveryItemCandidateRecord,
         *,
+        job_id: int,
         run_id: str,
     ) -> object | None:
         ...
@@ -96,6 +97,7 @@ def update_confirmed_store_items(
     limit: int | None = None,
     browser_fetch_enabled: bool = False,
     cancellation_token: CancellationToken | None = None,
+    job_id: int | None = None,
     run_id: str | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
@@ -103,5 +105,6 @@ def update_confirmed_store_items(
         limit=limit,
         browser_fetch_enabled=browser_fetch_enabled,
         cancellation_token=cancellation_token,
+        job_id=job_id,
         run_id=run_id,
     )

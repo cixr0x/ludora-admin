@@ -35,8 +35,8 @@ class FakeRepository:
         self.confirmed_items_limit = limit
         return self.confirmed_items
 
-    def update_item_candidate_with_change_log(self, existing_record, refreshed_record, *, run_id):
-        self.update_change_log_calls.append((existing_record, refreshed_record, run_id))
+    def update_item_candidate_with_change_log(self, existing_record, refreshed_record, *, job_id, run_id):
+        self.update_change_log_calls.append((existing_record, refreshed_record, job_id, run_id))
         self.item_records.append(refreshed_record)
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="LISTED", item_id=refreshed_record.item_id, should_process=False)
 
@@ -520,7 +520,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records[0].classification_reasons, ["previously confirmed"])
         self.assertEqual(repository.update_change_log_calls, [])
 
-    def test_update_confirmed_store_item_details_logs_changes_when_run_id_is_available(self):
+    def test_update_confirmed_store_item_details_logs_changes_when_job_id_is_available(self):
         detail_html = """
         <script type="application/ld+json">
         {
@@ -547,16 +547,17 @@ class InventoryTests(unittest.TestCase):
             "ludora.product_crawler.fetch_html",
             return_value=FetchResult(url="https://example.mx/products/catan", text=detail_html),
         ):
-            records = update_confirmed_store_item_details(repository, run_id="run-123")
+            records = update_confirmed_store_item_details(repository, job_id=99, run_id="run-123")
 
         self.assertEqual(len(records), 1)
         self.assertEqual(len(repository.update_change_log_calls), 1)
-        logged_existing, logged_refreshed, logged_run_id = repository.update_change_log_calls[0]
+        logged_existing, logged_refreshed, logged_job_id, logged_run_id = repository.update_change_log_calls[0]
         self.assertIs(logged_existing, existing_record)
         self.assertEqual(logged_refreshed.title, "Catan Nueva Edicion")
         self.assertEqual(logged_refreshed.store_item_id, 56)
         self.assertEqual(logged_refreshed.item_id, 77)
         self.assertEqual(logged_refreshed.listing_status, "LISTED")
+        self.assertEqual(logged_job_id, 99)
         self.assertEqual(logged_run_id, "run-123")
 
 
