@@ -455,6 +455,7 @@ class DiscoveryRepository:
               and is_boardgame_confirmed = true
               and item_id is not null
               and source_url <> ''
+              and listing_status = 'LISTED'
             order by last_updated asc, id asc
         """
         params: tuple[object, ...] = ()

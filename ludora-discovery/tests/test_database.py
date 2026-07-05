@@ -528,6 +528,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("is_boardgame_confirmed = true", normalized_sql)
         self.assertIn("item_id is not null", normalized_sql)
         self.assertIn("source_url <> ''", normalized_sql)
+        self.assertIn("listing_status = 'listed'", normalized_sql)
         self.assertIn("order by last_updated asc, id asc", normalized_sql)
         self.assertIn("limit %s", normalized_sql)
         self.assertEqual(params, (50,))
