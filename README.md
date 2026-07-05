@@ -19,6 +19,16 @@ npm run dev:codex
 
 Set `LUDORA_DATABASE_URL` in `.env` before running database-backed routes.
 
+## Database Changes
+
+Use incremental SQL patches in `database/patches/` for existing databases. `database/schema.sql` is the current schema snapshot for review/bootstrap reference and must not be replayed for routine updates.
+
+When a task changes the database shape or requires data backfill:
+
+- Add one focused patch file under `database/patches/`.
+- Keep `database/schema.sql` aligned as the final snapshot.
+- Apply only the relevant patch after explicit DDL/DML approval.
+
 ### Admin AI Flow
 
 OpenAI-backed admin features use the shared OpenAI Responses client in `ludora-admin-service/src/ai/openAiResponsesClient.ts`. Current callers include translation, description generation, product detail extraction, and Amazon title extraction.

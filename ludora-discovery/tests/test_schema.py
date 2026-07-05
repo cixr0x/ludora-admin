@@ -10,7 +10,74 @@ def schema_path() -> Path:
     raise FileNotFoundError("database/schema.sql was not found in any parent directory")
 
 
+def repo_root() -> Path:
+    return schema_path().parents[1]
+
+
+def patches_path() -> Path:
+    return repo_root() / "database" / "patches"
+
+
 class SchemaTests(unittest.TestCase):
+    def test_database_changes_are_available_as_incremental_patches(self):
+        patches = patches_path()
+
+        self.assertTrue(patches.is_dir())
+
+        expected_patches = {
+            "20260703_001_store_item_click_stats.sql": [
+                "create table if not exists store_item_click_stats",
+                "primary key (store_item_id, clicked_hour)",
+            ],
+            "20260705_001_store_item_discovery_log.sql": [
+                "create table if not exists job_store_item_discovery_log",
+                "job_store_item_discovery_log_store_id_started_at_idx",
+            ],
+            "20260705_002_store_item_update_job_log.sql": [
+                "create table if not exists job_store_item_update_log",
+                "scanned_items integer not null default 0",
+            ],
+            "20260705_003_store_item_update_change_log.sql": [
+                "create table if not exists store_item_update_change_log",
+                "store_item_update_change_log_job_id_fkey",
+                "store_item_update_change_log_store_item_created_idx",
+            ],
+            "20260705_004_store_item_update_log_store_scope.sql": [
+                "alter table if exists job_store_item_update_log add column if not exists store_id bigint",
+                "job_store_item_update_log_store_id_started_at_idx",
+            ],
+            "20260705_005_store_item_refreshed_date.sql": [
+                "alter table if exists store_items add column if not exists refreshed_date timestamptz",
+                "update store_items set refreshed_date = last_updated where refreshed_date is null",
+            ],
+            "20260705_006_preserve_listing_status_backfill.sql": [
+                "update store_items set listing_status = 'PENDING' where listing_status is null",
+                "alter table if exists store_items alter column listing_status set not null",
+            ],
+        }
+
+        for filename, expected_snippets in expected_patches.items():
+            patch = patches / filename
+            self.assertTrue(patch.exists(), f"Missing database patch {filename}")
+            sql = patch.read_text(encoding="utf-8").casefold()
+            normalized_sql = " ".join(sql.split())
+            for snippet in expected_snippets:
+                self.assertIn(" ".join(snippet.casefold().split()), normalized_sql)
+
+    def test_active_database_docs_use_incremental_patches(self):
+        active_docs = [
+            repo_root() / "AGENTS.md",
+            repo_root() / "README.md",
+            repo_root() / "database" / "README.md",
+            repo_root() / "ludora-discovery" / "README.md",
+        ]
+
+        for path in active_docs:
+            text = path.read_text(encoding="utf-8").casefold().replace("\\", "/")
+            self.assertIn("database/patches", text, f"{path} should document incremental database patches")
+            self.assertNotIn("-f ../database/schema.sql", text, f"{path} must not apply the full schema")
+            self.assertNotIn("apply the shared schema", text, f"{path} must not direct full schema replays")
+
     def test_schema_contains_mvp_lifecycle_tables(self):
         schema = schema_path().read_text(encoding="utf-8")
 

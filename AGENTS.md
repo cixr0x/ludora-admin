@@ -16,6 +16,12 @@ Do not choose another port automatically. If one of these ports is busy, report 
 
 When a task changes files, commit and push the task changes in each affected Git repository before reporting completion. If unrelated pre-existing changes are present, leave them untouched and report them separately.
 
+## Database Changes
+
+Do not apply `database/schema.sql` to existing shared or live databases. It is a snapshot/reference only, not the routine update mechanism.
+
+Every database change must have a focused incremental SQL patch in `database/patches/`. Apply only the specific patch required for the change, and only after explicit DDL/DML approval.
+
 ## AI API Flow
 
 Use `docs/ai-api-flow.md` for new AI requests. Admin-service owns prompts, routes, and OpenAI Responses clients through `ludora-admin-service/src/ai/openAiResponsesClient.ts`. Discovery code that needs a new AI task should call an admin-service endpoint and should reuse the existing admin `.env` values instead of creating a separate key flow.

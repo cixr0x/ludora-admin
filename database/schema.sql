@@ -1,3 +1,6 @@
+-- Snapshot only. Do not apply this full file to existing shared or live databases.
+-- Routine database changes must be applied through focused files in database/patches/.
+
 create table if not exists discovery_store_candidates (
     id bigserial primary key,
     store_name text not null default '',

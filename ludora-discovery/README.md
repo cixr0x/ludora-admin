@@ -47,10 +47,12 @@ discovery_store_candidates
 
 ## Database Persistence
 
-Apply the shared schema before the first database-backed run:
+Use incremental patches in `..\database\patches` for existing databases. The shared `schema.sql` file is a snapshot/reference and is not the routine update mechanism.
+
+Apply only the patch required by the change after explicit DDL/DML approval:
 
 ```powershell
-psql "$env:LUDORA_DATABASE_URL" -f ..\database\schema.sql
+psql "$env:LUDORA_DATABASE_URL" -f ..\database\patches\YYYYMMDD_NNN_description.sql
 ```
 
 Store candidates are persisted by default. To also extract raw listing candidates from accepted store homepages:
