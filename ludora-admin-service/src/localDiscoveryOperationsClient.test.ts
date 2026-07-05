@@ -165,6 +165,42 @@ describe('local discovery operations client', () => {
     expect(failed?.error).toBe('Missing database URL');
   });
 
+  it('starts item update by spawning the CLI with selected store ids', async () => {
+    const { client, spawned } = createClient();
+
+    const run = await client.startItemUpdateRun({ store_ids: [12, 34] });
+
+    expect(run.status).toBe('running');
+    expect(run.type).toBe('item_update');
+    expect(spawned[0].args).toEqual([
+      '-m',
+      'ludora.operation_cli',
+      '--env-file',
+      'C:/PROJECTS/ludora/ludora-admin/ludora-admin-service/.env',
+      'item-update',
+      '--store-id',
+      '12',
+      '--store-id',
+      '34'
+    ]);
+  });
+
+  it('starts item update for all stores without CLI store ids', async () => {
+    const { client, spawned } = createClient();
+
+    const run = await client.startItemUpdateRun({ all_stores: true });
+
+    expect(run.status).toBe('running');
+    expect(run.type).toBe('item_update');
+    expect(spawned[0].args).toEqual([
+      '-m',
+      'ludora.operation_cli',
+      '--env-file',
+      'C:/PROJECTS/ludora/ludora-admin/ludora-admin-service/.env',
+      'item-update'
+    ]);
+  });
+
   it('marks the run failed when the child process emits an error', async () => {
     const { client, spawned } = createClient();
     const run = await client.startItemUpdateRun();

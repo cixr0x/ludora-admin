@@ -16,6 +16,8 @@ export type ItemUpdateRunResult = {
   updated_items: number;
 };
 
+export type ItemUpdateRunScope = { all_stores: true } | { store_ids: number[] };
+
 export type ItemEmbeddingRunResult = {
   embedded_items: number;
   model: string;
@@ -39,7 +41,7 @@ export type DiscoveryOperationsClient = {
   getStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun | null>;
   startItemDiscoveryRun(storeId: number, websiteUrl: string, platform?: string, storeName?: string): Promise<StoreDiscoveryRun>;
   startItemEmbeddingRun(refreshMode: 'full' | 'missing'): Promise<StoreDiscoveryRun>;
-  startItemUpdateRun(): Promise<StoreDiscoveryRun>;
+  startItemUpdateRun(scope?: ItemUpdateRunScope): Promise<StoreDiscoveryRun>;
   startStoreDiscoveryRun(): Promise<StoreDiscoveryRun>;
 };
 

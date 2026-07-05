@@ -889,6 +889,64 @@ describe('fetchRows', () => {
     });
   });
 
+  it('starts item update runs for selected stores with a JSON body', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-selected',
+      result: {
+        updated_items: 3
+      },
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'completed',
+      type: 'item_update'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.startItemUpdateRun({ store_ids: [12, 34] })).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+      body: JSON.stringify({ store_ids: [12, 34] }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
+  it('starts item update runs for all stores with a JSON body', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-all',
+      result: {
+        updated_items: 8
+      },
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'completed',
+      type: 'item_update'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.startItemUpdateRun({ all_stores: true })).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+      body: JSON.stringify({ all_stores: true }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
   it('starts item embedding runs with a refresh mode', async () => {
     const run = {
       completed_at: null,

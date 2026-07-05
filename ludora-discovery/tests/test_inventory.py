@@ -7,7 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ludora.database import ItemCandidateUpsertResult
-from ludora.inventory import collect_store_inventory
+from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import crawl_store_product_details, update_confirmed_store_item_details
 from ludora.webfetch import FetchResult
@@ -21,6 +21,7 @@ class FakeRepository:
         self.exists_checks = []
         self.confirmed_items = list(confirmed_items or [])
         self.confirmed_items_limit = None
+        self.confirmed_items_store_ids = None
         self.update_change_log_calls = []
 
     def item_candidate_exists(self, store_id, source_url):
@@ -31,8 +32,9 @@ class FakeRepository:
         self.item_records.append(record)
         return self.upsert_result
 
-    def list_confirmed_boardgame_item_candidates(self, limit=None):
+    def list_confirmed_boardgame_item_candidates(self, limit=None, store_ids=None):
         self.confirmed_items_limit = limit
+        self.confirmed_items_store_ids = store_ids
         return self.confirmed_items
 
     def update_item_candidate_with_change_log(self, existing_record, refreshed_record, *, job_id, run_id):
@@ -519,6 +521,27 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records[0].category_confidence, 0.91)
         self.assertEqual(repository.item_records[0].classification_reasons, ["previously confirmed"])
         self.assertEqual(repository.update_change_log_calls, [])
+
+    def test_update_confirmed_store_items_forwards_selected_store_ids(self):
+        repository = FakeRepository()
+
+        with patch("ludora.inventory.update_confirmed_store_item_details", return_value=[]) as updater:
+            records = update_confirmed_store_items(repository, limit=25, store_ids=[12, 34])
+
+        self.assertEqual(records, [])
+        updater.assert_called_once()
+        self.assertIs(updater.call_args.args[0], repository)
+        self.assertEqual(updater.call_args.kwargs["limit"], 25)
+        self.assertEqual(updater.call_args.kwargs["store_ids"], [12, 34])
+
+    def test_update_confirmed_store_item_details_forwards_selected_store_ids_to_repository(self):
+        repository = FakeRepository()
+
+        records = update_confirmed_store_item_details(repository, limit=25, store_ids=[12, 34])
+
+        self.assertEqual(records, [])
+        self.assertEqual(repository.confirmed_items_limit, 25)
+        self.assertEqual(repository.confirmed_items_store_ids, [12, 34])
 
     def test_update_confirmed_store_item_details_logs_changes_when_job_id_is_available(self):
         detail_html = """

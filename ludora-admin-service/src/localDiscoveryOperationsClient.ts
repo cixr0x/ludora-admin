@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   DiscoveryOperationError,
   type DiscoveryOperationsClient,
+  type ItemUpdateRunScope,
   type StoreDiscoveryRun,
   type StoreDiscoveryRunStatus
 } from './discoveryOperations.js';
@@ -175,8 +176,8 @@ export function createLocalDiscoveryOperationsClient({
     async startItemEmbeddingRun(refreshMode: 'full' | 'missing'): Promise<StoreDiscoveryRun> {
       return startRun('item_embeddings', ['item-embeddings', '--refresh-mode', refreshMode]);
     },
-    async startItemUpdateRun(): Promise<StoreDiscoveryRun> {
-      return startRun('item_update', ['item-update']);
+    async startItemUpdateRun(scope?: ItemUpdateRunScope): Promise<StoreDiscoveryRun> {
+      return startRun('item_update', itemUpdateCommandArgs(scope));
     },
     async startStoreDiscoveryRun(): Promise<StoreDiscoveryRun> {
       return startRun('store_discovery', ['store-discovery']);
@@ -304,6 +305,16 @@ function parseResult(stdout: string, type: StoreDiscoveryRun['type']): StoreDisc
     throw new Error(`Malformed discovery operation result for ${type}`);
   }
   return result;
+}
+
+function itemUpdateCommandArgs(scope?: ItemUpdateRunScope): string[] {
+  const args = ['item-update'];
+  if (scope && 'store_ids' in scope) {
+    for (const storeId of scope.store_ids) {
+      args.push('--store-id', String(storeId));
+    }
+  }
+  return args;
 }
 
 function tryParseResult(

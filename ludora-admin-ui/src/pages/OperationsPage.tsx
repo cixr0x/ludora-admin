@@ -4,6 +4,7 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
   FormControlLabel,
@@ -17,8 +18,10 @@ import {
 import { useEffect, useState } from 'react';
 import {
   adminApi,
+  type AdminRecord,
   type ItemEmbeddingRunResult,
   type ItemDiscoveryRunResult,
+  type ItemUpdateRunScope,
   type ItemUpdateRunResult,
   type StoreDiscoveryRun,
   type StoreDiscoveryRunResult
@@ -178,10 +181,23 @@ function itemEmbeddingResult(run: StoreDiscoveryRun): ItemEmbeddingRunResult | n
   return run.type === 'item_embeddings' ? (run.result as ItemEmbeddingRunResult | null) : null;
 }
 
+function optionalRecordText(record: AdminRecord, key: string): string {
+  const value = record[key];
+  return value === null || value === undefined ? '' : String(value);
+}
+
+function storeIdFor(record: AdminRecord): number | null {
+  const value = Number(record.id);
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
 export function OperationsPage({ operation = 'store_discovery' }: { operation?: OperationPageMode }) {
   const [run, setRun] = useState<StoreDiscoveryRun | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [embeddingRefreshMode, setEmbeddingRefreshMode] = useState<'full' | 'missing'>('missing');
+  const [stores, setStores] = useState<AdminRecord[]>([]);
+  const [storeLoadState, setStoreLoadState] = useState<LoadState>('ready');
+  const [selectedStoreIds, setSelectedStoreIds] = useState<number[]>([]);
   const [storeItemDiscoveryStoreId, setStoreItemDiscoveryStoreId] = useState('');
   const [startingOperation, setStartingOperation] = useState<StartingOperation>('');
   const [stoppingOperation, setStoppingOperation] = useState(false);
@@ -210,6 +226,34 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
       ignore = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (operation !== 'item_update') {
+      return undefined;
+    }
+    let ignore = false;
+    setStoreLoadState('loading');
+    setStores([]);
+    setSelectedStoreIds([]);
+
+    adminApi
+      .getStores()
+      .then((rows) => {
+        if (!ignore) {
+          setStores(rows);
+          setStoreLoadState('ready');
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setStoreLoadState('error');
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [operation]);
 
   useEffect(() => {
     if (run?.status !== 'running' && run?.status !== 'cancelling') {
@@ -248,11 +292,11 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
     }
   }
 
-  async function handleStartItemUpdate() {
+  async function handleStartItemUpdate(scope: ItemUpdateRunScope) {
     setStartingOperation('item_update');
     setError('');
     try {
-      const startedRun = await adminApi.startItemUpdateRun();
+      const startedRun = await adminApi.startItemUpdateRun(scope);
       setRun(startedRun);
       setLoadState('ready');
     } catch {
@@ -260,6 +304,12 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
     } finally {
       setStartingOperation('');
     }
+  }
+
+  function handleStoreSelection(storeId: number, checked: boolean) {
+    setSelectedStoreIds((currentStoreIds) =>
+      checked ? [...currentStoreIds, storeId] : currentStoreIds.filter((currentStoreId) => currentStoreId !== storeId)
+    );
   }
 
   async function handleStartStoreItemDiscovery() {
@@ -421,30 +471,103 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
 
       {operation === 'item_update' ? (
         <Paper variant="outlined" sx={{ p: 2 }}>
-          <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
-            <Box>
-              <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
-                Item update
-              </Typography>
-              <Typography color="text.secondary" variant="body2">
-                Refresh confirmed boardgame store items from their product pages.
-              </Typography>
-            </Box>
-            <Button
-              disabled={Boolean(startingOperation) || runIsActive}
-              startIcon={
-                startingOperation === 'item_update' || runIsActive ? (
-                  <CircularProgress color="inherit" size={16} />
-                ) : (
-                  <PlayArrowIcon />
-                )
-              }
-              sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
-              variant="contained"
-              onClick={handleStartItemUpdate}
-            >
-              Run Item Update
-            </Button>
+          <Stack spacing={2}>
+            <Stack direction={{ md: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+              <Box>
+                <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+                  Item update
+                </Typography>
+                <Typography color="text.secondary" variant="body2">
+                  Refresh confirmed boardgame store items from their product pages.
+                </Typography>
+              </Box>
+              <Stack
+                direction={{ sm: 'row', xs: 'column' }}
+                spacing={1}
+                sx={{ alignSelf: { md: 'center', xs: 'stretch' } }}
+              >
+                <Button
+                  disabled={
+                    Boolean(startingOperation) ||
+                    runIsActive ||
+                    selectedStoreIds.length === 0 ||
+                    storeLoadState !== 'ready'
+                  }
+                  startIcon={
+                    startingOperation === 'item_update' || runIsActive ? (
+                      <CircularProgress color="inherit" size={16} />
+                    ) : (
+                      <PlayArrowIcon />
+                    )
+                  }
+                  variant="contained"
+                  onClick={() => handleStartItemUpdate({ store_ids: selectedStoreIds })}
+                >
+                  Run for selected stores
+                </Button>
+                <Button
+                  disabled={Boolean(startingOperation) || runIsActive}
+                  startIcon={
+                    startingOperation === 'item_update' || runIsActive ? (
+                      <CircularProgress color="inherit" size={16} />
+                    ) : (
+                      <PlayArrowIcon />
+                    )
+                  }
+                  variant="outlined"
+                  onClick={() => handleStartItemUpdate({ all_stores: true })}
+                >
+                  Run for all
+                </Button>
+              </Stack>
+            </Stack>
+            {storeLoadState === 'loading' ? (
+              <Stack alignItems="center" direction="row" spacing={1.5}>
+                <CircularProgress size={18} />
+                <Typography variant="body2">Loading stores</Typography>
+              </Stack>
+            ) : null}
+            {storeLoadState === 'error' ? <Alert severity="error">Stores could not be loaded for selection.</Alert> : null}
+            {storeLoadState === 'ready' ? (
+              <Stack spacing={1}>
+                {stores.length === 0 ? <Typography variant="body2">No stores available for selection.</Typography> : null}
+                {stores.map((store) => {
+                  const storeId = storeIdFor(store);
+                  if (storeId === null) {
+                    return null;
+                  }
+                  const name = optionalRecordText(store, 'name') || `Store ${storeId}`;
+                  const domain = optionalRecordText(store, 'canonical_domain');
+                  const websiteUrl = optionalRecordText(store, 'website_url');
+                  const platform = optionalRecordText(store, 'platform');
+                  const details = [domain, websiteUrl, platform].filter(Boolean).join(' | ');
+                  return (
+                    <Paper key={storeId} variant="outlined" sx={{ p: 1.25 }}>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={selectedStoreIds.includes(storeId)}
+                            onChange={(event) => handleStoreSelection(storeId, event.target.checked)}
+                          />
+                        }
+                        label={
+                          <Box>
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                              {name}
+                            </Typography>
+                            {details ? (
+                              <Typography color="text.secondary" variant="caption">
+                                {details}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                        }
+                      />
+                    </Paper>
+                  );
+                })}
+              </Stack>
+            ) : null}
           </Stack>
         </Paper>
       ) : null}

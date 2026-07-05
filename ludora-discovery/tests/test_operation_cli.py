@@ -1,7 +1,12 @@
 import json
+import sys
 import unittest
 from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ludora.operations import (
     ItemDiscoveryRunResult,
@@ -63,11 +68,42 @@ class OperationCliTests(unittest.TestCase):
         with patch("sys.stdout", stdout), patch(
             "ludora.operation_cli.run_item_update",
             return_value=ItemUpdateRunResult(updated_items=7),
-        ):
+        ) as runner:
             exit_code = main(["item-update"])
 
         self.assertEqual(exit_code, 0)
+        self.assertIsNone(runner.call_args.kwargs["store_ids"])
         self.assertEqual(json.loads(stdout.getvalue())["result"]["updated_items"], 7)
+
+    def test_runs_item_update_with_repeatable_store_id(self):
+        stdout = StringIO()
+        with patch("sys.stdout", stdout), patch(
+            "ludora.operation_cli.run_item_update",
+            return_value=ItemUpdateRunResult(updated_items=7),
+        ) as runner:
+            exit_code = main(["item-update", "--store-id", "12", "--store-id", "34"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(runner.call_args.kwargs["store_ids"], [12, 34])
+        self.assertEqual(json.loads(stdout.getvalue())["result"]["updated_items"], 7)
+
+    def test_item_update_rejects_invalid_store_ids(self):
+        invalid_cases = [
+            (["item-update", "--store-id", "0"], "store ids must be positive integers"),
+            (["item-update", "--store-id", "-2"], "store ids must be positive integers"),
+            (["item-update", "--store-id", "12", "--store-id", "12"], "store ids must not contain duplicates"),
+        ]
+
+        for argv, message in invalid_cases:
+            with self.subTest(argv=argv), patch("sys.stderr", StringIO()) as stderr, patch(
+                "ludora.operation_cli.run_item_update",
+                return_value=ItemUpdateRunResult(updated_items=7),
+            ) as runner:
+                exit_code = main(argv)
+
+                self.assertEqual(exit_code, 1)
+                self.assertEqual(json.loads(stderr.getvalue())["error"]["message"], message)
+                runner.assert_not_called()
 
     def test_runs_item_embeddings_with_refresh_mode(self):
         stdout = StringIO()

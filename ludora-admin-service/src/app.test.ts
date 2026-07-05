@@ -3314,6 +3314,177 @@ describe('ludora admin service', () => {
     expect(calls).toEqual(['item_update']);
   });
 
+  it('starts item update runs for selected stores through the discovery operations client', async () => {
+    const run: StoreDiscoveryRun = {
+      completed_at: null,
+      error: null,
+      id: 'run-selected',
+      result: {
+        updated_items: 3
+      },
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'completed',
+      type: 'item_update'
+    };
+    const calls: unknown[] = [];
+    const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => run,
+      startItemDiscoveryRun: async () => {
+        throw new Error('should not start item discovery');
+      },
+      startItemEmbeddingRun: async () => {
+        throw new Error('should not start item embeddings');
+      },
+      startItemUpdateRun: async (scope) => {
+        calls.push(scope);
+        return run;
+      },
+      startStoreDiscoveryRun: async () => run
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ store_ids: [12, 34] });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: run });
+    expect(calls).toEqual([{ store_ids: [12, 34] }]);
+  });
+
+  it('starts item update runs for all stores through the discovery operations client', async () => {
+    const run: StoreDiscoveryRun = {
+      completed_at: null,
+      error: null,
+      id: 'run-all',
+      result: {
+        updated_items: 8
+      },
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'completed',
+      type: 'item_update'
+    };
+    const calls: unknown[] = [];
+    const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => run,
+      startItemDiscoveryRun: async () => {
+        throw new Error('should not start item discovery');
+      },
+      startItemEmbeddingRun: async () => {
+        throw new Error('should not start item embeddings');
+      },
+      startItemUpdateRun: async (scope) => {
+        calls.push(scope);
+        return run;
+      },
+      startStoreDiscoveryRun: async () => run
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ all_stores: true });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: run });
+    expect(calls).toEqual([{ all_stores: true }]);
+  });
+
+  it('rejects item update requests that combine all stores and selected stores', async () => {
+    const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => null,
+      startItemDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startItemEmbeddingRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startItemUpdateRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startStoreDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      }
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ all_stores: true, store_ids: [12] });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: { message: 'Specify either all_stores or store_ids, not both' } });
+  });
+
+  it('rejects item update requests with invalid selected store ids', async () => {
+    const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => null,
+      startItemDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startItemEmbeddingRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startItemUpdateRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startStoreDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      }
+    };
+
+    const emptyResponse = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ store_ids: [] });
+    const invalidResponse = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ store_ids: [12, 'nope'] });
+    const duplicateResponse = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ store_ids: [12, 12] });
+    const stringNumericResponse = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ store_ids: ['12'] });
+    const booleanResponse = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ store_ids: [true] });
+    const arrayResponse = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ store_ids: [[12]] });
+    const typoResponse = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ store_id: [12] });
+    const falseAllStoresResponse = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-update-runs')
+      .send({ all_stores: false });
+
+    expect(emptyResponse.status).toBe(400);
+    expect(emptyResponse.body).toEqual({ error: { message: 'store_ids must be a non-empty array' } });
+    expect(invalidResponse.status).toBe(400);
+    expect(invalidResponse.body).toEqual({ error: { message: 'store_ids must contain positive integers' } });
+    expect(duplicateResponse.status).toBe(400);
+    expect(duplicateResponse.body).toEqual({ error: { message: 'store_ids must not contain duplicates' } });
+    expect(stringNumericResponse.status).toBe(400);
+    expect(stringNumericResponse.body).toEqual({ error: { message: 'store_ids must contain positive integers' } });
+    expect(booleanResponse.status).toBe(400);
+    expect(booleanResponse.body).toEqual({ error: { message: 'store_ids must contain positive integers' } });
+    expect(arrayResponse.status).toBe(400);
+    expect(arrayResponse.body).toEqual({ error: { message: 'store_ids must contain positive integers' } });
+    expect(typoResponse.status).toBe(400);
+    expect(typoResponse.body).toEqual({ error: { message: 'Item update scope must include all_stores or store_ids' } });
+    expect(falseAllStoresResponse.status).toBe(400);
+    expect(falseAllStoresResponse.body).toEqual({ error: { message: 'all_stores must be true when provided' } });
+  });
+
   it('starts item embedding runs through the discovery operations client', async () => {
     const run: StoreDiscoveryRun = {
       completed_at: null,

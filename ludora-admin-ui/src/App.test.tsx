@@ -189,13 +189,17 @@ describe('App', () => {
       if (new URL(url).pathname === '/admin/operations/store-discovery-runs/latest') {
         return jsonResponse(null);
       }
+      if (new URL(url).pathname === '/stores') {
+        return jsonResponse([]);
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: 'Store Item Update' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Run Item Update/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run for selected stores/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run for all/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Run Store Discovery/i })).not.toBeInTheDocument();
   });
 

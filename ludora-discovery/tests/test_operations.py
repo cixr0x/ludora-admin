@@ -304,7 +304,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch(
             "ludora.operations.update_confirmed_store_items", return_value=records
         ) as update_confirmed_store_items:
-            result = run_item_update(env_file="custom.env")
+            result = run_item_update(env_file="custom.env", store_ids=[12, 34])
 
         resolve_database_url.assert_called_once()
         self.assertEqual(resolve_database_url.call_args.kwargs["dotenv_path"], "custom.env")
@@ -316,6 +316,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             browser_fetch_enabled=True,
             job_id=99,
             run_id=ANY,
+            store_ids=[12, 34],
         )
         repository.start_store_item_update_log.assert_called_once()
         update_run_id = repository.start_store_item_update_log.call_args.kwargs["run_id"]
@@ -460,6 +461,21 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(run.result.updated_items, 6)
         self.assertEqual(manager.get_latest_run().id, run.id)
 
+    def test_manager_passes_selected_store_ids_to_custom_item_update_runner(self):
+        calls = []
+
+        manager = StoreDiscoveryRunManager(
+            runner=lambda: StoreDiscoveryRunResult(0, 0, 0),
+            item_update_runner=lambda *, store_ids: calls.append(store_ids) or ItemUpdateRunResult(updated_items=6),
+            background=False,
+        )
+
+        run = manager.start_item_update(store_ids=[12, 34])
+
+        self.assertEqual(run.status, "completed")
+        self.assertEqual(run.result.updated_items, 6)
+        self.assertEqual(calls, [[12, 34]])
+
     def test_manager_records_successful_item_embedding_run_result(self):
         manager = StoreDiscoveryRunManager(
             runner=lambda: StoreDiscoveryRunResult(0, 0, 0),
@@ -498,7 +514,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
 
             manager.start_store_discovery()
             manager.start_item_discovery(12, "https://example.mx/", "amazon")
-            manager.start_item_update()
+            manager.start_item_update([12, 34])
             manager.start_item_embeddings("missing")
 
         store_runner.assert_called_once_with(env_file="custom.env", cancellation_token=ANY)
@@ -512,7 +528,12 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             run_id=ANY,
             started_at=ANY,
         )
-        item_update_runner.assert_called_once_with(env_file="custom.env", cancellation_token=ANY, run_id=ANY)
+        item_update_runner.assert_called_once_with(
+            env_file="custom.env",
+            cancellation_token=ANY,
+            run_id=ANY,
+            store_ids=[12, 34],
+        )
         item_embedding_runner.assert_called_once_with(refresh_mode="missing", env_file="custom.env", cancellation_token=ANY)
 
     def test_manager_records_failed_run_error(self):

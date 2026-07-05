@@ -59,11 +59,17 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('starts item update and renders the updated item count', async () => {
+  it('starts item update for all stores and renders the updated item count', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
         return new Response(JSON.stringify({ data: null }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        });
+      }
+      if (url.endsWith('/stores')) {
+        return new Response(JSON.stringify({ data: [] }), {
           headers: { 'Content-Type': 'application/json' },
           status: 200
         });
@@ -95,12 +101,150 @@ describe('OperationsPage', () => {
     render(<OperationsPage operation="item_update" />);
 
     await screen.findByText('No recent operation run.');
-    await userEvent.click(screen.getByRole('button', { name: /Run Item Update/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Run for all/i }));
 
     expect(await screen.findByText('completed')).toBeInTheDocument();
     expect(screen.getByText('item_update')).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+      body: JSON.stringify({ all_stores: true }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
+  it('starts item update for selected stores from the checkbox list', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return jsonResponse({ data: null });
+      }
+      if (url.endsWith('/stores')) {
+        return jsonResponse({
+          data: [
+            {
+              canonical_domain: 'alpha.mx',
+              id: 12,
+              name: 'Alpha Games',
+              platform: 'shopify',
+              website_url: 'https://alpha.mx/'
+            },
+            {
+              canonical_domain: 'beta.mx',
+              id: 34,
+              name: 'Beta Games',
+              platform: 'custom',
+              website_url: 'https://beta.mx/'
+            }
+          ]
+        });
+      }
+      if (url.endsWith('/admin/operations/item-update-runs') && init?.method === 'POST') {
+        return jsonResponse(
+          {
+            data: {
+              completed_at: '2026-07-05T20:02:00Z',
+              error: null,
+              id: 'run-selected',
+              result: {
+                updated_items: 3
+              },
+              started_at: '2026-07-05T20:00:00Z',
+              status: 'completed',
+              type: 'item_update'
+            }
+          },
+          202
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="item_update" />);
+
+    await screen.findByText('Alpha Games');
+    await userEvent.click(screen.getByRole('checkbox', { name: /Alpha Games/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Run for selected stores/i }));
+
+    expect(await screen.findByText('completed')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+      body: JSON.stringify({ store_ids: [12] }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
+  it('disables selected-store item update until at least one store is selected', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return jsonResponse({ data: null });
+      }
+      if (url.endsWith('/stores')) {
+        return jsonResponse({
+          data: [
+            {
+              canonical_domain: 'alpha.mx',
+              id: 12,
+              name: 'Alpha Games',
+              platform: 'shopify',
+              website_url: 'https://alpha.mx/'
+            }
+          ]
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="item_update" />);
+
+    await screen.findByText('Alpha Games');
+    expect(screen.getByRole('button', { name: /Run for selected stores/i })).toBeDisabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: /Alpha Games/i }));
+    expect(screen.getByRole('button', { name: /Run for selected stores/i })).toBeEnabled();
+  });
+
+  it('keeps run for all available when the store list fails to load', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return jsonResponse({ data: null });
+      }
+      if (url.endsWith('/stores')) {
+        return new Response(JSON.stringify({ error: { message: 'store load failed' } }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 500
+        });
+      }
+      if (url.endsWith('/admin/operations/item-update-runs') && init?.method === 'POST') {
+        return jsonResponse(
+          {
+            data: {
+              completed_at: null,
+              error: null,
+              id: 'run-all',
+              result: null,
+              started_at: '2026-07-05T20:00:00Z',
+              status: 'running',
+              type: 'item_update'
+            }
+          },
+          202
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="item_update" />);
+
+    expect(await screen.findByText('Stores could not be loaded for selection.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run for selected stores/i })).toBeDisabled();
+    await userEvent.click(screen.getByRole('button', { name: /Run for all/i }));
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+      body: JSON.stringify({ all_stores: true }),
+      headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
   });
@@ -357,3 +501,10 @@ describe('OperationsPage', () => {
     expect(screen.getByText('relation "discovery_item_candidates" does not exist')).toBeInTheDocument();
   });
 });
+
+function jsonResponse(data: unknown, status = 200) {
+  return new Response(JSON.stringify(data), {
+    headers: { 'Content-Type': 'application/json' },
+    status
+  });
+}

@@ -544,6 +544,21 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(records[0].match_payload, {"source": "local"})
         self.assertEqual(connection.commits, 0)
 
+    def test_lists_confirmed_boardgame_item_candidates_filters_selected_stores_before_limit(self):
+        connection = FakeConnection(fetchall_rows=[[]])
+        repository = DiscoveryRepository(connection)
+
+        records = repository.list_confirmed_boardgame_item_candidates(limit=50, store_ids=[12, 34])
+
+        sql, params = connection.cursor_instance.executions[0]
+        normalized_sql = sql.casefold()
+        self.assertEqual(records, [])
+        self.assertIn("store_id in (%s, %s)", normalized_sql)
+        self.assertIn("order by last_updated asc, id asc", normalized_sql)
+        self.assertIn("limit %s", normalized_sql)
+        self.assertEqual(params, (12, 34, 50))
+        self.assertEqual(connection.commits, 0)
+
     def test_marks_processing_state_without_listing_status_changes(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)

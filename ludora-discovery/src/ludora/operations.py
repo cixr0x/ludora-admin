@@ -304,6 +304,7 @@ def run_item_update(
     env_file: str = ".env",
     cancellation_token: CancellationToken | None = None,
     run_id: str | None = None,
+    store_ids: list[int] | None = None,
 ) -> ItemUpdateRunResult:
     current_env = env if env is not None else os.environ
     database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
@@ -325,6 +326,7 @@ def run_item_update(
                 browser_fetch_enabled=browser_fetch_enabled,
                 job_id=job_id,
                 run_id=resolved_run_id,
+                store_ids=store_ids,
                 **update_kwargs,
             )
         except OperationCancelled:
@@ -410,7 +412,7 @@ class StoreDiscoveryRunManager:
         self,
         runner: Callable[[], StoreDiscoveryRunResult] | None = None,
         item_runner: Callable[..., ItemDiscoveryRunResult] | None = None,
-        item_update_runner: Callable[[], ItemUpdateRunResult] | None = None,
+        item_update_runner: Callable[..., ItemUpdateRunResult] | None = None,
         item_embedding_runner: Callable[[EmbeddingRefreshMode], ItemEmbeddingRunResult] | None = None,
         *,
         background: bool = True,
@@ -440,7 +442,14 @@ class StoreDiscoveryRunManager:
         self.item_update_runner = (
             _update_runner_with_token(item_update_runner)
             if item_update_runner is not None
-            else (lambda cancellation_token, run_id: run_item_update(env_file=env_file, cancellation_token=cancellation_token, run_id=run_id))
+            else (
+                lambda cancellation_token, run_id, store_ids: run_item_update(
+                    env_file=env_file,
+                    cancellation_token=cancellation_token,
+                    run_id=run_id,
+                    store_ids=store_ids,
+                )
+            )
         )
         self.item_embedding_runner = (
             _embedding_runner_with_token(item_embedding_runner)
@@ -518,7 +527,7 @@ class StoreDiscoveryRunManager:
 
         return self.get_run(run.id) or run
 
-    def start_item_update(self) -> StoreDiscoveryRun:
+    def start_item_update(self, store_ids: list[int] | None = None) -> StoreDiscoveryRun:
         with self.lock:
             if self.active_run_id:
                 raise OperationAlreadyRunning("Discovery operation is already running")
@@ -536,10 +545,10 @@ class StoreDiscoveryRunManager:
             self.active_run_id = run.id
 
         if self.background:
-            thread = threading.Thread(target=self._execute_item_update_run, args=(run.id,), daemon=True)
+            thread = threading.Thread(target=self._execute_item_update_run, args=(run.id, store_ids), daemon=True)
             thread.start()
         else:
-            self._execute_item_update_run(run.id)
+            self._execute_item_update_run(run.id, store_ids)
 
         return self.get_run(run.id) or run
 
@@ -655,9 +664,9 @@ class StoreDiscoveryRunManager:
             run.completed_at = _utc_now()
             self.active_run_id = None
 
-    def _execute_item_update_run(self, run_id: str) -> None:
+    def _execute_item_update_run(self, run_id: str, store_ids: list[int] | None) -> None:
         try:
-            result = self.item_update_runner(self._cancellation_token_for(run_id), run_id)
+            result = self.item_update_runner(self._cancellation_token_for(run_id), run_id, store_ids)
         except OperationCancelled:
             self._mark_run_cancelled(run_id)
             return
@@ -825,9 +834,9 @@ def _item_runner_arguments(
     return args, kwargs
 
 
-def _update_runner_with_token(runner: Callable[..., ItemUpdateRunResult]) -> Callable[[CancellationToken, str], ItemUpdateRunResult]:
-    def run(cancellation_token: CancellationToken, run_id: str) -> ItemUpdateRunResult:
-        args, kwargs = _update_runner_arguments(runner, cancellation_token, run_id)
+def _update_runner_with_token(runner: Callable[..., ItemUpdateRunResult]) -> Callable[[CancellationToken, str, list[int] | None], ItemUpdateRunResult]:
+    def run(cancellation_token: CancellationToken, run_id: str, store_ids: list[int] | None) -> ItemUpdateRunResult:
+        args, kwargs = _update_runner_arguments(runner, cancellation_token, run_id, store_ids)
         return runner(*args, **kwargs)
 
     return run
@@ -837,6 +846,7 @@ def _update_runner_arguments(
     runner: Callable[..., object],
     cancellation_token: CancellationToken,
     run_id: str,
+    store_ids: list[int] | None,
 ) -> tuple[list[object], dict[str, object]]:
     try:
         signature = inspect.signature(runner)
@@ -845,11 +855,11 @@ def _update_runner_arguments(
 
     parameters = list(signature.parameters.values())
     if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
-        return [cancellation_token, run_id], {}
+        return [cancellation_token, run_id, store_ids], {}
 
     args: list[object] = []
     kwargs: dict[str, object] = {}
-    fallback_values = [cancellation_token, run_id]
+    fallback_values = [cancellation_token, run_id, store_ids]
     unknown_positional = 0
 
     for parameter in parameters:
@@ -858,6 +868,8 @@ def _update_runner_arguments(
                 args.append(cancellation_token)
             elif parameter.name == "run_id":
                 args.append(run_id)
+            elif parameter.name == "store_ids":
+                args.append(store_ids)
             else:
                 args.append(fallback_values[min(unknown_positional, len(fallback_values) - 1)])
                 unknown_positional += 1
@@ -866,9 +878,12 @@ def _update_runner_arguments(
                 kwargs["cancellation_token"] = cancellation_token
             elif parameter.name == "run_id":
                 kwargs["run_id"] = run_id
+            elif parameter.name == "store_ids":
+                kwargs["store_ids"] = store_ids
         elif parameter.kind == inspect.Parameter.VAR_KEYWORD:
             kwargs.setdefault("cancellation_token", cancellation_token)
             kwargs.setdefault("run_id", run_id)
+            kwargs.setdefault("store_ids", store_ids)
 
     return args, kwargs
 

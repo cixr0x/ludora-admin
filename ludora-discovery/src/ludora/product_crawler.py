@@ -23,7 +23,11 @@ class ItemCandidateRepository(Protocol):
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         ...
 
-    def list_confirmed_boardgame_item_candidates(self, limit: int | None = None) -> list[DiscoveryItemCandidateRecord]:
+    def list_confirmed_boardgame_item_candidates(
+        self,
+        limit: int | None = None,
+        store_ids: list[int] | None = None,
+    ) -> list[DiscoveryItemCandidateRecord]:
         ...
 
     def update_item_candidate_with_change_log(
@@ -128,6 +132,7 @@ def update_confirmed_store_item_details(
     cancellation_token: CancellationToken | None = None,
     job_id: int | None = None,
     run_id: str | None = None,
+    store_ids: list[int] | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     browser_session = None
@@ -139,7 +144,7 @@ def update_confirmed_store_item_details(
 
     try:
         records: list[DiscoveryItemCandidateRecord] = []
-        for existing_record in repository.list_confirmed_boardgame_item_candidates(limit=limit):
+        for existing_record in repository.list_confirmed_boardgame_item_candidates(limit=limit, store_ids=store_ids):
             raise_if_cancelled(cancellation_token)
             refreshed_record = _fetch_detail_candidate(
                 listing_candidate=existing_record,

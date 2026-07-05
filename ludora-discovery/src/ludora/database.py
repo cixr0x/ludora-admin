@@ -447,7 +447,11 @@ class DiscoveryRepository:
         self.connection.commit()
         return result
 
-    def list_confirmed_boardgame_item_candidates(self, limit: int | None = None) -> list[DiscoveryItemCandidateRecord]:
+    def list_confirmed_boardgame_item_candidates(
+        self,
+        limit: int | None = None,
+        store_ids: list[int] | None = None,
+    ) -> list[DiscoveryItemCandidateRecord]:
         sql = f"""
             select {_item_candidate_select_columns()}
             from store_items
@@ -456,15 +460,19 @@ class DiscoveryRepository:
               and item_id is not null
               and source_url <> ''
               and listing_status = 'LISTED'
-            order by last_updated asc, id asc
         """
-        params: tuple[object, ...] = ()
+        params: list[object] = []
+        if store_ids:
+            placeholders = ", ".join(["%s"] * len(store_ids))
+            sql += f"\n              and store_id in ({placeholders})"
+            params.extend(store_ids)
+        sql += "\n            order by last_updated asc, id asc"
         if limit is not None:
             sql += "\nlimit %s"
-            params = (limit,)
+            params.append(limit)
 
         with self.connection.cursor() as cursor:
-            cursor.execute(sql, params)
+            cursor.execute(sql, tuple(params))
             return [_item_candidate_from_row(row) for row in cursor.fetchall()]
 
     def list_item_search_embedding_sources(self, *, refresh_mode: str = "missing") -> list[ItemSearchEmbeddingSource]:

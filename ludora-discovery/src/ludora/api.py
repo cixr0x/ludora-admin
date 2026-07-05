@@ -16,7 +16,7 @@ class RunManager(Protocol):
     def start_item_discovery(self, store_id: int, website_url: str, platform: str = "", store_name: str = ""):
         ...
 
-    def start_item_update(self):
+    def start_item_update(self, store_ids: list[int] | None = None):
         ...
 
     def start_item_embeddings(self, refresh_mode: str):
@@ -68,8 +68,11 @@ def route_request(
         return 202, {"data": run.to_dict()}
 
     if method == "POST" and path == "/operations/item-update-runs":
+        store_ids, error = _parse_item_update_scope(body)
+        if error:
+            return 400, {"error": {"message": error}}
         try:
-            run = manager.start_item_update()
+            run = manager.start_item_update(store_ids=store_ids)
         except OperationAlreadyRunning as exc:
             return 409, {"error": {"message": str(exc)}}
         return 202, {"data": run.to_dict()}
@@ -119,6 +122,30 @@ def _parse_item_discovery_path(path: str) -> int | None:
         return int(raw_store_id)
     except ValueError:
         return 0
+
+
+def _parse_item_update_scope(body: dict[str, object] | None) -> tuple[list[int] | None, str | None]:
+    request_body = body or {}
+    all_stores = request_body.get("all_stores") is True
+    has_all_stores = "all_stores" in request_body
+    has_store_ids = "store_ids" in request_body
+    if all_stores and has_store_ids:
+        return None, "Specify either all_stores or store_ids, not both"
+    if has_all_stores and not all_stores:
+        return None, "all_stores must be true when provided"
+    if request_body and not has_store_ids and not all_stores:
+        return None, "Item update scope must include all_stores or store_ids"
+    if not has_store_ids:
+        return None, None
+
+    raw_store_ids = request_body.get("store_ids")
+    if not isinstance(raw_store_ids, list) or not raw_store_ids:
+        return None, "store_ids must be a non-empty array"
+    if any(not isinstance(store_id, int) or isinstance(store_id, bool) or store_id <= 0 for store_id in raw_store_ids):
+        return None, "store_ids must contain positive integers"
+    if len(set(raw_store_ids)) != len(raw_store_ids):
+        return None, "store_ids must not contain duplicates"
+    return raw_store_ids, None
 
 
 def create_handler(manager: StoreDiscoveryRunManager):

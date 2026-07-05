@@ -1,6 +1,7 @@
 import {
   DiscoveryOperationError,
   type DiscoveryOperationsClient,
+  type ItemUpdateRunScope,
   type StoreDiscoveryRun
 } from './discoveryOperations.js';
 
@@ -49,10 +50,8 @@ export function createDiscoveryOperationsClient(baseUrl: string): DiscoveryOpera
         headers: { 'Content-Type': 'application/json' },
         method: 'POST'
       }),
-    startItemUpdateRun: () =>
-      requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-update-runs', {
-        method: 'POST'
-      }),
+    startItemUpdateRun: (scope?: ItemUpdateRunScope) =>
+      requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-update-runs', itemUpdateRequestInit(scope)),
     startItemEmbeddingRun: (refreshMode: 'full' | 'missing') =>
       requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-embedding-runs', {
         body: JSON.stringify({ refresh_mode: refreshMode }),
@@ -92,5 +91,16 @@ function itemDiscoveryRequestBody(
     ...(normalizedPlatform ? { platform: normalizedPlatform } : {}),
     ...(normalizedStoreName ? { store_name: normalizedStoreName } : {}),
     website_url: websiteUrl
+  };
+}
+
+function itemUpdateRequestInit(scope?: ItemUpdateRunScope): RequestInit {
+  if (!scope) {
+    return { method: 'POST' };
+  }
+  return {
+    body: JSON.stringify(scope),
+    headers: { 'Content-Type': 'application/json' },
+    method: 'POST'
   };
 }

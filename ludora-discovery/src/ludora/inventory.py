@@ -27,7 +27,11 @@ class ItemCandidateRepository(Protocol):
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         ...
 
-    def list_confirmed_boardgame_item_candidates(self, limit: int | None = None) -> list[DiscoveryItemCandidateRecord]:
+    def list_confirmed_boardgame_item_candidates(
+        self,
+        limit: int | None = None,
+        store_ids: list[int] | None = None,
+    ) -> list[DiscoveryItemCandidateRecord]:
         ...
 
     def update_item_candidate_with_change_log(
@@ -99,6 +103,7 @@ def update_confirmed_store_items(
     cancellation_token: CancellationToken | None = None,
     job_id: int | None = None,
     run_id: str | None = None,
+    store_ids: list[int] | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
         repository,
@@ -107,4 +112,5 @@ def update_confirmed_store_items(
         cancellation_token=cancellation_token,
         job_id=job_id,
         run_id=run_id,
+        store_ids=store_ids,
     )

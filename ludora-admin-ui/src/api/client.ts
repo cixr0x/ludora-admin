@@ -179,6 +179,8 @@ export type ItemUpdateRunResult = {
   updated_items: number;
 };
 
+export type ItemUpdateRunScope = { all_stores: true } | { store_ids: number[] };
+
 export type ItemEmbeddingRunResult = {
   embedded_items: number;
   model: string;
@@ -401,10 +403,12 @@ export const adminApi = {
     fetchData<StoreDiscoveryRun>(`/admin/operations/stores/${encodeURIComponent(storeId)}/item-discovery-runs`, {
       method: 'POST'
     }),
-  startItemUpdateRun: () =>
-    fetchData<StoreDiscoveryRun>('/admin/operations/item-update-runs', {
-      method: 'POST'
-    }),
+  startItemUpdateRun: (scope?: ItemUpdateRunScope) =>
+    scope
+      ? sendJson<StoreDiscoveryRun>('/admin/operations/item-update-runs', 'POST', scope)
+      : fetchData<StoreDiscoveryRun>('/admin/operations/item-update-runs', {
+          method: 'POST'
+        }),
   startItemEmbeddingRun: (refreshMode: 'full' | 'missing') =>
     sendJson<StoreDiscoveryRun>('/admin/operations/item-embedding-runs', 'POST', {
       refresh_mode: refreshMode

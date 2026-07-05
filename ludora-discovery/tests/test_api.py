@@ -100,6 +100,74 @@ class DiscoveryApiTests(unittest.TestCase):
         self.assertEqual(payload["data"]["status"], "completed")
         self.assertEqual(payload["data"]["result"]["updated_items"], 8)
 
+    def test_starts_item_update_run_for_selected_stores(self):
+        calls = []
+
+        manager = StoreDiscoveryRunManager(
+            runner=lambda: StoreDiscoveryRunResult(0, 0, 0),
+            item_update_runner=lambda *, store_ids: calls.append(store_ids) or ItemUpdateRunResult(updated_items=8),
+            background=False,
+        )
+
+        status, payload = route_request("POST", "/operations/item-update-runs", manager, {"store_ids": [12, 34]})
+
+        self.assertEqual(status, 202)
+        self.assertEqual(payload["data"]["type"], "item_update")
+        self.assertEqual(payload["data"]["status"], "completed")
+        self.assertEqual(payload["data"]["result"]["updated_items"], 8)
+        self.assertEqual(calls, [[12, 34]])
+
+    def test_item_update_run_treats_empty_body_and_all_stores_as_unscoped(self):
+        calls = []
+
+        manager = StoreDiscoveryRunManager(
+            runner=lambda: StoreDiscoveryRunResult(0, 0, 0),
+            item_update_runner=lambda *, store_ids: calls.append(store_ids) or ItemUpdateRunResult(updated_items=8),
+            background=False,
+        )
+
+        no_body_status, _no_body_payload = route_request("POST", "/operations/item-update-runs", manager)
+        all_stores_status, _all_stores_payload = route_request(
+            "POST",
+            "/operations/item-update-runs",
+            manager,
+            {"all_stores": True},
+        )
+
+        self.assertEqual(no_body_status, 202)
+        self.assertEqual(all_stores_status, 202)
+        self.assertEqual(calls, [None, None])
+
+    def test_item_update_run_rejects_invalid_scope(self):
+        manager = StoreDiscoveryRunManager(
+            runner=lambda: StoreDiscoveryRunResult(0, 0, 0),
+            item_update_runner=lambda **_kwargs: ItemUpdateRunResult(updated_items=0),
+            background=False,
+        )
+
+        invalid_cases = [
+            (
+                {"all_stores": True, "store_ids": [12]},
+                "Specify either all_stores or store_ids, not both",
+            ),
+            ({"store_ids": []}, "store_ids must be a non-empty array"),
+            ({"store_ids": "12"}, "store_ids must be a non-empty array"),
+            ({"store_ids": [12, 0]}, "store_ids must contain positive integers"),
+            ({"store_ids": [12, "34"]}, "store_ids must contain positive integers"),
+            ({"store_ids": [True]}, "store_ids must contain positive integers"),
+            ({"store_ids": [[12]]}, "store_ids must contain positive integers"),
+            ({"store_ids": [12, 12]}, "store_ids must not contain duplicates"),
+            ({"store_id": [12]}, "Item update scope must include all_stores or store_ids"),
+            ({"all_stores": False}, "all_stores must be true when provided"),
+        ]
+
+        for body, message in invalid_cases:
+            with self.subTest(body=body):
+                status, payload = route_request("POST", "/operations/item-update-runs", manager, body)
+
+                self.assertEqual(status, 400)
+                self.assertEqual(payload, {"error": {"message": message}})
+
     def test_starts_item_embedding_run(self):
         manager = StoreDiscoveryRunManager(
             runner=lambda: StoreDiscoveryRunResult(0, 0, 0),

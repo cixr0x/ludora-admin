@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
-import type { DiscoveryOperationsClient } from '../discoveryOperations.js';
+import type { DiscoveryOperationsClient, ItemUpdateRunScope } from '../discoveryOperations.js';
 
 export function createOperationsRouter(operationsClient: DiscoveryOperationsClient, database: Database): Router {
   const router = Router();
@@ -62,9 +62,9 @@ export function createOperationsRouter(operationsClient: DiscoveryOperationsClie
     }
   });
 
-  router.post('/admin/operations/item-update-runs', async (_request, response, next) => {
+  router.post('/admin/operations/item-update-runs', async (request, response, next) => {
     try {
-      const run = await operationsClient.startItemUpdateRun();
+      const run = await operationsClient.startItemUpdateRun(parseItemUpdateRunScope(request.body));
       response.status(202).json({ data: run });
     } catch (error) {
       next(error);
@@ -91,6 +91,49 @@ function parseEmbeddingRefreshMode(body: unknown): 'full' | 'missing' {
     return normalizedValue;
   }
   throw httpError(400, 'refresh_mode must be full or missing');
+}
+
+function parseItemUpdateRunScope(body: unknown): ItemUpdateRunScope | undefined {
+  if (!body) {
+    return undefined;
+  }
+  if (!isRecord(body)) {
+    throw httpError(400, 'Item update scope must be an object');
+  }
+  if (Object.keys(body).length === 0) {
+    return undefined;
+  }
+
+  const hasAllStoresProperty = Object.hasOwn(body, 'all_stores');
+  const hasAllStores = body.all_stores === true;
+  const hasStoreIds = Object.hasOwn(body, 'store_ids');
+  if (hasAllStores && hasStoreIds) {
+    throw httpError(400, 'Specify either all_stores or store_ids, not both');
+  }
+  if (hasAllStores) {
+    return { all_stores: true };
+  }
+  if (hasAllStoresProperty) {
+    throw httpError(400, 'all_stores must be true when provided');
+  }
+  if (!hasStoreIds) {
+    throw httpError(400, 'Item update scope must include all_stores or store_ids');
+  }
+  if (!Array.isArray(body.store_ids) || body.store_ids.length === 0) {
+    throw httpError(400, 'store_ids must be a non-empty array');
+  }
+  if (body.store_ids.some((value) => typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0)) {
+    throw httpError(400, 'store_ids must contain positive integers');
+  }
+  const storeIds = body.store_ids;
+  if (new Set(storeIds).size !== storeIds.length) {
+    throw httpError(400, 'store_ids must not contain duplicates');
+  }
+  return { store_ids: storeIds };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
 function httpError(status: number, message: string): Error & { status: number } {
