@@ -23,6 +23,7 @@ class SchemaTests(unittest.TestCase):
             "items",
             "item_match_candidates",
             "translation_jobs",
+            "job_store_item_discovery_log",
             "publishers",
         ]:
             self.assertIn(f"create table if not exists {table_name}", schema.casefold())
@@ -199,6 +200,36 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("click_count bigint not null default 0", table)
         self.assertIn("primary key (store_item_id, clicked_hour)", table)
         self.assertNotIn("references store_items", table)
+
+    def test_schema_contains_store_item_discovery_job_log(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+
+        self.assertIn("create table if not exists job_store_item_discovery_log", schema)
+        table = schema.split("create table if not exists job_store_item_discovery_log", 1)[1].split(");", 1)[0]
+
+        for column_name in [
+            "run_id",
+            "store_id",
+            "website_url",
+            "status",
+            "error",
+            "started_at",
+            "completed_at",
+            "new_items",
+            "created_at",
+            "updated_at",
+        ]:
+            self.assertIn(column_name, table)
+
+        self.assertIn("run_id text not null unique", table)
+        self.assertIn("store_id bigint not null", table)
+        self.assertIn("status text not null default 'running'", table)
+        self.assertIn("status in ('running', 'cancelled', 'completed', 'failed')", schema)
+        self.assertIn("started_at timestamptz not null default now()", table)
+        self.assertIn("completed_at timestamptz", table)
+        self.assertIn("new_items integer not null default 0", table)
+        self.assertIn("job_store_item_discovery_log_store_id_started_at_idx", schema)
+        self.assertIn("job_store_item_discovery_log_status_idx", schema)
 
     def test_schema_contains_active_item_view(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()

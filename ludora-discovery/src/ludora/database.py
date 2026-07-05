@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -55,6 +56,7 @@ class ItemCandidateUpsertResult:
     listing_status: str
     item_id: int | None
     should_process: bool
+    created: bool = False
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,57 @@ class DiscoveryRepository:
             )
         self.connection.commit()
 
+    def start_store_item_discovery_log(
+        self,
+        *,
+        run_id: str,
+        store_id: int,
+        website_url: str,
+        started_at: datetime,
+    ) -> None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into job_store_item_discovery_log (
+                    run_id,
+                    store_id,
+                    website_url,
+                    status,
+                    error,
+                    started_at,
+                    completed_at,
+                    new_items
+                )
+                values (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (run_id, store_id, website_url, "running", "", started_at, None, 0),
+            )
+        self.connection.commit()
+
+    def complete_store_item_discovery_log(
+        self,
+        *,
+        run_id: str,
+        status: str,
+        completed_at: datetime,
+        new_items: int,
+        error: str = "",
+    ) -> None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update job_store_item_discovery_log
+                set status = %s,
+                    error = %s,
+                    completed_at = %s,
+                    new_items = %s,
+                    updated_at = now()
+                where run_id = %s
+                """,
+                (status, error, completed_at, new_items, run_id),
+            )
+        self.connection.commit()
+
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> ItemCandidateUpsertResult:
         data = record.to_db_dict()
         with self.connection.cursor() as cursor:
@@ -162,6 +215,7 @@ class DiscoveryRepository:
                     listing_status=str(existing[1]),
                     item_id=item_id,
                     should_process=item_id is None and not existing[3] and existing[4] is None,
+                    created=False,
                 )
             else:
                 cursor.execute(_insert_item_candidate_sql(), self._item_candidate_write_params(data))
@@ -171,6 +225,7 @@ class DiscoveryRepository:
                     listing_status=str(row[1]) if row else str(data["listing_status"]),
                     item_id=_optional_int(row[2]) if row else _optional_int(data["item_id"]),
                     should_process=True,
+                    created=True,
                 )
         self.connection.commit()
         return result

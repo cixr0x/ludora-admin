@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -149,7 +150,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             classification_reasons=["player count found", "boardgame category found"],
         )
 
-        repository.upsert_item_candidate(record)
+        result = repository.upsert_item_candidate(record)
 
         sql, params = connection.cursor_instance.executions[1]
         self.assertEqual(sql.count("%s"), len(params))
@@ -200,6 +201,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(params[28], 0.87)
         self.assertEqual(json.loads(params[29]), ["player count found", "boardgame category found"])
         self.assertEqual(connection.commits, 1)
+        self.assertTrue(result.created)
 
     def test_upsert_tutorial_link_inserts_candidate_when_item_url_is_new(self):
         connection = FakeConnection(fetchone_rows=[None, (101,)])
@@ -235,6 +237,38 @@ class DatabaseRepositoryTests(unittest.TestCase):
             ),
         )
         self.assertEqual(connection.commits, 1)
+
+    def test_registers_store_item_discovery_log_start_and_completion(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        started_at = datetime(2026, 7, 5, 10, 0, tzinfo=timezone.utc)
+        completed_at = datetime(2026, 7, 5, 10, 5, tzinfo=timezone.utc)
+
+        repository.start_store_item_discovery_log(
+            run_id="run-123",
+            store_id=12,
+            website_url="https://example.mx/",
+            started_at=started_at,
+        )
+        repository.complete_store_item_discovery_log(
+            run_id="run-123",
+            status="completed",
+            completed_at=completed_at,
+            new_items=3,
+            error="",
+        )
+
+        insert_sql, insert_params = connection.cursor_instance.executions[0]
+        update_sql, update_params = connection.cursor_instance.executions[1]
+        self.assertIn("insert into job_store_item_discovery_log", insert_sql.casefold())
+        self.assertIn("run_id", insert_sql.casefold())
+        self.assertIn("started_at", insert_sql.casefold())
+        self.assertEqual(insert_params, ("run-123", 12, "https://example.mx/", "running", "", started_at, None, 0))
+        self.assertIn("update job_store_item_discovery_log", update_sql.casefold())
+        self.assertIn("completed_at = %s", update_sql.casefold())
+        self.assertIn("new_items = %s", update_sql.casefold())
+        self.assertEqual(update_params, ("completed", "", completed_at, 3, "run-123"))
+        self.assertEqual(connection.commits, 2)
 
     def test_upsert_tutorial_link_refreshes_existing_item_url(self):
         connection = FakeConnection(fetchone_rows=[(44,), (44,)])
@@ -278,6 +312,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         self.assertEqual(result.candidate_id, 55)
         self.assertFalse(result.should_process)
+        self.assertFalse(result.created)
         self.assertEqual(len(connection.cursor_instance.executions), 2)
         sql, params = connection.cursor_instance.executions[1]
         normalized_sql = sql.casefold()
@@ -307,6 +342,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         self.assertEqual(result.candidate_id, 56)
         self.assertFalse(result.should_process)
+        self.assertFalse(result.created)
         self.assertEqual(result.item_id, 7)
         self.assertEqual(len(connection.cursor_instance.executions), 2)
         candidate_sql, candidate_params = connection.cursor_instance.executions[1]

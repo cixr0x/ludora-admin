@@ -64,12 +64,14 @@ class ItemDiscoveryRunResult:
     store_id: int
     website_url: str
     item_candidates: int
+    new_items: int = 0
 
     def to_dict(self) -> dict[str, object]:
         return {
             "store_id": self.store_id,
             "website_url": self.website_url,
             "item_candidates": self.item_candidates,
+            "new_items": self.new_items,
         }
 
 
@@ -176,47 +178,109 @@ def run_item_discovery(
     env: Mapping[str, str] | None = None,
     env_file: str = ".env",
     cancellation_token: CancellationToken | None = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
 ) -> ItemDiscoveryRunResult:
     current_env = env if env is not None else os.environ
     database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
     if not database_url:
         raise RuntimeError("Missing database URL")
-    browser_sitemap_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
-    admin_api_url = resolve_admin_api_url(env=current_env, dotenv_path=env_file)
-    item_classifier = _resolve_item_classifier(current_env, env_file)
 
     connection = connect_database(database_url)
+    resolved_run_id = run_id or str(uuid.uuid4())
+    resolved_started_at = started_at or _utc_now()
+    tracking_repository: _StoreItemDiscoveryTrackingRepository | None = None
     try:
         repository = DiscoveryRepository(connection)
-        item_processor = AdminItemMatcher(admin_api_url, repository)
-        normalized_platform = platform.strip().casefold()
-        item_title_extractor = (
-            AdminAmazonTitleExtractor(admin_api_url).extract_title
-            if normalized_platform in {"amazon", "amazon_brand"}
-            else None
+        repository.start_store_item_discovery_log(
+            run_id=resolved_run_id,
+            store_id=store_id,
+            website_url=website_url,
+            started_at=resolved_started_at,
         )
-        collect_kwargs = {}
-        if cancellation_token is not None:
-            collect_kwargs["cancellation_token"] = cancellation_token
-        records = collect_store_inventory(
-            website_url,
-            store_id,
-            repository,
-            platform=platform,
-            store_name=store_name,
-            browser_sitemap_fetch_enabled=browser_sitemap_fetch_enabled,
-            item_classifier=item_classifier,
-            item_processor=item_processor,
-            item_title_extractor=item_title_extractor,
-            **collect_kwargs,
+        try:
+            browser_sitemap_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
+            admin_api_url = resolve_admin_api_url(env=current_env, dotenv_path=env_file)
+            item_classifier = _resolve_item_classifier(current_env, env_file)
+            tracking_repository = _StoreItemDiscoveryTrackingRepository(repository)
+            item_processor = AdminItemMatcher(admin_api_url, repository)
+            normalized_platform = platform.strip().casefold()
+            item_title_extractor = (
+                AdminAmazonTitleExtractor(admin_api_url).extract_title
+                if normalized_platform in {"amazon", "amazon_brand"}
+                else None
+            )
+            collect_kwargs = {}
+            if cancellation_token is not None:
+                collect_kwargs["cancellation_token"] = cancellation_token
+            raise_if_cancelled(cancellation_token)
+            records = collect_store_inventory(
+                website_url,
+                store_id,
+                tracking_repository,
+                platform=platform,
+                store_name=store_name,
+                browser_sitemap_fetch_enabled=browser_sitemap_fetch_enabled,
+                item_classifier=item_classifier,
+                item_processor=item_processor,
+                item_title_extractor=item_title_extractor,
+                **collect_kwargs,
+            )
+            raise_if_cancelled(cancellation_token)
+        except OperationCancelled as exc:
+            repository.complete_store_item_discovery_log(
+                run_id=resolved_run_id,
+                status="cancelled",
+                completed_at=_utc_now(),
+                new_items=_new_items_count(tracking_repository),
+                error=str(exc),
+            )
+            raise
+        except Exception as exc:
+            repository.complete_store_item_discovery_log(
+                run_id=resolved_run_id,
+                status="failed",
+                completed_at=_utc_now(),
+                new_items=_new_items_count(tracking_repository),
+                error=str(exc),
+            )
+            raise
+
+        new_items = tracking_repository.new_items if tracking_repository is not None else 0
+        repository.complete_store_item_discovery_log(
+            run_id=resolved_run_id,
+            status="completed",
+            completed_at=_utc_now(),
+            new_items=new_items,
+            error="",
         )
         return ItemDiscoveryRunResult(
             store_id=store_id,
             website_url=website_url,
             item_candidates=len(records),
+            new_items=new_items,
         )
     finally:
         connection.close()
+
+
+class _StoreItemDiscoveryTrackingRepository:
+    def __init__(self, repository: DiscoveryRepository) -> None:
+        self.repository = repository
+        self.new_items = 0
+
+    def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
+        result = self.repository.upsert_item_candidate(record)
+        if getattr(result, "created", False):
+            self.new_items += 1
+        return result
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self.repository, name)
+
+
+def _new_items_count(repository: _StoreItemDiscoveryTrackingRepository | None) -> int:
+    return repository.new_items if repository is not None else 0
 
 
 def _resolve_item_classifier(current_env: Mapping[str, str], env_file: str) -> ItemClassifierCallable:
@@ -327,13 +391,15 @@ class StoreDiscoveryRunManager:
             _item_runner_with_token(item_runner)
             if item_runner is not None
             else (
-                lambda store_id, website_url, platform, store_name, cancellation_token: run_item_discovery(
+                lambda store_id, website_url, platform, store_name, cancellation_token, run_id, started_at: run_item_discovery(
                     store_id=store_id,
                     website_url=website_url,
                     platform=platform,
                     store_name=store_name,
                     env_file=env_file,
                     cancellation_token=cancellation_token,
+                    run_id=run_id,
+                    started_at=started_at,
                 )
             )
         )
@@ -520,7 +586,16 @@ class StoreDiscoveryRunManager:
 
     def _execute_item_run(self, run_id: str, store_id: int, website_url: str, platform: str, store_name: str) -> None:
         try:
-            result = self.item_runner(store_id, website_url, platform, store_name, self._cancellation_token_for(run_id))
+            run = self.runs[run_id]
+            result = self.item_runner(
+                store_id,
+                website_url,
+                platform,
+                store_name,
+                self._cancellation_token_for(run_id),
+                run_id,
+                run.started_at,
+            )
         except OperationCancelled:
             self._mark_run_cancelled(run_id)
             return
@@ -626,15 +701,26 @@ def _store_runner_with_token(runner: Callable[..., StoreDiscoveryRunResult]) -> 
 
 def _item_runner_with_token(
     runner: Callable[..., ItemDiscoveryRunResult],
-) -> Callable[[int, str, str, str, CancellationToken], ItemDiscoveryRunResult]:
+) -> Callable[[int, str, str, str, CancellationToken, str, datetime], ItemDiscoveryRunResult]:
     def run(
         store_id: int,
         website_url: str,
         platform: str,
         store_name: str,
         cancellation_token: CancellationToken,
+        run_id: str,
+        started_at: datetime,
     ) -> ItemDiscoveryRunResult:
-        args, kwargs = _item_runner_arguments(runner, store_id, website_url, platform, store_name, cancellation_token)
+        args, kwargs = _item_runner_arguments(
+            runner,
+            store_id,
+            website_url,
+            platform,
+            store_name,
+            cancellation_token,
+            run_id,
+            started_at,
+        )
         return runner(*args, **kwargs)
 
     return run
@@ -647,21 +733,24 @@ def _item_runner_arguments(
     platform: str,
     store_name: str,
     cancellation_token: CancellationToken,
+    run_id: str,
+    started_at: datetime,
 ) -> tuple[list[object], dict[str, object]]:
     try:
         signature = inspect.signature(runner)
     except (TypeError, ValueError):
-        return [store_id, website_url, platform, store_name, cancellation_token], {}
+        return [store_id, website_url, platform, store_name, cancellation_token, run_id, started_at], {}
 
     parameters = list(signature.parameters.values())
     if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
-        return [store_id, website_url, platform, store_name, cancellation_token], {}
+        return [store_id, website_url, platform, store_name, cancellation_token, run_id, started_at], {}
 
     args: list[object] = []
     kwargs: dict[str, object] = {}
     positional_index = 0
     unknown_after_url = 0
     positional_values = [store_id, website_url]
+    fallback_values = [platform, store_name, cancellation_token, run_id, started_at]
 
     for parameter in parameters:
         if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}:
@@ -674,8 +763,12 @@ def _item_runner_arguments(
                 args.append(store_name)
             elif parameter.name == "cancellation_token":
                 args.append(cancellation_token)
+            elif parameter.name == "run_id":
+                args.append(run_id)
+            elif parameter.name == "started_at":
+                args.append(started_at)
             else:
-                args.append(platform if unknown_after_url == 0 else store_name if unknown_after_url == 1 else cancellation_token)
+                args.append(fallback_values[min(unknown_after_url, len(fallback_values) - 1)])
                 unknown_after_url += 1
         elif parameter.kind == inspect.Parameter.KEYWORD_ONLY:
             if parameter.name == "platform":
@@ -684,10 +777,16 @@ def _item_runner_arguments(
                 kwargs["store_name"] = store_name
             elif parameter.name == "cancellation_token":
                 kwargs["cancellation_token"] = cancellation_token
+            elif parameter.name == "run_id":
+                kwargs["run_id"] = run_id
+            elif parameter.name == "started_at":
+                kwargs["started_at"] = started_at
         elif parameter.kind == inspect.Parameter.VAR_KEYWORD:
             kwargs.setdefault("platform", platform)
             kwargs.setdefault("store_name", store_name)
             kwargs.setdefault("cancellation_token", cancellation_token)
+            kwargs.setdefault("run_id", run_id)
+            kwargs.setdefault("started_at", started_at)
 
     return args, kwargs
 

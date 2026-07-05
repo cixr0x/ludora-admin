@@ -9,7 +9,9 @@ from unittest.mock import ANY, Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ludora.collector import CollectionSummary
+from ludora.database import ItemCandidateUpsertResult
 from ludora.item_classification import apply_item_classification
+from ludora.models import DiscoveryItemCandidateRecord
 from ludora.operations import (
     ItemEmbeddingRunResult,
     ItemDiscoveryRunResult,
@@ -86,6 +88,28 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ai_classifier = Mock()
         ai_classifier.apply_item_classification = object()
 
+        def collect_inventory(_website_url, _store_id, inventory_repository, **_kwargs):
+            inventory_repository.upsert_item_candidate(
+                DiscoveryItemCandidateRecord(
+                    store_id=12,
+                    source_url="https://example.mx/products/catan",
+                    title="Catan",
+                )
+            )
+            inventory_repository.upsert_item_candidate(
+                DiscoveryItemCandidateRecord(
+                    store_id=12,
+                    source_url="https://example.mx/products/pandemic",
+                    title="Pandemic",
+                )
+            )
+            return records
+
+        repository.upsert_item_candidate.side_effect = [
+            ItemCandidateUpsertResult(candidate_id=101, listing_status="PENDING", item_id=None, should_process=True, created=True),
+            ItemCandidateUpsertResult(candidate_id=102, listing_status="PENDING", item_id=None, should_process=False, created=False),
+        ]
+
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora") as resolve_database_url, patch(
             "ludora.operations.resolve_browser_fetch_enabled", return_value=True
         ) as resolve_browser_fetch_enabled, patch(
@@ -109,7 +133,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ) as admin_title_extractor, patch(
             "ludora.operations.OpenAIItemClassifier", return_value=ai_classifier
         ) as openai_item_classifier, patch(
-            "ludora.operations.collect_store_inventory", return_value=records
+            "ludora.operations.collect_store_inventory", side_effect=collect_inventory
         ) as collect_store_inventory:
             result = run_item_discovery(
                 store_id=12,
@@ -117,6 +141,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
                 platform="amazon_brand",
                 store_name="Hasbro Gaming",
                 env_file="custom.env",
+                run_id="run-123",
             )
 
         resolve_database_url.assert_called_once()
@@ -140,21 +165,68 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             model="classifier-model",
             base_url="http://ai.test/v1",
         )
-        collect_store_inventory.assert_called_once_with(
-            "https://example.mx/",
-            12,
-            repository,
-            platform="amazon_brand",
-            store_name="Hasbro Gaming",
-            browser_sitemap_fetch_enabled=True,
-            item_classifier=ai_classifier.apply_item_classification,
-            item_processor=item_processor,
-            item_title_extractor=admin_title_extractor.return_value.extract_title,
+        collect_store_inventory.assert_called_once()
+        self.assertEqual(collect_store_inventory.call_args.args[:2], ("https://example.mx/", 12))
+        inventory_repository = collect_store_inventory.call_args.args[2]
+        self.assertIs(inventory_repository.repository, repository)
+        self.assertEqual(collect_store_inventory.call_args.kwargs["platform"], "amazon_brand")
+        self.assertEqual(collect_store_inventory.call_args.kwargs["store_name"], "Hasbro Gaming")
+        self.assertTrue(collect_store_inventory.call_args.kwargs["browser_sitemap_fetch_enabled"])
+        self.assertIs(collect_store_inventory.call_args.kwargs["item_classifier"], ai_classifier.apply_item_classification)
+        self.assertIs(collect_store_inventory.call_args.kwargs["item_processor"], item_processor)
+        self.assertIs(
+            collect_store_inventory.call_args.kwargs["item_title_extractor"],
+            admin_title_extractor.return_value.extract_title,
         )
+        repository.start_store_item_discovery_log.assert_called_once()
+        self.assertEqual(repository.start_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
+        self.assertEqual(repository.start_store_item_discovery_log.call_args.kwargs["store_id"], 12)
+        self.assertEqual(repository.start_store_item_discovery_log.call_args.kwargs["website_url"], "https://example.mx/")
+        repository.complete_store_item_discovery_log.assert_called_once()
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["status"], "completed")
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["new_items"], 1)
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["error"], "")
         connection.close.assert_called_once_with()
         self.assertEqual(result.store_id, 12)
         self.assertEqual(result.website_url, "https://example.mx/")
         self.assertEqual(result.item_candidates, 3)
+        self.assertEqual(result.new_items, 1)
+
+    def test_run_item_discovery_logs_failed_run(self):
+        connection = Mock()
+        repository = Mock()
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.resolve_browser_fetch_enabled", return_value=False
+        ), patch(
+            "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
+        ), patch(
+            "ludora.operations.resolve_ai_classifier_enabled", return_value=False
+        ), patch(
+            "ludora.operations.connect_database", return_value=connection
+        ), patch(
+            "ludora.operations.DiscoveryRepository", return_value=repository
+        ), patch(
+            "ludora.operations.AdminItemMatcher", return_value=object()
+        ), patch(
+            "ludora.operations.collect_store_inventory", side_effect=RuntimeError("crawl failed")
+        ):
+            with self.assertRaisesRegex(RuntimeError, "crawl failed"):
+                run_item_discovery(
+                    store_id=12,
+                    website_url="https://example.mx/",
+                    env_file="custom.env",
+                    run_id="run-123",
+                )
+
+        repository.start_store_item_discovery_log.assert_called_once()
+        repository.complete_store_item_discovery_log.assert_called_once()
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["status"], "failed")
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["new_items"], 0)
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["error"], "crawl failed")
+        connection.close.assert_called_once_with()
 
     def test_run_item_discovery_uses_heuristic_classifier_when_ai_disabled(self):
         connection = Mock()
@@ -187,6 +259,9 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         connection.close.assert_called_once_with()
 
     def test_run_item_discovery_requires_openai_key_when_ai_classifier_enabled(self):
+        connection = Mock()
+        repository = Mock()
+
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
             "ludora.operations.resolve_browser_fetch_enabled", return_value=False
         ), patch(
@@ -196,12 +271,23 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch(
             "ludora.operations.resolve_openai_api_key", return_value=""
         ), patch(
-            "ludora.operations.connect_database"
-        ) as connect_database:
+            "ludora.operations.connect_database", return_value=connection
+        ) as connect_database, patch(
+            "ludora.operations.DiscoveryRepository", return_value=repository
+        ):
             with self.assertRaisesRegex(RuntimeError, "Missing OpenAI API key for AI item classifier"):
-                run_item_discovery(store_id=12, website_url="https://example.mx/")
+                run_item_discovery(store_id=12, website_url="https://example.mx/", run_id="run-123")
 
-        connect_database.assert_not_called()
+        connect_database.assert_called_once_with("postgresql://ludora")
+        repository.start_store_item_discovery_log.assert_called_once()
+        repository.complete_store_item_discovery_log.assert_called_once()
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["status"], "failed")
+        self.assertEqual(
+            repository.complete_store_item_discovery_log.call_args.kwargs["error"],
+            "Missing OpenAI API key for AI item classifier",
+        )
+        connection.close.assert_called_once_with()
 
     def test_run_item_update_refreshes_confirmed_boardgames_and_closes_database(self):
         connection = Mock()
@@ -385,6 +471,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             store_name="",
             env_file="custom.env",
             cancellation_token=ANY,
+            run_id=ANY,
+            started_at=ANY,
         )
         item_update_runner.assert_called_once_with(env_file="custom.env", cancellation_token=ANY)
         item_embedding_runner.assert_called_once_with(refresh_mode="missing", env_file="custom.env", cancellation_token=ANY)
