@@ -217,6 +217,84 @@ describe('fetchRows', () => {
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings?page=2&page_size=25');
   });
 
+  it('fetches paged store item discovery jobs with page metadata', async () => {
+    const records = [{ id: 19, new_items: 7, run_id: 'run-discovery-19', status: 'completed', store_id: 12 }];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: records,
+          meta: {
+            page: 0,
+            page_size: 25,
+            total: 1
+          }
+        }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        }
+      )
+    );
+
+    await expect(
+      adminApi.getStoreItemDiscoveryJobsPage({
+        filters: { store_id: '12' },
+        page: 0,
+        pageSize: 25,
+        sortColumnId: 'started_at',
+        sortDirection: 'desc'
+      })
+    ).resolves.toEqual({
+      page: 0,
+      pageSize: 25,
+      rows: records,
+      total: 1
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:4001/admin/operations/store-item-discovery-jobs?page=0&page_size=25&sort=started_at&sort_direction=desc&filter_store_id=12'
+    );
+  });
+
+  it('fetches paged store item update jobs with page metadata', async () => {
+    const records = [{ id: 27, run_id: 'run-update-27', scanned_items: 18, status: 'completed', updated_items: 5 }];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: records,
+          meta: {
+            page: 0,
+            page_size: 25,
+            total: 1
+          }
+        }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        }
+      )
+    );
+
+    await expect(
+      adminApi.getStoreItemUpdateJobsPage({
+        filters: { status: 'completed' },
+        page: 0,
+        pageSize: 25,
+        sortColumnId: 'scanned_items',
+        sortDirection: 'desc'
+      })
+    ).resolves.toEqual({
+      page: 0,
+      pageSize: 25,
+      rows: records,
+      total: 1
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:4001/admin/operations/store-item-update-jobs?page=0&page_size=25&sort=scanned_items&sort_direction=desc&filter_status=completed'
+    );
+  });
+
   it('fetches paged catalog items with page metadata', async () => {
     const records = [{ canonical_name: 'Coffee Rush', id: '377061', item_type: 'base_game' }];
     const { adminApi } = await importClient();

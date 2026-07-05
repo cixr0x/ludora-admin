@@ -8,6 +8,7 @@ import {
   Chip,
   CircularProgress,
   FormControlLabel,
+  Link,
   Paper,
   Radio,
   RadioGroup,
@@ -27,6 +28,7 @@ import {
   type StoreDiscoveryRunResult
 } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 type LoadState = 'loading' | 'ready' | 'error';
 export type OperationPageMode = 'item_discovery' | 'item_embeddings' | 'item_update' | 'store_discovery';
@@ -186,15 +188,309 @@ function optionalRecordText(record: AdminRecord, key: string): string {
   return value === null || value === undefined ? '' : String(value);
 }
 
+function recordText(record: AdminRecord, key: string, fallback = '-') {
+  return optionalRecordText(record, key) || fallback;
+}
+
 function storeIdFor(record: AdminRecord): number | null {
   const value = Number(record.id);
   return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+function errorCell(value: string) {
+  return value ? (
+    <Typography color="error" sx={{ whiteSpace: 'pre-wrap' }} variant="body2">
+      {value}
+    </Typography>
+  ) : (
+    '-'
+  );
+}
+
+function websiteLink(record: AdminRecord) {
+  const url = optionalRecordText(record, 'website_url');
+  return url ? (
+    <Link href={url} rel="noreferrer" target="_blank">
+      {url}
+    </Link>
+  ) : (
+    '-'
+  );
+}
+
+const storeItemDiscoveryJobColumns: DataTableColumn<AdminRecord>[] = [
+  {
+    filterValue: (row) => recordText(row, 'id'),
+    id: 'id',
+    label: 'ID',
+    minWidth: 90,
+    render: (row) => recordText(row, 'id'),
+    sortValue: (row) => recordText(row, 'id')
+  },
+  {
+    filterValue: (row) => recordText(row, 'run_id'),
+    id: 'run_id',
+    label: 'Run ID',
+    minWidth: 180,
+    render: (row) => recordText(row, 'run_id'),
+    sortValue: (row) => recordText(row, 'run_id')
+  },
+  {
+    filterValue: (row) => recordText(row, 'store_id'),
+    id: 'store_id',
+    label: 'Store ID',
+    minWidth: 110,
+    render: (row) => recordText(row, 'store_id'),
+    sortValue: (row) => recordText(row, 'store_id')
+  },
+  {
+    filterValue: (row) => recordText(row, 'website_url'),
+    id: 'website_url',
+    label: 'Website URL',
+    minWidth: 240,
+    render: websiteLink,
+    sortValue: (row) => recordText(row, 'website_url')
+  },
+  {
+    filterValue: (row) => recordText(row, 'status'),
+    id: 'status',
+    label: 'Status',
+    minWidth: 130,
+    render: (row) => <Chip label={recordText(row, 'status')} size="small" />,
+    sortValue: (row) => recordText(row, 'status')
+  },
+  {
+    filterValue: (row) => optionalRecordText(row, 'error'),
+    id: 'error',
+    label: 'Error',
+    minWidth: 280,
+    render: (row) => errorCell(optionalRecordText(row, 'error')),
+    sortValue: (row) => optionalRecordText(row, 'error')
+  },
+  {
+    filterValue: (row) => recordText(row, 'started_at'),
+    id: 'started_at',
+    label: 'Started at',
+    minWidth: 190,
+    render: (row) => recordText(row, 'started_at'),
+    sortValue: (row) => recordText(row, 'started_at')
+  },
+  {
+    filterValue: (row) => recordText(row, 'completed_at'),
+    id: 'completed_at',
+    label: 'Completed at',
+    minWidth: 190,
+    render: (row) => recordText(row, 'completed_at'),
+    sortValue: (row) => recordText(row, 'completed_at')
+  },
+  {
+    filterValue: (row) => recordText(row, 'new_items'),
+    id: 'new_items',
+    label: 'New items',
+    minWidth: 130,
+    render: (row) => recordText(row, 'new_items'),
+    sortValue: (row) => recordText(row, 'new_items')
+  },
+  {
+    filterValue: (row) => recordText(row, 'created_at'),
+    id: 'created_at',
+    label: 'Created at',
+    minWidth: 190,
+    render: (row) => recordText(row, 'created_at'),
+    sortValue: (row) => recordText(row, 'created_at')
+  },
+  {
+    filterValue: (row) => recordText(row, 'updated_at'),
+    id: 'updated_at',
+    label: 'Updated at',
+    minWidth: 190,
+    render: (row) => recordText(row, 'updated_at'),
+    sortValue: (row) => recordText(row, 'updated_at')
+  }
+];
+
+const storeItemUpdateJobColumns: DataTableColumn<AdminRecord>[] = [
+  {
+    filterValue: (row) => recordText(row, 'id'),
+    id: 'id',
+    label: 'ID',
+    minWidth: 90,
+    render: (row) => recordText(row, 'id'),
+    sortValue: (row) => recordText(row, 'id')
+  },
+  {
+    filterValue: (row) => recordText(row, 'run_id'),
+    id: 'run_id',
+    label: 'Run ID',
+    minWidth: 180,
+    render: (row) => recordText(row, 'run_id'),
+    sortValue: (row) => recordText(row, 'run_id')
+  },
+  {
+    filterValue: (row) => recordText(row, 'status'),
+    id: 'status',
+    label: 'Status',
+    minWidth: 130,
+    render: (row) => <Chip label={recordText(row, 'status')} size="small" />,
+    sortValue: (row) => recordText(row, 'status')
+  },
+  {
+    filterValue: (row) => optionalRecordText(row, 'error'),
+    id: 'error',
+    label: 'Error',
+    minWidth: 280,
+    render: (row) => errorCell(optionalRecordText(row, 'error')),
+    sortValue: (row) => optionalRecordText(row, 'error')
+  },
+  {
+    filterValue: (row) => recordText(row, 'started_at'),
+    id: 'started_at',
+    label: 'Started at',
+    minWidth: 190,
+    render: (row) => recordText(row, 'started_at'),
+    sortValue: (row) => recordText(row, 'started_at')
+  },
+  {
+    filterValue: (row) => recordText(row, 'completed_at'),
+    id: 'completed_at',
+    label: 'Completed at',
+    minWidth: 190,
+    render: (row) => recordText(row, 'completed_at'),
+    sortValue: (row) => recordText(row, 'completed_at')
+  },
+  {
+    filterValue: (row) => recordText(row, 'scanned_items'),
+    id: 'scanned_items',
+    label: 'Scanned items',
+    minWidth: 150,
+    render: (row) => recordText(row, 'scanned_items'),
+    sortValue: (row) => recordText(row, 'scanned_items')
+  },
+  {
+    filterValue: (row) => recordText(row, 'updated_items'),
+    id: 'updated_items',
+    label: 'Updated items',
+    minWidth: 150,
+    render: (row) => recordText(row, 'updated_items'),
+    sortValue: (row) => recordText(row, 'updated_items')
+  },
+  {
+    filterValue: (row) => recordText(row, 'created_at'),
+    id: 'created_at',
+    label: 'Created at',
+    minWidth: 190,
+    render: (row) => recordText(row, 'created_at'),
+    sortValue: (row) => recordText(row, 'created_at')
+  },
+  {
+    filterValue: (row) => recordText(row, 'updated_at'),
+    id: 'updated_at',
+    label: 'Updated at',
+    minWidth: 190,
+    render: (row) => recordText(row, 'updated_at'),
+    sortValue: (row) => recordText(row, 'updated_at')
+  }
+];
+
+function StoreItemDiscoveryJobsTable({ refreshKey }: { refreshKey: number }) {
+  const table = useServerTableState('started_at', 'desc');
+  const { hasMore, isLoadingMore, loadMore, rows, state, totalRows } = useInfiniteServerRows(
+    table,
+    adminApi.getStoreItemDiscoveryJobsPage
+  );
+
+  useEffect(() => {
+    if (refreshKey > 0) {
+      table.refresh();
+    }
+  }, [refreshKey]);
+
+  if (state === 'loading') {
+    return <JobTableLoading label="Loading store item discovery jobs" />;
+  }
+  if (state === 'error') {
+    return <Alert severity="error">Store item discovery jobs could not be loaded.</Alert>;
+  }
+
+  return (
+    <DataTable
+      ariaLabel="Store item discovery jobs"
+      columns={storeItemDiscoveryJobColumns}
+      defaultSortColumnId="started_at"
+      getRowKey={(row, index) => recordText(row, 'id', String(index))}
+      infiniteScroll={{
+        hasMore,
+        isLoading: isLoadingMore,
+        loadedCount: rows.length,
+        onLoadMore: loadMore,
+        totalCount: totalRows
+      }}
+      minWidth={1980}
+      rows={rows}
+      serverSide
+      tableState={table.tableState}
+      onTableStateChange={table.handleTableStateChange}
+    />
+  );
+}
+
+function StoreItemUpdateJobsTable({ refreshKey }: { refreshKey: number }) {
+  const table = useServerTableState('started_at', 'desc');
+  const { hasMore, isLoadingMore, loadMore, rows, state, totalRows } = useInfiniteServerRows(
+    table,
+    adminApi.getStoreItemUpdateJobsPage
+  );
+
+  useEffect(() => {
+    if (refreshKey > 0) {
+      table.refresh();
+    }
+  }, [refreshKey]);
+
+  if (state === 'loading') {
+    return <JobTableLoading label="Loading store item update jobs" />;
+  }
+  if (state === 'error') {
+    return <Alert severity="error">Store item update jobs could not be loaded.</Alert>;
+  }
+
+  return (
+    <DataTable
+      ariaLabel="Store item update jobs"
+      columns={storeItemUpdateJobColumns}
+      defaultSortColumnId="started_at"
+      getRowKey={(row, index) => recordText(row, 'id', String(index))}
+      infiniteScroll={{
+        hasMore,
+        isLoading: isLoadingMore,
+        loadedCount: rows.length,
+        onLoadMore: loadMore,
+        totalCount: totalRows
+      }}
+      minWidth={1750}
+      rows={rows}
+      serverSide
+      tableState={table.tableState}
+      onTableStateChange={table.handleTableStateChange}
+    />
+  );
+}
+
+function JobTableLoading({ label }: { label: string }) {
+  return (
+    <Stack alignItems="center" direction="row" spacing={1.5}>
+      <CircularProgress size={18} />
+      <Typography variant="body2">{label}</Typography>
+    </Stack>
+  );
 }
 
 export function OperationsPage({ operation = 'store_discovery' }: { operation?: OperationPageMode }) {
   const [run, setRun] = useState<StoreDiscoveryRun | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [embeddingRefreshMode, setEmbeddingRefreshMode] = useState<'full' | 'missing'>('missing');
+  const [storeItemDiscoveryJobsRefreshKey, setStoreItemDiscoveryJobsRefreshKey] = useState(0);
+  const [storeItemUpdateJobsRefreshKey, setStoreItemUpdateJobsRefreshKey] = useState(0);
   const [stores, setStores] = useState<AdminRecord[]>([]);
   const [storeLoadState, setStoreLoadState] = useState<LoadState>('ready');
   const [selectedStoreIds, setSelectedStoreIds] = useState<number[]>([]);
@@ -203,6 +499,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
   const [stoppingOperation, setStoppingOperation] = useState(false);
   const [error, setError] = useState('');
   const pageContent = operationPageContent[operation];
+  const usesJobLogTable = operation === 'item_discovery' || operation === 'item_update';
 
   useEffect(() => {
     let ignore = false;
@@ -267,6 +564,12 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
           if (latestRun) {
             setRun(latestRun);
           }
+          if (operation === 'item_discovery' && latestRun?.type === 'item_discovery') {
+            setStoreItemDiscoveryJobsRefreshKey((currentKey) => currentKey + 1);
+          }
+          if (operation === 'item_update' && latestRun?.type === 'item_update') {
+            setStoreItemUpdateJobsRefreshKey((currentKey) => currentKey + 1);
+          }
         })
         .catch(() => {
           setError('Operations status could not be refreshed.');
@@ -274,7 +577,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
     }, 3000);
 
     return () => window.clearInterval(timer);
-  }, [run?.status]);
+  }, [operation, run?.status]);
 
   const runIsActive = run?.status === 'running' || run?.status === 'cancelling';
 
@@ -299,6 +602,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
       const startedRun = await adminApi.startItemUpdateRun(scope);
       setRun(startedRun);
       setLoadState('ready');
+      setStoreItemUpdateJobsRefreshKey((currentKey) => currentKey + 1);
     } catch {
       setError('Item update could not be started.');
     } finally {
@@ -325,6 +629,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
       const startedRun = await adminApi.startStoreItemDiscoveryRun(storeId);
       setRun(startedRun);
       setLoadState('ready');
+      setStoreItemDiscoveryJobsRefreshKey((currentKey) => currentKey + 1);
     } catch {
       setError('Store item discovery could not be started.');
     } finally {
@@ -617,9 +922,9 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
         </Stack>
       ) : null}
 
-      {loadState === 'ready' && !run ? <Alert severity="info">No recent operation run.</Alert> : null}
+      {loadState === 'ready' && !run && !usesJobLogTable ? <Alert severity="info">No recent operation run.</Alert> : null}
 
-      {run ? (
+      {run && !usesJobLogTable ? (
         <DataTable
           ariaLabel="Store discovery runs"
           columns={operationRunColumns}
@@ -628,6 +933,10 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
           rows={[run]}
         />
       ) : null}
+      {operation === 'item_discovery' ? (
+        <StoreItemDiscoveryJobsTable refreshKey={storeItemDiscoveryJobsRefreshKey} />
+      ) : null}
+      {operation === 'item_update' ? <StoreItemUpdateJobsTable refreshKey={storeItemUpdateJobsRefreshKey} /> : null}
     </Stack>
   );
 }

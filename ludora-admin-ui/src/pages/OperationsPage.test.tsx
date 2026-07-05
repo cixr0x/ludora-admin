@@ -59,7 +59,8 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('starts item update for all stores and renders the updated item count', async () => {
+  it('starts item update for all stores and refreshes the update job log table', async () => {
+    let jobRequests = 0;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
@@ -72,6 +73,31 @@ describe('OperationsPage', () => {
         return new Response(JSON.stringify({ data: [] }), {
           headers: { 'Content-Type': 'application/json' },
           status: 200
+        });
+      }
+      if (isStoreItemUpdateJobsUrl(url)) {
+        jobRequests += 1;
+        return jsonResponse({
+          data:
+            jobRequests > 1
+              ? [
+                  {
+                    completed_at: '2026-06-08T20:02:00Z',
+                    error: '',
+                    id: 80,
+                    run_id: 'run-3',
+                    scanned_items: 12,
+                    started_at: '2026-06-08T20:00:00Z',
+                    status: 'completed',
+                    updated_items: 8
+                  }
+                ]
+              : [],
+          meta: {
+            page: 0,
+            page_size: 100,
+            total: jobRequests > 1 ? 1 : 0
+          }
         });
       }
       if (url.endsWith('/admin/operations/item-update-runs') && init?.method === 'POST') {
@@ -100,11 +126,10 @@ describe('OperationsPage', () => {
 
     render(<OperationsPage operation="item_update" />);
 
-    await screen.findByText('No recent operation run.');
+    await screen.findByRole('table', { name: /Store item update jobs/i });
     await userEvent.click(screen.getByRole('button', { name: /Run for all/i }));
 
-    expect(await screen.findByText('completed')).toBeInTheDocument();
-    expect(screen.getByText('item_update')).toBeInTheDocument();
+    expect(await screen.findByText('run-3')).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
       body: JSON.stringify({ all_stores: true }),
@@ -113,7 +138,8 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('starts item update for selected stores from the checkbox list', async () => {
+  it('starts item update for selected stores from the checkbox list and refreshes the update job log table', async () => {
+    let jobRequests = 0;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
@@ -137,6 +163,31 @@ describe('OperationsPage', () => {
               website_url: 'https://beta.mx/'
             }
           ]
+        });
+      }
+      if (isStoreItemUpdateJobsUrl(url)) {
+        jobRequests += 1;
+        return jsonResponse({
+          data:
+            jobRequests > 1
+              ? [
+                  {
+                    completed_at: '2026-07-05T20:02:00Z',
+                    error: '',
+                    id: 30,
+                    run_id: 'run-selected',
+                    scanned_items: 9,
+                    started_at: '2026-07-05T20:00:00Z',
+                    status: 'completed',
+                    updated_items: 3
+                  }
+                ]
+              : [],
+          meta: {
+            page: 0,
+            page_size: 100,
+            total: jobRequests > 1 ? 1 : 0
+          }
         });
       }
       if (url.endsWith('/admin/operations/item-update-runs') && init?.method === 'POST') {
@@ -166,7 +217,7 @@ describe('OperationsPage', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: /Alpha Games/i }));
     await userEvent.click(screen.getByRole('button', { name: /Run for selected stores/i }));
 
-    expect(await screen.findByText('completed')).toBeInTheDocument();
+    expect(await screen.findByText('run-selected')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
       body: JSON.stringify({ store_ids: [12] }),
@@ -194,6 +245,9 @@ describe('OperationsPage', () => {
           ]
         });
       }
+      if (isStoreItemUpdateJobsUrl(url)) {
+        return emptyPagedRows();
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -216,6 +270,9 @@ describe('OperationsPage', () => {
           headers: { 'Content-Type': 'application/json' },
           status: 500
         });
+      }
+      if (isStoreItemUpdateJobsUrl(url)) {
+        return emptyPagedRows();
       }
       if (url.endsWith('/admin/operations/item-update-runs') && init?.method === 'POST') {
         return jsonResponse(
@@ -247,6 +304,95 @@ describe('OperationsPage', () => {
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
+  });
+
+  it('renders store item discovery job logs instead of unrelated operation result columns', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return jsonResponse({ data: null });
+      }
+      if (isStoreItemDiscoveryJobsUrl(url)) {
+        return jsonResponse({
+          data: [
+            {
+              completed_at: '2026-07-05T20:03:00Z',
+              error: '',
+              id: 19,
+              new_items: 7,
+              run_id: 'run-discovery-19',
+              started_at: '2026-07-05T20:00:00Z',
+              status: 'completed',
+              store_id: 12,
+              website_url: 'https://store.example'
+            }
+          ],
+          meta: {
+            page: 0,
+            page_size: 100,
+            total: 1
+          }
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="item_discovery" />);
+
+    expect(await screen.findByText('run-discovery-19')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Store ID' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Website URL' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'New items' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Accepted stores' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Embedding model' })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:4001/admin/operations/store-item-discovery-jobs?page=0&page_size=100&sort=started_at&sort_direction=desc'
+    );
+  });
+
+  it('renders store item update job logs instead of unrelated operation result columns', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return jsonResponse({ data: null });
+      }
+      if (url.endsWith('/stores')) {
+        return jsonResponse({ data: [] });
+      }
+      if (isStoreItemUpdateJobsUrl(url)) {
+        return jsonResponse({
+          data: [
+            {
+              completed_at: '2026-07-05T21:04:00Z',
+              error: '',
+              id: 27,
+              run_id: 'run-update-27',
+              scanned_items: 18,
+              started_at: '2026-07-05T21:00:00Z',
+              status: 'completed',
+              updated_items: 5
+            }
+          ],
+          meta: {
+            page: 0,
+            page_size: 100,
+            total: 1
+          }
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="item_update" />);
+
+    expect(await screen.findByText('run-update-27')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Scanned items' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Updated items' })).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Candidate domains' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Selected embeddings' })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:4001/admin/operations/store-item-update-jobs?page=0&page_size=100&sort=started_at&sort_direction=desc'
+    );
   });
 
   it('starts item embeddings for missing rows and renders the embedded count', async () => {
@@ -345,13 +491,40 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('starts store item discovery for the requested store id', async () => {
+  it('starts store item discovery for the requested store id and refreshes the discovery job log table', async () => {
+    let jobRequests = 0;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
         return new Response(JSON.stringify({ data: null }), {
           headers: { 'Content-Type': 'application/json' },
           status: 200
+        });
+      }
+      if (isStoreItemDiscoveryJobsUrl(url)) {
+        jobRequests += 1;
+        return jsonResponse({
+          data:
+            jobRequests > 1
+              ? [
+                  {
+                    completed_at: '2026-06-08T20:02:00Z',
+                    error: '',
+                    id: 40,
+                    new_items: 4,
+                    run_id: 'run-2',
+                    started_at: '2026-06-08T20:00:00Z',
+                    status: 'completed',
+                    store_id: 12,
+                    website_url: 'https://store.example'
+                  }
+                ]
+              : [],
+          meta: {
+            page: 0,
+            page_size: 100,
+            total: jobRequests > 1 ? 1 : 0
+          }
         });
       }
       if (url.endsWith('/admin/operations/stores/12/item-discovery-runs') && init?.method === 'POST') {
@@ -382,12 +555,11 @@ describe('OperationsPage', () => {
 
     render(<OperationsPage operation="item_discovery" />);
 
-    await screen.findByText('No recent operation run.');
+    await screen.findByRole('table', { name: /Store item discovery jobs/i });
     await userEvent.type(screen.getByLabelText('Store ID'), '12');
     await userEvent.click(screen.getByRole('button', { name: /Run Store Item Discovery/i }));
 
-    expect(await screen.findByText('completed')).toBeInTheDocument();
-    expect(screen.getByText('item_discovery')).toBeInTheDocument();
+    expect(await screen.findByText('run-2')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/stores/12/item-discovery-runs', {
       method: 'POST'
@@ -403,12 +575,15 @@ describe('OperationsPage', () => {
           status: 200
         });
       }
+      if (isStoreItemDiscoveryJobsUrl(url)) {
+        return emptyPagedRows();
+      }
       throw new Error(`Unexpected request: ${url}`);
     });
 
     render(<OperationsPage operation="item_discovery" />);
 
-    await screen.findByText('No recent operation run.');
+    await screen.findByRole('table', { name: /Store item discovery jobs/i });
     await userEvent.click(screen.getByRole('button', { name: /Run Store Item Discovery/i }));
 
     expect(await screen.findByText('Store ID is required.')).toBeInTheDocument();
@@ -507,4 +682,23 @@ function jsonResponse(data: unknown, status = 200) {
     headers: { 'Content-Type': 'application/json' },
     status
   });
+}
+
+function emptyPagedRows() {
+  return jsonResponse({
+    data: [],
+    meta: {
+      page: 0,
+      page_size: 100,
+      total: 0
+    }
+  });
+}
+
+function isStoreItemDiscoveryJobsUrl(url: string) {
+  return url.includes('/admin/operations/store-item-discovery-jobs?');
+}
+
+function isStoreItemUpdateJobsUrl(url: string) {
+  return url.includes('/admin/operations/store-item-update-jobs?');
 }

@@ -3,6 +3,70 @@ import { Router } from 'express';
 import type { Database } from '../db.js';
 import type { DiscoveryOperationsClient, ItemUpdateRunScope } from '../discoveryOperations.js';
 
+type SortDirection = 'asc' | 'desc';
+
+type TableColumnConfig = {
+  filterSql: string;
+  sortSql: string;
+};
+
+type TableQueryConfig = {
+  columns: Record<string, TableColumnConfig>;
+  defaultSortColumnId: string;
+  defaultSortDirection: SortDirection;
+  fromSql: string;
+  selectSql: string;
+};
+
+const storeItemDiscoveryJobSelect = `
+  id, run_id, store_id, website_url, status, error, started_at,
+  completed_at, new_items, created_at, updated_at
+`;
+
+const storeItemUpdateJobSelect = `
+  id, run_id, status, error, started_at, completed_at,
+  scanned_items, updated_items, created_at, updated_at
+`;
+
+const storeItemDiscoveryJobsTableConfig: TableQueryConfig = {
+  columns: {
+    completed_at: columnSql('completed_at'),
+    created_at: columnSql('created_at'),
+    error: columnSql('error'),
+    id: columnSql('id'),
+    new_items: columnSql('new_items'),
+    run_id: columnSql('run_id'),
+    started_at: columnSql('started_at'),
+    status: columnSql('status'),
+    store_id: columnSql('store_id'),
+    updated_at: columnSql('updated_at'),
+    website_url: columnSql('website_url')
+  },
+  defaultSortColumnId: 'started_at',
+  defaultSortDirection: 'desc',
+  fromSql: 'from job_store_item_discovery_log',
+  selectSql: storeItemDiscoveryJobSelect
+};
+
+const storeItemUpdateJobsTableConfig: TableQueryConfig = {
+  columns: {
+    completed_at: columnSql('completed_at'),
+    created_at: columnSql('created_at'),
+    error: columnSql('error'),
+    id: columnSql('id'),
+    run_id: columnSql('run_id'),
+    scanned_items: columnSql('scanned_items'),
+    started_at: columnSql('started_at'),
+    status: columnSql('status'),
+    updated_at: columnSql('updated_at'),
+    updated_items: columnSql('updated_items')
+  },
+  defaultSortColumnId: 'started_at',
+  defaultSortDirection: 'desc',
+  fromSql: 'from job_store_item_update_log',
+  selectSql: storeItemUpdateJobSelect
+};
+
 export function createOperationsRouter(operationsClient: DiscoveryOperationsClient, database: Database): Router {
   const router = Router();
 
@@ -57,6 +121,22 @@ export function createOperationsRouter(operationsClient: DiscoveryOperationsClie
         String(store.name ?? '')
       );
       response.status(202).json({ data: run });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/admin/operations/store-item-discovery-jobs', async (request, response, next) => {
+    try {
+      response.json(await queryTable(database, storeItemDiscoveryJobsTableConfig, request.query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/admin/operations/store-item-update-jobs', async (request, response, next) => {
+    try {
+      response.json(await queryTable(database, storeItemUpdateJobsTableConfig, request.query));
     } catch (error) {
       next(error);
     }
@@ -130,6 +210,128 @@ function parseItemUpdateRunScope(body: unknown): ItemUpdateRunScope | undefined 
     throw httpError(400, 'store_ids must not contain duplicates');
   }
   return { store_ids: storeIds };
+}
+
+async function queryTable(database: Database, config: TableQueryConfig, query: Record<string, unknown>) {
+  const pagination = parsePagination(query);
+  const tableQuery = parseTableQuery(query, config);
+  const whereClause = buildWhereClause(tableQuery.filters);
+  const dataParams = [...whereClause.params, pagination.pageSize, pagination.page * pagination.pageSize];
+  const limitParam = whereClause.params.length + 1;
+  const offsetParam = whereClause.params.length + 2;
+
+  const result = await database.query(
+    `select ${config.selectSql}
+     ${config.fromSql}
+     ${whereClause.sql}
+     order by ${tableQuery.sortSql} ${tableQuery.sortDirection}
+     limit $${limitParam} offset $${offsetParam}`,
+    dataParams
+  );
+  const countResult = await database.query(
+    `select count(*)::int as total
+     ${config.fromSql}
+     ${whereClause.sql}`,
+    whereClause.params
+  );
+  const total = numberField((countResult.rows[0] ?? {}) as Record<string, unknown>, 'total');
+
+  return {
+    data: result.rows,
+    meta: {
+      page: pagination.page,
+      page_size: pagination.pageSize,
+      total
+    }
+  };
+}
+
+function parseTableQuery(query: Record<string, unknown>, config: TableQueryConfig) {
+  const requestedSort = stringQueryField(query.sort);
+  const hasValidRequestedSort = Boolean(requestedSort && config.columns[requestedSort]);
+  const sortColumn = hasValidRequestedSort ? config.columns[requestedSort] : config.columns[config.defaultSortColumnId];
+  const requestedDirection = stringQueryField(query.sort_direction).toLowerCase();
+
+  return {
+    filters: tableFilters(query, config),
+    sortDirection: (hasValidRequestedSort
+      ? requestedDirection === 'desc'
+        ? 'desc'
+        : 'asc'
+      : config.defaultSortDirection) as SortDirection,
+    sortSql: sortColumn.sortSql
+  };
+}
+
+function tableFilters(query: Record<string, unknown>, config: TableQueryConfig) {
+  const filters: Array<{ column: TableColumnConfig; value: string }> = [];
+  for (const [columnId, column] of Object.entries(config.columns)) {
+    const value = stringQueryField(query[`filter_${columnId}`]).trim();
+    if (value) {
+      filters.push({ column, value });
+    }
+  }
+  return filters;
+}
+
+function buildWhereClause(filters: Array<{ column: TableColumnConfig; value: string }>): { params: string[]; sql: string } {
+  const params: string[] = [];
+  const predicates: string[] = [];
+
+  for (const filter of filters) {
+    params.push(likePattern(filter.value));
+    predicates.push(`${filter.column.filterSql} ilike $${params.length} escape '\\'`);
+  }
+
+  return {
+    params,
+    sql: predicates.length ? `where ${predicates.join(' and ')}` : ''
+  };
+}
+
+function columnSql(columnName: string): TableColumnConfig {
+  return {
+    filterSql: textSql(columnName),
+    sortSql: columnName
+  };
+}
+
+function textSql(expression: string): string {
+  return `coalesce((${expression})::text, '')`;
+}
+
+function likePattern(value: string): string {
+  return `%${value.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
+}
+
+function parsePagination(query: Record<string, unknown>) {
+  return {
+    page: integerQueryField(query.page, 0, 0, 100000),
+    pageSize: integerQueryField(query.page_size, 25, 1, 200)
+  };
+}
+
+function stringQueryField(value: unknown): string {
+  const rawValue = Array.isArray(value) ? value[0] : value;
+  return typeof rawValue === 'string' || typeof rawValue === 'number' ? String(rawValue) : '';
+}
+
+function integerQueryField(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(stringQueryField(value));
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+  return Math.min(Math.max(parsed, min), max);
+}
+
+function numberField(value: Record<string, unknown>, key: string): number {
+  const field = value[key];
+  if (field === '' || field === null || field === undefined) {
+    return 0;
+  }
+
+  const parsed = typeof field === 'number' ? field : Number(field);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

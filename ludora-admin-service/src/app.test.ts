@@ -3275,6 +3275,103 @@ describe('ludora admin service', () => {
     expect(calls).toEqual([{ storeId: 12, platform: 'amazon_brand', storeName: 'Hasbro Gaming', websiteUrl: 'https://example.mx/' }]);
   });
 
+  it('lists store item discovery job logs from the job table', async () => {
+    const rows = [
+      {
+        completed_at: '2026-07-05T20:03:00Z',
+        created_at: '2026-07-05T20:00:00Z',
+        error: '',
+        id: 19,
+        new_items: 7,
+        run_id: 'run-discovery-19',
+        started_at: '2026-07-05T20:00:00Z',
+        status: 'completed',
+        store_id: 12,
+        updated_at: '2026-07-05T20:03:00Z',
+        website_url: 'https://store.example'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).includes('count(*)')) {
+          return { rows: [{ total: 1 }] };
+        }
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
+      '/admin/operations/store-item-discovery-jobs?page=0&page_size=25&sort=started_at&sort_direction=desc&filter_store_id=12'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: rows,
+      meta: {
+        page: 0,
+        page_size: 25,
+        total: 1
+      }
+    });
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, run_id, store_id'));
+    const countQuery = queries.find((query) => normalizeSql(query.sql).includes('count(*)'));
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from job_store_item_discovery_log');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((store_id)::text, '') ilike $1 escape '\\'");
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by started_at desc');
+    expect(rowQuery?.params).toEqual(['%12%', 25, 0]);
+    expect(countQuery?.params).toEqual(['%12%']);
+  });
+
+  it('lists store item update job logs from the job table', async () => {
+    const rows = [
+      {
+        completed_at: '2026-07-05T21:04:00Z',
+        created_at: '2026-07-05T21:00:00Z',
+        error: '',
+        id: 27,
+        run_id: 'run-update-27',
+        scanned_items: 18,
+        started_at: '2026-07-05T21:00:00Z',
+        status: 'completed',
+        updated_at: '2026-07-05T21:04:00Z',
+        updated_items: 5
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).includes('count(*)')) {
+          return { rows: [{ total: 1 }] };
+        }
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
+      '/admin/operations/store-item-update-jobs?page=0&page_size=25&sort=scanned_items&sort_direction=desc&filter_status=completed'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: rows,
+      meta: {
+        page: 0,
+        page_size: 25,
+        total: 1
+      }
+    });
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, run_id, status'));
+    const countQuery = queries.find((query) => normalizeSql(query.sql).includes('count(*)'));
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from job_store_item_update_log');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((status)::text, '') ilike $1 escape '\\'");
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by scanned_items desc');
+    expect(rowQuery?.params).toEqual(['%completed%', 25, 0]);
+    expect(countQuery?.params).toEqual(['%completed%']);
+  });
+
   it('starts item update runs through the discovery operations client', async () => {
     const run: StoreDiscoveryRun = {
       completed_at: null,
@@ -3700,5 +3797,27 @@ describe('ludora admin service', () => {
 function idleDatabase(): Database {
   return {
     query: async () => ({ rows: [] })
+  };
+}
+
+function idleOperationsClient(): DiscoveryOperationsClient {
+  const run: StoreDiscoveryRun = {
+    completed_at: null,
+    error: null,
+    id: 'idle-run',
+    result: null,
+    started_at: '2026-07-05T20:00:00Z',
+    status: 'completed',
+    type: 'store_discovery'
+  };
+
+  return {
+    cancelStoreDiscoveryRun: async () => run,
+    getLatestStoreDiscoveryRun: async () => null,
+    getStoreDiscoveryRun: async () => run,
+    startItemDiscoveryRun: async () => run,
+    startItemEmbeddingRun: async () => run,
+    startItemUpdateRun: async () => run,
+    startStoreDiscoveryRun: async () => run
   };
 }

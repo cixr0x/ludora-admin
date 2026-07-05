@@ -387,6 +387,10 @@ export const adminApi = {
   getOfferReviewsPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/admin/discovery/offer-reviews', query), query),
   getReviewTasks: () => fetchRows('/admin/review-tasks'),
   getReviewTasksPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/admin/review-tasks', query), query),
+  getStoreItemDiscoveryJobsPage: (query: TableQuery) =>
+    fetchPagedRows<AdminRecord>(pagedPath('/admin/operations/store-item-discovery-jobs', query), query),
+  getStoreItemUpdateJobsPage: (query: TableQuery) =>
+    fetchPagedRows<AdminRecord>(pagedPath('/admin/operations/store-item-update-jobs', query), query),
   getLatestStoreDiscoveryRun: () => fetchData<StoreDiscoveryRun | null>('/admin/operations/store-discovery-runs/latest'),
   getCurrentLocalCoverWorkflow: () => fetchData<LocalCoverWorkflow | null>('/admin/local-cover-workflows/current'),
   startLocalCoverWorkflow: (storeItemId: string) =>
