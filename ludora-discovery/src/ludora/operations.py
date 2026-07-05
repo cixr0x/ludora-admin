@@ -303,6 +303,7 @@ def run_item_update(
     env: Mapping[str, str] | None = None,
     env_file: str = ".env",
     cancellation_token: CancellationToken | None = None,
+    run_id: str | None = None,
 ) -> ItemUpdateRunResult:
     current_env = env if env is not None else os.environ
     database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
@@ -311,6 +312,7 @@ def run_item_update(
     browser_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
 
     connection = connect_database(database_url)
+    resolved_run_id = run_id or str(uuid.uuid4())
     try:
         repository = DiscoveryRepository(connection)
         update_kwargs = {}
@@ -319,6 +321,7 @@ def run_item_update(
         records = update_confirmed_store_items(
             repository,
             browser_fetch_enabled=browser_fetch_enabled,
+            run_id=resolved_run_id,
             **update_kwargs,
         )
         return ItemUpdateRunResult(updated_items=len(records))
@@ -406,7 +409,7 @@ class StoreDiscoveryRunManager:
         self.item_update_runner = (
             _update_runner_with_token(item_update_runner)
             if item_update_runner is not None
-            else (lambda cancellation_token: run_item_update(env_file=env_file, cancellation_token=cancellation_token))
+            else (lambda cancellation_token, run_id: run_item_update(env_file=env_file, cancellation_token=cancellation_token, run_id=run_id))
         )
         self.item_embedding_runner = (
             _embedding_runner_with_token(item_embedding_runner)
@@ -623,7 +626,7 @@ class StoreDiscoveryRunManager:
 
     def _execute_item_update_run(self, run_id: str) -> None:
         try:
-            result = self.item_update_runner(self._cancellation_token_for(run_id))
+            result = self.item_update_runner(self._cancellation_token_for(run_id), run_id)
         except OperationCancelled:
             self._mark_run_cancelled(run_id)
             return
@@ -791,10 +794,52 @@ def _item_runner_arguments(
     return args, kwargs
 
 
-def _update_runner_with_token(runner: Callable[..., ItemUpdateRunResult]) -> Callable[[CancellationToken], ItemUpdateRunResult]:
-    if _accepts_cancellation_token(runner, positional_before_token=0):
-        return lambda cancellation_token: runner(cancellation_token)
-    return lambda cancellation_token: runner()
+def _update_runner_with_token(runner: Callable[..., ItemUpdateRunResult]) -> Callable[[CancellationToken, str], ItemUpdateRunResult]:
+    def run(cancellation_token: CancellationToken, run_id: str) -> ItemUpdateRunResult:
+        args, kwargs = _update_runner_arguments(runner, cancellation_token, run_id)
+        return runner(*args, **kwargs)
+
+    return run
+
+
+def _update_runner_arguments(
+    runner: Callable[..., object],
+    cancellation_token: CancellationToken,
+    run_id: str,
+) -> tuple[list[object], dict[str, object]]:
+    try:
+        signature = inspect.signature(runner)
+    except (TypeError, ValueError):
+        return [cancellation_token, run_id], {}
+
+    parameters = list(signature.parameters.values())
+    if any(parameter.kind == inspect.Parameter.VAR_POSITIONAL for parameter in parameters):
+        return [cancellation_token, run_id], {}
+
+    args: list[object] = []
+    kwargs: dict[str, object] = {}
+    fallback_values = [cancellation_token, run_id]
+    unknown_positional = 0
+
+    for parameter in parameters:
+        if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}:
+            if parameter.name == "cancellation_token":
+                args.append(cancellation_token)
+            elif parameter.name == "run_id":
+                args.append(run_id)
+            else:
+                args.append(fallback_values[min(unknown_positional, len(fallback_values) - 1)])
+                unknown_positional += 1
+        elif parameter.kind == inspect.Parameter.KEYWORD_ONLY:
+            if parameter.name == "cancellation_token":
+                kwargs["cancellation_token"] = cancellation_token
+            elif parameter.name == "run_id":
+                kwargs["run_id"] = run_id
+        elif parameter.kind == inspect.Parameter.VAR_KEYWORD:
+            kwargs.setdefault("cancellation_token", cancellation_token)
+            kwargs.setdefault("run_id", run_id)
+
+    return args, kwargs
 
 
 def _embedding_runner_with_token(

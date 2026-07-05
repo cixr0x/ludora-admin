@@ -313,6 +313,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         update_confirmed_store_items.assert_called_once_with(
             repository,
             browser_fetch_enabled=True,
+            run_id=ANY,
         )
         connection.close.assert_called_once_with()
         self.assertEqual(result.updated_items, 2)
@@ -474,7 +475,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             run_id=ANY,
             started_at=ANY,
         )
-        item_update_runner.assert_called_once_with(env_file="custom.env", cancellation_token=ANY)
+        item_update_runner.assert_called_once_with(env_file="custom.env", cancellation_token=ANY, run_id=ANY)
         item_embedding_runner.assert_called_once_with(refresh_mode="missing", env_file="custom.env", cancellation_token=ANY)
 
     def test_manager_records_failed_run_error(self):

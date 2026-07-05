@@ -24,6 +24,7 @@ class SchemaTests(unittest.TestCase):
             "item_match_candidates",
             "translation_jobs",
             "job_store_item_discovery_log",
+            "store_item_update_change_log",
             "publishers",
         ]:
             self.assertIn(f"create table if not exists {table_name}", schema.casefold())
@@ -230,6 +231,30 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("new_items integer not null default 0", table)
         self.assertIn("job_store_item_discovery_log_store_id_started_at_idx", schema)
         self.assertIn("job_store_item_discovery_log_status_idx", schema)
+
+    def test_schema_contains_store_item_update_change_log(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+
+        self.assertIn("create table if not exists store_item_update_change_log", schema)
+        table = schema.split("create table if not exists store_item_update_change_log", 1)[1].split(");", 1)[0]
+
+        for column_name in [
+            "run_id",
+            "store_item_id",
+            "field_name",
+            "old_value",
+            "new_value",
+            "created_at",
+        ]:
+            self.assertIn(column_name, table)
+
+        self.assertIn("run_id text not null", table)
+        self.assertIn("store_item_id bigint not null", table)
+        self.assertIn("field_name text not null", table)
+        self.assertIn("old_value jsonb not null", table)
+        self.assertIn("new_value jsonb not null", table)
+        self.assertIn("store_item_update_change_log_run_id_idx", schema)
+        self.assertIn("store_item_update_change_log_store_item_created_idx", schema)
 
     def test_schema_contains_active_item_view(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()

@@ -171,6 +171,7 @@ class DiscoveryItemCandidateRecord:
     matched_at: str | None = None
     processed_at: str | None = None
     processing_error: str = ""
+    store_item_id: int | None = None
 
     def to_db_dict(self) -> dict[str, object]:
         return {

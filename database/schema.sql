@@ -159,6 +159,22 @@ on job_store_item_discovery_log (store_id, started_at desc);
 create index if not exists job_store_item_discovery_log_status_idx
 on job_store_item_discovery_log (status);
 
+create table if not exists store_item_update_change_log (
+    id bigserial primary key,
+    run_id text not null,
+    store_item_id bigint not null,
+    field_name text not null,
+    old_value jsonb not null,
+    new_value jsonb not null,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists store_item_update_change_log_run_id_idx
+on store_item_update_change_log (run_id);
+
+create index if not exists store_item_update_change_log_store_item_created_idx
+on store_item_update_change_log (store_item_id, created_at desc);
+
 alter table if exists store_items add column if not exists source_listing_url text not null default '';
 alter table if exists store_items add column if not exists image_url text not null default '';
 alter table if exists store_items add column if not exists item_type text not null default 'unknown';

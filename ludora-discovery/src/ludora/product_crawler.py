@@ -26,6 +26,15 @@ class ItemCandidateRepository(Protocol):
     def list_confirmed_boardgame_item_candidates(self, limit: int | None = None) -> list[DiscoveryItemCandidateRecord]:
         ...
 
+    def update_item_candidate_with_change_log(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        refreshed_record: DiscoveryItemCandidateRecord,
+        *,
+        run_id: str,
+    ) -> object | None:
+        ...
+
 
 class ItemCandidateProcessor(Protocol):
     def process_candidate(self, candidate_id: int, record: DiscoveryItemCandidateRecord) -> None:
@@ -116,6 +125,7 @@ def update_confirmed_store_item_details(
     browser_fetch_enabled: bool = False,
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
     cancellation_token: CancellationToken | None = None,
+    run_id: str | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     browser_session = None
@@ -136,7 +146,10 @@ def update_confirmed_store_item_details(
             )
             raise_if_cancelled(cancellation_token)
             _preserve_confirmed_item_state(refreshed_record, existing_record)
-            repository.upsert_item_candidate(refreshed_record)
+            if run_id:
+                repository.update_item_candidate_with_change_log(existing_record, refreshed_record, run_id=run_id)
+            else:
+                repository.upsert_item_candidate(refreshed_record)
             records.append(refreshed_record)
         return records
     finally:
@@ -257,6 +270,7 @@ def _preserve_confirmed_item_state(
 ) -> None:
     refreshed_record.store_id = existing_record.store_id
     refreshed_record.source_url = existing_record.source_url
+    refreshed_record.store_item_id = existing_record.store_item_id
     refreshed_record.item_id = existing_record.item_id
     refreshed_record.listing_status = existing_record.listing_status
     refreshed_record.is_boardgame = True

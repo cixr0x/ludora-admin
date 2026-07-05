@@ -86,6 +86,31 @@ class TutorialLinkUpsertResult:
     action: str
 
 
+STORE_ITEM_UPDATE_CHANGE_LOG_FIELDS = (
+    "source_listing_url",
+    "title",
+    "publisher",
+    "description",
+    "item_type",
+    "min_players",
+    "max_players",
+    "min_minutes",
+    "max_minutes",
+    "min_age",
+    "language",
+    "language_source",
+    "language_evidence",
+    "image_url",
+    "raw_price",
+    "price",
+    "price_source",
+    "currency",
+    "availability",
+    "availability_source",
+    "store_sku",
+)
+
+
 class DiscoveryRepository:
     def __init__(self, connection: Any):
         self.connection = connection
@@ -229,6 +254,58 @@ class DiscoveryRepository:
                 )
         self.connection.commit()
         return result
+
+    def update_item_candidate_with_change_log(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        refreshed_record: DiscoveryItemCandidateRecord,
+        *,
+        run_id: str,
+    ) -> ItemCandidateUpsertResult:
+        store_item_id = existing_record.store_item_id or refreshed_record.store_item_id
+        if store_item_id is None:
+            raise ValueError("store item id is required to log update changes")
+
+        refreshed_record.store_item_id = store_item_id
+        data = refreshed_record.to_db_dict()
+        changes = _item_update_changes(existing_record, refreshed_record)
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                _update_item_candidate_sql(),
+                (
+                    *self._item_candidate_write_params(data),
+                    store_item_id,
+                ),
+            )
+            for field_name, old_value, new_value in changes:
+                cursor.execute(
+                    """
+                    insert into store_item_update_change_log (
+                        run_id,
+                        store_item_id,
+                        field_name,
+                        old_value,
+                        new_value
+                    )
+                    values (%s, %s, %s, %s::jsonb, %s::jsonb)
+                    """,
+                    (
+                        run_id,
+                        store_item_id,
+                        field_name,
+                        _jsonb_log_value(old_value),
+                        _jsonb_log_value(new_value),
+                    ),
+                )
+        self.connection.commit()
+        return ItemCandidateUpsertResult(
+            candidate_id=store_item_id,
+            listing_status=refreshed_record.listing_status,
+            item_id=refreshed_record.item_id,
+            should_process=False,
+            created=False,
+        )
 
     def _find_item_candidate(self, cursor: Any, record: DiscoveryItemCandidateRecord):
         cursor.execute(
@@ -644,7 +721,8 @@ def _item_candidate_select_columns() -> str:
         match_payload,
         matched_at,
         processed_at,
-        processing_error
+        processing_error,
+        id
     """
 
 
@@ -689,7 +767,27 @@ def _item_candidate_from_row(row: Any) -> DiscoveryItemCandidateRecord:
         matched_at=_text(row[36]) or None,
         processed_at=_text(row[37]) or None,
         processing_error=_text(row[38]),
+        store_item_id=_optional_int(row[39]),
     )
+
+
+def _item_update_changes(
+    existing_record: DiscoveryItemCandidateRecord,
+    refreshed_record: DiscoveryItemCandidateRecord,
+) -> list[tuple[str, object, object]]:
+    existing_data = existing_record.to_db_dict()
+    refreshed_data = refreshed_record.to_db_dict()
+    changes: list[tuple[str, object, object]] = []
+    for field_name in STORE_ITEM_UPDATE_CHANGE_LOG_FIELDS:
+        old_value = existing_data[field_name]
+        new_value = refreshed_data[field_name]
+        if old_value != new_value:
+            changes.append((field_name, old_value, new_value))
+    return changes
+
+
+def _jsonb_log_value(value: object) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def _optional_int(value: object) -> int | None:

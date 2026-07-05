@@ -30,6 +30,15 @@ class ItemCandidateRepository(Protocol):
     def list_confirmed_boardgame_item_candidates(self, limit: int | None = None) -> list[DiscoveryItemCandidateRecord]:
         ...
 
+    def update_item_candidate_with_change_log(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        refreshed_record: DiscoveryItemCandidateRecord,
+        *,
+        run_id: str,
+    ) -> object | None:
+        ...
+
 
 def collect_store_inventory(
     store_url: str,
@@ -87,10 +96,12 @@ def update_confirmed_store_items(
     limit: int | None = None,
     browser_fetch_enabled: bool = False,
     cancellation_token: CancellationToken | None = None,
+    run_id: str | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
         repository,
         limit=limit,
         browser_fetch_enabled=browser_fetch_enabled,
         cancellation_token=cancellation_token,
+        run_id=run_id,
     )

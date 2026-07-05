@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import unittest
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -270,6 +271,76 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("completed", "", completed_at, 3, "run-123"))
         self.assertEqual(connection.commits, 2)
 
+    def test_updates_item_candidate_and_logs_changed_refresh_fields(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            source_listing_url="https://example.mx/sitemap.xml",
+            title="Catan",
+            publisher="Devir",
+            description="Juego base",
+            item_id=77,
+            raw_price="$899",
+            price="899.00",
+            availability="available",
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        refreshed_record = replace(
+            existing_record,
+            title="Catan Nueva Edicion",
+            raw_price="$799",
+            price="799.00",
+        )
+
+        result = repository.update_item_candidate_with_change_log(
+            existing_record,
+            refreshed_record,
+            run_id="run-123",
+        )
+
+        self.assertEqual(result.candidate_id, 56)
+        self.assertFalse(result.created)
+        update_sql, update_params = connection.cursor_instance.executions[0]
+        change_entries = connection.cursor_instance.executions[1:]
+        self.assertIn("update store_items", update_sql.casefold())
+        self.assertEqual(update_params[-1], 56)
+        self.assertEqual(len(change_entries), 3)
+        self.assertEqual(connection.commits, 1)
+        logged_fields = [params[2] for _sql, params in change_entries]
+        self.assertEqual(logged_fields, ["title", "raw_price", "price"])
+        for sql, params in change_entries:
+            self.assertIn("insert into store_item_update_change_log", sql.casefold())
+            self.assertEqual(params[0], "run-123")
+            self.assertEqual(params[1], 56)
+        self.assertEqual(json.loads(change_entries[0][1][3]), "Catan")
+        self.assertEqual(json.loads(change_entries[0][1][4]), "Catan Nueva Edicion")
+        self.assertEqual(json.loads(change_entries[2][1][3]), "899.00")
+        self.assertEqual(json.loads(change_entries[2][1][4]), "799.00")
+
+    def test_update_item_candidate_change_log_requires_store_item_id(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        existing_record = DiscoveryItemCandidateRecord(
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+        )
+
+        with self.assertRaisesRegex(ValueError, "store item id is required"):
+            repository.update_item_candidate_with_change_log(
+                existing_record,
+                existing_record,
+                run_id="run-123",
+            )
+
+        self.assertEqual(connection.cursor_instance.executions, [])
+        self.assertEqual(connection.commits, 0)
+
     def test_upsert_tutorial_link_refreshes_existing_item_url(self):
         connection = FakeConnection(fetchone_rows=[(44,), (44,)])
         repository = DiscoveryRepository(connection)
@@ -410,6 +481,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
                         "2026-05-01T00:00:00Z",
                         "2026-05-01T00:00:00Z",
                         "",
+                        56,
                     )
                 ]
             ]
@@ -429,6 +501,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("limit %s", normalized_sql)
         self.assertEqual(params, (50,))
         self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].store_item_id, 56)
         self.assertEqual(records[0].store_id, 12)
         self.assertEqual(records[0].source_url, "https://example.mx/products/catan")
         self.assertEqual(records[0].item_id, 77)

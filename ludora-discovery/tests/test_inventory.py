@@ -21,6 +21,7 @@ class FakeRepository:
         self.exists_checks = []
         self.confirmed_items = list(confirmed_items or [])
         self.confirmed_items_limit = None
+        self.update_change_log_calls = []
 
     def item_candidate_exists(self, store_id, source_url):
         self.exists_checks.append((store_id, source_url))
@@ -33,6 +34,11 @@ class FakeRepository:
     def list_confirmed_boardgame_item_candidates(self, limit=None):
         self.confirmed_items_limit = limit
         return self.confirmed_items
+
+    def update_item_candidate_with_change_log(self, existing_record, refreshed_record, *, run_id):
+        self.update_change_log_calls.append((existing_record, refreshed_record, run_id))
+        self.item_records.append(refreshed_record)
+        return ItemCandidateUpsertResult(candidate_id=101, listing_status="LISTED", item_id=refreshed_record.item_id, should_process=False)
 
 
 class FakeItemProcessor:
@@ -512,6 +518,46 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(repository.item_records[0].is_boardgame_confirmed)
         self.assertEqual(repository.item_records[0].category_confidence, 0.91)
         self.assertEqual(repository.item_records[0].classification_reasons, ["previously confirmed"])
+        self.assertEqual(repository.update_change_log_calls, [])
+
+    def test_update_confirmed_store_item_details_logs_changes_when_run_id_is_available(self):
+        detail_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Catan Nueva Edicion",
+          "offers": {"price": "799.00", "priceCurrency": "MXN"}
+        }
+        </script>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            source_listing_url="https://example.mx/sitemap.xml",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record])
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url="https://example.mx/products/catan", text=detail_html),
+        ):
+            records = update_confirmed_store_item_details(repository, run_id="run-123")
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(len(repository.update_change_log_calls), 1)
+        logged_existing, logged_refreshed, logged_run_id = repository.update_change_log_calls[0]
+        self.assertIs(logged_existing, existing_record)
+        self.assertEqual(logged_refreshed.title, "Catan Nueva Edicion")
+        self.assertEqual(logged_refreshed.store_item_id, 56)
+        self.assertEqual(logged_refreshed.item_id, 77)
+        self.assertEqual(logged_refreshed.listing_status, "LISTED")
+        self.assertEqual(logged_run_id, "run-123")
 
 
 if __name__ == "__main__":
