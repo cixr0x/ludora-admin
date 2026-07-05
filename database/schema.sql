@@ -423,6 +423,17 @@ create table if not exists admin_import_jobs (
     updated_at timestamptz not null default now()
 );
 
+create table if not exists contact_form_submissions (
+    id bigserial primary key,
+    name text not null,
+    email text not null,
+    message text not null,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists contact_form_submissions_created_at_idx
+on contact_form_submissions (created_at desc);
+
 create table if not exists stores (
     id bigserial primary key,
     name text not null,

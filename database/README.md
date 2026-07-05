@@ -10,7 +10,13 @@ database/patches/YYYYMMDD_NNN_short_description.sql
 
 Each patch should contain only the statements required for that change. Apply only the relevant patch file after explicit approval for DDL or DML.
 
-Example:
+Use the database patch runbook for the approved execution path:
+
+```text
+database/runbooks/apply-database-patches.md
+```
+
+Optional `psql` example, only when `psql` is installed and `LUDORA_DATABASE_URL` is already loaded in the shell:
 
 ```powershell
 psql "$env:LUDORA_DATABASE_URL" -f .\database\patches\20260705_005_store_item_refreshed_date.sql
