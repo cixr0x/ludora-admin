@@ -276,7 +276,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         repository = DiscoveryRepository(connection)
         completed_at = datetime(2026, 7, 5, 10, 5, tzinfo=timezone.utc)
 
-        job_id = repository.start_store_item_update_log(run_id="run-123")
+        job_id = repository.start_store_item_update_log(run_id="run-123", store_id=12)
         repository.complete_store_item_update_log(
             job_id=job_id,
             status="completed",
@@ -291,7 +291,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(job_id, 99)
         self.assertIn("insert into job_store_item_update_log", insert_sql.casefold())
         self.assertIn("returning id", insert_sql.casefold())
-        self.assertEqual(insert_params, ("run-123", "running", "", None, 0, 0))
+        self.assertIn("store_id", insert_sql.casefold())
+        self.assertEqual(insert_params, ("run-123", 12, "running", "", None, 0, 0))
         self.assertIn("update job_store_item_update_log", update_sql.casefold())
         self.assertIn("completed_at = %s", update_sql.casefold())
         self.assertIn("scanned_items = %s", update_sql.casefold())

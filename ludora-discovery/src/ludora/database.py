@@ -220,22 +220,23 @@ class DiscoveryRepository:
             )
         self.connection.commit()
 
-    def start_store_item_update_log(self, *, run_id: str) -> int:
+    def start_store_item_update_log(self, *, run_id: str, store_id: int | None = None) -> int:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
                 insert into job_store_item_update_log (
                     run_id,
+                    store_id,
                     status,
                     error,
                     completed_at,
                     scanned_items,
                     updated_items
                 )
-                values (%s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s)
                 returning id
                 """,
-                (run_id, "running", "", None, 0, 0),
+                (run_id, store_id, "running", "", None, 0, 0),
             )
             row = cursor.fetchone()
         self.connection.commit()

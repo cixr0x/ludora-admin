@@ -320,6 +320,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         )
         repository.start_store_item_update_log.assert_called_once()
         update_run_id = repository.start_store_item_update_log.call_args.kwargs["run_id"]
+        self.assertIsNone(repository.start_store_item_update_log.call_args.kwargs["store_id"])
         self.assertEqual(update_confirmed_store_items.call_args.kwargs["run_id"], update_run_id)
         repository.complete_store_item_update_log.assert_called_once()
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["job_id"], 99)
@@ -347,7 +348,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "update failed"):
                 run_item_update(env_file="custom.env", run_id="run-123")
 
-        repository.start_store_item_update_log.assert_called_once_with(run_id="run-123")
+        repository.start_store_item_update_log.assert_called_once_with(run_id="run-123", store_id=None)
         repository.complete_store_item_update_log.assert_called_once()
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["job_id"], 99)
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["status"], "failed")
@@ -355,6 +356,24 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["updated_items"], 0)
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["error"], "update failed")
         connection.close.assert_called_once_with()
+
+    def test_run_item_update_logs_single_selected_store_id(self):
+        connection = Mock()
+        repository = Mock()
+        repository.start_store_item_update_log.return_value = 99
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.resolve_browser_fetch_enabled", return_value=True
+        ), patch(
+            "ludora.operations.connect_database", return_value=connection
+        ), patch(
+            "ludora.operations.DiscoveryRepository", return_value=repository
+        ), patch(
+            "ludora.operations.update_confirmed_store_items", return_value=[]
+        ):
+            run_item_update(env_file="custom.env", run_id="run-123", store_ids=[12])
+
+        repository.start_store_item_update_log.assert_called_once_with(run_id="run-123", store_id=12)
 
     def test_run_item_embeddings_embeds_selected_sources_and_closes_database(self):
         connection = Mock()

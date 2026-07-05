@@ -24,7 +24,7 @@ const storeItemDiscoveryJobSelect = `
 `;
 
 const storeItemUpdateJobSelect = `
-  id, run_id, status, error, started_at, completed_at,
+  id, run_id, store_id, status, error, started_at, completed_at,
   scanned_items, updated_items, created_at, updated_at
 `;
 
@@ -58,6 +58,7 @@ const storeItemUpdateJobsTableConfig: TableQueryConfig = {
     scanned_items: columnSql('scanned_items'),
     started_at: columnSql('started_at'),
     status: columnSql('status'),
+    store_id: columnSql('store_id'),
     updated_at: columnSql('updated_at'),
     updated_items: columnSql('updated_items')
   },

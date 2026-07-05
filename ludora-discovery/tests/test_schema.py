@@ -242,6 +242,7 @@ class SchemaTests(unittest.TestCase):
         for column_name in [
             "id",
             "run_id",
+            "store_id",
             "status",
             "error",
             "started_at",
@@ -254,12 +255,15 @@ class SchemaTests(unittest.TestCase):
             self.assertIn(column_name, table)
 
         self.assertIn("run_id text not null unique", table)
+        self.assertIn("store_id bigint", table)
         self.assertIn("status text not null default 'running'", table)
         self.assertIn("status in ('running', 'cancelled', 'completed', 'failed')", schema)
         self.assertIn("started_at timestamptz not null default now()", table)
         self.assertIn("completed_at timestamptz", table)
         self.assertIn("scanned_items integer not null default 0", table)
         self.assertIn("updated_items integer not null default 0", table)
+        self.assertIn("alter table if exists job_store_item_update_log add column if not exists store_id bigint", schema)
+        self.assertIn("job_store_item_update_log_store_id_started_at_idx", schema)
         self.assertIn("job_store_item_update_log_started_at_idx", schema)
         self.assertIn("job_store_item_update_log_status_idx", schema)
 

@@ -327,6 +327,14 @@ const storeItemUpdateJobColumns: DataTableColumn<AdminRecord>[] = [
     sortValue: (row) => recordText(row, 'run_id')
   },
   {
+    filterValue: (row) => recordText(row, 'store_id'),
+    id: 'store_id',
+    label: 'Store ID',
+    minWidth: 110,
+    render: (row) => recordText(row, 'store_id'),
+    sortValue: (row) => recordText(row, 'store_id')
+  },
+  {
     filterValue: (row) => recordText(row, 'status'),
     id: 'status',
     label: 'Status',
@@ -467,7 +475,7 @@ function StoreItemUpdateJobsTable({ refreshKey }: { refreshKey: number }) {
         onLoadMore: loadMore,
         totalCount: totalRows
       }}
-      minWidth={1750}
+      minWidth={1860}
       rows={rows}
       serverSide
       tableState={table.tableState}

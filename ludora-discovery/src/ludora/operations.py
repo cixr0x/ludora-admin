@@ -314,9 +314,10 @@ def run_item_update(
 
     connection = connect_database(database_url)
     resolved_run_id = run_id or str(uuid.uuid4())
+    job_store_id = store_ids[0] if store_ids is not None and len(store_ids) == 1 else None
     try:
         repository = DiscoveryRepository(connection)
-        job_id = repository.start_store_item_update_log(run_id=resolved_run_id)
+        job_id = repository.start_store_item_update_log(run_id=resolved_run_id, store_id=job_store_id)
         update_kwargs = {}
         if cancellation_token is not None:
             update_kwargs["cancellation_token"] = cancellation_token

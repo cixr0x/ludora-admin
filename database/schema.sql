@@ -162,6 +162,7 @@ on job_store_item_discovery_log (status);
 create table if not exists job_store_item_update_log (
     id bigserial primary key,
     run_id text not null unique,
+    store_id bigint,
     status text not null default 'running' check (status in ('running', 'cancelled', 'completed', 'failed')),
     error text not null default '',
     started_at timestamptz not null default now(),
@@ -172,8 +173,13 @@ create table if not exists job_store_item_update_log (
     updated_at timestamptz not null default now()
 );
 
+alter table if exists job_store_item_update_log add column if not exists store_id bigint;
+
 create index if not exists job_store_item_update_log_started_at_idx
 on job_store_item_update_log (started_at desc);
+
+create index if not exists job_store_item_update_log_store_id_started_at_idx
+on job_store_item_update_log (store_id, started_at desc);
 
 create index if not exists job_store_item_update_log_status_idx
 on job_store_item_update_log (status);
