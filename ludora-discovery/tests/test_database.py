@@ -375,6 +375,37 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads(change_entries[2][1][4]), "899.00")
         self.assertEqual(json.loads(change_entries[2][1][5]), "799.00")
 
+    def test_update_change_log_compares_price_numerically(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+            raw_price="$700.00",
+            price="700.00",
+            availability="available",
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        refreshed_record = replace(existing_record, price="700.0")
+
+        result = repository.update_item_candidate_with_change_log(
+            existing_record,
+            refreshed_record,
+            job_id=99,
+            run_id="run-123",
+        )
+
+        self.assertEqual(result.candidate_id, 56)
+        self.assertEqual(len(connection.cursor_instance.executions), 1)
+        update_sql, update_params = connection.cursor_instance.executions[0]
+        self.assertIn("update store_items", update_sql.casefold())
+        self.assertEqual(update_params[-1], 56)
+        self.assertEqual(connection.commits, 1)
+
     def test_update_item_candidate_change_log_requires_store_item_id(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)

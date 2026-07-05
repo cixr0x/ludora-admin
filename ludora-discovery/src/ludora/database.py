@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import dataclass, field
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -875,9 +876,35 @@ def _item_update_changes(
     for field_name in STORE_ITEM_UPDATE_CHANGE_LOG_FIELDS:
         old_value = existing_data[field_name]
         new_value = refreshed_data[field_name]
-        if old_value != new_value:
+        if not _item_update_values_equal(field_name, old_value, new_value):
             changes.append((field_name, old_value, new_value))
     return changes
+
+
+def _item_update_values_equal(field_name: str, old_value: object, new_value: object) -> bool:
+    if field_name == "price":
+        return _price_values_equal(old_value, new_value)
+    return old_value == new_value
+
+
+def _price_values_equal(old_value: object, new_value: object) -> bool:
+    old_price = _decimal_price(old_value)
+    new_price = _decimal_price(new_value)
+    if old_price is not None and new_price is not None:
+        return old_price == new_price
+    return old_value == new_value
+
+
+def _decimal_price(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+    try:
+        return Decimal(text_value)
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def _jsonb_log_value(value: object) -> str:
