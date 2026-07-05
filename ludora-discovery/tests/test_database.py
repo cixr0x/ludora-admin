@@ -179,6 +179,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             "language_source",
             "language_evidence",
             "last_seen_at",
+            "refreshed_date",
         ]:
             self.assertIn(column_name, sql.casefold())
         self.assertEqual(params[0], 12)

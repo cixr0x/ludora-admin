@@ -123,11 +123,14 @@ create table if not exists store_items (
     created_at timestamptz not null default now(),
     last_seen_at timestamptz not null default now(),
     last_updated timestamptz not null default now(),
-    refreshed_date timestamptz,
+    refreshed_date timestamptz not null default now(),
     unique (store_id, source_url)
 );
 
 alter table if exists store_items add column if not exists refreshed_date timestamptz;
+update store_items set refreshed_date = last_updated where refreshed_date is null;
+alter table if exists store_items alter column refreshed_date set default now();
+alter table if exists store_items alter column refreshed_date set not null;
 
 create index if not exists store_items_store_id_idx
 on store_items (store_id);

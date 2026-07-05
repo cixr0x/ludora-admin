@@ -732,9 +732,10 @@ def _insert_item_candidate_sql() -> str:
         category_confidence,
         classification_reasons,
         last_seen_at,
-        last_updated
+        last_updated,
+        refreshed_date
     )
-    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, now(), now())
+    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, now(), now(), now())
     returning id, listing_status, item_id
     """
 
