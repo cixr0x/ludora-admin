@@ -39,6 +39,10 @@ const adminSections: AdminSection[] = [
   'listings',
   'reviews',
   'operations',
+  'operations-store-discovery',
+  'operations-store-item-discovery',
+  'operations-store-item-update',
+  'operations-item-embeddings',
   'items',
   'front-page-category-options',
   'front-page-category-products',
@@ -48,6 +52,7 @@ const adminSections: AdminSection[] = [
 ];
 
 const routeAliases: Partial<Record<string, AdminSection>> = {
+  operations: 'operations-store-discovery',
   'front-page-review': 'front-page-preview'
 };
 
@@ -107,7 +112,14 @@ function renderSection(
     case 'reviews':
       return <ReviewTasksPage />;
     case 'operations':
-      return <OperationsPage />;
+    case 'operations-store-discovery':
+      return <OperationsPage operation="store_discovery" />;
+    case 'operations-store-item-discovery':
+      return <OperationsPage operation="item_discovery" />;
+    case 'operations-store-item-update':
+      return <OperationsPage operation="item_update" />;
+    case 'operations-item-embeddings':
+      return <OperationsPage operation="item_embeddings" />;
     case 'items':
       return <ItemsPage selectedItemId={selectedId} onClearSelectedItemId={() => navigate('items')} />;
     case 'front-page-category-options':

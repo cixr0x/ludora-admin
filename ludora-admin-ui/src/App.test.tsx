@@ -17,6 +17,10 @@ describe('App', () => {
     expect(screen.getByRole('link', { name: /Store Items/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Review Tasks/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Operations/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Store Discovery/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Store Item Discovery/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Store Item Update/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Item Embeddings/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^Items$/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Add Front Page Category/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Front Page Preview/i })).toBeInTheDocument();
@@ -176,6 +180,23 @@ describe('App', () => {
 
     expect(await screen.findByRole('heading', { name: 'Front Page Preview' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Party Game' })).toBeInTheDocument();
+  });
+
+  it('opens an operation sub page from a hash route', async () => {
+    window.location.hash = '#operations-store-item-update';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (new URL(url).pathname === '/admin/operations/store-discovery-runs/latest') {
+        return jsonResponse(null);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Store Item Update' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Run Item Update/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Run Store Discovery/i })).not.toBeInTheDocument();
   });
 
   it('opens the front page preview from the front page review hash alias', async () => {

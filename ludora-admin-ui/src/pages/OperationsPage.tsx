@@ -1,6 +1,19 @@
 import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 import StopCircleIcon from '@mui/icons-material/StopCircle';
-import { Alert, Box, Button, Chip, CircularProgress, FormControlLabel, Paper, Radio, RadioGroup, Stack, Typography } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  FormControlLabel,
+  Paper,
+  Radio,
+  RadioGroup,
+  Stack,
+  TextField,
+  Typography
+} from '@mui/material';
 import { useEffect, useState } from 'react';
 import {
   adminApi,
@@ -13,6 +26,27 @@ import {
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 
 type LoadState = 'loading' | 'ready' | 'error';
+export type OperationPageMode = 'item_discovery' | 'item_embeddings' | 'item_update' | 'store_discovery';
+type StartingOperation = OperationPageMode | '';
+
+const operationPageContent: Record<OperationPageMode, { description: string; title: string }> = {
+  item_discovery: {
+    description: 'Discover store items for a specific accepted store.',
+    title: 'Store Item Discovery'
+  },
+  item_embeddings: {
+    description: 'Generate semantic search embeddings for catalog items.',
+    title: 'Item Embeddings'
+  },
+  item_update: {
+    description: 'Refresh confirmed boardgame store items from their product pages.',
+    title: 'Store Item Update'
+  },
+  store_discovery: {
+    description: 'Search for Mexican boardgame stores and persist dirty candidates.',
+    title: 'Store Discovery'
+  }
+};
 
 const operationRunColumns: DataTableColumn<StoreDiscoveryRun>[] = [
   {
@@ -144,13 +178,15 @@ function itemEmbeddingResult(run: StoreDiscoveryRun): ItemEmbeddingRunResult | n
   return run.type === 'item_embeddings' ? (run.result as ItemEmbeddingRunResult | null) : null;
 }
 
-export function OperationsPage() {
+export function OperationsPage({ operation = 'store_discovery' }: { operation?: OperationPageMode }) {
   const [run, setRun] = useState<StoreDiscoveryRun | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [embeddingRefreshMode, setEmbeddingRefreshMode] = useState<'full' | 'missing'>('missing');
-  const [startingOperation, setStartingOperation] = useState<'item_embeddings' | 'item_update' | 'store_discovery' | ''>('');
+  const [storeItemDiscoveryStoreId, setStoreItemDiscoveryStoreId] = useState('');
+  const [startingOperation, setStartingOperation] = useState<StartingOperation>('');
   const [stoppingOperation, setStoppingOperation] = useState(false);
   const [error, setError] = useState('');
+  const pageContent = operationPageContent[operation];
 
   useEffect(() => {
     let ignore = false;
@@ -226,6 +262,26 @@ export function OperationsPage() {
     }
   }
 
+  async function handleStartStoreItemDiscovery() {
+    const storeId = storeItemDiscoveryStoreId.trim();
+    if (!storeId) {
+      setError('Store ID is required.');
+      return;
+    }
+
+    setStartingOperation('item_discovery');
+    setError('');
+    try {
+      const startedRun = await adminApi.startStoreItemDiscoveryRun(storeId);
+      setRun(startedRun);
+      setLoadState('ready');
+    } catch {
+      setError('Store item discovery could not be started.');
+    } finally {
+      setStartingOperation('');
+    }
+  }
+
   async function handleStartItemEmbeddings() {
     setStartingOperation('item_embeddings');
     setError('');
@@ -261,10 +317,10 @@ export function OperationsPage() {
     <Stack spacing={2}>
       <Box>
         <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
-          Operations
+          {pageContent.title}
         </Typography>
         <Typography color="text.secondary" variant="body2">
-          Run operational discovery processes from admin.
+          {pageContent.description}
         </Typography>
       </Box>
 
@@ -295,97 +351,141 @@ export function OperationsPage() {
         </Paper>
       ) : null}
 
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
-          <Box>
-            <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
-              Store discovery
-            </Typography>
-            <Typography color="text.secondary" variant="body2">
-              Search for Mexican boardgame stores and persist dirty candidates.
-            </Typography>
-          </Box>
-          <Button
-            disabled={Boolean(startingOperation) || runIsActive}
-            startIcon={
-              startingOperation === 'store_discovery' || runIsActive ? (
-                <CircularProgress color="inherit" size={16} />
-              ) : (
-                <PlayArrowIcon />
-              )
-            }
-            sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
-            variant="contained"
-            onClick={handleStartStoreDiscovery}
-          >
-            Run Store Discovery
-          </Button>
-        </Stack>
-      </Paper>
-
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
-          <Box>
-            <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
-              Item update
-            </Typography>
-            <Typography color="text.secondary" variant="body2">
-              Refresh confirmed boardgame store items from their product pages.
-            </Typography>
-          </Box>
-          <Button
-            disabled={Boolean(startingOperation) || runIsActive}
-            startIcon={
-              startingOperation === 'item_update' || runIsActive ? (
-                <CircularProgress color="inherit" size={16} />
-              ) : (
-                <PlayArrowIcon />
-              )
-            }
-            sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
-            variant="contained"
-            onClick={handleStartItemUpdate}
-          >
-            Run Item Update
-          </Button>
-        </Stack>
-      </Paper>
-
-      <Paper variant="outlined" sx={{ p: 2 }}>
-        <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
-          <Box>
-            <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
-              Item embeddings
-            </Typography>
-            <Typography color="text.secondary" variant="body2">
-              Generate semantic search embeddings from item names, descriptions, and taxonomy.
-            </Typography>
-            <RadioGroup
-              row
-              value={embeddingRefreshMode}
-              onChange={(event) => setEmbeddingRefreshMode(event.target.value === 'full' ? 'full' : 'missing')}
+      {operation === 'store_discovery' ? (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+            <Box>
+              <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+                Store discovery
+              </Typography>
+              <Typography color="text.secondary" variant="body2">
+                Search for Mexican boardgame stores and persist dirty candidates.
+              </Typography>
+            </Box>
+            <Button
+              disabled={Boolean(startingOperation) || runIsActive}
+              startIcon={
+                startingOperation === 'store_discovery' || runIsActive ? (
+                  <CircularProgress color="inherit" size={16} />
+                ) : (
+                  <PlayArrowIcon />
+                )
+              }
+              sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
+              variant="contained"
+              onClick={handleStartStoreDiscovery}
             >
-              <FormControlLabel control={<Radio size="small" />} label="Missing only" value="missing" />
-              <FormControlLabel control={<Radio size="small" />} label="Full refresh" value="full" />
-            </RadioGroup>
-          </Box>
-          <Button
-            disabled={Boolean(startingOperation) || runIsActive}
-            startIcon={
-              startingOperation === 'item_embeddings' || runIsActive ? (
-                <CircularProgress color="inherit" size={16} />
-              ) : (
-                <PlayArrowIcon />
-              )
-            }
-            sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
-            variant="contained"
-            onClick={handleStartItemEmbeddings}
-          >
-            Run Item Embeddings
-          </Button>
-        </Stack>
-      </Paper>
+              Run Store Discovery
+            </Button>
+          </Stack>
+        </Paper>
+      ) : null}
+
+      {operation === 'item_discovery' ? (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Stack direction={{ md: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+            <Box sx={{ flex: 1 }}>
+              <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+                Store item discovery
+              </Typography>
+              <Typography color="text.secondary" variant="body2">
+                Crawl one accepted store and persist discovered store item candidates.
+              </Typography>
+              <TextField
+                fullWidth
+                label="Store ID"
+                margin="normal"
+                size="small"
+                value={storeItemDiscoveryStoreId}
+                onChange={(event) => setStoreItemDiscoveryStoreId(event.target.value)}
+              />
+            </Box>
+            <Button
+              disabled={Boolean(startingOperation) || runIsActive}
+              startIcon={
+                startingOperation === 'item_discovery' || runIsActive ? (
+                  <CircularProgress color="inherit" size={16} />
+                ) : (
+                  <PlayArrowIcon />
+                )
+              }
+              sx={{ alignSelf: { md: 'center', xs: 'stretch' } }}
+              variant="contained"
+              onClick={handleStartStoreItemDiscovery}
+            >
+              Run Store Item Discovery
+            </Button>
+          </Stack>
+        </Paper>
+      ) : null}
+
+      {operation === 'item_update' ? (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+            <Box>
+              <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+                Item update
+              </Typography>
+              <Typography color="text.secondary" variant="body2">
+                Refresh confirmed boardgame store items from their product pages.
+              </Typography>
+            </Box>
+            <Button
+              disabled={Boolean(startingOperation) || runIsActive}
+              startIcon={
+                startingOperation === 'item_update' || runIsActive ? (
+                  <CircularProgress color="inherit" size={16} />
+                ) : (
+                  <PlayArrowIcon />
+                )
+              }
+              sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
+              variant="contained"
+              onClick={handleStartItemUpdate}
+            >
+              Run Item Update
+            </Button>
+          </Stack>
+        </Paper>
+      ) : null}
+
+      {operation === 'item_embeddings' ? (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+            <Box>
+              <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+                Item embeddings
+              </Typography>
+              <Typography color="text.secondary" variant="body2">
+                Generate semantic search embeddings from item names, descriptions, and taxonomy.
+              </Typography>
+              <RadioGroup
+                row
+                value={embeddingRefreshMode}
+                onChange={(event) => setEmbeddingRefreshMode(event.target.value === 'full' ? 'full' : 'missing')}
+              >
+                <FormControlLabel control={<Radio size="small" />} label="Missing only" value="missing" />
+                <FormControlLabel control={<Radio size="small" />} label="Full refresh" value="full" />
+              </RadioGroup>
+            </Box>
+            <Button
+              disabled={Boolean(startingOperation) || runIsActive}
+              startIcon={
+                startingOperation === 'item_embeddings' || runIsActive ? (
+                  <CircularProgress color="inherit" size={16} />
+                ) : (
+                  <PlayArrowIcon />
+                )
+              }
+              sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
+              variant="contained"
+              onClick={handleStartItemEmbeddings}
+            >
+              Run Item Embeddings
+            </Button>
+          </Stack>
+        </Paper>
+      ) : null}
 
       {loadState === 'loading' ? (
         <Stack alignItems="center" direction="row" spacing={1.5}>

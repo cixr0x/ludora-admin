@@ -92,7 +92,7 @@ describe('OperationsPage', () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
-    render(<OperationsPage />);
+    render(<OperationsPage operation="item_update" />);
 
     await screen.findByText('No recent operation run.');
     await userEvent.click(screen.getByRole('button', { name: /Run Item Update/i }));
@@ -141,7 +141,7 @@ describe('OperationsPage', () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
-    render(<OperationsPage />);
+    render(<OperationsPage operation="item_embeddings" />);
 
     await screen.findByText('No recent operation run.');
     await userEvent.click(screen.getByRole('button', { name: /Run Item Embeddings/i }));
@@ -188,7 +188,7 @@ describe('OperationsPage', () => {
       throw new Error(`Unexpected request: ${url}`);
     });
 
-    render(<OperationsPage />);
+    render(<OperationsPage operation="item_embeddings" />);
 
     await screen.findByText('No recent operation run.');
     await userEvent.click(screen.getByRole('radio', { name: /Full refresh/i }));
@@ -199,6 +199,75 @@ describe('OperationsPage', () => {
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
+  });
+
+  it('starts store item discovery for the requested store id', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return new Response(JSON.stringify({ data: null }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        });
+      }
+      if (url.endsWith('/admin/operations/stores/12/item-discovery-runs') && init?.method === 'POST') {
+        return new Response(
+          JSON.stringify({
+            data: {
+              completed_at: '2026-06-08T20:02:00Z',
+              error: null,
+              id: 'run-2',
+              result: {
+                item_candidates: 4,
+                store_id: 12,
+                website_url: 'https://store.example'
+              },
+              started_at: '2026-06-08T20:00:00Z',
+              status: 'completed',
+              type: 'item_discovery'
+            }
+          }),
+          {
+            headers: { 'Content-Type': 'application/json' },
+            status: 202
+          }
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="item_discovery" />);
+
+    await screen.findByText('No recent operation run.');
+    await userEvent.type(screen.getByLabelText('Store ID'), '12');
+    await userEvent.click(screen.getByRole('button', { name: /Run Store Item Discovery/i }));
+
+    expect(await screen.findByText('completed')).toBeInTheDocument();
+    expect(screen.getByText('item_discovery')).toBeInTheDocument();
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/stores/12/item-discovery-runs', {
+      method: 'POST'
+    });
+  });
+
+  it('requires a store id before starting store item discovery', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return new Response(JSON.stringify({ data: null }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="item_discovery" />);
+
+    await screen.findByText('No recent operation run.');
+    await userEvent.click(screen.getByRole('button', { name: /Run Store Item Discovery/i }));
+
+    expect(await screen.findByText('Store ID is required.')).toBeInTheDocument();
   });
 
   it('cancels a running operation from the operations page', async () => {
