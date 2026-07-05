@@ -188,7 +188,8 @@ class SchemaTests(unittest.TestCase):
             "listing_status in ('pending', 'listed', 'unlisted', 'rejected')",
             schema,
         )
-        self.assertIn("update store_items set listing_status = 'pending'", schema)
+        self.assertIn("update store_items set listing_status = 'pending' where listing_status is null", schema)
+        self.assertNotIn("update store_items set listing_status = 'pending';", schema)
         self.assertIn("alter table if exists store_items drop column if exists status", schema)
         self.assertIn("unique (store_id, source_url)", item_candidate_table)
         self.assertIn(

@@ -283,7 +283,7 @@ begin
 end $$;
 
 alter table if exists store_items add column if not exists listing_status text;
-update store_items set listing_status = 'PENDING';
+update store_items set listing_status = 'PENDING' where listing_status is null;
 alter table if exists store_items alter column listing_status set default 'PENDING';
 alter table if exists store_items alter column listing_status set not null;
 alter table if exists store_items
