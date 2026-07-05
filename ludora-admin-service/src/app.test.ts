@@ -3275,6 +3275,117 @@ describe('ludora admin service', () => {
     expect(calls).toEqual([{ storeId: 12, platform: 'amazon_brand', storeName: 'Hasbro Gaming', websiteUrl: 'https://example.mx/' }]);
   });
 
+  it('starts item discovery runs for selected stores through the discovery operations client', async () => {
+    const run: StoreDiscoveryRun = {
+      completed_at: null,
+      error: null,
+      id: 'run-discovery-selected',
+      result: {
+        item_candidates: 5,
+        new_items: 5,
+        store_id: null,
+        stores_scanned: 1,
+        website_url: ''
+      },
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'completed',
+      type: 'item_discovery'
+    };
+    const calls: unknown[] = [];
+    const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => run,
+      startItemDiscoveryRun: async (scope) => {
+        calls.push(scope);
+        return run;
+      },
+      startItemEmbeddingRun: async () => run,
+      startItemUpdateRun: async () => {
+        throw new Error('should not start item update');
+      },
+      startStoreDiscoveryRun: async () => run
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-discovery-runs')
+      .send({ store_ids: [12, 34] });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: run });
+    expect(calls).toEqual([{ store_ids: [12, 34] }]);
+  });
+
+  it('starts item discovery runs for all stores through the discovery operations client', async () => {
+    const run: StoreDiscoveryRun = {
+      completed_at: null,
+      error: null,
+      id: 'run-discovery-all',
+      result: {
+        item_candidates: 9,
+        new_items: 9,
+        store_id: null,
+        stores_scanned: 3,
+        website_url: ''
+      },
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'completed',
+      type: 'item_discovery'
+    };
+    const calls: unknown[] = [];
+    const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => run,
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => run,
+      startItemDiscoveryRun: async (scope) => {
+        calls.push(scope);
+        return run;
+      },
+      startItemEmbeddingRun: async () => run,
+      startItemUpdateRun: async () => {
+        throw new Error('should not start item update');
+      },
+      startStoreDiscoveryRun: async () => run
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-discovery-runs')
+      .send({ all_stores: true });
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: run });
+    expect(calls).toEqual([{ all_stores: true }]);
+  });
+
+  it('rejects item discovery requests with invalid selected store ids', async () => {
+    const operationsClient: DiscoveryOperationsClient = {
+      cancelStoreDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      getLatestStoreDiscoveryRun: async () => null,
+      getStoreDiscoveryRun: async () => null,
+      startItemDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startItemEmbeddingRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startItemUpdateRun: async () => {
+        throw new Error('should not call operations client');
+      },
+      startStoreDiscoveryRun: async () => {
+        throw new Error('should not call operations client');
+      }
+    };
+
+    const response = await request(createApp({ database: idleDatabase(), operationsClient }))
+      .post('/admin/operations/item-discovery-runs')
+      .send({ store_ids: [12, 12] });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: { message: 'store_ids must not contain duplicates' } });
+  });
+
   it('lists store item discovery job logs from the job table', async () => {
     const rows = [
       {

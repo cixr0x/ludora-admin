@@ -8,7 +8,9 @@ export type StoreDiscoveryRunResult = {
 
 export type ItemDiscoveryRunResult = {
   item_candidates: number;
-  store_id: number;
+  new_items?: number;
+  store_id: number | null;
+  stores_scanned?: number;
   website_url: string;
 };
 
@@ -16,6 +18,7 @@ export type ItemUpdateRunResult = {
   updated_items: number;
 };
 
+export type ItemDiscoveryRunScope = { all_stores: true } | { store_ids: number[] };
 export type ItemUpdateRunScope = { all_stores: true } | { store_ids: number[] };
 
 export type ItemEmbeddingRunResult = {
@@ -39,7 +42,12 @@ export type DiscoveryOperationsClient = {
   cancelStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun>;
   getLatestStoreDiscoveryRun(): Promise<StoreDiscoveryRun | null>;
   getStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun | null>;
-  startItemDiscoveryRun(storeId: number, websiteUrl: string, platform?: string, storeName?: string): Promise<StoreDiscoveryRun>;
+  startItemDiscoveryRun(
+    storeIdOrScope: number | ItemDiscoveryRunScope,
+    websiteUrl?: string,
+    platform?: string,
+    storeName?: string
+  ): Promise<StoreDiscoveryRun>;
   startItemEmbeddingRun(refreshMode: 'full' | 'missing'): Promise<StoreDiscoveryRun>;
   startItemUpdateRun(scope?: ItemUpdateRunScope): Promise<StoreDiscoveryRun>;
   startStoreDiscoveryRun(): Promise<StoreDiscoveryRun>;

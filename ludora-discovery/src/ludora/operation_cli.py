@@ -8,6 +8,7 @@ import sys
 from ludora.cancellation import CancellationToken, OperationCancelled
 from ludora.operations import (
     EmbeddingRefreshMode,
+    run_item_discovery_batch,
     run_item_discovery,
     run_item_embeddings,
     run_item_update,
@@ -27,6 +28,9 @@ def build_parser() -> argparse.ArgumentParser:
     item_discovery.add_argument("--website-url", required=True)
     item_discovery.add_argument("--store-name", default="")
     item_discovery.add_argument("--platform", default="")
+
+    item_discovery_batch = subparsers.add_parser("item-discovery-batch")
+    item_discovery_batch.add_argument("--store-id", type=int, action="append", default=[])
 
     item_update = subparsers.add_parser("item-update")
     item_update.add_argument("--store-id", type=int, action="append", default=[])
@@ -66,6 +70,13 @@ def _run_command(args: argparse.Namespace, cancellation_token: CancellationToken
             platform=args.platform.strip().casefold(),
             env_file=args.env_file,
             cancellation_token=cancellation_token,
+        )
+    if args.command == "item-discovery-batch":
+        store_ids = _selected_store_ids(args.store_id)
+        return run_item_discovery_batch(
+            env_file=args.env_file,
+            cancellation_token=cancellation_token,
+            store_ids=store_ids,
         )
     if args.command == "item-update":
         store_ids = _selected_store_ids(args.store_id)

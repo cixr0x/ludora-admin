@@ -63,6 +63,31 @@ class OperationCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["result"]["item_candidates"], 5)
 
+    def test_runs_item_discovery_batch_with_repeatable_store_id(self):
+        stdout = StringIO()
+        with patch("sys.stdout", stdout), patch(
+            "ludora.operation_cli.run_item_discovery_batch",
+            return_value=ItemDiscoveryRunResult(store_id=None, website_url="", item_candidates=5, new_items=5, stores_scanned=2),
+        ) as runner:
+            exit_code = main(
+                [
+                    "--env-file",
+                    "admin.env",
+                    "item-discovery-batch",
+                    "--store-id",
+                    "12",
+                    "--store-id",
+                    "34",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        runner.assert_called_once()
+        self.assertEqual(runner.call_args.kwargs["env_file"], "admin.env")
+        self.assertEqual(runner.call_args.kwargs["store_ids"], [12, 34])
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["result"]["stores_scanned"], 2)
+
     def test_runs_item_update(self):
         stdout = StringIO()
         with patch("sys.stdout", stdout), patch(

@@ -171,7 +171,9 @@ export type StoreDiscoveryRunResult = {
 
 export type ItemDiscoveryRunResult = {
   item_candidates: number;
-  store_id: number;
+  new_items?: number;
+  store_id: number | null;
+  stores_scanned?: number;
   website_url: string;
 };
 
@@ -179,6 +181,7 @@ export type ItemUpdateRunResult = {
   updated_items: number;
 };
 
+export type ItemDiscoveryRunScope = { all_stores: true } | { store_ids: number[] };
 export type ItemUpdateRunScope = { all_stores: true } | { store_ids: number[] };
 
 export type ItemEmbeddingRunResult = {
@@ -403,10 +406,12 @@ export const adminApi = {
     }),
   getStoreDiscoveryRun: (runId: string) =>
     fetchData<StoreDiscoveryRun | null>(`/admin/operations/store-discovery-runs/${encodeURIComponent(runId)}`),
-  startStoreItemDiscoveryRun: (storeId: string) =>
-    fetchData<StoreDiscoveryRun>(`/admin/operations/stores/${encodeURIComponent(storeId)}/item-discovery-runs`, {
-      method: 'POST'
-    }),
+  startStoreItemDiscoveryRun: (storeIdOrScope: string | ItemDiscoveryRunScope) =>
+    typeof storeIdOrScope === 'string'
+      ? fetchData<StoreDiscoveryRun>(`/admin/operations/stores/${encodeURIComponent(storeIdOrScope)}/item-discovery-runs`, {
+          method: 'POST'
+        })
+      : sendJson<StoreDiscoveryRun>('/admin/operations/item-discovery-runs', 'POST', storeIdOrScope),
   startItemUpdateRun: (scope?: ItemUpdateRunScope) =>
     scope
       ? sendJson<StoreDiscoveryRun>('/admin/operations/item-update-runs', 'POST', scope)

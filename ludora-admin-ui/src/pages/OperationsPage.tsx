@@ -13,13 +13,13 @@ import {
   Radio,
   RadioGroup,
   Stack,
-  TextField,
   Typography
 } from '@mui/material';
 import { useEffect, useState } from 'react';
 import {
   adminApi,
   type AdminRecord,
+  type ItemDiscoveryRunScope,
   type ItemEmbeddingRunResult,
   type ItemDiscoveryRunResult,
   type ItemUpdateRunScope,
@@ -36,7 +36,7 @@ type StartingOperation = OperationPageMode | '';
 
 const operationPageContent: Record<OperationPageMode, { description: string; title: string }> = {
   item_discovery: {
-    description: 'Discover store items for a specific accepted store.',
+    description: 'Discover store items for selected stores or all stores.',
     title: 'Store Item Discovery'
   },
   item_embeddings: {
@@ -502,7 +502,6 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
   const [stores, setStores] = useState<AdminRecord[]>([]);
   const [storeLoadState, setStoreLoadState] = useState<LoadState>('ready');
   const [selectedStoreIds, setSelectedStoreIds] = useState<number[]>([]);
-  const [storeItemDiscoveryStoreId, setStoreItemDiscoveryStoreId] = useState('');
   const [startingOperation, setStartingOperation] = useState<StartingOperation>('');
   const [stoppingOperation, setStoppingOperation] = useState(false);
   const [error, setError] = useState('');
@@ -533,7 +532,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
   }, []);
 
   useEffect(() => {
-    if (operation !== 'item_update') {
+    if (operation !== 'item_discovery' && operation !== 'item_update') {
       return undefined;
     }
     let ignore = false;
@@ -624,17 +623,11 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
     );
   }
 
-  async function handleStartStoreItemDiscovery() {
-    const storeId = storeItemDiscoveryStoreId.trim();
-    if (!storeId) {
-      setError('Store ID is required.');
-      return;
-    }
-
+  async function handleStartStoreItemDiscovery(scope: ItemDiscoveryRunScope) {
     setStartingOperation('item_discovery');
     setError('');
     try {
-      const startedRun = await adminApi.startStoreItemDiscoveryRun(storeId);
+      const startedRun = await adminApi.startStoreItemDiscoveryRun(scope);
       setRun(startedRun);
       setLoadState('ready');
       setStoreItemDiscoveryJobsRefreshKey((currentKey) => currentKey + 1);
@@ -746,38 +739,103 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
 
       {operation === 'item_discovery' ? (
         <Paper variant="outlined" sx={{ p: 2 }}>
-          <Stack direction={{ md: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
-            <Box sx={{ flex: 1 }}>
-              <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
-                Store item discovery
-              </Typography>
-              <Typography color="text.secondary" variant="body2">
-                Crawl one accepted store and persist discovered store item candidates.
-              </Typography>
-              <TextField
-                fullWidth
-                label="Store ID"
-                margin="normal"
-                size="small"
-                value={storeItemDiscoveryStoreId}
-                onChange={(event) => setStoreItemDiscoveryStoreId(event.target.value)}
-              />
-            </Box>
-            <Button
-              disabled={Boolean(startingOperation) || runIsActive}
-              startIcon={
-                startingOperation === 'item_discovery' || runIsActive ? (
-                  <CircularProgress color="inherit" size={16} />
-                ) : (
-                  <PlayArrowIcon />
-                )
-              }
-              sx={{ alignSelf: { md: 'center', xs: 'stretch' } }}
-              variant="contained"
-              onClick={handleStartStoreItemDiscovery}
-            >
-              Run Store Item Discovery
-            </Button>
+          <Stack spacing={2}>
+            <Stack direction={{ md: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+              <Box>
+                <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+                  Store item discovery
+                </Typography>
+                <Typography color="text.secondary" variant="body2">
+                  Crawl selected stores and persist discovered store item candidates.
+                </Typography>
+              </Box>
+              <Stack
+                direction={{ sm: 'row', xs: 'column' }}
+                spacing={1}
+                sx={{ alignSelf: { md: 'center', xs: 'stretch' } }}
+              >
+                <Button
+                  disabled={
+                    Boolean(startingOperation) ||
+                    runIsActive ||
+                    selectedStoreIds.length === 0 ||
+                    storeLoadState !== 'ready'
+                  }
+                  startIcon={
+                    startingOperation === 'item_discovery' || runIsActive ? (
+                      <CircularProgress color="inherit" size={16} />
+                    ) : (
+                      <PlayArrowIcon />
+                    )
+                  }
+                  variant="contained"
+                  onClick={() => handleStartStoreItemDiscovery({ store_ids: selectedStoreIds })}
+                >
+                  Run for selected stores
+                </Button>
+                <Button
+                  disabled={Boolean(startingOperation) || runIsActive}
+                  startIcon={
+                    startingOperation === 'item_discovery' || runIsActive ? (
+                      <CircularProgress color="inherit" size={16} />
+                    ) : (
+                      <PlayArrowIcon />
+                    )
+                  }
+                  variant="outlined"
+                  onClick={() => handleStartStoreItemDiscovery({ all_stores: true })}
+                >
+                  Run for all
+                </Button>
+              </Stack>
+            </Stack>
+            {storeLoadState === 'loading' ? (
+              <Stack alignItems="center" direction="row" spacing={1.5}>
+                <CircularProgress size={18} />
+                <Typography variant="body2">Loading stores</Typography>
+              </Stack>
+            ) : null}
+            {storeLoadState === 'error' ? <Alert severity="error">Stores could not be loaded for selection.</Alert> : null}
+            {storeLoadState === 'ready' ? (
+              <Stack spacing={1}>
+                {stores.length === 0 ? <Typography variant="body2">No stores available for selection.</Typography> : null}
+                {stores.map((store) => {
+                  const storeId = storeIdFor(store);
+                  if (storeId === null) {
+                    return null;
+                  }
+                  const name = optionalRecordText(store, 'name') || `Store ${storeId}`;
+                  const domain = optionalRecordText(store, 'canonical_domain');
+                  const websiteUrl = optionalRecordText(store, 'website_url');
+                  const platform = optionalRecordText(store, 'platform');
+                  const details = [domain, websiteUrl, platform].filter(Boolean).join(' | ');
+                  return (
+                    <Paper key={storeId} variant="outlined" sx={{ p: 1.25 }}>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={selectedStoreIds.includes(storeId)}
+                            onChange={(event) => handleStoreSelection(storeId, event.target.checked)}
+                          />
+                        }
+                        label={
+                          <Box>
+                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                              {name}
+                            </Typography>
+                            {details ? (
+                              <Typography color="text.secondary" variant="caption">
+                                {details}
+                              </Typography>
+                            ) : null}
+                          </Box>
+                        }
+                      />
+                    </Paper>
+                  );
+                })}
+              </Stack>
+            ) : null}
           </Stack>
         </Paper>
       ) : null}

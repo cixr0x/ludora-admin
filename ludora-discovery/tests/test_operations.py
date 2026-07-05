@@ -3,6 +3,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import ANY, Mock, patch
 
 
@@ -20,6 +21,7 @@ from ludora.operations import (
     OperationNotRunning,
     StoreDiscoveryRunManager,
     StoreDiscoveryRunResult,
+    run_item_discovery_batch,
     run_item_embeddings,
     run_item_discovery,
     run_item_update,
@@ -289,6 +291,43 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         )
         connection.close.assert_called_once_with()
 
+    def test_run_item_discovery_batch_runs_selected_stores_and_closes_database(self):
+        connection = Mock()
+        repository = Mock()
+        repository.list_store_item_discovery_sources.return_value = [
+            SimpleNamespace(store_id=12, store_name="Alpha Games", website_url="https://alpha.mx/", platform="shopify"),
+            SimpleNamespace(store_id=34, store_name="Beta Games", website_url="https://beta.mx/", platform="custom"),
+        ]
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", return_value=connection
+        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.run_item_discovery",
+            side_effect=[
+                ItemDiscoveryRunResult(store_id=12, website_url="https://alpha.mx/", item_candidates=4, new_items=3),
+                ItemDiscoveryRunResult(store_id=34, website_url="https://beta.mx/", item_candidates=2, new_items=1),
+            ],
+        ) as run_item_discovery_:
+            result = run_item_discovery_batch(env_file="custom.env", run_id="batch-run", store_ids=[12, 34])
+
+        repository.list_store_item_discovery_sources.assert_called_once_with(store_ids=[12, 34])
+        self.assertEqual(run_item_discovery_.call_count, 2)
+        first_call = run_item_discovery_.call_args_list[0].kwargs
+        second_call = run_item_discovery_.call_args_list[1].kwargs
+        self.assertEqual(first_call["store_id"], 12)
+        self.assertEqual(first_call["website_url"], "https://alpha.mx/")
+        self.assertEqual(first_call["store_name"], "Alpha Games")
+        self.assertEqual(first_call["platform"], "shopify")
+        self.assertEqual(first_call["run_id"], "batch-run:12")
+        self.assertEqual(second_call["store_id"], 34)
+        self.assertEqual(second_call["run_id"], "batch-run:34")
+        self.assertEqual(result.store_id, None)
+        self.assertEqual(result.website_url, "")
+        self.assertEqual(result.item_candidates, 6)
+        self.assertEqual(result.new_items, 4)
+        self.assertEqual(result.stores_scanned, 2)
+        connection.close.assert_called_once_with()
+
     def test_run_item_update_refreshes_confirmed_boardgames_and_closes_database(self):
         connection = Mock()
         repository = Mock()
@@ -493,6 +532,24 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
 
         self.assertEqual(run.status, "completed")
         self.assertEqual(run.result.updated_items, 6)
+        self.assertEqual(calls, [[12, 34]])
+
+    def test_manager_passes_selected_store_ids_to_custom_item_discovery_batch_runner(self):
+        calls = []
+
+        manager = StoreDiscoveryRunManager(
+            runner=lambda: StoreDiscoveryRunResult(0, 0, 0),
+            item_batch_runner=lambda *, store_ids: calls.append(store_ids)
+            or ItemDiscoveryRunResult(store_id=None, website_url="", item_candidates=7, new_items=5, stores_scanned=2),
+            background=False,
+        )
+
+        run = manager.start_item_discovery_batch(store_ids=[12, 34])
+
+        self.assertEqual(run.status, "completed")
+        self.assertEqual(run.run_type, "item_discovery")
+        self.assertEqual(run.result.item_candidates, 7)
+        self.assertEqual(run.result.stores_scanned, 2)
         self.assertEqual(calls, [[12, 34]])
 
     def test_manager_records_successful_item_embedding_run_result(self):

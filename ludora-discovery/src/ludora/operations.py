@@ -61,10 +61,11 @@ class StoreDiscoveryRunResult:
 
 @dataclass(frozen=True)
 class ItemDiscoveryRunResult:
-    store_id: int
+    store_id: int | None
     website_url: str
     item_candidates: int
     new_items: int = 0
+    stores_scanned: int = 1
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -72,6 +73,7 @@ class ItemDiscoveryRunResult:
             "website_url": self.website_url,
             "item_candidates": self.item_candidates,
             "new_items": self.new_items,
+            "stores_scanned": self.stores_scanned,
         }
 
 
@@ -283,6 +285,58 @@ def _new_items_count(repository: _StoreItemDiscoveryTrackingRepository | None) -
     return repository.new_items if repository is not None else 0
 
 
+def run_item_discovery_batch(
+    *,
+    env: Mapping[str, str] | None = None,
+    env_file: str = ".env",
+    cancellation_token: CancellationToken | None = None,
+    run_id: str | None = None,
+    store_ids: list[int] | None = None,
+) -> ItemDiscoveryRunResult:
+    current_env = env if env is not None else os.environ
+    database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
+    if not database_url:
+        raise RuntimeError("Missing database URL")
+
+    connection = connect_database(database_url)
+    try:
+        repository = DiscoveryRepository(connection)
+        stores = repository.list_store_item_discovery_sources(store_ids=store_ids)
+    finally:
+        connection.close()
+
+    if store_ids and len(stores) != len(set(store_ids)):
+        raise RuntimeError("One or more selected stores were not found")
+
+    resolved_run_id = run_id or str(uuid.uuid4())
+    item_candidates = 0
+    new_items = 0
+    stores_scanned = 0
+    for store in stores:
+        raise_if_cancelled(cancellation_token)
+        result = run_item_discovery(
+            store_id=store.store_id,
+            website_url=store.website_url,
+            platform=store.platform,
+            store_name=store.store_name,
+            env=current_env,
+            env_file=env_file,
+            cancellation_token=cancellation_token,
+            run_id=f"{resolved_run_id}:{store.store_id}",
+        )
+        item_candidates += result.item_candidates
+        new_items += result.new_items
+        stores_scanned += 1
+
+    return ItemDiscoveryRunResult(
+        store_id=None,
+        website_url="",
+        item_candidates=item_candidates,
+        new_items=new_items,
+        stores_scanned=stores_scanned,
+    )
+
+
 def _resolve_item_classifier(current_env: Mapping[str, str], env_file: str) -> ItemClassifierCallable:
     if not resolve_ai_classifier_enabled(env=current_env, dotenv_path=env_file):
         return apply_item_classification
@@ -413,6 +467,7 @@ class StoreDiscoveryRunManager:
         self,
         runner: Callable[[], StoreDiscoveryRunResult] | None = None,
         item_runner: Callable[..., ItemDiscoveryRunResult] | None = None,
+        item_batch_runner: Callable[..., ItemDiscoveryRunResult] | None = None,
         item_update_runner: Callable[..., ItemUpdateRunResult] | None = None,
         item_embedding_runner: Callable[[EmbeddingRefreshMode], ItemEmbeddingRunResult] | None = None,
         *,
@@ -437,6 +492,18 @@ class StoreDiscoveryRunManager:
                     cancellation_token=cancellation_token,
                     run_id=run_id,
                     started_at=started_at,
+                )
+            )
+        )
+        self.item_batch_runner = (
+            _item_batch_runner_with_token(item_batch_runner)
+            if item_batch_runner is not None
+            else (
+                lambda cancellation_token, run_id, store_ids: run_item_discovery_batch(
+                    env_file=env_file,
+                    cancellation_token=cancellation_token,
+                    run_id=run_id,
+                    store_ids=store_ids,
                 )
             )
         )
@@ -525,6 +592,31 @@ class StoreDiscoveryRunManager:
             thread.start()
         else:
             self._execute_item_run(run.id, store_id, website_url, platform, store_name)
+
+        return self.get_run(run.id) or run
+
+    def start_item_discovery_batch(self, store_ids: list[int] | None = None) -> StoreDiscoveryRun:
+        with self.lock:
+            if self.active_run_id:
+                raise OperationAlreadyRunning("Discovery operation is already running")
+
+            cancellation_token = CancellationToken()
+            run = StoreDiscoveryRun(
+                id=str(uuid.uuid4()),
+                status="running",
+                started_at=_utc_now(),
+                run_type="item_discovery",
+                cancellation_token=cancellation_token,
+            )
+            self.runs[run.id] = run
+            self.latest_run_id = run.id
+            self.active_run_id = run.id
+
+        if self.background:
+            thread = threading.Thread(target=self._execute_item_batch_run, args=(run.id, store_ids), daemon=True)
+            thread.start()
+        else:
+            self._execute_item_batch_run(run.id, store_ids)
 
         return self.get_run(run.id) or run
 
@@ -640,6 +732,34 @@ class StoreDiscoveryRunManager:
                 run_id,
                 run.started_at,
             )
+        except OperationCancelled:
+            self._mark_run_cancelled(run_id)
+            return
+        except Exception as exc:  # pragma: no cover - message behavior is tested through manager.
+            with self.lock:
+                run = self.runs[run_id]
+                run.status = "failed"
+                run.error = str(exc)
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+            return
+
+        with self.lock:
+            run = self.runs[run_id]
+            if run.status == "cancelling":
+                run.status = "cancelled"
+                run.result = None
+                run.completed_at = _utc_now()
+                self.active_run_id = None
+                return
+            run.status = "completed"
+            run.result = result
+            run.completed_at = _utc_now()
+            self.active_run_id = None
+
+    def _execute_item_batch_run(self, run_id: str, store_ids: list[int] | None) -> None:
+        try:
+            result = self.item_batch_runner(self._cancellation_token_for(run_id), run_id, store_ids)
         except OperationCancelled:
             self._mark_run_cancelled(run_id)
             return
@@ -837,6 +957,16 @@ def _item_runner_arguments(
 
 def _update_runner_with_token(runner: Callable[..., ItemUpdateRunResult]) -> Callable[[CancellationToken, str, list[int] | None], ItemUpdateRunResult]:
     def run(cancellation_token: CancellationToken, run_id: str, store_ids: list[int] | None) -> ItemUpdateRunResult:
+        args, kwargs = _update_runner_arguments(runner, cancellation_token, run_id, store_ids)
+        return runner(*args, **kwargs)
+
+    return run
+
+
+def _item_batch_runner_with_token(
+    runner: Callable[..., ItemDiscoveryRunResult],
+) -> Callable[[CancellationToken, str, list[int] | None], ItemDiscoveryRunResult]:
+    def run(cancellation_token: CancellationToken, run_id: str, store_ids: list[int] | None) -> ItemDiscoveryRunResult:
         args, kwargs = _update_runner_arguments(runner, cancellation_token, run_id, store_ids)
         return runner(*args, **kwargs)
 

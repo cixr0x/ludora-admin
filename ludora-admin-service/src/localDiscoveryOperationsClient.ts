@@ -5,6 +5,7 @@ import path from 'node:path';
 import {
   DiscoveryOperationError,
   type DiscoveryOperationsClient,
+  type ItemDiscoveryRunScope,
   type ItemUpdateRunScope,
   type StoreDiscoveryRun,
   type StoreDiscoveryRunStatus
@@ -155,23 +156,13 @@ export function createLocalDiscoveryOperationsClient({
     async getStoreDiscoveryRun(runId: string): Promise<StoreDiscoveryRun | null> {
       return publicRun(runs.get(runId) ?? null);
     },
-    async startItemDiscoveryRun(storeId: number, websiteUrl: string, platform = '', storeName = ''): Promise<StoreDiscoveryRun> {
-      const args = [
-        'item-discovery',
-        '--store-id',
-        String(storeId),
-        '--website-url',
-        websiteUrl
-      ];
-      const normalizedStoreName = storeName.trim();
-      if (normalizedStoreName) {
-        args.push('--store-name', normalizedStoreName);
-      }
-      const normalizedPlatform = platform.trim().toLowerCase();
-      if (normalizedPlatform) {
-        args.push('--platform', normalizedPlatform);
-      }
-      return startRun('item_discovery', args);
+    async startItemDiscoveryRun(
+      storeIdOrScope: number | ItemDiscoveryRunScope,
+      websiteUrl = '',
+      platform = '',
+      storeName = ''
+    ): Promise<StoreDiscoveryRun> {
+      return startRun('item_discovery', itemDiscoveryCommandArgs(storeIdOrScope, websiteUrl, platform, storeName));
     },
     async startItemEmbeddingRun(refreshMode: 'full' | 'missing'): Promise<StoreDiscoveryRun> {
       return startRun('item_embeddings', ['item-embeddings', '--refresh-mode', refreshMode]);
@@ -307,16 +298,6 @@ function parseResult(stdout: string, type: StoreDiscoveryRun['type']): StoreDisc
   return result;
 }
 
-function itemUpdateCommandArgs(scope?: ItemUpdateRunScope): string[] {
-  const args = ['item-update'];
-  if (scope && 'store_ids' in scope) {
-    for (const storeId of scope.store_ids) {
-      args.push('--store-id', String(storeId));
-    }
-  }
-  return args;
-}
-
 function tryParseResult(
   stdout: string,
   type: StoreDiscoveryRun['type']
@@ -335,6 +316,47 @@ function tryParseResult(
   }
 }
 
+function itemDiscoveryCommandArgs(
+  storeIdOrScope: number | ItemDiscoveryRunScope,
+  websiteUrl: string,
+  platform: string,
+  storeName: string
+): string[] {
+  if (typeof storeIdOrScope !== 'number') {
+    return scopedStoreCommandArgs('item-discovery-batch', storeIdOrScope);
+  }
+  const args = [
+    'item-discovery',
+    '--store-id',
+    String(storeIdOrScope),
+    '--website-url',
+    websiteUrl
+  ];
+  const normalizedStoreName = storeName.trim();
+  if (normalizedStoreName) {
+    args.push('--store-name', normalizedStoreName);
+  }
+  const normalizedPlatform = platform.trim().toLowerCase();
+  if (normalizedPlatform) {
+    args.push('--platform', normalizedPlatform);
+  }
+  return args;
+}
+
+function itemUpdateCommandArgs(scope?: ItemUpdateRunScope): string[] {
+  return scopedStoreCommandArgs('item-update', scope);
+}
+
+function scopedStoreCommandArgs(command: string, scope?: ItemDiscoveryRunScope | ItemUpdateRunScope): string[] {
+  const args = [command];
+  if (scope && 'store_ids' in scope) {
+    for (const storeId of scope.store_ids) {
+      args.push('--store-id', String(storeId));
+    }
+  }
+  return args;
+}
+
 function isResultForRunType(type: StoreDiscoveryRun['type'], result: unknown): result is NonNullable<StoreDiscoveryRun['result']> {
   if (!isRecord(result)) {
     return false;
@@ -348,7 +370,11 @@ function isResultForRunType(type: StoreDiscoveryRun['type'], result: unknown): r
         isNumber(result.searched_queries)
       );
     case 'item_discovery':
-      return isNumber(result.item_candidates) && isNumber(result.store_id) && typeof result.website_url === 'string';
+      return (
+        isNumber(result.item_candidates) &&
+        (isNumber(result.store_id) || result.store_id === null) &&
+        typeof result.website_url === 'string'
+      );
     case 'item_update':
       return isNumber(result.updated_items);
     case 'item_embeddings':

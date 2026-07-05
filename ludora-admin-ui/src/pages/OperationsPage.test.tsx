@@ -494,15 +494,15 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('starts store item discovery for the requested store id and refreshes the discovery job log table', async () => {
+  it('starts store item discovery for all stores and refreshes the discovery job log table', async () => {
     let jobRequests = 0;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
-        return new Response(JSON.stringify({ data: null }), {
-          headers: { 'Content-Type': 'application/json' },
-          status: 200
-        });
+        return jsonResponse({ data: null });
+      }
+      if (url.endsWith('/stores')) {
+        return jsonResponse({ data: [] });
       }
       if (isStoreItemDiscoveryJobsUrl(url)) {
         jobRequests += 1;
@@ -530,27 +530,26 @@ describe('OperationsPage', () => {
           }
         });
       }
-      if (url.endsWith('/admin/operations/stores/12/item-discovery-runs') && init?.method === 'POST') {
-        return new Response(
-          JSON.stringify({
+      if (url.endsWith('/admin/operations/item-discovery-runs') && init?.method === 'POST') {
+        return jsonResponse(
+          {
             data: {
               completed_at: '2026-06-08T20:02:00Z',
               error: null,
               id: 'run-2',
               result: {
                 item_candidates: 4,
-                store_id: 12,
-                website_url: 'https://store.example'
+                new_items: 4,
+                store_id: null,
+                stores_scanned: 2,
+                website_url: ''
               },
               started_at: '2026-06-08T20:00:00Z',
               status: 'completed',
               type: 'item_discovery'
             }
-          }),
-          {
-            headers: { 'Content-Type': 'application/json' },
-            status: 202
-          }
+          },
+          202
         );
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -559,23 +558,127 @@ describe('OperationsPage', () => {
     render(<OperationsPage operation="item_discovery" />);
 
     await screen.findByRole('table', { name: /Store item discovery jobs/i });
-    await userEvent.type(screen.getByLabelText('Store ID'), '12');
-    await userEvent.click(screen.getByRole('button', { name: /Run Store Item Discovery/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Run for all/i }));
 
     expect(await screen.findByText('run-2')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/stores/12/item-discovery-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-discovery-runs', {
+      body: JSON.stringify({ all_stores: true }),
+      headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
   });
 
-  it('requires a store id before starting store item discovery', async () => {
+  it('starts store item discovery for selected stores from the checkbox list and refreshes the discovery job log table', async () => {
+    let jobRequests = 0;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return jsonResponse({ data: null });
+      }
+      if (url.endsWith('/stores')) {
+        return jsonResponse({
+          data: [
+            {
+              canonical_domain: 'alpha.mx',
+              id: 12,
+              name: 'Alpha Games',
+              platform: 'shopify',
+              website_url: 'https://alpha.mx/'
+            },
+            {
+              canonical_domain: 'beta.mx',
+              id: 34,
+              name: 'Beta Games',
+              platform: 'custom',
+              website_url: 'https://beta.mx/'
+            }
+          ]
+        });
+      }
+      if (isStoreItemDiscoveryJobsUrl(url)) {
+        jobRequests += 1;
+        return jsonResponse({
+          data:
+            jobRequests > 1
+              ? [
+                  {
+                    completed_at: '2026-07-05T20:02:00Z',
+                    error: '',
+                    id: 31,
+                    new_items: 5,
+                    run_id: 'run-discovery-selected',
+                    started_at: '2026-07-05T20:00:00Z',
+                    status: 'completed',
+                    store_id: 12,
+                    website_url: 'https://alpha.mx/'
+                  }
+                ]
+              : [],
+          meta: {
+            page: 0,
+            page_size: 100,
+            total: jobRequests > 1 ? 1 : 0
+          }
+        });
+      }
+      if (url.endsWith('/admin/operations/item-discovery-runs') && init?.method === 'POST') {
+        return jsonResponse(
+          {
+            data: {
+              completed_at: '2026-07-05T20:02:00Z',
+              error: null,
+              id: 'run-discovery-selected',
+              result: {
+                item_candidates: 5,
+                new_items: 5,
+                store_id: null,
+                stores_scanned: 1,
+                website_url: ''
+              },
+              started_at: '2026-07-05T20:00:00Z',
+              status: 'completed',
+              type: 'item_discovery'
+            }
+          },
+          202
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="item_discovery" />);
+
+    await screen.findByText('Alpha Games');
+    await userEvent.click(screen.getByRole('checkbox', { name: /Alpha Games/i }));
+    await userEvent.click(screen.getByRole('button', { name: /Run for selected stores/i }));
+
+    expect(await screen.findByText('run-discovery-selected')).toBeInTheDocument();
+    expect(screen.getByText('5')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-discovery-runs', {
+      body: JSON.stringify({ store_ids: [12] }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
+  it('disables selected-store item discovery until at least one store is selected', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
       if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
-        return new Response(JSON.stringify({ data: null }), {
-          headers: { 'Content-Type': 'application/json' },
-          status: 200
+        return jsonResponse({ data: null });
+      }
+      if (url.endsWith('/stores')) {
+        return jsonResponse({
+          data: [
+            {
+              canonical_domain: 'alpha.mx',
+              id: 12,
+              name: 'Alpha Games',
+              platform: 'shopify',
+              website_url: 'https://alpha.mx/'
+            }
+          ]
         });
       }
       if (isStoreItemDiscoveryJobsUrl(url)) {
@@ -586,10 +689,10 @@ describe('OperationsPage', () => {
 
     render(<OperationsPage operation="item_discovery" />);
 
-    await screen.findByRole('table', { name: /Store item discovery jobs/i });
-    await userEvent.click(screen.getByRole('button', { name: /Run Store Item Discovery/i }));
-
-    expect(await screen.findByText('Store ID is required.')).toBeInTheDocument();
+    await screen.findByText('Alpha Games');
+    expect(screen.getByRole('button', { name: /Run for selected stores/i })).toBeDisabled();
+    await userEvent.click(screen.getByRole('checkbox', { name: /Alpha Games/i }));
+    expect(screen.getByRole('button', { name: /Run for selected stores/i })).toBeEnabled();
   });
 
   it('cancels a running operation from the operations page', async () => {

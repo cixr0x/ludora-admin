@@ -940,6 +940,33 @@ describe('fetchRows', () => {
     });
   });
 
+  it('starts scoped item discovery runs with a JSON body', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-discovery-selected',
+      result: null,
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'running',
+      type: 'item_discovery'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.startStoreItemDiscoveryRun({ store_ids: [12, 34] })).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-discovery-runs', {
+      body: JSON.stringify({ store_ids: [12, 34] }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
   it('starts item update runs with a POST request', async () => {
     const run = {
       completed_at: null,

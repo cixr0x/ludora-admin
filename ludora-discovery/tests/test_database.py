@@ -271,6 +271,28 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("completed", "", completed_at, 3, "run-123"))
         self.assertEqual(connection.commits, 2)
 
+    def test_lists_store_item_discovery_sources_for_selected_stores(self):
+        connection = FakeConnection(
+            fetchall_rows=[
+                [
+                    (12, "Alpha Games", "https://alpha.mx/", "shopify"),
+                    (34, "Beta Games", "https://beta.mx/", "custom"),
+                ]
+            ]
+        )
+        repository = DiscoveryRepository(connection)
+
+        stores = repository.list_store_item_discovery_sources(store_ids=[12, 34])
+
+        sql, params = connection.cursor_instance.executions[0]
+        self.assertIn("from stores", sql.casefold())
+        self.assertIn("where id in (%s, %s)", sql.casefold())
+        self.assertEqual(params, [12, 34])
+        self.assertEqual([store.store_id for store in stores], [12, 34])
+        self.assertEqual(stores[0].store_name, "Alpha Games")
+        self.assertEqual(stores[0].website_url, "https://alpha.mx/")
+        self.assertEqual(stores[0].platform, "shopify")
+
     def test_registers_store_item_update_log_start_and_completion(self):
         connection = FakeConnection(fetchone_rows=[(99,)])
         repository = DiscoveryRepository(connection)

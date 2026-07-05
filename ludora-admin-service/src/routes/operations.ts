@@ -1,7 +1,7 @@
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
-import type { DiscoveryOperationsClient, ItemUpdateRunScope } from '../discoveryOperations.js';
+import type { DiscoveryOperationsClient, ItemDiscoveryRunScope, ItemUpdateRunScope } from '../discoveryOperations.js';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -135,6 +135,15 @@ export function createOperationsRouter(operationsClient: DiscoveryOperationsClie
     }
   });
 
+  router.post('/admin/operations/item-discovery-runs', async (request, response, next) => {
+    try {
+      const run = await operationsClient.startItemDiscoveryRun(parseItemDiscoveryRunScope(request.body));
+      response.status(202).json({ data: run });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/admin/operations/store-item-update-jobs', async (request, response, next) => {
     try {
       response.json(await queryTable(database, storeItemUpdateJobsTableConfig, request.query));
@@ -175,11 +184,23 @@ function parseEmbeddingRefreshMode(body: unknown): 'full' | 'missing' {
 }
 
 function parseItemUpdateRunScope(body: unknown): ItemUpdateRunScope | undefined {
+  return parseStoreRunScope(body, 'Item update');
+}
+
+function parseItemDiscoveryRunScope(body: unknown): ItemDiscoveryRunScope {
+  const scope = parseStoreRunScope(body, 'Item discovery');
+  if (!scope) {
+    throw httpError(400, 'Item discovery scope must include all_stores or store_ids');
+  }
+  return scope;
+}
+
+function parseStoreRunScope(body: unknown, operationLabel: string): ItemDiscoveryRunScope | ItemUpdateRunScope | undefined {
   if (!body) {
     return undefined;
   }
   if (!isRecord(body)) {
-    throw httpError(400, 'Item update scope must be an object');
+    throw httpError(400, `${operationLabel} scope must be an object`);
   }
   if (Object.keys(body).length === 0) {
     return undefined;
@@ -198,7 +219,7 @@ function parseItemUpdateRunScope(body: unknown): ItemUpdateRunScope | undefined 
     throw httpError(400, 'all_stores must be true when provided');
   }
   if (!hasStoreIds) {
-    throw httpError(400, 'Item update scope must include all_stores or store_ids');
+    throw httpError(400, `${operationLabel} scope must include all_stores or store_ids`);
   }
   if (!Array.isArray(body.store_ids) || body.store_ids.length === 0) {
     throw httpError(400, 'store_ids must be a non-empty array');

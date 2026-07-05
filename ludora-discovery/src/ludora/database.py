@@ -86,6 +86,14 @@ class TutorialLinkUpsertResult:
     action: str
 
 
+@dataclass(frozen=True)
+class StoreItemDiscoverySource:
+    store_id: int
+    store_name: str
+    website_url: str
+    platform: str
+
+
 STORE_ITEM_UPDATE_CHANGE_LOG_FIELDS = (
     "source_listing_url",
     "title",
@@ -219,6 +227,32 @@ class DiscoveryRepository:
                 (status, error, completed_at, new_items, run_id),
             )
         self.connection.commit()
+
+    def list_store_item_discovery_sources(self, *, store_ids: list[int] | None = None) -> list[StoreItemDiscoverySource]:
+        sql = """
+            select id, name, website_url, platform
+            from stores
+        """
+        params: list[int] = []
+        if store_ids:
+            placeholders = ", ".join(["%s"] * len(store_ids))
+            sql += f"\n            where id in ({placeholders})"
+            params.extend(store_ids)
+        sql += "\n            order by canonical_domain asc"
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+
+        return [
+            StoreItemDiscoverySource(
+                store_id=int(row[0]),
+                store_name=_text(row[1]),
+                website_url=_text(row[2]),
+                platform=_text(row[3]),
+            )
+            for row in rows
+        ]
 
     def start_store_item_update_log(self, *, run_id: str, store_id: int | None = None) -> int:
         with self.connection.cursor() as cursor:

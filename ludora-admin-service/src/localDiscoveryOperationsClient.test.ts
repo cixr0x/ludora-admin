@@ -141,6 +141,42 @@ describe('local discovery operations client', () => {
     ]);
   });
 
+  it('starts item discovery by spawning the CLI with selected store ids', async () => {
+    const { client, spawned } = createClient();
+
+    const run = await client.startItemDiscoveryRun({ store_ids: [12, 34] });
+
+    expect(run.status).toBe('running');
+    expect(run.type).toBe('item_discovery');
+    expect(spawned[0].args).toEqual([
+      '-m',
+      'ludora.operation_cli',
+      '--env-file',
+      'C:/PROJECTS/ludora/ludora-admin/ludora-admin-service/.env',
+      'item-discovery-batch',
+      '--store-id',
+      '12',
+      '--store-id',
+      '34'
+    ]);
+  });
+
+  it('starts item discovery for all stores without CLI store ids', async () => {
+    const { client, spawned } = createClient();
+
+    const run = await client.startItemDiscoveryRun({ all_stores: true });
+
+    expect(run.status).toBe('running');
+    expect(run.type).toBe('item_discovery');
+    expect(spawned[0].args).toEqual([
+      '-m',
+      'ludora.operation_cli',
+      '--env-file',
+      'C:/PROJECTS/ludora/ludora-admin/ludora-admin-service/.env',
+      'item-discovery-batch'
+    ]);
+  });
+
   it('cancels the active child process and marks the run cancelled', async () => {
     const { client, spawned } = createClient();
     const run = await client.startStoreDiscoveryRun();

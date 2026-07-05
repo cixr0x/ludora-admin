@@ -1,6 +1,7 @@
 import {
   DiscoveryOperationError,
   type DiscoveryOperationsClient,
+  type ItemDiscoveryRunScope,
   type ItemUpdateRunScope,
   type StoreDiscoveryRun
 } from './discoveryOperations.js';
@@ -44,14 +45,16 @@ export function createDiscoveryOperationsClient(baseUrl: string): DiscoveryOpera
         throw error;
       }
     },
-    startItemDiscoveryRun: (storeId: number, websiteUrl: string, platform = '', storeName = '') =>
-      requestData<StoreDiscoveryRun>(baseUrl, `/operations/stores/${encodeURIComponent(storeId)}/item-discovery-runs`, {
-        body: JSON.stringify(itemDiscoveryRequestBody(websiteUrl, platform, storeName)),
-        headers: { 'Content-Type': 'application/json' },
-        method: 'POST'
-      }),
+    startItemDiscoveryRun: (storeIdOrScope: number | ItemDiscoveryRunScope, websiteUrl = '', platform = '', storeName = '') =>
+      typeof storeIdOrScope === 'number'
+        ? requestData<StoreDiscoveryRun>(baseUrl, `/operations/stores/${encodeURIComponent(storeIdOrScope)}/item-discovery-runs`, {
+            body: JSON.stringify(itemDiscoveryRequestBody(websiteUrl, platform, storeName)),
+            headers: { 'Content-Type': 'application/json' },
+            method: 'POST'
+          })
+        : requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-discovery-runs', scopedStoreRequestInit(storeIdOrScope)),
     startItemUpdateRun: (scope?: ItemUpdateRunScope) =>
-      requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-update-runs', itemUpdateRequestInit(scope)),
+      requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-update-runs', scopedStoreRequestInit(scope)),
     startItemEmbeddingRun: (refreshMode: 'full' | 'missing') =>
       requestData<StoreDiscoveryRun>(baseUrl, '/operations/item-embedding-runs', {
         body: JSON.stringify({ refresh_mode: refreshMode }),
@@ -94,7 +97,7 @@ function itemDiscoveryRequestBody(
   };
 }
 
-function itemUpdateRequestInit(scope?: ItemUpdateRunScope): RequestInit {
+function scopedStoreRequestInit(scope?: ItemDiscoveryRunScope | ItemUpdateRunScope): RequestInit {
   if (!scope) {
     return { method: 'POST' };
   }

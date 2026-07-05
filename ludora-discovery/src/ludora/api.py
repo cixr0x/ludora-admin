@@ -16,6 +16,9 @@ class RunManager(Protocol):
     def start_item_discovery(self, store_id: int, website_url: str, platform: str = "", store_name: str = ""):
         ...
 
+    def start_item_discovery_batch(self, store_ids: list[int] | None = None):
+        ...
+
     def start_item_update(self, store_ids: list[int] | None = None):
         ...
 
@@ -67,8 +70,18 @@ def route_request(
             return 409, {"error": {"message": str(exc)}}
         return 202, {"data": run.to_dict()}
 
+    if method == "POST" and path == "/operations/item-discovery-runs":
+        store_ids, error = _parse_store_scope(body, "Item discovery")
+        if error:
+            return 400, {"error": {"message": error}}
+        try:
+            run = manager.start_item_discovery_batch(store_ids=store_ids)
+        except OperationAlreadyRunning as exc:
+            return 409, {"error": {"message": str(exc)}}
+        return 202, {"data": run.to_dict()}
+
     if method == "POST" and path == "/operations/item-update-runs":
-        store_ids, error = _parse_item_update_scope(body)
+        store_ids, error = _parse_store_scope(body, "Item update")
         if error:
             return 400, {"error": {"message": error}}
         try:
@@ -124,7 +137,7 @@ def _parse_item_discovery_path(path: str) -> int | None:
         return 0
 
 
-def _parse_item_update_scope(body: dict[str, object] | None) -> tuple[list[int] | None, str | None]:
+def _parse_store_scope(body: dict[str, object] | None, operation_label: str) -> tuple[list[int] | None, str | None]:
     request_body = body or {}
     all_stores = request_body.get("all_stores") is True
     has_all_stores = "all_stores" in request_body
@@ -134,7 +147,7 @@ def _parse_item_update_scope(body: dict[str, object] | None) -> tuple[list[int] 
     if has_all_stores and not all_stores:
         return None, "all_stores must be true when provided"
     if request_body and not has_store_ids and not all_stores:
-        return None, "Item update scope must include all_stores or store_ids"
+        return None, f"{operation_label} scope must include all_stores or store_ids"
     if not has_store_ids:
         return None, None
 

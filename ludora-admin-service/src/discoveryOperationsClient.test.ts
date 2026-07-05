@@ -91,6 +91,58 @@ describe('createDiscoveryOperationsClient', () => {
     });
   });
 
+  it('starts item discovery runs for selected stores', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-discovery-selected',
+      result: null,
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'running',
+      type: 'item_discovery'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(createDiscoveryOperationsClient('http://localhost:8001/').startItemDiscoveryRun({ store_ids: [12, 34] })).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8001/operations/item-discovery-runs', {
+      body: JSON.stringify({ store_ids: [12, 34] }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
+  it('starts item discovery runs for all stores', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'run-discovery-all',
+      result: null,
+      started_at: '2026-07-05T20:00:00Z',
+      status: 'running',
+      type: 'item_discovery'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(createDiscoveryOperationsClient('http://localhost:8001/').startItemDiscoveryRun({ all_stores: true })).resolves.toEqual(run);
+
+    expect(fetchMock).toHaveBeenCalledWith('http://localhost:8001/operations/item-discovery-runs', {
+      body: JSON.stringify({ all_stores: true }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
   it('starts item update runs', async () => {
     const run = {
       completed_at: null,
