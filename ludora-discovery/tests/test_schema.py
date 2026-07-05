@@ -141,6 +141,7 @@ class SchemaTests(unittest.TestCase):
             "processing_error",
             "last_seen_at",
             "last_updated",
+            "refreshed_date",
         ]:
             self.assertIn(column_name, item_candidate_table)
 
@@ -175,6 +176,9 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("classification_reasons jsonb not null default '[]'::jsonb", item_candidate_table)
         self.assertIn("last_seen_at timestamptz not null default now()", item_candidate_table)
         self.assertIn("last_updated timestamptz not null default now()", item_candidate_table)
+        self.assertIn("refreshed_date timestamptz", item_candidate_table)
+        self.assertIn("alter table if exists store_items add column if not exists refreshed_date timestamptz", schema)
+        self.assertIn("store_items_refreshed_date_idx", schema)
         self.assertNotIn("status text not null default 'new'", item_candidate_table)
         self.assertIn("listing_status text not null default 'pending'", item_candidate_table)
         self.assertIn(

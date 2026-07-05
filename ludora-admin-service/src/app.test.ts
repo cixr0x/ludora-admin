@@ -1638,6 +1638,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('processed_at');
     expect(sql).toContain('processing_error');
     expect(sql).toContain('last_seen_at');
+    expect(sql).toContain('refreshed_date');
     expect(sql).toContain('order by title asc');
     expect(sql).toContain('limit 200');
   });

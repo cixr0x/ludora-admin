@@ -153,7 +153,7 @@ const itemCandidateSelect = `
   store_sku, raw_payload, is_boardgame, is_boardgame_confirmed, category_confidence,
   classification_reasons, match_source,
   matched_bgg_id, matched_name, match_score, match_reasons, match_payload,
-  matched_at, processed_at, processing_error, last_seen_at, last_updated
+  matched_at, processed_at, processing_error, last_seen_at, last_updated, refreshed_date
 `;
 
 const itemSelect = `
@@ -643,6 +643,7 @@ const itemCandidatesTableConfig: TableQueryConfig = {
     processing_error: columnSql('processing_error'),
     publisher: columnSql('publisher'),
     raw_payload: columnSql('raw_payload'),
+    refreshed_date: columnSql('refreshed_date'),
     source_listing_url: columnSql('source_listing_url'),
     source_url: columnSql('source_url'),
     listing_status: columnSql('listing_status'),

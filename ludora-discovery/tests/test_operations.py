@@ -332,7 +332,11 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         connection = Mock()
         repository = Mock()
         repository.start_store_item_update_log.return_value = 99
-        records = [object(), object()]
+
+        class UpdateRecords(list):
+            updated_items = 1
+
+        records = UpdateRecords([object(), object()])
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora") as resolve_database_url, patch(
             "ludora.operations.resolve_browser_fetch_enabled", return_value=True
@@ -365,10 +369,10 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["job_id"], 99)
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["status"], "completed")
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["scanned_items"], 2)
-        self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["updated_items"], 2)
+        self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["updated_items"], 1)
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["error"], "")
         connection.close.assert_called_once_with()
-        self.assertEqual(result.updated_items, 2)
+        self.assertEqual(result.updated_items, 1)
 
     def test_run_item_update_logs_failed_run(self):
         connection = Mock()

@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -14,7 +15,7 @@ from ludora.webfetch import FetchResult
 
 
 class FakeRepository:
-    def __init__(self, upsert_result=None, existing_urls=None, confirmed_items=None):
+    def __init__(self, upsert_result=None, existing_urls=None, confirmed_items=None, update_change_log_results=None):
         self.item_records = []
         self.upsert_result = upsert_result
         self.existing_urls = set(existing_urls or [])
@@ -23,6 +24,7 @@ class FakeRepository:
         self.confirmed_items_limit = None
         self.confirmed_items_store_ids = None
         self.update_change_log_calls = []
+        self.update_change_log_results = list(update_change_log_results or [])
 
     def item_candidate_exists(self, store_id, source_url):
         self.exists_checks.append((store_id, source_url))
@@ -40,6 +42,8 @@ class FakeRepository:
     def update_item_candidate_with_change_log(self, existing_record, refreshed_record, *, job_id, run_id):
         self.update_change_log_calls.append((existing_record, refreshed_record, job_id, run_id))
         self.item_records.append(refreshed_record)
+        if self.update_change_log_results:
+            return self.update_change_log_results.pop(0)
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="LISTED", item_id=refreshed_record.item_id, should_process=False)
 
 
@@ -582,6 +586,60 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(logged_refreshed.listing_status, "LISTED")
         self.assertEqual(logged_job_id, 99)
         self.assertEqual(logged_run_id, "run-123")
+
+    def test_update_confirmed_store_item_details_counts_only_changed_items_as_updated(self):
+        first_detail_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Catan Nueva Edicion"
+        }
+        </script>
+        """
+        second_detail_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Azul"
+        }
+        </script>
+        """
+        first_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        second_record = DiscoveryItemCandidateRecord(
+            store_item_id=57,
+            store_id=12,
+            source_url="https://example.mx/products/azul",
+            title="Azul",
+            item_id=78,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(
+            confirmed_items=[first_record, second_record],
+            update_change_log_results=[SimpleNamespace(changed=True), SimpleNamespace(changed=False)],
+        )
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=[
+                FetchResult(url="https://example.mx/products/catan", text=first_detail_html),
+                FetchResult(url="https://example.mx/products/azul", text=second_detail_html),
+            ],
+        ):
+            records = update_confirmed_store_item_details(repository, job_id=99, run_id="run-123")
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(getattr(records, "updated_items", None), 1)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,12 @@ class ItemCandidateProcessor(Protocol):
 ItemClassifier = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidateRecord]
 
 
+class StoreItemUpdateRecords(list[DiscoveryItemCandidateRecord]):
+    def __init__(self, records: list[DiscoveryItemCandidateRecord] | None = None, *, updated_items: int = 0):
+        super().__init__(records or [])
+        self.updated_items = updated_items
+
+
 def crawl_store_product_details(
     store_url: str,
     store_id: int | None,
@@ -133,7 +139,7 @@ def update_confirmed_store_item_details(
     job_id: int | None = None,
     run_id: str | None = None,
     store_ids: list[int] | None = None,
-) -> list[DiscoveryItemCandidateRecord]:
+) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
     browser_session = None
     if browser_fetch_enabled and browser_fetcher is None:
@@ -143,7 +149,7 @@ def update_confirmed_store_item_details(
         browser_fetcher = browser_session.__enter__().fetch
 
     try:
-        records: list[DiscoveryItemCandidateRecord] = []
+        records = StoreItemUpdateRecords()
         for existing_record in repository.list_confirmed_boardgame_item_candidates(limit=limit, store_ids=store_ids):
             raise_if_cancelled(cancellation_token)
             refreshed_record = _fetch_detail_candidate(
@@ -156,12 +162,14 @@ def update_confirmed_store_item_details(
             if run_id:
                 if job_id is None:
                     raise ValueError("job id is required to log update changes")
-                repository.update_item_candidate_with_change_log(
+                update_result = repository.update_item_candidate_with_change_log(
                     existing_record,
                     refreshed_record,
                     job_id=job_id,
                     run_id=run_id,
                 )
+                if getattr(update_result, "changed", False):
+                    records.updated_items += 1
             else:
                 repository.upsert_item_candidate(refreshed_record)
             records.append(refreshed_record)

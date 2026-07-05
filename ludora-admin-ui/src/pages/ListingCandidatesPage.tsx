@@ -232,6 +232,7 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { key: 'processing_error', label: 'Processing Error', multiline: true },
   { key: 'last_seen_at', label: 'Last Seen At', readOnly: true },
   { key: 'last_updated', label: 'Last Updated', readOnly: true },
+  { key: 'refreshed_date', label: 'Refreshed At', readOnly: true },
   { gridColumn: { md: '1 / -1' }, key: 'description', label: 'Description', multiline: true },
   { gridColumn: { md: '1 / -1' }, key: 'classification_reasons', label: 'Classification Reasons', multiline: true },
   { gridColumn: { md: '1 / -1' }, key: 'match_reasons', label: 'Match Reasons', multiline: true },
@@ -412,6 +413,14 @@ function buildItemCandidateColumns(
     minWidth: 240,
     render: (row) => field(row, ['processing_error']),
     sortValue: (row) => field(row, ['processing_error'])
+  },
+  {
+    filterValue: (row) => field(row, ['refreshed_date']),
+    id: 'refreshed_date',
+    label: 'Refreshed At',
+    minWidth: 190,
+    render: (row) => field(row, ['refreshed_date']),
+    sortValue: (row) => field(row, ['refreshed_date'])
   },
   {
     filterValue: (row) => field(row, ['last_updated']),

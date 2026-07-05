@@ -58,6 +58,7 @@ class ItemCandidateUpsertResult:
     item_id: int | None
     should_process: bool
     created: bool = False
+    changed: bool = False
 
 
 @dataclass(frozen=True)
@@ -356,7 +357,7 @@ class DiscoveryRepository:
 
         with self.connection.cursor() as cursor:
             cursor.execute(
-                _update_item_candidate_sql(),
+                _update_item_candidate_sql(refresh_from_source=True),
                 (
                     *self._item_candidate_write_params(data),
                     store_item_id,
@@ -391,6 +392,7 @@ class DiscoveryRepository:
             item_id=refreshed_record.item_id,
             should_process=False,
             created=False,
+            changed=bool(changes),
         )
 
     def _find_item_candidate(self, cursor: Any, record: DiscoveryItemCandidateRecord):
@@ -502,7 +504,7 @@ class DiscoveryRepository:
             placeholders = ", ".join(["%s"] * len(store_ids))
             sql += f"\n              and store_id in ({placeholders})"
             params.extend(store_ids)
-        sql += "\n            order by last_updated asc, id asc"
+        sql += "\n            order by refreshed_date asc nulls first, id asc"
         if limit is not None:
             sql += "\nlimit %s"
             params.append(limit)
@@ -737,8 +739,19 @@ def _insert_item_candidate_sql() -> str:
     """
 
 
-def _update_item_candidate_sql() -> str:
-    return """
+def _update_item_candidate_sql(*, refresh_from_source: bool = False) -> str:
+    timestamp_sql = (
+        """
+        last_seen_at = now(),
+        refreshed_date = now()
+        """
+        if refresh_from_source
+        else """
+        last_seen_at = now(),
+        last_updated = now()
+        """
+    )
+    return f"""
     update store_items
     set store_id = %s,
         source_url = %s,
@@ -770,8 +783,7 @@ def _update_item_candidate_sql() -> str:
         is_boardgame_confirmed = %s,
         category_confidence = %s,
         classification_reasons = %s::jsonb,
-        last_seen_at = now(),
-        last_updated = now()
+        {timestamp_sql.strip()}
     where id = %s
     """
 

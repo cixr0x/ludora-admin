@@ -123,14 +123,20 @@ create table if not exists store_items (
     created_at timestamptz not null default now(),
     last_seen_at timestamptz not null default now(),
     last_updated timestamptz not null default now(),
+    refreshed_date timestamptz,
     unique (store_id, source_url)
 );
+
+alter table if exists store_items add column if not exists refreshed_date timestamptz;
 
 create index if not exists store_items_store_id_idx
 on store_items (store_id);
 
 create index if not exists store_items_item_id_idx
 on store_items (item_id);
+
+create index if not exists store_items_refreshed_date_idx
+on store_items (refreshed_date, id);
 
 create table if not exists store_item_click_stats (
     store_item_id bigint not null,

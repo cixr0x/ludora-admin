@@ -360,9 +360,12 @@ class DatabaseRepositoryTests(unittest.TestCase):
         update_sql, update_params = connection.cursor_instance.executions[0]
         change_entries = connection.cursor_instance.executions[1:]
         self.assertIn("update store_items", update_sql.casefold())
+        self.assertIn("refreshed_date = now()", update_sql.casefold())
+        self.assertNotIn("last_updated = now()", update_sql.casefold())
         self.assertEqual(update_params[-1], 56)
         self.assertEqual(len(change_entries), 3)
         self.assertEqual(connection.commits, 1)
+        self.assertTrue(result.changed)
         logged_fields = [params[3] for _sql, params in change_entries]
         self.assertEqual(logged_fields, ["title", "raw_price", "price"])
         for sql, params in change_entries:
@@ -400,9 +403,12 @@ class DatabaseRepositoryTests(unittest.TestCase):
         )
 
         self.assertEqual(result.candidate_id, 56)
+        self.assertFalse(result.changed)
         self.assertEqual(len(connection.cursor_instance.executions), 1)
         update_sql, update_params = connection.cursor_instance.executions[0]
         self.assertIn("update store_items", update_sql.casefold())
+        self.assertIn("refreshed_date = now()", update_sql.casefold())
+        self.assertNotIn("last_updated = now()", update_sql.casefold())
         self.assertEqual(update_params[-1], 56)
         self.assertEqual(connection.commits, 1)
 
@@ -583,7 +589,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("item_id is not null", normalized_sql)
         self.assertIn("source_url <> ''", normalized_sql)
         self.assertIn("listing_status = 'listed'", normalized_sql)
-        self.assertIn("order by last_updated asc, id asc", normalized_sql)
+        self.assertIn("order by refreshed_date asc nulls first, id asc", normalized_sql)
         self.assertIn("limit %s", normalized_sql)
         self.assertEqual(params, (50,))
         self.assertEqual(len(records), 1)
@@ -608,7 +614,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         normalized_sql = sql.casefold()
         self.assertEqual(records, [])
         self.assertIn("store_id in (%s, %s)", normalized_sql)
-        self.assertIn("order by last_updated asc, id asc", normalized_sql)
+        self.assertIn("order by refreshed_date asc nulls first, id asc", normalized_sql)
         self.assertIn("limit %s", normalized_sql)
         self.assertEqual(params, (12, 34, 50))
         self.assertEqual(connection.commits, 0)

@@ -409,10 +409,10 @@ def run_item_update(
             status="completed",
             completed_at=_utc_now(),
             scanned_items=len(records),
-            updated_items=len(records),
+            updated_items=getattr(records, "updated_items", len(records)),
             error="",
         )
-        return ItemUpdateRunResult(updated_items=len(records))
+        return ItemUpdateRunResult(updated_items=getattr(records, "updated_items", len(records)))
     finally:
         connection.close()
 

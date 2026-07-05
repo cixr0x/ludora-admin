@@ -20,6 +20,7 @@ describe('ListingCandidatesPage', () => {
               is_boardgame: true,
               is_boardgame_confirmed: true,
               last_updated: '2026-05-25T10:00:00.000Z',
+              refreshed_date: '2026-05-26T09:00:00.000Z',
               language: 'es',
               language_evidence: 'Highlights: 10+ 2-4 jugadores 45 min Español',
               language_source: 'product_highlights',
@@ -79,6 +80,7 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getAllByText('false').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('899.00')).toBeInTheDocument();
     expect(screen.getByText('in_stock')).toBeInTheDocument();
+    expect(screen.getByText('2026-05-26T09:00:00.000Z')).toBeInTheDocument();
     expect(screen.getAllByText('json_ld_offer').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('es')).toBeInTheDocument();
     expect(screen.getByText('product_highlights')).toBeInTheDocument();
