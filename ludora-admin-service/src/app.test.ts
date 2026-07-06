@@ -13,6 +13,15 @@ import type { TranslationRequest, TranslationService } from './translation/trans
 
 describe('ludora admin service', () => {
   const normalizeSql = (sql: string): string => sql.replace(/\s+/g, ' ').trim().toLowerCase();
+  const authOptions = {
+    cookieName: 'ludora_admin_session',
+    cookieSameSite: 'lax' as const,
+    cookieSecure: false,
+    password: 'secret-password',
+    sessionSecret: 'test-session-secret-with-enough-length',
+    sessionTtlHours: 12,
+    username: 'admin'
+  };
 
   it('returns health status', async () => {
     const database: Database = {
@@ -42,6 +51,31 @@ describe('ludora admin service', () => {
 
     expect(localhostResponse.headers['access-control-allow-origin']).toBe('http://localhost:5173');
     expect(loopbackResponse.headers['access-control-allow-origin']).toBe('http://127.0.0.1:5173');
+  });
+
+  it('requires authentication for admin data routes', async () => {
+    const response = await request(createApp({ database: idleDatabase(), adminAuth: authOptions })).get('/stores');
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: { message: 'Authentication required' } });
+  });
+
+  it('sets an HttpOnly session cookie after a successful login', async () => {
+    const app = createApp({ database: idleDatabase(), adminAuth: authOptions });
+
+    const loginResponse = await request(app).post('/admin/auth/login').send({
+      password: 'secret-password',
+      username: 'admin'
+    });
+
+    expect(loginResponse.status).toBe(200);
+    expect(loginResponse.body).toEqual({ data: { username: 'admin' } });
+    expect(loginResponse.headers['set-cookie']?.[0]).toContain('ludora_admin_session=');
+    expect(loginResponse.headers['set-cookie']?.[0]).toContain('HttpOnly');
+
+    const protectedResponse = await request(app).get('/stores').set('Cookie', loginResponse.headers['set-cookie']);
+
+    expect(protectedResponse.status).toBe(200);
   });
 
   it('returns discovery stores from the injected database query', async () => {

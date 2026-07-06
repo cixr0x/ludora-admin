@@ -2,12 +2,15 @@ import cors from 'cors';
 import express, { type ErrorRequestHandler, type Express } from 'express';
 
 import type { AmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
+import type { AdminAuthOptions } from './auth/adminAuth.js';
+import { requireAdminAuth } from './auth/adminAuth.js';
 import type { BggItemImporter } from './bgg/bggItemImporter.js';
 import type { DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
 import type { DiscoveryOperationsClient } from './discoveryOperations.js';
 import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { createAmazonTitleExtractionRouter } from './routes/amazonTitleExtraction.js';
+import { createAuthRouter } from './routes/auth.js';
 import { createDescriptionGenerationRouter } from './routes/descriptionGeneration.js';
 import { createDiscoveryRouter } from './routes/discovery.js';
 import { createHealthRouter } from './routes/health.js';
@@ -25,6 +28,7 @@ type HttpError = Error & {
 };
 
 type CreateAppOptions = {
+  adminAuth?: AdminAuthOptions;
   amazonTitleExtractionService?: AmazonTitleExtractionService;
   bggItemImporter?: BggItemImporter;
   database: Database;
@@ -38,6 +42,7 @@ type CreateAppOptions = {
 };
 
 export function createApp({
+  adminAuth,
   amazonTitleExtractionService,
   bggItemImporter,
   database,
@@ -51,9 +56,13 @@ export function createApp({
 }: CreateAppOptions): Express {
   const app = express();
 
-  app.use(cors({ origin: corsOrigin }));
+  app.use(cors({ credentials: Boolean(adminAuth), origin: corsOrigin }));
   app.use(express.json());
   app.use(createHealthRouter());
+  if (adminAuth) {
+    app.use(createAuthRouter(adminAuth));
+    app.use(requireAdminAuth(adminAuth));
+  }
   app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter, productDetailsEnrichmentService));
   app.use(createAmazonTitleExtractionRouter(amazonTitleExtractionService));
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
