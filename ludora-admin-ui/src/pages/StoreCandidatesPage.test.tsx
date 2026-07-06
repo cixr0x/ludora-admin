@@ -141,7 +141,8 @@ describe('StoreCandidatesPage', () => {
 
     expect(await screen.findByText('First Returned')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/discovery/stores?page=0&page_size=100&sort=canonical_domain&sort_direction=asc'
+      'http://127.0.0.1:4001/discovery/stores?page=0&page_size=100&sort=canonical_domain&sort_direction=asc',
+      { credentials: 'include' }
     );
   });
 
@@ -149,7 +150,7 @@ describe('StoreCandidatesPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/stores' && !init) {
+      if (pathOf(url) === '/discovery/stores' && !init?.method) {
         return new Response(
           JSON.stringify({
             data: [
@@ -212,8 +213,9 @@ describe('StoreCandidatesPage', () => {
 
     expect(await screen.findByText('Example Updated')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/discovery/stores/store-1',
+      'http://127.0.0.1:4001/discovery/stores/store-1',
       expect.objectContaining({
+        credentials: 'include',
         method: 'PATCH'
       })
     );
@@ -229,7 +231,7 @@ describe('StoreCandidatesPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/stores' && !init) {
+      if (pathOf(url) === '/discovery/stores' && !init?.method) {
         return new Response(JSON.stringify({ data: [] }), {
           headers: { 'Content-Type': 'application/json' },
           status: 200
@@ -278,8 +280,9 @@ describe('StoreCandidatesPage', () => {
 
     expect(await screen.findByText('New Store')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/discovery/stores',
+      'http://127.0.0.1:4001/discovery/stores',
       expect.objectContaining({
+        credentials: 'include',
         method: 'POST'
       })
     );
@@ -291,7 +294,7 @@ describe('StoreCandidatesPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/stores' && !init) {
+      if (pathOf(url) === '/discovery/stores' && !init?.method) {
         return new Response(
           JSON.stringify({
             data: [
@@ -336,7 +339,8 @@ describe('StoreCandidatesPage', () => {
 
     expect(await screen.findByText('ACCEPTED')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Approve' })).not.toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/stores/store-1/approve', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/stores/store-1/approve', {
+      credentials: 'include',
       method: 'POST'
     });
   });
@@ -345,7 +349,7 @@ describe('StoreCandidatesPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/stores' && !init) {
+      if (pathOf(url) === '/discovery/stores' && !init?.method) {
         return new Response(
           JSON.stringify({
             data: [
@@ -390,7 +394,8 @@ describe('StoreCandidatesPage', () => {
 
     expect(await screen.findByText('REJECTED')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Reject' })).not.toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/stores/store-1/reject', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/stores/store-1/reject', {
+      credentials: 'include',
       method: 'POST'
     });
   });

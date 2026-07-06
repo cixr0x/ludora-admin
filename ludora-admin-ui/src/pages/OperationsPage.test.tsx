@@ -54,7 +54,8 @@ describe('OperationsPage', () => {
     expect(screen.getByText('2')).toBeInTheDocument();
     await userEvent.type(screen.getByLabelText('Filter Status'), 'completed');
     expect(screen.getByText('completed')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/store-discovery-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/store-discovery-runs', {
+      credentials: 'include',
       method: 'POST'
     });
   });
@@ -131,8 +132,9 @@ describe('OperationsPage', () => {
 
     expect(await screen.findByText('run-3')).toBeInTheDocument();
     expect(screen.getByText('8')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-update-runs', {
       body: JSON.stringify({ all_stores: true }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -219,8 +221,9 @@ describe('OperationsPage', () => {
 
     expect(await screen.findByText('run-selected')).toBeInTheDocument();
     expect(screen.getByText('3')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-update-runs', {
       body: JSON.stringify({ store_ids: [12] }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -299,8 +302,9 @@ describe('OperationsPage', () => {
     expect(screen.getByRole('button', { name: /Run for selected stores/i })).toBeDisabled();
     await userEvent.click(screen.getByRole('button', { name: /Run for all/i }));
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-update-runs', {
       body: JSON.stringify({ all_stores: true }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -346,7 +350,8 @@ describe('OperationsPage', () => {
     expect(screen.queryByRole('columnheader', { name: 'Accepted stores' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Embedding model' })).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/admin/operations/store-item-discovery-jobs?page=0&page_size=100&sort=started_at&sort_direction=desc'
+      'http://127.0.0.1:4001/admin/operations/store-item-discovery-jobs?page=0&page_size=100&sort=started_at&sort_direction=desc',
+      { credentials: 'include' }
     );
   });
 
@@ -394,7 +399,8 @@ describe('OperationsPage', () => {
     expect(screen.queryByRole('columnheader', { name: 'Candidate domains' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Selected embeddings' })).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/admin/operations/store-item-update-jobs?page=0&page_size=100&sort=started_at&sort_direction=desc'
+      'http://127.0.0.1:4001/admin/operations/store-item-update-jobs?page=0&page_size=100&sort=started_at&sort_direction=desc',
+      { credentials: 'include' }
     );
   });
 
@@ -443,8 +449,9 @@ describe('OperationsPage', () => {
     expect(screen.getByText('item_embeddings')).toBeInTheDocument();
     expect(screen.getAllByText('8').length).toBeGreaterThan(0);
     expect(screen.getByText('text-embedding-3-small')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-embedding-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-embedding-runs', {
       body: JSON.stringify({ refresh_mode: 'missing' }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -487,8 +494,9 @@ describe('OperationsPage', () => {
     await userEvent.click(screen.getByRole('radio', { name: /Full refresh/i }));
     await userEvent.click(screen.getByRole('button', { name: /Run Item Embeddings/i }));
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-embedding-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-embedding-runs', {
       body: JSON.stringify({ refresh_mode: 'full' }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -562,8 +570,9 @@ describe('OperationsPage', () => {
 
     expect(await screen.findByText('run-2')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-discovery-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-discovery-runs', {
       body: JSON.stringify({ all_stores: true }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -655,8 +664,9 @@ describe('OperationsPage', () => {
 
     expect(await screen.findByText('run-discovery-selected')).toBeInTheDocument();
     expect(screen.getByText('5')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-discovery-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-discovery-runs', {
       body: JSON.stringify({ store_ids: [12] }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -745,7 +755,8 @@ describe('OperationsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: /Stop Operation/i }));
 
     expect(await screen.findByText('cancelling')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/store-discovery-runs/run-active/cancel', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/store-discovery-runs/run-active/cancel', {
+      credentials: 'include',
       method: 'POST'
     });
   });

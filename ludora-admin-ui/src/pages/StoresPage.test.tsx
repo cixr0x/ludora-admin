@@ -55,7 +55,7 @@ describe('StoresPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/stores' && !init) {
+      if (pathOf(url) === '/stores' && !init?.method) {
         return jsonResponse([
           {
             canonical_domain: 'example.mx',
@@ -111,7 +111,7 @@ describe('StoresPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/stores' && !init) {
+      if (pathOf(url) === '/stores' && !init?.method) {
         return jsonResponse([
           {
             canonical_domain: 'example.mx',
@@ -143,7 +143,8 @@ describe('StoresPage', () => {
     await user.click(screen.getByRole('button', { name: 'Run Item Discovery' }));
 
     expect(await screen.findByText('Item discovery started.')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/stores/12/item-discovery-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/stores/12/item-discovery-runs', {
+      credentials: 'include',
       method: 'POST'
     });
   });
@@ -152,7 +153,7 @@ describe('StoresPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/stores' && !init) {
+      if (pathOf(url) === '/stores' && !init?.method) {
         return jsonResponse([
           {
             canonical_domain: 'example.mx',
@@ -184,7 +185,8 @@ describe('StoresPage', () => {
     await user.click(screen.getByRole('button', { name: 'Run Item Update' }));
 
     expect(await screen.findByText('Item update started.')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-update-runs', {
+      credentials: 'include',
       method: 'POST'
     });
   });

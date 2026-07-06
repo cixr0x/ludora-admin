@@ -76,7 +76,7 @@ describe('ItemsPage', () => {
     };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/items' && !init) {
+      if (pathOf(url) === '/items' && !init?.method) {
         return jsonResponse([item]);
       }
       if (pathOf(url) === '/items/1/store-items') {
@@ -215,7 +215,7 @@ describe('ItemsPage', () => {
     };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/items/77' && !init) {
+      if (pathOf(url) === '/items/77' && !init?.method) {
         return jsonResponse(item);
       }
       if (pathOf(url) === '/items/77/store-items') {
@@ -302,7 +302,7 @@ describe('ItemsPage', () => {
     };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/items/2247' && !init) {
+      if (pathOf(url) === '/items/2247' && !init?.method) {
         return jsonResponse(item);
       }
       if (pathOf(url) === '/items/2247/store-items') {
@@ -499,8 +499,9 @@ describe('ItemsPage', () => {
     const storeItemsTable = await screen.findByRole('table', { name: 'Linked store items' });
     await user.click(within(storeItemsTable).getByRole('button', { name: 'Start cover workflow for Coffee Rush' }));
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/local-cover-workflows', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/local-cover-workflows', {
       body: JSON.stringify({ store_item_id: '3365' }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -569,8 +570,9 @@ describe('ItemsPage', () => {
     await screen.findByRole('heading', { name: 'Item Details' });
     await user.click(screen.getByRole('button', { name: 'Start cover workflow from item image for Coffee Rush' }));
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/local-cover-workflows/items', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/local-cover-workflows/items', {
       body: JSON.stringify({ item_id: '77' }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -648,7 +650,7 @@ describe('ItemsPage', () => {
           mechanics: []
         });
       }
-      if (pathOf(url) === '/items/77/relationships' && !init) {
+      if (pathOf(url) === '/items/77/relationships' && !init?.method) {
         return jsonResponse([
           {
             direction: 'incoming',
@@ -737,7 +739,7 @@ describe('ItemsPage', () => {
     const deleteCall = fetchMock.mock.calls.find(
       ([url, init]) => pathOf(String(url)) === '/items/77/relationships/100' && init?.method === 'DELETE'
     );
-    expect(deleteCall?.[1]).toEqual({ method: 'DELETE' });
+    expect(deleteCall?.[1]).toEqual({ credentials: 'include', method: 'DELETE' });
   });
 
   it('refreshes taxonomy after adding an implementation relationship', async () => {
@@ -761,7 +763,7 @@ describe('ItemsPage', () => {
       if (pathOf(url) === '/items/77/store-items') {
         return jsonResponse([]);
       }
-      if (pathOf(url) === '/items/77/relationships' && !init) {
+      if (pathOf(url) === '/items/77/relationships' && !init?.method) {
         return jsonResponse([]);
       }
       if (pathOf(url) === '/items/77/taxonomy') {
@@ -856,7 +858,7 @@ describe('ItemsPage', () => {
           mechanics: []
         });
       }
-      if (pathOf(url) === '/items/77/relationships' && !init) {
+      if (pathOf(url) === '/items/77/relationships' && !init?.method) {
         return jsonResponse([
           {
             direction: 'incoming',
@@ -947,7 +949,7 @@ describe('ItemsPage', () => {
           mechanics: []
         });
       }
-      if (pathOf(url) === '/items/77/relationships' && !init) {
+      if (pathOf(url) === '/items/77/relationships' && !init?.method) {
         return jsonResponse([
           {
             direction: 'incoming',

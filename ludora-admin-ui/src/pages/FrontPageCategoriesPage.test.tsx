@@ -35,7 +35,8 @@ describe('FrontPageCategoriesPage', () => {
     expect(screen.getByText('5')).toBeInTheDocument();
     expect(screen.getByText('Juego de fiesta')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/front-page-categories?page=0&page_size=100&sort=order&sort_direction=asc'
+      'http://127.0.0.1:4001/front-page-categories?page=0&page_size=100&sort=order&sort_direction=asc',
+      { credentials: 'include' }
     );
   });
 
@@ -43,7 +44,7 @@ describe('FrontPageCategoriesPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/front-page-categories' && !init) {
+      if (pathOf(url) === '/front-page-categories' && !init?.method) {
         return jsonResponse([]);
       }
       if (pathOf(url) === '/front-page-categories' && init?.method === 'POST') {
@@ -83,7 +84,7 @@ describe('FrontPageCategoriesPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/front-page-categories' && !init) {
+      if (pathOf(url) === '/front-page-categories' && !init?.method) {
         return jsonResponse([
           {
             category_id: 5,
@@ -135,7 +136,7 @@ describe('FrontPageCategoriesPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/front-page-categories' && !init) {
+      if (pathOf(url) === '/front-page-categories' && !init?.method) {
         return jsonResponse([
           {
             category_id: 5,
@@ -169,14 +170,14 @@ describe('FrontPageCategoriesPage', () => {
     expect(await screen.findByText('Front page category deleted.')).toBeInTheDocument();
     expect(screen.getByText('No matching records.')).toBeInTheDocument();
     const deleteCall = fetchMock.mock.calls.find(([url, init]) => pathOf(String(url)) === '/front-page-categories/1' && init?.method === 'DELETE');
-    expect(deleteCall?.[1]).toEqual({ method: 'DELETE' });
+    expect(deleteCall?.[1]).toEqual({ credentials: 'include', method: 'DELETE' });
   });
 
   it('starts random item assignment from the table screen', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/front-page-categories' && !init) {
+      if (pathOf(url) === '/front-page-categories' && !init?.method) {
         return jsonResponse([
           {
             category_id: 5,
@@ -202,14 +203,14 @@ describe('FrontPageCategoriesPage', () => {
     const assignmentCall = fetchMock.mock.calls.find(
       ([url, init]) => pathOf(String(url)) === '/front-page-categories/random-item-assignments' && init?.method === 'POST'
     );
-    expect(assignmentCall?.[1]).toEqual({ method: 'POST' });
+    expect(assignmentCall?.[1]).toEqual({ credentials: 'include', method: 'POST' });
   });
 
   it('starts balanced item assignment from the table screen', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/front-page-categories' && !init) {
+      if (pathOf(url) === '/front-page-categories' && !init?.method) {
         return jsonResponse([
           {
             category_id: 5,
@@ -236,7 +237,7 @@ describe('FrontPageCategoriesPage', () => {
       ([url, init]) =>
         pathOf(String(url)) === '/front-page-categories/balanced-random-item-assignments' && init?.method === 'POST'
     );
-    expect(assignmentCall?.[1]).toEqual({ method: 'POST' });
+    expect(assignmentCall?.[1]).toEqual({ credentials: 'include', method: 'POST' });
   });
 });
 

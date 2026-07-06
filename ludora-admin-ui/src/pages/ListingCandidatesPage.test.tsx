@@ -187,7 +187,7 @@ describe('ListingCandidatesPage', () => {
     let currentCandidate = originalCandidate;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/listings' && !init) {
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
         return jsonResponse([currentCandidate], 200, { page: 0, page_size: 100, total: 1 });
       }
       if (pathOf(url) === '/discovery/listings/3365/confirm-boardgame' && init?.method === 'POST') {
@@ -259,7 +259,7 @@ describe('ListingCandidatesPage', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       const path = pathOf(url);
-      if (path === '/discovery/listings' && !init) {
+      if (path === '/discovery/listings' && !init?.method) {
         return jsonResponse(currentCandidates, 200, { page: 0, page_size: 100, total: currentCandidates.length });
       }
       if (path === '/discovery/listings/101/confirm-boardgame' && init?.method === 'POST') {
@@ -330,7 +330,7 @@ describe('ListingCandidatesPage', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       const path = pathOf(url);
-      if (path === '/discovery/listings' && !init) {
+      if (path === '/discovery/listings' && !init?.method) {
         return jsonResponse(currentCandidates, 200, { page: 0, page_size: 100, total: currentCandidates.length });
       }
       if (path === '/discovery/listings/201' && init?.method === 'PATCH') {
@@ -394,7 +394,7 @@ describe('ListingCandidatesPage', () => {
     let currentCandidate = originalCandidate;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/listings' && !init) {
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
         return jsonResponse([currentCandidate], 200, { page: 0, page_size: 100, total: 1 });
       }
       if (pathOf(url) === '/discovery/listings/3365' && init?.method === 'PATCH') {
@@ -456,7 +456,7 @@ describe('ListingCandidatesPage', () => {
     let matchCompleted = false;
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/listings' && !init) {
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
         listingRequests.push(url);
         return jsonResponse([matchCompleted ? refreshedCandidate : originalCandidate], 200, {
           page: 0,
@@ -593,7 +593,7 @@ describe('ListingCandidatesPage', () => {
     };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/listings' && !init) {
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
         return jsonResponse([originalCandidate], 200, { page: 0, page_size: 100, total: 1 });
       }
       if (pathOf(url) === '/admin/local-cover-workflows' && init?.method === 'POST') {
@@ -685,7 +685,7 @@ describe('ListingCandidatesPage', () => {
     };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/listings' && !init) {
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
         return jsonResponse([originalCandidate], 200, { page: 0, page_size: 100, total: 1 });
       }
       if (pathOf(url) === '/discovery/listings/3365' && init?.method === 'PATCH') {
@@ -747,7 +747,7 @@ describe('ListingCandidatesPage', () => {
     };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/listings' && !init) {
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
         return jsonResponse([originalCandidate], 200, { page: 0, page_size: 100, total: 1 });
       }
       if (pathOf(url) === '/discovery/listings/3365/create-item' && init?.method === 'POST') {
@@ -781,8 +781,9 @@ describe('ListingCandidatesPage', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Create Item from Candidate' })).not.toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Create Item from Candidate' })).toBeEnabled();
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/create-item', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/listings/3365/create-item', {
       body: JSON.stringify({ bgg_id: '223953', implements: true }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -806,7 +807,7 @@ describe('ListingCandidatesPage', () => {
     };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/listings' && !init) {
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
         return jsonResponse([originalCandidate], 200, { page: 0, page_size: 100, total: 1 });
       }
       if (pathOf(url) === '/discovery/listings/3366/create-item' && init?.method === 'POST') {
@@ -833,8 +834,9 @@ describe('ListingCandidatesPage', () => {
 
     expect(await screen.findByText('Item created from candidate.')).toBeInTheDocument();
     expect(screen.getByLabelText('Item ID')).toHaveValue('78');
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3366/create-item', {
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/listings/3366/create-item', {
       body: JSON.stringify({ bgg_id: '', implements: false, extends: true, extends_item_id: '77' }),
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
@@ -862,7 +864,7 @@ describe('ListingCandidatesPage', () => {
     };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/discovery/listings' && !init) {
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
         return jsonResponse([originalCandidate], 200, { page: 0, page_size: 100, total: 1 });
       }
       if (pathOf(url) === '/discovery/listings/3365/create-item-from-bgg' && init?.method === 'POST') {
@@ -944,7 +946,8 @@ describe('ListingCandidatesPage', () => {
     expect(await screen.findByText('Second Page Item')).toBeInTheDocument();
     expect(screen.getByText('First Page Item')).toBeInTheDocument();
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'http://localhost:4001/discovery/listings?page=1&page_size=100&sort=last_updated&sort_direction=desc'
+      'http://127.0.0.1:4001/discovery/listings?page=1&page_size=100&sort=last_updated&sort_direction=desc',
+      { credentials: 'include' }
     );
   });
 

@@ -13,7 +13,7 @@ describe('FrontPageCategoryOptionsPage', () => {
     const handleOpenProducts = vi.fn();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathOf(url) === '/front-page-category-options' && !init) {
+      if (pathOf(url) === '/front-page-category-options' && !init?.method) {
         return jsonResponse([
           {
             bgg_id: 1021,
@@ -87,7 +87,7 @@ describe('FrontPageCategoryOptionsPage', () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
-      if (pathAndSearchOf(url) === '/front-page-category-options' && !init) {
+      if (pathAndSearchOf(url) === '/front-page-category-options' && !init?.method) {
         return jsonResponse([
           {
             bgg_id: 1021,
@@ -100,7 +100,7 @@ describe('FrontPageCategoryOptionsPage', () => {
           }
         ]);
       }
-      if (pathAndSearchOf(url) === '/front-page-category-options?only_unlinked_games=true' && !init) {
+      if (pathAndSearchOf(url) === '/front-page-category-options?only_unlinked_games=true' && !init?.method) {
         return jsonResponse([
           {
             bgg_id: 1021,
@@ -123,7 +123,10 @@ describe('FrontPageCategoryOptionsPage', () => {
     await user.click(screen.getByRole('checkbox', { name: 'Only count uncovered games' }));
 
     expect(await screen.findByText('7')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-category-options?only_unlinked_games=true');
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4001/front-page-category-options?only_unlinked_games=true',
+      { credentials: 'include' }
+    );
   });
 });
 

@@ -19,6 +19,23 @@ npm run dev:codex
 
 Set `LUDORA_DATABASE_URL` in `.env` before running database-backed routes.
 
+### Admin Authentication
+
+The deployed admin service requires these environment variables:
+
+- `ADMIN_USERNAME`
+- `ADMIN_PASSWORD`
+- `ADMIN_SESSION_SECRET`
+
+Optional session settings:
+
+- `ADMIN_SESSION_TTL_HOURS`, default `12`
+- `ADMIN_SESSION_COOKIE_NAME`, default `ludora_admin_session`
+- `ADMIN_SESSION_COOKIE_SECURE`, default `true` when `NODE_ENV=production`, otherwise `false`
+- `ADMIN_SESSION_COOKIE_SAMESITE`, default `lax`
+
+For split-domain HTTPS deployments, set `ADMIN_SESSION_COOKIE_SECURE=true`, `ADMIN_SESSION_COOKIE_SAMESITE=none`, and `CORS_ORIGIN` to the exact admin UI origin.
+
 ## Database Changes
 
 Use incremental SQL patches in `database/patches/` for existing databases. `database/schema.sql` is the current schema snapshot for review/bootstrap reference and must not be replayed for routine updates.
@@ -71,7 +88,7 @@ npm install
 npm run dev:codex
 ```
 
-The UI expects the service at `VITE_ADMIN_API_URL`, defaulting to `http://localhost:4001`.
+The UI expects the service at `VITE_ADMIN_API_URL`, defaulting to `http://127.0.0.1:4001`.
 
 ## Operations
 
