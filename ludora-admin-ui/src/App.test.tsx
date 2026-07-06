@@ -8,10 +8,21 @@ describe('App', () => {
     vi.restoreAllMocks();
   });
 
-  it('renders the admin shell navigation', () => {
+  it('renders the admin shell navigation', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/discovery/stores') {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
     render(<App />);
 
-    expect(screen.getByRole('heading', { name: /Ludora Admin/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Ludora Admin/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Store Candidates/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^Stores$/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Store Items/i })).toBeInTheDocument();
@@ -28,11 +39,79 @@ describe('App', () => {
     expect(screen.getByRole('link', { name: /Store Item Review/i })).toBeInTheDocument();
   });
 
+  it('renders login when the admin session is missing', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Authentication required' } }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 401
+      })
+    );
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Ludora Admin' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Username')).toBeInTheDocument();
+    expect(screen.getByLabelText('Password')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Store Candidates/i })).not.toBeInTheDocument();
+  });
+
+  it('logs in and renders the admin shell', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return new Response(JSON.stringify({ error: { message: 'Authentication required' } }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 401
+        });
+      }
+      if (url.pathname === '/admin/auth/login' && init?.method === 'POST') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/discovery/stores') {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText('Username'), { target: { value: 'admin' } });
+    fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'secret-password' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+
+    expect(await screen.findByRole('link', { name: /Store Candidates/i })).toBeInTheDocument();
+  });
+
+  it('logs out and returns to login', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/discovery/stores') {
+        return jsonResponse([]);
+      }
+      if (url.pathname === '/admin/auth/logout' && init?.method === 'POST') {
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign out' }));
+
+    expect(await screen.findByLabelText('Username')).toBeInTheDocument();
+  });
+
   it('opens an item form from a hash route', async () => {
     window.location.hash = '#items?id=77';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = String(input);
-      if (new URL(url).pathname === '/items/77') {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/items/77') {
         return jsonResponse({
           canonical_name: 'Coffee Rush',
           id: '77',
@@ -41,19 +120,19 @@ describe('App', () => {
           status: 'active'
         });
       }
-      if (new URL(url).pathname === '/items/77/store-items') {
+      if (url.pathname === '/items/77/store-items') {
         return jsonResponse([]);
       }
-      if (new URL(url).pathname === '/items/77/relationships') {
+      if (url.pathname === '/items/77/relationships') {
         return jsonResponse([]);
       }
-      if (new URL(url).pathname === '/items/77/taxonomy') {
+      if (url.pathname === '/items/77/taxonomy') {
         return jsonResponse({ categories: [], families: [], mechanics: [] });
       }
-      if (new URL(url).pathname === '/items') {
+      if (url.pathname === '/items') {
         return jsonResponse([]);
       }
-      throw new Error(`Unexpected request: ${url}`);
+      throw new Error(`Unexpected request: ${url.toString()}`);
     });
 
     render(<App />);
@@ -66,7 +145,10 @@ describe('App', () => {
     window.location.hash = '#listings?id=3365';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input));
-      if (url.pathname === '/discovery/listings/3365' && !init) {
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/discovery/listings/3365' && init?.method !== 'POST') {
         return jsonResponse({
           id: '3365',
           item_id: null,
@@ -76,7 +158,7 @@ describe('App', () => {
           title: 'Kitchen Rush'
         });
       }
-      if (url.pathname === '/discovery/listings' && !init) {
+      if (url.pathname === '/discovery/listings' && init?.method !== 'POST') {
         return jsonResponse([]);
       }
       if (url.pathname === '/discovery/listings/3365/create-item' && init?.method === 'POST') {
@@ -127,7 +209,16 @@ describe('App', () => {
 
   it('opens the front page category source screen from a hash route', async () => {
     window.location.hash = '#front-page-category-options';
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse([]));
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/front-page-category-options') {
+        return jsonResponse([]);
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
 
     render(<App />);
 
@@ -137,8 +228,11 @@ describe('App', () => {
   it('opens front page category products from a hash route', async () => {
     window.location.hash = '#front-page-category-products?category_type=category&category_id=5&name=Party%20Game';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = String(input);
-      if (new URL(url).pathname === '/front-page-category-options/category/5/products') {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/front-page-category-options/category/5/products') {
         return jsonResponse([
           {
             canonical_name: 'Coffee Rush',
@@ -151,7 +245,7 @@ describe('App', () => {
           }
         ]);
       }
-      throw new Error(`Unexpected request: ${url}`);
+      throw new Error(`Unexpected request: ${url.toString()}`);
     });
 
     render(<App />);
@@ -162,19 +256,26 @@ describe('App', () => {
 
   it('opens the front page preview from a hash route', async () => {
     window.location.hash = '#front-page-preview';
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      jsonResponse([
-        {
-          category_id: 5,
-          category_name: 'Party Game',
-          category_type: 'category',
-          id: 1,
-          order: 10,
-          products: [],
-          title: 'Party Game'
-        }
-      ])
-    );
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/front-page-preview') {
+        return jsonResponse([
+          {
+            category_id: 5,
+            category_name: 'Party Game',
+            category_type: 'category',
+            id: 1,
+            order: 10,
+            products: [],
+            title: 'Party Game'
+          }
+        ]);
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
 
     render(<App />);
 
@@ -185,14 +286,17 @@ describe('App', () => {
   it('opens an operation sub page from a hash route', async () => {
     window.location.hash = '#operations-store-item-update';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const url = String(input);
-      if (new URL(url).pathname === '/admin/operations/store-discovery-runs/latest') {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/admin/operations/store-discovery-runs/latest') {
         return jsonResponse(null);
       }
-      if (new URL(url).pathname === '/stores') {
+      if (url.pathname === '/stores') {
         return jsonResponse([]);
       }
-      throw new Error(`Unexpected request: ${url}`);
+      throw new Error(`Unexpected request: ${url.toString()}`);
     });
 
     render(<App />);
@@ -205,19 +309,26 @@ describe('App', () => {
 
   it('opens the front page preview from the front page review hash alias', async () => {
     window.location.hash = '#front-page-review';
-    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      jsonResponse([
-        {
-          category_id: 5,
-          category_name: 'Party Game',
-          category_type: 'category',
-          id: 1,
-          order: 10,
-          products: [],
-          title: 'Party Game'
-        }
-      ])
-    );
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/front-page-preview') {
+        return jsonResponse([
+          {
+            category_id: 5,
+            category_name: 'Party Game',
+            category_type: 'category',
+            id: 1,
+            order: 10,
+            products: [],
+            title: 'Party Game'
+          }
+        ]);
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
 
     render(<App />);
 

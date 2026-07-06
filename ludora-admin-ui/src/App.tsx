@@ -1,7 +1,8 @@
-import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
+import { Box, CircularProgress, CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import { useEffect, useState } from 'react';
+import { adminApi, setUnauthorizedHandler, type AdminIdentity, type FrontPageCategoryOption, type LoginInput } from './api/client';
 import { AdminLayout, type AdminSection } from './components/AdminLayout';
-import type { FrontPageCategoryOption } from './api/client';
+import { LoginPage } from './components/LoginPage';
 import { FrontPageCategoriesPage } from './pages/FrontPageCategoriesPage';
 import { FrontPageCategoryOptionsPage } from './pages/FrontPageCategoryOptionsPage';
 import { FrontPageCategoryProductsPage } from './pages/FrontPageCategoryProductsPage';
@@ -32,6 +33,11 @@ type AdminRoute = {
   params: URLSearchParams;
   section: AdminSection;
 };
+
+type AuthState =
+  | { status: 'checking' }
+  | { admin: AdminIdentity; status: 'authenticated' }
+  | { error: string | null; status: 'unauthenticated' };
 
 const adminSections: AdminSection[] = [
   'store-candidates',
@@ -143,7 +149,33 @@ function renderSection(
 }
 
 export default function App() {
+  const [authState, setAuthState] = useState<AuthState>({ status: 'checking' });
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [route, setRoute] = useState<AdminRoute>(() => parseAdminRoute());
+
+  useEffect(() => {
+    let isActive = true;
+    setUnauthorizedHandler(() => {
+      setAuthState({ error: null, status: 'unauthenticated' });
+    });
+    adminApi
+      .getCurrentAdmin()
+      .then((admin) => {
+        if (isActive) {
+          setAuthState({ admin, status: 'authenticated' });
+        }
+      })
+      .catch(() => {
+        if (isActive) {
+          setAuthState({ error: null, status: 'unauthenticated' });
+        }
+      });
+
+    return () => {
+      isActive = false;
+      setUnauthorizedHandler(null);
+    };
+  }, []);
 
   useEffect(() => {
     function handleHashChange() {
@@ -168,6 +200,30 @@ export default function App() {
     window.location.hash = nextHash;
   }
 
+  async function handleLogin(input: LoginInput) {
+    setIsLoggingIn(true);
+    setAuthState({ error: null, status: 'unauthenticated' });
+    try {
+      const admin = await adminApi.login(input);
+      setAuthState({ admin, status: 'authenticated' });
+    } catch (error) {
+      setAuthState({
+        error: error instanceof Error ? error.message : 'Unable to sign in',
+        status: 'unauthenticated'
+      });
+    } finally {
+      setIsLoggingIn(false);
+    }
+  }
+
+  async function handleLogout() {
+    try {
+      await adminApi.logout();
+    } finally {
+      setAuthState({ error: null, status: 'unauthenticated' });
+    }
+  }
+
   function navigateToFrontPageCategoryProducts(option: FrontPageCategoryOption) {
     navigateToHash(frontPageCategoryProductsHash(option));
   }
@@ -179,9 +235,17 @@ export default function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <AdminLayout activeSection={route.section} onNavigate={navigate}>
-        {renderSection(route, navigate, navigateToFrontPageCategoryProducts, navigateToItem)}
-      </AdminLayout>
+      {authState.status === 'checking' ? (
+        <Box sx={{ alignItems: 'center', display: 'flex', justifyContent: 'center', minHeight: '100vh' }}>
+          <CircularProgress aria-label="Checking admin session" />
+        </Box>
+      ) : authState.status === 'unauthenticated' ? (
+        <LoginPage error={authState.error} isSubmitting={isLoggingIn} onSubmit={handleLogin} />
+      ) : (
+        <AdminLayout activeSection={route.section} onLogout={handleLogout} onNavigate={navigate}>
+          {renderSection(route, navigate, navigateToFrontPageCategoryProducts, navigateToItem)}
+        </AdminLayout>
+      )}
     </ThemeProvider>
   );
 }

@@ -4,6 +4,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import BuildIcon from '@mui/icons-material/Build';
 import CategoryIcon from '@mui/icons-material/Category';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
+import LogoutIcon from '@mui/icons-material/Logout';
 import MenuOpenIcon from '@mui/icons-material/MenuOpen';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
@@ -13,6 +14,7 @@ import ViewListIcon from '@mui/icons-material/ViewList';
 import {
   AppBar,
   Box,
+  Button,
   Divider,
   Drawer,
   List,
@@ -80,10 +82,11 @@ function isNavigationItemSelected(item: NavigationItem, activeSection: AdminSect
 type AdminLayoutProps = {
   activeSection: AdminSection;
   children: ReactNode;
+  onLogout: () => void;
   onNavigate: (section: AdminSection) => void;
 };
 
-export function AdminLayout({ activeSection, children, onNavigate }: AdminLayoutProps) {
+export function AdminLayout({ activeSection, children, onLogout, onNavigate }: AdminLayoutProps) {
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'grey.100' }}>
       <AppBar
@@ -97,6 +100,10 @@ export function AdminLayout({ activeSection, children, onNavigate }: AdminLayout
           <Typography component="h1" variant="h6" sx={{ fontSize: '1rem', fontWeight: 700 }}>
             Ludora Admin
           </Typography>
+          <Box sx={{ flexGrow: 1 }} />
+          <Button color="inherit" size="small" startIcon={<LogoutIcon fontSize="small" />} onClick={onLogout}>
+            Sign out
+          </Button>
         </Toolbar>
       </AppBar>
 
