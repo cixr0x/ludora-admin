@@ -1,10 +1,16 @@
 import path from 'node:path';
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { loadConfig } from './config.js';
 
 describe('loadConfig', () => {
+  beforeEach(() => {
+    vi.stubEnv('ADMIN_USERNAME', 'admin');
+    vi.stubEnv('ADMIN_PASSWORD', 'secret-password');
+    vi.stubEnv('ADMIN_SESSION_SECRET', 'test-session-secret');
+  });
+
   afterEach(() => {
     vi.unstubAllEnvs();
   });
@@ -107,6 +113,43 @@ describe('loadConfig', () => {
     vi.stubEnv('LUDORA_DISCOVERY_RUNNER', 'sidecar');
 
     expect(() => loadConfig()).toThrow('LUDORA_DISCOVERY_RUNNER must be local or http');
+  });
+
+  it('loads admin auth configuration from environment', () => {
+    vi.stubEnv('ADMIN_USERNAME', 'admin');
+    vi.stubEnv('ADMIN_PASSWORD', 'secret-password');
+    vi.stubEnv('ADMIN_SESSION_SECRET', 'test-session-secret');
+    vi.stubEnv('ADMIN_SESSION_TTL_HOURS', '8');
+    vi.stubEnv('ADMIN_SESSION_COOKIE_NAME', 'custom_admin_session');
+    vi.stubEnv('ADMIN_SESSION_COOKIE_SECURE', 'true');
+    vi.stubEnv('ADMIN_SESSION_COOKIE_SAMESITE', 'none');
+
+    expect(loadConfig().adminAuth).toEqual({
+      cookieName: 'custom_admin_session',
+      cookieSameSite: 'none',
+      cookieSecure: true,
+      password: 'secret-password',
+      sessionSecret: 'test-session-secret',
+      sessionTtlHours: 8,
+      username: 'admin'
+    });
+  });
+
+  it('requires admin auth credentials', () => {
+    vi.stubEnv('ADMIN_USERNAME', undefined);
+    vi.stubEnv('ADMIN_PASSWORD', 'secret-password');
+    vi.stubEnv('ADMIN_SESSION_SECRET', 'test-session-secret');
+
+    expect(() => loadConfig()).toThrow('ADMIN_USERNAME is required');
+  });
+
+  it.each(['0', '-1', 'abc'])('rejects invalid admin session TTL %s', (ttl) => {
+    vi.stubEnv('ADMIN_USERNAME', 'admin');
+    vi.stubEnv('ADMIN_PASSWORD', 'secret-password');
+    vi.stubEnv('ADMIN_SESSION_SECRET', 'test-session-secret');
+    vi.stubEnv('ADMIN_SESSION_TTL_HOURS', ttl);
+
+    expect(() => loadConfig()).toThrow('ADMIN_SESSION_TTL_HOURS must be a positive number');
   });
 
   it('allows both localhost and 127.0.0.1 UI origins by default', () => {

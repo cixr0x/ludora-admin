@@ -78,6 +78,50 @@ describe('ludora admin service', () => {
     expect(protectedResponse.status).toBe(200);
   });
 
+  it('rejects missing and wrong login credentials', async () => {
+    const app = createApp({ database: idleDatabase(), adminAuth: authOptions });
+
+    const missingResponse = await request(app).post('/admin/auth/login').send({ username: 'admin' });
+    const wrongResponse = await request(app).post('/admin/auth/login').send({
+      password: 'wrong-password',
+      username: 'admin'
+    });
+
+    expect(missingResponse.status).toBe(400);
+    expect(missingResponse.body).toEqual({ error: { message: 'username and password are required' } });
+    expect(wrongResponse.status).toBe(401);
+    expect(wrongResponse.body).toEqual({ error: { message: 'Invalid username or password' } });
+  });
+
+  it('rejects tampered admin session cookies', async () => {
+    const app = createApp({ database: idleDatabase(), adminAuth: authOptions });
+    const loginResponse = await request(app).post('/admin/auth/login').send({
+      password: 'secret-password',
+      username: 'admin'
+    });
+    const originalCookie = loginResponse.headers['set-cookie'][0] as string;
+    const tamperedCookie = originalCookie.replace('ludora_admin_session=', 'ludora_admin_session=x');
+
+    const response = await request(app).get('/stores').set('Cookie', tamperedCookie);
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({ error: { message: 'Authentication required' } });
+  });
+
+  it('clears admin session cookies on logout', async () => {
+    const app = createApp({ database: idleDatabase(), adminAuth: authOptions });
+    const loginResponse = await request(app).post('/admin/auth/login').send({
+      password: 'secret-password',
+      username: 'admin'
+    });
+
+    const logoutResponse = await request(app).post('/admin/auth/logout').set('Cookie', loginResponse.headers['set-cookie']);
+
+    expect(logoutResponse.status).toBe(200);
+    expect(logoutResponse.body).toEqual({ data: { ok: true } });
+    expect(logoutResponse.headers['set-cookie'][0]).toContain('Max-Age=0');
+  });
+
   it('returns discovery stores from the injected database query', async () => {
     const rows = [
       { id: 'store-1', name: 'Downtown Games' },

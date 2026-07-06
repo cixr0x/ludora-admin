@@ -83,6 +83,7 @@ const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
 );
 const app = createApp({
+  adminAuth: config.adminAuth,
   amazonTitleExtractionService,
   bggItemImporter,
   database,

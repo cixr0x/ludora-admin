@@ -3,11 +3,14 @@ import { fileURLToPath } from 'node:url';
 
 import dotenv from 'dotenv';
 
+import type { AdminAuthOptions, AdminSameSite } from './auth/adminAuth.js';
+
 dotenv.config({ quiet: true });
 
 type DiscoveryRunnerMode = 'local' | 'http';
 
 export type Config = {
+  adminAuth: AdminAuthOptions;
   bggApiBaseUrl: string;
   bggApiToken?: string;
   openAiApiKey?: string;
@@ -39,6 +42,7 @@ export function loadConfig(): Config {
   const port = readPort();
 
   return {
+    adminAuth: readAdminAuthConfig(),
     bggApiBaseUrl: process.env.BGG_API_BASE_URL ?? 'https://boardgamegeek.com/xmlapi2',
     bggApiToken: process.env.BGG_API_TOKEN,
     openAiApiKey: process.env.OPENAI_API_KEY,
@@ -55,6 +59,58 @@ export function loadConfig(): Config {
 function readOptionalEnv(key: string): string | undefined {
   const value = process.env[key]?.trim();
   return value ? value : undefined;
+}
+
+function readAdminAuthConfig(): AdminAuthOptions {
+  return {
+    cookieName: readEnvWithDefault('ADMIN_SESSION_COOKIE_NAME', 'ludora_admin_session'),
+    cookieSameSite: readAdminCookieSameSite(),
+    cookieSecure: readAdminCookieSecure(),
+    password: readRequiredEnv('ADMIN_PASSWORD'),
+    sessionSecret: readRequiredEnv('ADMIN_SESSION_SECRET'),
+    sessionTtlHours: readAdminSessionTtlHours(),
+    username: readRequiredEnv('ADMIN_USERNAME')
+  };
+}
+
+function readRequiredEnv(key: string): string {
+  const value = readOptionalEnv(key);
+  if (!value) {
+    throw new Error(`${key} is required`);
+  }
+  return value;
+}
+
+function readAdminSessionTtlHours(): number {
+  const rawValue = readEnvWithDefault('ADMIN_SESSION_TTL_HOURS', '12');
+  const value = Number(rawValue);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error('ADMIN_SESSION_TTL_HOURS must be a positive number');
+  }
+  return value;
+}
+
+function readAdminCookieSecure(): boolean {
+  const rawValue = readOptionalEnv('ADMIN_SESSION_COOKIE_SECURE');
+  if (!rawValue) {
+    return process.env.NODE_ENV === 'production';
+  }
+  const normalizedValue = rawValue.toLowerCase();
+  if (normalizedValue === 'true') {
+    return true;
+  }
+  if (normalizedValue === 'false') {
+    return false;
+  }
+  throw new Error('ADMIN_SESSION_COOKIE_SECURE must be true or false');
+}
+
+function readAdminCookieSameSite(): AdminSameSite {
+  const value = readEnvWithDefault('ADMIN_SESSION_COOKIE_SAMESITE', 'lax').toLowerCase();
+  if (value === 'lax' || value === 'none' || value === 'strict') {
+    return value;
+  }
+  throw new Error('ADMIN_SESSION_COOKIE_SAMESITE must be lax, none, or strict');
 }
 
 function readLocalCoverWorkflowConfig(): Config['localCoverWorkflow'] {
