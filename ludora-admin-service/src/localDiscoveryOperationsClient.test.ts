@@ -85,6 +85,18 @@ describe('local discovery operations client', () => {
     });
   });
 
+  it('passes the internal API token to the spawned discovery process', async () => {
+    const { client, spawned } = createClient({ internalApiToken: 'internal-test-token' });
+
+    await client.startStoreDiscoveryRun();
+
+    expect(spawned[0].options).toMatchObject({
+      env: expect.objectContaining({
+        LUDORA_INTERNAL_API_TOKEN: 'internal-test-token'
+      })
+    });
+  });
+
   it('marks a completed run with parsed Python result', async () => {
     const { client, spawned } = createClient();
     const run = await client.startStoreDiscoveryRun();

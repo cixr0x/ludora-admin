@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
 import { createApp } from './app.js';
@@ -21,6 +23,7 @@ import { createOpenAiTranslationClient } from './translation/openAiTranslationCl
 import { createTranslationService } from './translation/translationService.js';
 
 const config = loadConfig();
+const internalApiToken = config.internalApiToken ?? randomBytes(32).toString('hex');
 
 if (!config.databaseUrl) {
   throw new Error('LUDORA_DATABASE_URL is required');
@@ -67,6 +70,7 @@ const localOperationsClient =
   config.discoveryRunner.mode === 'local'
     ? createLocalDiscoveryOperationsClient({
         envFile: config.discoveryRunner.envFile,
+        internalApiToken,
         packageDir: config.discoveryRunner.packageDir,
         pythonExecutable: config.discoveryRunner.pythonExecutable
       })
@@ -83,7 +87,7 @@ const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
 );
 const app = createApp({
-  adminAuth: config.adminAuth,
+  adminAuth: { ...config.adminAuth, internalApiToken },
   amazonTitleExtractionService,
   bggItemImporter,
   database,

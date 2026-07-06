@@ -20,9 +20,11 @@ class AdminItemMatcher:
         admin_api_url: str,
         repository: ProcessingErrorRepository,
         *,
+        internal_api_token: str = "",
         timeout_seconds: float = 60,
     ) -> None:
         self.admin_api_url = admin_api_url.rstrip("/")
+        self.internal_api_token = internal_api_token.strip()
         self.repository = repository
         self.timeout_seconds = timeout_seconds
 
@@ -31,22 +33,32 @@ class AdminItemMatcher:
             return
 
         if not self.admin_api_url:
-            self.repository.mark_item_candidate_processing_error(candidate_id, "Admin item matcher is not configured")
-            return
+            self._fail_candidate(candidate_id, "Admin item matcher is not configured")
 
         request = Request(
             urljoin(f"{self.admin_api_url}/", f"discovery/listings/{quote(str(candidate_id))}/confirm-boardgame"),
             data=json.dumps({"confirmation_source": "automated"}).encode("utf-8"),
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            headers=_admin_headers(self.internal_api_token),
             method="POST",
         )
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
                 response.read()
         except HTTPError as exc:
-            self.repository.mark_item_candidate_processing_error(candidate_id, _http_error_message(exc))
+            self._fail_candidate(candidate_id, _http_error_message(exc))
         except (OSError, TimeoutError, URLError, ValueError) as exc:
-            self.repository.mark_item_candidate_processing_error(candidate_id, f"Admin item matcher failed: {exc}")
+            self._fail_candidate(candidate_id, f"Admin item matcher failed: {exc}")
+
+    def _fail_candidate(self, candidate_id: int, message: str) -> None:
+        self.repository.mark_item_candidate_processing_error(candidate_id, message)
+        raise RuntimeError(message)
+
+
+def _admin_headers(internal_api_token: str) -> dict[str, str]:
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if internal_api_token:
+        headers["X-Ludora-Internal-Token"] = internal_api_token
+    return headers
 
 
 def _http_error_message(error: HTTPError) -> str:

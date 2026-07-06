@@ -117,6 +117,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ) as resolve_browser_fetch_enabled, patch(
             "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
         ) as resolve_admin_api_url, patch(
+            "ludora.operations.resolve_internal_api_token", return_value="internal-token"
+        ) as resolve_internal_api_token, patch(
             "ludora.operations.resolve_ai_classifier_enabled", return_value=True
         ) as resolve_ai_classifier_enabled, patch(
             "ludora.operations.resolve_openai_api_key", return_value="openai-key"
@@ -152,6 +154,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(resolve_browser_fetch_enabled.call_args.kwargs["dotenv_path"], "custom.env")
         resolve_admin_api_url.assert_called_once()
         self.assertEqual(resolve_admin_api_url.call_args.kwargs["dotenv_path"], "custom.env")
+        resolve_internal_api_token.assert_called_once()
+        self.assertEqual(resolve_internal_api_token.call_args.kwargs["dotenv_path"], "custom.env")
         resolve_ai_classifier_enabled.assert_called_once()
         self.assertEqual(resolve_ai_classifier_enabled.call_args.kwargs["dotenv_path"], "custom.env")
         resolve_openai_api_key.assert_called_once()
@@ -161,7 +165,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         resolve_openai_base_url.assert_called_once()
         self.assertEqual(resolve_openai_base_url.call_args.kwargs["dotenv_path"], "custom.env")
         connect_database.assert_called_once_with("postgresql://ludora")
-        admin_item_matcher.assert_called_once_with("http://admin.test", repository)
+        admin_item_matcher.assert_called_once_with("http://admin.test", repository, internal_api_token="internal-token")
+        admin_title_extractor.assert_called_once_with("http://admin.test", internal_api_token="internal-token")
         openai_item_classifier.assert_called_once_with(
             api_key="openai-key",
             model="classifier-model",

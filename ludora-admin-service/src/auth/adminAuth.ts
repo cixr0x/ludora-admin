@@ -7,6 +7,7 @@ export type AdminAuthOptions = {
   cookieName: string;
   cookieSameSite: AdminSameSite;
   cookieSecure: boolean;
+  internalApiToken?: string;
   password: string;
   sessionSecret: string;
   sessionTtlHours: number;
@@ -84,6 +85,12 @@ export function serializeExpiredSessionCookie(options: AdminAuthOptions): string
 
 export function requireAdminAuth(options: AdminAuthOptions) {
   return (request: Request, response: Response, next: NextFunction) => {
+    if (verifyInternalApiToken(request, options)) {
+      response.locals.admin = { username: 'internal-service' };
+      next();
+      return;
+    }
+
     const identity = verifySessionCookie(readCookie(request.headers.cookie, options.cookieName), options);
     if (!identity) {
       response.status(401).json({ error: { message: 'Authentication required' } });
@@ -93,6 +100,15 @@ export function requireAdminAuth(options: AdminAuthOptions) {
     response.locals.admin = identity;
     next();
   };
+}
+
+function verifyInternalApiToken(request: Request, options: AdminAuthOptions): boolean {
+  const expectedToken = options.internalApiToken?.trim();
+  if (!expectedToken) {
+    return false;
+  }
+  const providedToken = request.get('X-Ludora-Internal-Token')?.trim();
+  return Boolean(providedToken) && timingSafeEqual(providedToken ?? '', expectedToken);
 }
 
 export function readCookie(cookieHeader: string | undefined, name: string): string | undefined {

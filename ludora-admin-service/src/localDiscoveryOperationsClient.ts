@@ -21,6 +21,7 @@ type LocalDiscoveryOptions = {
   cancelEscalationMs?: number;
   cancelForceFailMs?: number;
   envFile: string;
+  internalApiToken?: string;
   now?: () => Date;
   packageDir: string;
   pythonExecutable: string;
@@ -39,6 +40,7 @@ export function createLocalDiscoveryOperationsClient({
   cancelEscalationMs = 10_000,
   cancelForceFailMs = 5_000,
   envFile,
+  internalApiToken,
   now = () => new Date(),
   packageDir,
   pythonExecutable,
@@ -68,12 +70,14 @@ export function createLocalDiscoveryOperationsClient({
     };
 
     const args = ['-m', 'ludora.operation_cli', '--env-file', envFile, ...commandArgs];
+    const childEnv = {
+      ...process.env,
+      PYTHONPATH: path.join(packageDir, 'src'),
+      ...(internalApiToken?.trim() ? { LUDORA_INTERNAL_API_TOKEN: internalApiToken.trim() } : {})
+    };
     const child = spawnProcess(pythonExecutable, args, {
       cwd: packageDir,
-      env: {
-        ...process.env,
-        PYTHONPATH: path.join(packageDir, 'src')
-      }
+      env: childEnv
     });
 
     run.child = child;

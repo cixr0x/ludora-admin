@@ -22,6 +22,7 @@ from ludora.config import (
     resolve_classifier_model,
     resolve_database_url,
     resolve_embedding_model,
+    resolve_internal_api_token,
     resolve_openai_base_url,
     resolve_openai_api_key,
 )
@@ -203,12 +204,13 @@ def run_item_discovery(
         try:
             browser_sitemap_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
             admin_api_url = resolve_admin_api_url(env=current_env, dotenv_path=env_file)
+            internal_api_token = resolve_internal_api_token(env=current_env, dotenv_path=env_file)
             item_classifier = _resolve_item_classifier(current_env, env_file)
             tracking_repository = _StoreItemDiscoveryTrackingRepository(repository)
-            item_processor = AdminItemMatcher(admin_api_url, repository)
+            item_processor = AdminItemMatcher(admin_api_url, repository, internal_api_token=internal_api_token)
             normalized_platform = platform.strip().casefold()
             item_title_extractor = (
-                AdminAmazonTitleExtractor(admin_api_url).extract_title
+                AdminAmazonTitleExtractor(admin_api_url, internal_api_token=internal_api_token).extract_title
                 if normalized_platform in {"amazon", "amazon_brand"}
                 else None
             )

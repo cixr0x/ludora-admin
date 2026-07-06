@@ -24,6 +24,7 @@ export type Config = {
     s3Region: string;
     workDir: string;
   };
+  internalApiToken?: string;
   port: number;
   databaseUrl?: string;
   corsOrigin: string[];
@@ -49,6 +50,7 @@ export function loadConfig(): Config {
     openAiBaseUrl: readOptionalEnv('OPENAI_BASE_URL'),
     openAiTranslationModel: process.env.OPENAI_TRANSLATION_MODEL ?? 'gpt-5.4-nano',
     localCoverWorkflow: readLocalCoverWorkflowConfig(),
+    internalApiToken: readOptionalEnv('LUDORA_INTERNAL_API_TOKEN'),
     port,
     databaseUrl: process.env.LUDORA_DATABASE_URL,
     corsOrigin: readCorsOrigins(),

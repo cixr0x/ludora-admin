@@ -105,6 +105,8 @@ Set `AI_ENABLED_CLASSIFIER=false` to use the older heuristic classifier.
 
 Amazon store item discovery calls the admin-service AI endpoint to normalize Amazon product titles before saving `store_items`. The route is `POST /admin/ai/amazon-title-extractions`, and it uses the shared admin-service AI configuration described in `..\docs\ai-api-flow.md`.
 
+Discovery-to-admin calls use `LUDORA_ADMIN_API_URL` plus the `X-Ludora-Internal-Token` header sourced from `LUDORA_INTERNAL_API_TOKEN`. Normal local admin-service runs generate this token and pass it to the Python subprocess automatically. If an internal admin call fails, discovery raises the error so the run is marked failed instead of silently storing partial data.
+
 Amazon supports two platform modes:
 
 - `amazon`: `website_url` is an Amazon Stores page. Discovery builds the store search URL from the page ID.

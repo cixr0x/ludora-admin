@@ -18,6 +18,7 @@ from ludora.config import (
     resolve_classifier_model,
     resolve_database_url,
     resolve_embedding_model,
+    resolve_internal_api_token,
     resolve_openai_base_url,
     resolve_openai_api_key,
 )
@@ -121,6 +122,18 @@ class ConfigTests(unittest.TestCase):
             )
             self.assertEqual(resolve_admin_api_url(env={}, dotenv_path=dotenv_path), "http://admin-dotenv.test")
             self.assertEqual(resolve_admin_api_url(env={}, dotenv_path=Path(temp_dir) / "missing.env"), "http://127.0.0.1:4001")
+
+    def test_resolve_internal_api_token_prefers_environment_then_dotenv(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            dotenv_path = Path(temp_dir) / ".env"
+            dotenv_path.write_text("LUDORA_INTERNAL_API_TOKEN=from-dotenv\n", encoding="utf-8")
+
+            self.assertEqual(
+                resolve_internal_api_token(env={"LUDORA_INTERNAL_API_TOKEN": "from-env"}, dotenv_path=dotenv_path),
+                "from-env",
+            )
+            self.assertEqual(resolve_internal_api_token(env={}, dotenv_path=dotenv_path), "from-dotenv")
+            self.assertEqual(resolve_internal_api_token(env={}, dotenv_path=Path(temp_dir) / "missing.env"), "")
 
     def test_resolve_bgg_api_token_prefers_cli_then_environment_then_dotenv(self):
         with tempfile.TemporaryDirectory() as temp_dir:

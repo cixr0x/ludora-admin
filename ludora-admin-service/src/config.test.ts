@@ -186,6 +186,12 @@ describe('loadConfig', () => {
     });
   });
 
+  it('loads the optional internal API token', () => {
+    vi.stubEnv('LUDORA_INTERNAL_API_TOKEN', 'internal-test-token');
+
+    expect(loadConfig().internalApiToken).toBe('internal-test-token');
+  });
+
   it('loads local cover workflow defaults and overrides', () => {
     vi.stubEnv('LUDORA_COVER_WORK_DIR', 'D:\\covers');
     vi.stubEnv('LUDORA_COVER_S3_BUCKET', 'custom-bucket');

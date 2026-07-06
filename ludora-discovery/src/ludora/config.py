@@ -182,6 +182,18 @@ def resolve_admin_api_url(
     return dotenv_value or "http://127.0.0.1:4001"
 
 
+def resolve_internal_api_token(
+    env: Mapping[str, str] | None = None,
+    dotenv_path: str | Path = ".env",
+) -> str:
+    current_env = env if env is not None else os.environ
+    env_value = current_env.get("LUDORA_INTERNAL_API_TOKEN", "").strip()
+    if env_value:
+        return env_value
+
+    return load_dotenv_values(dotenv_path).get("LUDORA_INTERNAL_API_TOKEN", "").strip()
+
+
 def _strip_optional_quotes(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         return value[1:-1]

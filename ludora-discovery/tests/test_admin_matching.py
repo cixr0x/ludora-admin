@@ -26,12 +26,16 @@ class AdminItemMatcherTests(unittest.TestCase):
         with patch("ludora.admin_matching.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = b'{"data": {"id": 42}}'
 
-            AdminItemMatcher("http://admin.test/", repository).process_candidate(42, record)
+            AdminItemMatcher("http://admin.test/", repository, internal_api_token="internal-test-token").process_candidate(
+                42,
+                record,
+            )
 
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "http://admin.test/discovery/listings/42/confirm-boardgame")
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(request.headers["Content-type"], "application/json")
+        self.assertEqual(request.headers["X-ludora-internal-token"], "internal-test-token")
         self.assertEqual(json.loads(request.data.decode("utf-8")), {"confirmation_source": "automated"})
         repository.mark_item_candidate_processing_error.assert_not_called()
 
@@ -67,7 +71,11 @@ class AdminItemMatcherTests(unittest.TestCase):
         )
 
         with patch("ludora.admin_matching.urlopen", side_effect=error):
-            AdminItemMatcher("http://admin.test", repository).process_candidate(42, record)
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Admin item matcher failed with 503: Item matching service is not configured",
+            ):
+                AdminItemMatcher("http://admin.test", repository).process_candidate(42, record)
 
         repository.mark_item_candidate_processing_error.assert_called_once_with(
             42,
@@ -84,7 +92,8 @@ class AdminItemMatcherTests(unittest.TestCase):
         )
 
         with patch("ludora.admin_matching.urlopen", side_effect=URLError("connection refused")):
-            AdminItemMatcher("http://admin.test", repository).process_candidate(42, record)
+            with self.assertRaisesRegex(RuntimeError, "Admin item matcher failed:"):
+                AdminItemMatcher("http://admin.test", repository).process_candidate(42, record)
 
         self.assertIn(
             "Admin item matcher failed:",

@@ -60,6 +60,17 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ error: { message: 'Authentication required' } });
   });
 
+  it('accepts the configured internal token for protected admin routes', async () => {
+    const app = createApp({
+      database: idleDatabase(),
+      adminAuth: { ...authOptions, internalApiToken: 'internal-test-token' }
+    });
+
+    const response = await request(app).get('/stores').set('X-Ludora-Internal-Token', 'internal-test-token');
+
+    expect(response.status).toBe(200);
+  });
+
   it('sets an HttpOnly session cookie after a successful login', async () => {
     const app = createApp({ database: idleDatabase(), adminAuth: authOptions });
 

@@ -27,12 +27,15 @@ class AdminAmazonTitleExtractorTests(unittest.TestCase):
                 {"data": {"game_title": "Yokai Pagoda"}}
             ).encode("utf-8")
 
-            title = AdminAmazonTitleExtractor("http://admin.test/").extract_title(record)
+            title = AdminAmazonTitleExtractor("http://admin.test/", internal_api_token="internal-test-token").extract_title(
+                record
+            )
 
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "http://admin.test/admin/ai/amazon-title-extractions")
         self.assertEqual(request.get_method(), "POST")
         self.assertEqual(request.headers["Content-type"], "application/json")
+        self.assertEqual(request.headers["X-ludora-internal-token"], "internal-test-token")
         self.assertEqual(
             json.loads(request.data.decode("utf-8")),
             {
@@ -43,7 +46,7 @@ class AdminAmazonTitleExtractorTests(unittest.TestCase):
         )
         self.assertEqual(title, "Yokai Pagoda")
 
-    def test_returns_empty_title_when_admin_ai_is_not_configured(self):
+    def test_raises_when_admin_ai_is_not_configured(self):
         record = DiscoveryItemCandidateRecord(
             store_id=12,
             source_url="https://www.amazon.com.mx/dp/B0TEST1234",
@@ -58,11 +61,13 @@ class AdminAmazonTitleExtractorTests(unittest.TestCase):
         )
 
         with patch("ludora.admin_title_extraction.urlopen", side_effect=error):
-            title = AdminAmazonTitleExtractor("http://admin.test").extract_title(record)
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Admin Amazon title extractor failed with 503: Amazon title extraction service is not configured",
+            ):
+                AdminAmazonTitleExtractor("http://admin.test").extract_title(record)
 
-        self.assertEqual(title, "")
-
-    def test_returns_empty_title_on_network_error(self):
+    def test_raises_on_network_error(self):
         record = DiscoveryItemCandidateRecord(
             store_id=12,
             source_url="https://www.amazon.com.mx/dp/B0TEST1234",
@@ -70,9 +75,8 @@ class AdminAmazonTitleExtractorTests(unittest.TestCase):
         )
 
         with patch("ludora.admin_title_extraction.urlopen", side_effect=URLError("connection refused")):
-            title = AdminAmazonTitleExtractor("http://admin.test").extract_title(record)
-
-        self.assertEqual(title, "")
+            with self.assertRaisesRegex(RuntimeError, "Admin Amazon title extractor failed:"):
+                AdminAmazonTitleExtractor("http://admin.test").extract_title(record)
 
 
 if __name__ == "__main__":
