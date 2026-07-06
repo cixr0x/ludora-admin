@@ -5,6 +5,21 @@ async function importClient() {
   return import('./client');
 }
 
+function expectFetch(fetchMock: unknown, url: string, init?: RequestInit) {
+  expect(fetchMock).toHaveBeenCalledWith(url, withCredentials(init));
+}
+
+function expectFetchNth(fetchMock: unknown, callIndex: number, url: string, init?: RequestInit) {
+  expect(fetchMock).toHaveBeenNthCalledWith(callIndex, url, withCredentials(init));
+}
+
+function withCredentials(init: RequestInit = {}) {
+  return {
+    credentials: 'include' as const,
+    ...init
+  };
+}
+
 describe('fetchRows', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -25,7 +40,7 @@ describe('fetchRows', () => {
   });
 
   it('uses a single slash when the API base URL has a trailing slash', async () => {
-    vi.stubEnv('VITE_ADMIN_API_URL', 'http://localhost:4001/');
+    vi.stubEnv('VITE_ADMIN_API_URL', 'http://127.0.0.1:4001/');
     const { fetchRows } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({ data: [] }), {
@@ -36,7 +51,41 @@ describe('fetchRows', () => {
 
     await fetchRows('/discovery/stores');
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/stores');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/stores');
+  });
+
+  it('sends credentials with admin API requests', async () => {
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: [] }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await adminApi.getStores();
+
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/stores', { credentials: 'include' });
+  });
+
+  it('logs in with credentials included', async () => {
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: { username: 'admin' } }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.login({ password: 'secret-password', username: 'admin' })).resolves.toEqual({
+      username: 'admin'
+    });
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/auth/login', {
+      body: JSON.stringify({ password: 'secret-password', username: 'admin' }),
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
   });
 
   it('rejects when the backend data field is missing', async () => {
@@ -83,7 +132,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startStoreDiscoveryRun()).resolves.toEqual(run);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/store-discovery-runs', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/store-discovery-runs', {
       method: 'POST'
     });
   });
@@ -122,7 +171,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startLocalCoverWorkflow('123')).resolves.toEqual(workflow);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/local-cover-workflows', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/local-cover-workflows', {
       body: JSON.stringify({ store_item_id: '123' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -156,7 +205,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startItemLocalCoverWorkflow('77')).resolves.toEqual(workflow);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/local-cover-workflows/items', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/local-cover-workflows/items', {
       body: JSON.stringify({ item_id: '77' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -185,7 +234,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getCurrentLocalCoverWorkflow()).resolves.toEqual(workflow);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/local-cover-workflows/current');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/local-cover-workflows/current');
   });
 
   it('fetches paged store items with page metadata', async () => {
@@ -214,7 +263,7 @@ describe('fetchRows', () => {
       rows: records,
       total: 73
     });
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings?page=2&page_size=25');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings?page=2&page_size=25');
   });
 
   it('fetches paged store item discovery jobs with page metadata', async () => {
@@ -251,8 +300,8 @@ describe('fetchRows', () => {
       rows: records,
       total: 1
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/admin/operations/store-item-discovery-jobs?page=0&page_size=25&sort=started_at&sort_direction=desc&filter_store_id=12'
+    expectFetch(fetchMock,
+      'http://127.0.0.1:4001/admin/operations/store-item-discovery-jobs?page=0&page_size=25&sort=started_at&sort_direction=desc&filter_store_id=12'
     );
   });
 
@@ -290,8 +339,8 @@ describe('fetchRows', () => {
       rows: records,
       total: 1
     });
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/admin/operations/store-item-update-jobs?page=0&page_size=25&sort=scanned_items&sort_direction=desc&filter_status=completed'
+    expectFetch(fetchMock,
+      'http://127.0.0.1:4001/admin/operations/store-item-update-jobs?page=0&page_size=25&sort=scanned_items&sort_direction=desc&filter_status=completed'
     );
   });
 
@@ -321,7 +370,7 @@ describe('fetchRows', () => {
       rows: records,
       total: 70
     });
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items?page=1&page_size=50&sort=canonical_name');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/items?page=1&page_size=50&sort=canonical_name');
   });
 
   it('fetches item-linked candidates', async () => {
@@ -336,7 +385,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getItemLinkedCandidates('77')).resolves.toEqual(records);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/77/candidates');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/items/77/candidates');
   });
 
   it('fetches item-linked store items', async () => {
@@ -351,7 +400,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getItemStoreItems('77')).resolves.toEqual(records);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/77/store-items');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/items/77/store-items');
   });
 
   it('fetches item taxonomy metadata', async () => {
@@ -370,7 +419,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getItemTaxonomy('77')).resolves.toEqual(taxonomy);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/77/taxonomy');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/items/77/taxonomy');
   });
 
   it('deletes item relationships with a DELETE request', async () => {
@@ -385,7 +434,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.deleteItemRelationship('77', '100')).resolves.toEqual(relationship);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/77/relationships/100', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/items/77/relationships/100', {
       method: 'DELETE'
     });
   });
@@ -428,8 +477,8 @@ describe('fetchRows', () => {
       total: 1
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/discovery/stores?page=0&page_size=25&sort=canonical_domain&sort_direction=asc&filter_canonical_domain=caravana'
+    expectFetch(fetchMock,
+      'http://127.0.0.1:4001/discovery/stores?page=0&page_size=25&sort=canonical_domain&sort_direction=asc&filter_canonical_domain=caravana'
     );
   });
 
@@ -445,7 +494,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getOfferReviews()).resolves.toEqual(records);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/discovery/offer-reviews');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/discovery/offer-reviews');
   });
 
   it('generates Spanish item descriptions with a JSON body', async () => {
@@ -470,7 +519,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.generateDescription(payload)).resolves.toEqual(result);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/description-generations', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/description-generations', {
       body: JSON.stringify(payload),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -495,7 +544,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.createStoreCandidate(payload)).resolves.toEqual(store);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/stores', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/stores', {
       body: JSON.stringify(payload),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -520,7 +569,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.updateStoreCandidate('store-1', payload)).resolves.toEqual(store);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/stores/store-1', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/stores/store-1', {
       body: JSON.stringify(payload),
       headers: { 'Content-Type': 'application/json' },
       method: 'PATCH'
@@ -545,7 +594,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.updateStore('12', payload)).resolves.toEqual(store);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/stores/12', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/stores/12', {
       body: JSON.stringify(payload),
       headers: { 'Content-Type': 'application/json' },
       method: 'PATCH'
@@ -587,8 +636,8 @@ describe('fetchRows', () => {
       total: 1
     });
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/front-page-categories?page=0&page_size=100&sort=title&sort_direction=asc&filter_title=laugh'
+    expectFetch(fetchMock,
+      'http://127.0.0.1:4001/front-page-categories?page=0&page_size=100&sort=title&sort_direction=asc&filter_title=laugh'
     );
   });
 
@@ -610,17 +659,17 @@ describe('fetchRows', () => {
     );
     await expect(adminApi.deleteFrontPageCategory('1')).resolves.toEqual(category);
 
-    expect(fetchMock).toHaveBeenNthCalledWith(1, 'http://localhost:4001/front-page-categories', {
+    expectFetchNth(fetchMock, 1, 'http://127.0.0.1:4001/front-page-categories', {
       body: JSON.stringify({ category_id: 5, category_type: 'category', order: 10, title: 'Need a laugh?' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(2, 'http://localhost:4001/front-page-categories/1', {
+    expectFetchNth(fetchMock, 2, 'http://127.0.0.1:4001/front-page-categories/1', {
       body: JSON.stringify({ category_id: 6, category_type: 'family', order: 20, title: 'Cozy nights' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'PATCH'
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, 'http://localhost:4001/front-page-categories/1', {
+    expectFetchNth(fetchMock, 3, 'http://127.0.0.1:4001/front-page-categories/1', {
       method: 'DELETE'
     });
   });
@@ -647,7 +696,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getFrontPageCategoryOptions()).resolves.toEqual(rows);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-category-options');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/front-page-category-options');
   });
 
   it('fetches front page category taxonomy options with uncovered-game counts', async () => {
@@ -672,7 +721,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getFrontPageCategoryOptions({ onlyUnlinkedGames: true })).resolves.toEqual(rows);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-category-options?only_unlinked_games=true');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/front-page-category-options?only_unlinked_games=true');
   });
 
   it('fetches products linked to a front page category taxonomy option', async () => {
@@ -697,7 +746,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getFrontPageCategoryProducts('mechanic', 8)).resolves.toEqual(rows);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-category-options/mechanic/8/products');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/front-page-category-options/mechanic/8/products');
   });
 
   it('starts random front page category item assignment with a POST request', async () => {
@@ -712,7 +761,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.assignRandomFrontPageCategoryItems()).resolves.toEqual(result);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-categories/random-item-assignments', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/front-page-categories/random-item-assignments', {
       method: 'POST'
     });
   });
@@ -729,8 +778,8 @@ describe('fetchRows', () => {
 
     await expect(adminApi.assignBalancedFrontPageCategoryItems()).resolves.toEqual(result);
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:4001/front-page-categories/balanced-random-item-assignments',
+    expectFetch(fetchMock,
+      'http://127.0.0.1:4001/front-page-categories/balanced-random-item-assignments',
       {
         method: 'POST'
       }
@@ -769,7 +818,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.getFrontPagePreview()).resolves.toEqual(rows);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/front-page-preview');
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/front-page-preview');
   });
 
   it('updates store items with a JSON body', async () => {
@@ -789,7 +838,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.updateItemCandidate('3365', payload)).resolves.toEqual(itemCandidate);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365', {
       body: JSON.stringify(payload),
       headers: { 'Content-Type': 'application/json' },
       method: 'PATCH'
@@ -808,7 +857,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.confirmItemCandidateBoardgame('3365')).resolves.toEqual(itemCandidate);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/confirm-boardgame', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365/confirm-boardgame', {
       method: 'POST'
     });
   });
@@ -825,7 +874,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.updateItemCandidateListingStatus('3365', 'LISTED')).resolves.toEqual(itemCandidate);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/listing-status', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365/listing-status', {
       body: JSON.stringify({ listing_status: 'LISTED' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'PATCH'
@@ -844,7 +893,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.createItemFromCandidate('3365')).resolves.toEqual(itemCandidate);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/create-item', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365/create-item', {
       body: JSON.stringify({ bgg_id: '', implements: false }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -865,7 +914,7 @@ describe('fetchRows', () => {
       itemCandidate
     );
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/create-item', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365/create-item', {
       body: JSON.stringify({ bgg_id: '223953', implements: true }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -884,7 +933,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.createItemFromBggId('3365', '377061')).resolves.toEqual(itemCandidate);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/listings/3365/create-item-from-bgg', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365/create-item-from-bgg', {
       body: JSON.stringify({ bgg_id: '377061' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -908,7 +957,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.updateItem('377061', payload)).resolves.toEqual(item);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/items/377061', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/items/377061', {
       body: JSON.stringify(payload),
       headers: { 'Content-Type': 'application/json' },
       method: 'PATCH'
@@ -935,7 +984,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startStoreItemDiscoveryRun('12')).resolves.toEqual(run);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/stores/12/item-discovery-runs', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/stores/12/item-discovery-runs', {
       method: 'POST'
     });
   });
@@ -960,7 +1009,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startStoreItemDiscoveryRun({ store_ids: [12, 34] })).resolves.toEqual(run);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-discovery-runs', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/item-discovery-runs', {
       body: JSON.stringify({ store_ids: [12, 34] }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -989,7 +1038,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startItemUpdateRun()).resolves.toEqual(run);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/item-update-runs', {
       method: 'POST'
     });
   });
@@ -1016,7 +1065,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startItemUpdateRun({ store_ids: [12, 34] })).resolves.toEqual(run);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/item-update-runs', {
       body: JSON.stringify({ store_ids: [12, 34] }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -1045,7 +1094,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startItemUpdateRun({ all_stores: true })).resolves.toEqual(run);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-update-runs', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/item-update-runs', {
       body: JSON.stringify({ all_stores: true }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -1077,7 +1126,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.startItemEmbeddingRun('missing')).resolves.toEqual(run);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/item-embedding-runs', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/item-embedding-runs', {
       body: JSON.stringify({ refresh_mode: 'missing' }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
@@ -1104,7 +1153,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.cancelStoreDiscoveryRun('run-5')).resolves.toEqual(run);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/admin/operations/store-discovery-runs/run-5/cancel', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/store-discovery-runs/run-5/cancel', {
       method: 'POST'
     });
   });
@@ -1121,7 +1170,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.approveStoreCandidate('store-1')).resolves.toEqual(store);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/stores/store-1/approve', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/stores/store-1/approve', {
       method: 'POST'
     });
   });
@@ -1138,7 +1187,7 @@ describe('fetchRows', () => {
 
     await expect(adminApi.rejectStoreCandidate('store-1')).resolves.toEqual(store);
 
-    expect(fetchMock).toHaveBeenCalledWith('http://localhost:4001/discovery/stores/store-1/reject', {
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/stores/store-1/reject', {
       method: 'POST'
     });
   });

@@ -1,4 +1,4 @@
-const API_URL = import.meta.env.VITE_ADMIN_API_URL ?? 'http://localhost:4001';
+const API_URL = import.meta.env.VITE_ADMIN_API_URL ?? 'http://127.0.0.1:4001';
 const INVALID_DATA_ERROR = 'Invalid API response: data must be an array';
 
 type DataResponse<T> = {
@@ -16,6 +16,15 @@ type ErrorResponse = {
 };
 
 export type AdminRecord = Record<string, unknown>;
+
+export type AdminIdentity = {
+  username: string;
+};
+
+export type LoginInput = {
+  password: string;
+  username: string;
+};
 
 export type PagedRows<T extends AdminRecord> = {
   page: number;
@@ -205,6 +214,12 @@ function buildApiUrl(path: string) {
   return `${API_URL.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`;
 }
 
+let unauthorizedHandler: (() => void) | null = null;
+
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  unauthorizedHandler = handler;
+}
+
 export async function fetchRows<T extends AdminRecord>(path: string): Promise<T[]> {
   const rows = await fetchData<T[]>(path);
 
@@ -222,9 +237,15 @@ async function fetchData<T>(path: string, init?: RequestInit): Promise<T> {
 
 async function fetchEnvelope<T>(path: string, init?: RequestInit): Promise<DataResponse<T>> {
   const url = buildApiUrl(path);
-  const response = init ? await fetch(url, init) : await fetch(url);
+  const response = await fetch(url, {
+    credentials: 'include',
+    ...(init ?? {})
+  });
 
   if (!response.ok) {
+    if (response.status === 401) {
+      unauthorizedHandler?.();
+    }
     throw new Error(await readErrorMessage(response));
   }
 
@@ -292,6 +313,12 @@ function pagedPath(path: string, query: TableQuery) {
 }
 
 export const adminApi = {
+  getCurrentAdmin: () => fetchData<AdminIdentity>('/admin/auth/me'),
+  login: (input: LoginInput) => sendJson<AdminIdentity>('/admin/auth/login', 'POST', input),
+  logout: () =>
+    fetchData<{ ok: true }>('/admin/auth/logout', {
+      method: 'POST'
+    }),
   getStores: () => fetchRows('/stores'),
   getStoresPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/stores', query), query),
   updateStore: (id: string, input: StoreInput) => sendJson<AdminRecord>(`/stores/${encodeURIComponent(id)}`, 'PATCH', input),
