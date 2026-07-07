@@ -40,6 +40,13 @@ class ItemCandidateRepository(Protocol):
     ) -> object | None:
         ...
 
+    def update_item_candidate_price_availability(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        refreshed_record: DiscoveryItemCandidateRecord,
+    ) -> object | None:
+        ...
+
 
 class ItemCandidateProcessor(Protocol):
     def process_candidate(self, candidate_id: int, record: DiscoveryItemCandidateRecord) -> None:
@@ -171,7 +178,9 @@ def update_confirmed_store_item_details(
                 if getattr(update_result, "changed", False):
                     records.updated_items += 1
             else:
-                repository.upsert_item_candidate(refreshed_record)
+                update_result = repository.update_item_candidate_price_availability(existing_record, refreshed_record)
+                if getattr(update_result, "changed", False):
+                    records.updated_items += 1
             records.append(refreshed_record)
         return records
     finally:

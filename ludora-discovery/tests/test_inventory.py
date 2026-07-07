@@ -25,6 +25,7 @@ class FakeRepository:
         self.confirmed_items_store_ids = None
         self.update_change_log_calls = []
         self.update_change_log_results = list(update_change_log_results or [])
+        self.price_availability_update_calls = []
 
     def item_candidate_exists(self, store_id, source_url):
         self.exists_checks.append((store_id, source_url))
@@ -44,6 +45,11 @@ class FakeRepository:
         self.item_records.append(refreshed_record)
         if self.update_change_log_results:
             return self.update_change_log_results.pop(0)
+        return ItemCandidateUpsertResult(candidate_id=101, listing_status="LISTED", item_id=refreshed_record.item_id, should_process=False)
+
+    def update_item_candidate_price_availability(self, existing_record, refreshed_record):
+        self.price_availability_update_calls.append((existing_record, refreshed_record))
+        self.item_records.append(refreshed_record)
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="LISTED", item_id=refreshed_record.item_id, should_process=False)
 
 
@@ -482,7 +488,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records, [])
         self.assertEqual(repository.exists_checks, [(12, product_url)])
 
-    def test_update_confirmed_store_item_details_refreshes_only_confirmed_boardgame_rows(self):
+    def test_update_confirmed_store_item_details_refreshes_confirmed_rows_with_price_availability_update(self):
         detail_html = """
         <script type="application/ld+json">
         {
@@ -518,6 +524,8 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].title, "Catan Nueva Edicion")
         self.assertEqual(records[0].price, "799.00")
+        self.assertEqual(len(repository.price_availability_update_calls), 1)
+        self.assertEqual(repository.price_availability_update_calls[0][0], existing_record)
         self.assertEqual(repository.item_records[0].item_id, 77)
         self.assertEqual(repository.item_records[0].listing_status, "LISTED")
         self.assertTrue(repository.item_records[0].is_boardgame)

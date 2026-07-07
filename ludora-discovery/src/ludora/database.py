@@ -96,28 +96,13 @@ class StoreItemDiscoverySource:
     platform: str
 
 
-STORE_ITEM_UPDATE_CHANGE_LOG_FIELDS = (
-    "source_listing_url",
-    "title",
-    "publisher",
-    "description",
-    "item_type",
-    "min_players",
-    "max_players",
-    "min_minutes",
-    "max_minutes",
-    "min_age",
-    "language",
-    "language_source",
-    "language_evidence",
-    "image_url",
+STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS = (
     "raw_price",
     "price",
     "price_source",
     "currency",
     "availability",
     "availability_source",
-    "store_sku",
 )
 
 
@@ -357,9 +342,9 @@ class DiscoveryRepository:
 
         with self.connection.cursor() as cursor:
             cursor.execute(
-                _update_item_candidate_sql(refresh_from_source=True),
+                _update_item_candidate_price_availability_sql(),
                 (
-                    *self._item_candidate_write_params(data),
+                    *self._item_candidate_price_availability_params(data),
                     store_item_id,
                 ),
             )
@@ -385,6 +370,37 @@ class DiscoveryRepository:
                         _jsonb_log_value(new_value),
                     ),
                 )
+        self.connection.commit()
+        return ItemCandidateUpsertResult(
+            candidate_id=store_item_id,
+            listing_status=refreshed_record.listing_status,
+            item_id=refreshed_record.item_id,
+            should_process=False,
+            created=False,
+            changed=bool(changes),
+        )
+
+    def update_item_candidate_price_availability(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        refreshed_record: DiscoveryItemCandidateRecord,
+    ) -> ItemCandidateUpsertResult:
+        store_item_id = existing_record.store_item_id or refreshed_record.store_item_id
+        if store_item_id is None:
+            raise ValueError("store item id is required to update price and availability")
+
+        refreshed_record.store_item_id = store_item_id
+        data = refreshed_record.to_db_dict()
+        changes = _item_update_changes(existing_record, refreshed_record)
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                _update_item_candidate_price_availability_sql(),
+                (
+                    *self._item_candidate_price_availability_params(data),
+                    store_item_id,
+                ),
+            )
         self.connection.commit()
         return ItemCandidateUpsertResult(
             candidate_id=store_item_id,
@@ -660,6 +676,9 @@ class DiscoveryRepository:
             json.dumps(data["classification_reasons"], ensure_ascii=False),
         )
 
+    def _item_candidate_price_availability_params(self, data: dict[str, object]) -> tuple[object, ...]:
+        return tuple(data[field_name] for field_name in STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS)
+
     def mark_item_candidate_not_boardgame(self, candidate_id: int, reasons: list[str]) -> None:
         self._mark_item_candidate_no_match(candidate_id, reasons)
 
@@ -789,6 +808,21 @@ def _update_item_candidate_sql(*, refresh_from_source: bool = False) -> str:
     """
 
 
+def _update_item_candidate_price_availability_sql() -> str:
+    return """
+    update store_items
+    set raw_price = %s,
+        price = %s,
+        price_source = %s,
+        currency = %s,
+        availability = %s,
+        availability_source = %s,
+        last_seen_at = now(),
+        refreshed_date = now()
+    where id = %s
+    """
+
+
 def _item_candidate_select_columns() -> str:
     return """
         store_id,
@@ -886,7 +920,7 @@ def _item_update_changes(
     existing_data = existing_record.to_db_dict()
     refreshed_data = refreshed_record.to_db_dict()
     changes: list[tuple[str, object, object]] = []
-    for field_name in STORE_ITEM_UPDATE_CHANGE_LOG_FIELDS:
+    for field_name in STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS:
         old_value = existing_data[field_name]
         new_value = refreshed_data[field_name]
         if not _item_update_values_equal(field_name, old_value, new_value):

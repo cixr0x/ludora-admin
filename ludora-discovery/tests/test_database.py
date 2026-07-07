@@ -323,7 +323,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("completed", "", completed_at, 5, 3, 99))
         self.assertEqual(connection.commits, 2)
 
-    def test_updates_item_candidate_and_logs_changed_refresh_fields(self):
+    def test_updates_item_candidate_and_logs_only_price_availability_refresh_fields(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)
         existing_record = DiscoveryItemCandidateRecord(
@@ -345,8 +345,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
         refreshed_record = replace(
             existing_record,
             title="Catan Nueva Edicion",
+            description="Updated detail page text",
+            image_url="https://example.mx/catan-new.jpg",
             raw_price="$799",
             price="799.00",
+            price_source="json_ld_offer",
+            currency="USD",
+            availability="out_of_stock",
+            availability_source="generic_text",
         )
 
         result = repository.update_item_candidate_with_change_log(
@@ -361,23 +367,36 @@ class DatabaseRepositoryTests(unittest.TestCase):
         update_sql, update_params = connection.cursor_instance.executions[0]
         change_entries = connection.cursor_instance.executions[1:]
         self.assertIn("update store_items", update_sql.casefold())
+        self.assertNotIn("title = %s", update_sql.casefold())
+        self.assertNotIn("description = %s", update_sql.casefold())
+        self.assertNotIn("image_url = %s", update_sql.casefold())
         self.assertIn("refreshed_date = now()", update_sql.casefold())
         self.assertNotIn("last_updated = now()", update_sql.casefold())
         self.assertEqual(update_params[-1], 56)
-        self.assertEqual(len(change_entries), 3)
+        self.assertEqual(len(change_entries), 6)
         self.assertEqual(connection.commits, 1)
         self.assertTrue(result.changed)
         logged_fields = [params[3] for _sql, params in change_entries]
-        self.assertEqual(logged_fields, ["title", "raw_price", "price"])
+        self.assertEqual(
+            logged_fields,
+            [
+                "raw_price",
+                "price",
+                "price_source",
+                "currency",
+                "availability",
+                "availability_source",
+            ],
+        )
         for sql, params in change_entries:
             self.assertIn("insert into store_item_update_change_log", sql.casefold())
             self.assertEqual(params[0], 99)
             self.assertEqual(params[1], "run-123")
             self.assertEqual(params[2], 56)
-        self.assertEqual(json.loads(change_entries[0][1][4]), "Catan")
-        self.assertEqual(json.loads(change_entries[0][1][5]), "Catan Nueva Edicion")
-        self.assertEqual(json.loads(change_entries[2][1][4]), "899.00")
-        self.assertEqual(json.loads(change_entries[2][1][5]), "799.00")
+        self.assertEqual(json.loads(change_entries[0][1][4]), "$899")
+        self.assertEqual(json.loads(change_entries[0][1][5]), "$799")
+        self.assertEqual(json.loads(change_entries[1][1][4]), "899.00")
+        self.assertEqual(json.loads(change_entries[1][1][5]), "799.00")
 
     def test_update_change_log_compares_price_numerically(self):
         connection = FakeConnection()
