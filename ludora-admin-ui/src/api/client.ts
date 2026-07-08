@@ -53,6 +53,54 @@ export type LocalCoverWorkflow = {
   workflow_id: string;
 };
 
+export type CoverImageField = 'image_url' | 'image_url_es';
+
+export type OptimizedCoverImage = {
+  applied: boolean;
+  field: CoverImageField;
+  itemId: number;
+  newName: string;
+  optimizedSizeBytes: number;
+  originalSizeBytes: number | null;
+  publicUrl: string;
+  s3Key: string;
+  sourceName: string;
+  sourceUrl: string;
+};
+
+export type SkippedCoverImage = {
+  field: CoverImageField;
+  itemId: number;
+  reason: 'blank' | 'managed' | 'within_limit';
+  sizeBytes?: number | null;
+  sourceUrl?: string;
+};
+
+export type FailedCoverImage = {
+  error: string;
+  field: CoverImageField;
+  itemId: number;
+  sourceUrl: string;
+};
+
+export type ExternalCoverImageOptimizationResult = {
+  failures: FailedCoverImage[];
+  optimized: OptimizedCoverImage[];
+  skipped: SkippedCoverImage[];
+  summary: {
+    downloadedImages: number;
+    failedImages: number;
+    imageFields: number;
+    itemsScanned: number;
+    optimizedImages: number;
+    skippedBlank: number;
+    skippedManaged: number;
+    skippedWithinLimit: number;
+    updatedRows: number;
+    uploadedImages: number;
+  };
+};
+
 export type TableQuery = {
   filters?: Record<string, string>;
   page: number;
@@ -451,6 +499,10 @@ export const adminApi = {
     }),
   startStoreDiscoveryRun: () =>
     fetchData<StoreDiscoveryRun>('/admin/operations/store-discovery-runs', {
+      method: 'POST'
+    }),
+  optimizeExternalCoverImages: () =>
+    fetchData<ExternalCoverImageOptimizationResult>('/admin/operations/external-cover-image-optimizations', {
       method: 'POST'
     }),
   cancelStoreDiscoveryRun: (runId: string) =>

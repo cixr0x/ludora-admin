@@ -15,7 +15,7 @@ import { createDescriptionGenerationRouter } from './routes/descriptionGeneratio
 import { createDiscoveryRouter } from './routes/discovery.js';
 import { createHealthRouter } from './routes/health.js';
 import { createLocalCoverWorkflowRouter } from './routes/localCoverWorkflow.js';
-import { createOperationsRouter } from './routes/operations.js';
+import { createOperationsRouter, type ExternalCoverImageOptimizerRunner } from './routes/operations.js';
 import { createTutorialCurationRouter } from './routes/tutorialCuration.js';
 import { createTranslationRouter } from './routes/translation.js';
 import type { TranslationService } from './translation/translationService.js';
@@ -34,6 +34,7 @@ type CreateAppOptions = {
   database: Database;
   corsOrigin?: string | string[];
   descriptionGenerationService?: DescriptionGenerationService;
+  externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner;
   itemMatchingService?: ItemMatchingService;
   localCoverWorkflowManager?: LocalCoverWorkflowManager;
   operationsClient?: DiscoveryOperationsClient;
@@ -48,6 +49,7 @@ export function createApp({
   database,
   corsOrigin,
   descriptionGenerationService,
+  externalCoverImageOptimizer,
   itemMatchingService,
   localCoverWorkflowManager,
   operationsClient,
@@ -72,7 +74,7 @@ export function createApp({
     app.use(createLocalCoverWorkflowRouter(localCoverWorkflowManager));
   }
   if (operationsClient) {
-    app.use(createOperationsRouter(operationsClient, database));
+    app.use(createOperationsRouter(operationsClient, database, externalCoverImageOptimizer));
   }
   app.use(jsonErrorHandler);
 

@@ -3,6 +3,7 @@ import AddCircleIcon from '@mui/icons-material/AddCircle';
 import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import BuildIcon from '@mui/icons-material/Build';
 import CategoryIcon from '@mui/icons-material/Category';
+import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuOpenIcon from '@mui/icons-material/MenuOpen';
@@ -36,6 +37,7 @@ export type AdminSection =
   | 'operations-store-item-discovery'
   | 'operations-store-item-update'
   | 'operations-item-embeddings'
+  | 'operations-image-optimization'
   | 'items'
   | 'front-page-category-options'
   | 'front-page-category-products'
@@ -65,7 +67,8 @@ const navigationItems: NavigationItem[] = [
       { id: 'operations-store-discovery', label: 'Store Discovery', icon: <TravelExploreIcon fontSize="small" /> },
       { id: 'operations-store-item-discovery', label: 'Store Item Discovery', icon: <Inventory2Icon fontSize="small" /> },
       { id: 'operations-store-item-update', label: 'Store Item Update', icon: <UpdateIcon fontSize="small" /> },
-      { id: 'operations-item-embeddings', label: 'Item Embeddings', icon: <AutoAwesomeIcon fontSize="small" /> }
+      { id: 'operations-item-embeddings', label: 'Item Embeddings', icon: <AutoAwesomeIcon fontSize="small" /> },
+      { id: 'operations-image-optimization', label: 'Image Optimization', icon: <ImageSearchIcon fontSize="small" /> }
     ]
   },
   { id: 'items', label: 'Items', icon: <CategoryIcon fontSize="small" /> },

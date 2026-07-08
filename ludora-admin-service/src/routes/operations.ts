@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import type { Database } from '../db.js';
 import type { DiscoveryOperationsClient, ItemDiscoveryRunScope, ItemUpdateRunScope } from '../discoveryOperations.js';
+import type { ExternalCoverImageOptimizerOptions, ExternalCoverImageOptimizerResult } from '../externalCoverImageOptimizer.js';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -16,6 +17,10 @@ type TableQueryConfig = {
   defaultSortDirection: SortDirection;
   fromSql: string;
   selectSql: string;
+};
+
+export type ExternalCoverImageOptimizerRunner = {
+  run(options: ExternalCoverImageOptimizerOptions): Promise<ExternalCoverImageOptimizerResult>;
 };
 
 const storeItemDiscoveryJobSelect = `
@@ -68,7 +73,11 @@ const storeItemUpdateJobsTableConfig: TableQueryConfig = {
   selectSql: storeItemUpdateJobSelect
 };
 
-export function createOperationsRouter(operationsClient: DiscoveryOperationsClient, database: Database): Router {
+export function createOperationsRouter(
+  operationsClient: DiscoveryOperationsClient,
+  database: Database,
+  externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner
+): Router {
   const router = Router();
 
   router.post('/admin/operations/store-discovery-runs', async (_request, response, next) => {
@@ -166,6 +175,18 @@ export function createOperationsRouter(operationsClient: DiscoveryOperationsClie
       const refreshMode = parseEmbeddingRefreshMode(request.body);
       const run = await operationsClient.startItemEmbeddingRun(refreshMode);
       response.status(202).json({ data: run });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/admin/operations/external-cover-image-optimizations', async (_request, response, next) => {
+    try {
+      if (!externalCoverImageOptimizer) {
+        throw httpError(404, 'External cover image optimizer is not configured');
+      }
+      const result = await externalCoverImageOptimizer.run({ apply: true });
+      response.status(202).json({ data: result });
     } catch (error) {
       next(error);
     }

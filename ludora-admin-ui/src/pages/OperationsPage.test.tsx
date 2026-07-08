@@ -502,6 +502,76 @@ describe('OperationsPage', () => {
     });
   });
 
+  it('runs external cover image optimization and renders the returned summary', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
+        return jsonResponse({ data: null });
+      }
+      if (url.endsWith('/admin/operations/external-cover-image-optimizations') && init?.method === 'POST') {
+        return jsonResponse(
+          {
+            data: {
+              failures: [
+                {
+                  error: 'Could not download image: 404 Not Found',
+                  field: 'image_url_es',
+                  itemId: 88,
+                  sourceUrl: 'https://cdn.example/missing.jpg'
+                }
+              ],
+              optimized: [
+                {
+                  applied: true,
+                  field: 'image_url',
+                  itemId: 77,
+                  newName: '77-coffeerush.en.webp',
+                  optimizedSizeBytes: 84210,
+                  originalSizeBytes: 180000,
+                  publicUrl: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/77-coffeerush.en.webp',
+                  s3Key: 'boardgame/77-coffeerush.en.webp',
+                  sourceName: 'coffee.jpg',
+                  sourceUrl: 'https://cf.geekdo-images.com/coffee.jpg'
+                }
+              ],
+              skipped: [],
+              summary: {
+                downloadedImages: 1,
+                failedImages: 1,
+                imageFields: 4,
+                itemsScanned: 2,
+                optimizedImages: 1,
+                skippedBlank: 0,
+                skippedManaged: 0,
+                skippedWithinLimit: 0,
+                updatedRows: 1,
+                uploadedImages: 1
+              }
+            }
+          },
+          202
+        );
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<OperationsPage operation="image_optimization" />);
+
+    await screen.findByRole('button', { name: /Optimize External Cover Images/i });
+    await userEvent.click(screen.getByRole('button', { name: /Optimize External Cover Images/i }));
+
+    expect(await screen.findByText('Image optimization summary')).toBeInTheDocument();
+    expect(screen.getByText('Items scanned')).toBeInTheDocument();
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.getByText('Optimized images')).toBeInTheDocument();
+    expect(screen.getByText('Updated rows')).toBeInTheDocument();
+    expect(screen.getByText('Could not download image: 404 Not Found')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/external-cover-image-optimizations', {
+      credentials: 'include',
+      method: 'POST'
+    });
+  });
+
   it('starts store item discovery for all stores and refreshes the discovery job log table', async () => {
     let jobRequests = 0;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

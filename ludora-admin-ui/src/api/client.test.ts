@@ -137,6 +137,52 @@ describe('fetchRows', () => {
     });
   });
 
+  it('runs external cover image optimization with a POST request', async () => {
+    const result = {
+      failures: [],
+      optimized: [
+        {
+          applied: true,
+          field: 'image_url',
+          itemId: 77,
+          newName: '77-coffeerush.en.webp',
+          optimizedSizeBytes: 84210,
+          originalSizeBytes: 180000,
+          publicUrl: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/77-coffeerush.en.webp',
+          s3Key: 'boardgame/77-coffeerush.en.webp',
+          sourceName: 'coffee.jpg',
+          sourceUrl: 'https://cf.geekdo-images.com/coffee.jpg'
+        }
+      ],
+      skipped: [],
+      summary: {
+        downloadedImages: 1,
+        failedImages: 0,
+        imageFields: 2,
+        itemsScanned: 1,
+        optimizedImages: 1,
+        skippedBlank: 0,
+        skippedManaged: 0,
+        skippedWithinLimit: 1,
+        updatedRows: 1,
+        uploadedImages: 1
+      }
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: result }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 202
+      })
+    );
+
+    await expect(adminApi.optimizeExternalCoverImages()).resolves.toEqual(result);
+
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/external-cover-image-optimizations', {
+      method: 'POST'
+    });
+  });
+
   it('rejects with the backend error message when an admin request fails', async () => {
     const { adminApi } = await importClient();
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(

@@ -19,6 +19,8 @@ import { useEffect, useState } from 'react';
 import {
   adminApi,
   type AdminRecord,
+  type ExternalCoverImageOptimizationResult,
+  type FailedCoverImage,
   type ItemDiscoveryRunScope,
   type ItemEmbeddingRunResult,
   type ItemDiscoveryRunResult,
@@ -31,10 +33,14 @@ import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 type LoadState = 'loading' | 'ready' | 'error';
-export type OperationPageMode = 'item_discovery' | 'item_embeddings' | 'item_update' | 'store_discovery';
+export type OperationPageMode = 'image_optimization' | 'item_discovery' | 'item_embeddings' | 'item_update' | 'store_discovery';
 type StartingOperation = OperationPageMode | '';
 
 const operationPageContent: Record<OperationPageMode, { description: string; title: string }> = {
+  image_optimization: {
+    description: 'Optimize oversized external item cover images and update catalog image URLs.',
+    title: 'Image Optimization'
+  },
   item_discovery: {
     description: 'Discover store items for selected stores or all stores.',
     title: 'Store Item Discovery'
@@ -182,6 +188,22 @@ function itemUpdateResult(run: StoreDiscoveryRun): ItemUpdateRunResult | null {
 function itemEmbeddingResult(run: StoreDiscoveryRun): ItemEmbeddingRunResult | null {
   return run.type === 'item_embeddings' ? (run.result as ItemEmbeddingRunResult | null) : null;
 }
+
+const imageOptimizationSummaryItems: Array<{
+  key: keyof ExternalCoverImageOptimizationResult['summary'];
+  label: string;
+}> = [
+  { key: 'itemsScanned', label: 'Items scanned' },
+  { key: 'imageFields', label: 'Image fields' },
+  { key: 'downloadedImages', label: 'Downloaded images' },
+  { key: 'optimizedImages', label: 'Optimized images' },
+  { key: 'uploadedImages', label: 'Uploaded images' },
+  { key: 'updatedRows', label: 'Updated rows' },
+  { key: 'failedImages', label: 'Failed images' },
+  { key: 'skippedManaged', label: 'Skipped managed' },
+  { key: 'skippedWithinLimit', label: 'Skipped within limit' },
+  { key: 'skippedBlank', label: 'Skipped blank' }
+];
 
 function optionalRecordText(record: AdminRecord, key: string): string {
   const value = record[key];
@@ -493,7 +515,64 @@ function JobTableLoading({ label }: { label: string }) {
   );
 }
 
+function ImageOptimizationSummary({ result }: { result: ExternalCoverImageOptimizationResult }) {
+  return (
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Stack spacing={2}>
+        <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+          Image optimization summary
+        </Typography>
+        <Box
+          sx={{
+            display: 'grid',
+            gap: 1,
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))'
+          }}
+        >
+          {imageOptimizationSummaryItems.map((item) => (
+            <Box key={item.key} sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1.25 }}>
+              <Typography color="text.secondary" variant="caption">
+                {item.label}
+              </Typography>
+              <Typography sx={{ fontWeight: 700 }} variant="h6">
+                {result.summary[item.key]}
+              </Typography>
+            </Box>
+          ))}
+        </Box>
+        {result.failures.length > 0 ? (
+          <Stack spacing={1}>
+            <Typography sx={{ fontWeight: 700 }} variant="subtitle2">
+              Failures
+            </Typography>
+            {result.failures.map((failure) => (
+              <ImageOptimizationFailure failure={failure} key={`${failure.itemId}-${failure.field}-${failure.sourceUrl}`} />
+            ))}
+          </Stack>
+        ) : null}
+      </Stack>
+    </Paper>
+  );
+}
+
+function ImageOptimizationFailure({ failure }: { failure: FailedCoverImage }) {
+  return (
+    <Alert severity="warning">
+      <Stack spacing={0.5}>
+        <Typography sx={{ fontWeight: 700 }} variant="body2">
+          Item {failure.itemId} {failure.field}
+        </Typography>
+        <Typography variant="body2">{failure.error}</Typography>
+        <Link href={failure.sourceUrl} rel="noreferrer" target="_blank">
+          {failure.sourceUrl}
+        </Link>
+      </Stack>
+    </Alert>
+  );
+}
+
 export function OperationsPage({ operation = 'store_discovery' }: { operation?: OperationPageMode }) {
+  const [imageOptimizationResult, setImageOptimizationResult] = useState<ExternalCoverImageOptimizationResult | null>(null);
   const [run, setRun] = useState<StoreDiscoveryRun | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [embeddingRefreshMode, setEmbeddingRefreshMode] = useState<'full' | 'missing'>('missing');
@@ -507,6 +586,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
   const [error, setError] = useState('');
   const pageContent = operationPageContent[operation];
   const usesJobLogTable = operation === 'item_discovery' || operation === 'item_update';
+  const usesRunTable = operation !== 'image_optimization' && !usesJobLogTable;
 
   useEffect(() => {
     let ignore = false;
@@ -612,6 +692,21 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
       setStoreItemUpdateJobsRefreshKey((currentKey) => currentKey + 1);
     } catch {
       setError('Item update could not be started.');
+    } finally {
+      setStartingOperation('');
+    }
+  }
+
+  async function handleOptimizeExternalCoverImages() {
+    setStartingOperation('image_optimization');
+    setImageOptimizationResult(null);
+    setError('');
+    try {
+      const result = await adminApi.optimizeExternalCoverImages();
+      setImageOptimizationResult(result);
+      setLoadState('ready');
+    } catch {
+      setError('External cover image optimization could not be started.');
     } finally {
       setStartingOperation('');
     }
@@ -981,6 +1076,38 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
         </Paper>
       ) : null}
 
+      {operation === 'image_optimization' ? (
+        <Paper variant="outlined" sx={{ p: 2 }}>
+          <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
+            <Box>
+              <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
+                External cover images
+              </Typography>
+              <Typography color="text.secondary" variant="body2">
+                Convert oversized external item covers to managed WebP assets.
+              </Typography>
+            </Box>
+            <Button
+              disabled={Boolean(startingOperation) || runIsActive}
+              startIcon={
+                startingOperation === 'image_optimization' || runIsActive ? (
+                  <CircularProgress color="inherit" size={16} />
+                ) : (
+                  <PlayArrowIcon />
+                )
+              }
+              sx={{ alignSelf: { sm: 'center', xs: 'stretch' } }}
+              variant="contained"
+              onClick={handleOptimizeExternalCoverImages}
+            >
+              Optimize External Cover Images
+            </Button>
+          </Stack>
+        </Paper>
+      ) : null}
+
+      {imageOptimizationResult ? <ImageOptimizationSummary result={imageOptimizationResult} /> : null}
+
       {loadState === 'loading' ? (
         <Stack alignItems="center" direction="row" spacing={1.5}>
           <CircularProgress size={18} />
@@ -988,9 +1115,9 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
         </Stack>
       ) : null}
 
-      {loadState === 'ready' && !run && !usesJobLogTable ? <Alert severity="info">No recent operation run.</Alert> : null}
+      {loadState === 'ready' && !run && usesRunTable ? <Alert severity="info">No recent operation run.</Alert> : null}
 
-      {run && !usesJobLogTable ? (
+      {run && usesRunTable ? (
         <DataTable
           ariaLabel="Store discovery runs"
           columns={operationRunColumns}

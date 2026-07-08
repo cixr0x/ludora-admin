@@ -11,6 +11,7 @@ import { createBggItemImporter } from './bgg/bggItemImporter.js';
 import { createDescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import { createOpenAiDescriptionGenerationClient } from './descriptionGeneration/openAiDescriptionGenerationClient.js';
 import { createDiscoveryOperationsClient } from './discoveryOperationsClient.js';
+import { createNodeExternalCoverImageOptimizerDependencies, optimizeExternalCoverImages } from './externalCoverImageOptimizer.js';
 import { createItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { createLocalDiscoveryOperationsClient } from './localDiscoveryOperationsClient.js';
 import { createLocalCoverWorkflowManager, createNodeLocalCoverWorkflowDependencies } from './localCoverWorkflow.js';
@@ -86,6 +87,7 @@ const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   database,
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
 );
+const externalCoverImageOptimizerDependencies = createNodeExternalCoverImageOptimizerDependencies(config.localCoverWorkflow);
 const app = createApp({
   adminAuth: { ...config.adminAuth, internalApiToken },
   amazonTitleExtractionService,
@@ -93,6 +95,9 @@ const app = createApp({
   database,
   corsOrigin: config.corsOrigin,
   descriptionGenerationService,
+  externalCoverImageOptimizer: {
+    run: (options) => optimizeExternalCoverImages(database, externalCoverImageOptimizerDependencies, options)
+  },
   itemMatchingService,
   localCoverWorkflowManager,
   operationsClient,

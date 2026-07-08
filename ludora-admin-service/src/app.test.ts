@@ -3826,6 +3826,65 @@ describe('ludora admin service', () => {
     expect(calls).toEqual(['full']);
   });
 
+  it('runs external cover image optimization with apply enabled', async () => {
+    const result = {
+      failures: [
+        {
+          error: 'Could not download image: 404 Not Found',
+          field: 'image_url_es',
+          itemId: 88,
+          sourceUrl: 'https://cdn.example/missing.jpg'
+        }
+      ],
+      optimized: [
+        {
+          applied: true,
+          field: 'image_url',
+          itemId: 77,
+          newName: '77-coffeerush.en.webp',
+          optimizedSizeBytes: 84210,
+          originalSizeBytes: 180000,
+          publicUrl: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/77-coffeerush.en.webp',
+          s3Key: 'boardgame/77-coffeerush.en.webp',
+          sourceName: 'coffee.jpg',
+          sourceUrl: 'https://cf.geekdo-images.com/coffee.jpg'
+        }
+      ],
+      skipped: [],
+      summary: {
+        downloadedImages: 1,
+        failedImages: 1,
+        imageFields: 4,
+        itemsScanned: 2,
+        optimizedImages: 1,
+        skippedBlank: 0,
+        skippedManaged: 0,
+        skippedWithinLimit: 0,
+        updatedRows: 1,
+        uploadedImages: 1
+      }
+    };
+    const calls: unknown[] = [];
+    const externalCoverImageOptimizer = {
+      run: async (options: unknown) => {
+        calls.push(options);
+        return result;
+      }
+    };
+
+    const response = await request(
+      createApp({
+        database: idleDatabase(),
+        externalCoverImageOptimizer,
+        operationsClient: idleOperationsClient()
+      })
+    ).post('/admin/operations/external-cover-image-optimizations');
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({ data: result });
+    expect(calls).toEqual([{ apply: true }]);
+  });
+
   it('returns 404 when starting item discovery for a missing clean store', async () => {
     const operationsClient: DiscoveryOperationsClient = {
       cancelStoreDiscoveryRun: async () => {

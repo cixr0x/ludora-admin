@@ -49,6 +49,7 @@ const adminSections: AdminSection[] = [
   'operations-store-item-discovery',
   'operations-store-item-update',
   'operations-item-embeddings',
+  'operations-image-optimization',
   'items',
   'front-page-category-options',
   'front-page-category-products',
@@ -126,6 +127,8 @@ function renderSection(
       return <OperationsPage operation="item_update" />;
     case 'operations-item-embeddings':
       return <OperationsPage operation="item_embeddings" />;
+    case 'operations-image-optimization':
+      return <OperationsPage operation="image_optimization" />;
     case 'items':
       return <ItemsPage selectedItemId={selectedId} onClearSelectedItemId={() => navigate('items')} />;
     case 'front-page-category-options':

@@ -32,6 +32,7 @@ describe('App', () => {
     expect(screen.getByRole('link', { name: /Store Item Discovery/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Store Item Update/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Item Embeddings/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Image Optimization/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /^Items$/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Add Front Page Category/i })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Front Page Preview/i })).toBeInTheDocument();
@@ -305,6 +306,25 @@ describe('App', () => {
     expect(screen.getByRole('button', { name: /Run for selected stores/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Run for all/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Run Store Discovery/i })).not.toBeInTheDocument();
+  });
+
+  it('opens the image optimization operation sub page from a hash route', async () => {
+    window.location.hash = '#operations-image-optimization';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/admin/operations/store-discovery-runs/latest') {
+        return jsonResponse(null);
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Image Optimization' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Optimize External Cover Images/i })).toBeInTheDocument();
   });
 
   it('opens the front page preview from the front page review hash alias', async () => {
