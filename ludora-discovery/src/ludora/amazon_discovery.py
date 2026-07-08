@@ -12,6 +12,7 @@ from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import _collapse_text, _extract_availability, _extract_price
 from ludora.models import DiscoveryItemCandidateRecord, ItemCandidateType
 from ludora.product_crawler import ItemCandidateProcessor, ItemCandidateRepository, ItemClassifier
+from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import FetchResult
 
 
@@ -75,6 +76,7 @@ def crawl_amazon_store_inventory(
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
     item_title_extractor: ItemTitleExtractor | None = None,
+    trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
     delay_seconds: float = 1.0,
 ) -> list[DiscoveryItemCandidateRecord]:
@@ -91,6 +93,7 @@ def crawl_amazon_store_inventory(
         item_classifier=item_classifier,
         item_processor=item_processor,
         item_title_extractor=item_title_extractor,
+        trace_logger=trace_logger,
         cancellation_token=cancellation_token,
         delay_seconds=delay_seconds,
         limit=limit,
@@ -108,6 +111,7 @@ def crawl_amazon_brand_inventory(
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
     item_title_extractor: ItemTitleExtractor | None = None,
+    trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
     delay_seconds: float = 1.0,
     max_pages: int = DEFAULT_AMAZON_BRAND_MAX_PAGES,
@@ -122,6 +126,7 @@ def crawl_amazon_brand_inventory(
         item_classifier=item_classifier,
         item_processor=item_processor,
         item_title_extractor=item_title_extractor,
+        trace_logger=trace_logger,
         cancellation_token=cancellation_token,
         delay_seconds=delay_seconds,
         limit=limit,
@@ -139,6 +144,7 @@ def _crawl_amazon_search_inventory(
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
     item_title_extractor: ItemTitleExtractor | None = None,
+    trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
     delay_seconds: float = 1.0,
     limit: int | None = None,
@@ -146,6 +152,12 @@ def _crawl_amazon_search_inventory(
     max_search_pages: int = 1,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
+    trace = trace_logger or NullTraceLogger()
+    trace.log(
+        "amazon_inventory.crawl.start",
+        max_search_pages=max_search_pages,
+        store_id=store_id,
+    )
     browser_session = None
     if browser_fetcher is None:
         from ludora.browser_fetch import BrowserTextFetcher
@@ -164,13 +176,21 @@ def _crawl_amazon_search_inventory(
             for page_number in range(1, max_search_pages + 1):
                 raise_if_cancelled(cancellation_token)
                 search_url = first_search_url if page_number == 1 else _amazon_search_page_url(first_search_url, page_number)
+                trace.log("amazon_inventory.search_fetch.start", page_number=page_number, search_url=search_url, store_id=store_id)
                 fetched_listing = browser_fetcher(search_url)
                 if fetched_listing is None:
-                    continue
+                    raise RuntimeError(f"Failed to fetch Amazon search page: {search_url}")
                 listing_url = fetched_listing.url or search_url
                 listing_candidates = _extract_amazon_listing_candidates(
                     html=fetched_listing.text,
                     page_url=listing_url,
+                    store_id=store_id,
+                )
+                trace.log(
+                    "amazon_inventory.search_extract.completed",
+                    listing_count=len(listing_candidates),
+                    page_number=page_number,
+                    search_url=listing_url,
                     store_id=store_id,
                 )
                 if not listing_candidates:
@@ -182,19 +202,23 @@ def _crawl_amazon_search_inventory(
                         continue
                     seen_asins.add(asin)
                     if repository.item_candidate_exists(listing_candidate.store_id, listing_candidate.source_url):
+                        trace.log(
+                            "amazon_inventory.candidate.skipped_existing",
+                            source_url=listing_candidate.source_url,
+                            store_id=listing_candidate.store_id,
+                            title=listing_candidate.title,
+                        )
                         continue
 
+                    trace.log(
+                        "amazon_inventory.candidate.detail_fetch.start",
+                        source_url=listing_candidate.source_url,
+                        store_id=listing_candidate.store_id,
+                        title=listing_candidate.title,
+                    )
                     fetched_detail = browser_fetcher(listing_candidate.source_url)
                     if fetched_detail is None:
-                        if expected_brand_name:
-                            continue
-                        detail_candidate = listing_candidate
-                        detail_candidate.raw_payload = {
-                            "amazon": {
-                                "asin": asin,
-                                "search_title": listing_candidate.title,
-                            }
-                        }
+                        raise RuntimeError(f"Failed to fetch Amazon product detail page: {listing_candidate.source_url}")
                     else:
                         detail_candidate = _extract_amazon_detail_candidate(
                             html=fetched_detail.text,
@@ -203,16 +227,63 @@ def _crawl_amazon_search_inventory(
                             source_listing_url=listing_url,
                             search_title=listing_candidate.title,
                         )
+                    trace.log(
+                        "amazon_inventory.candidate.detail_fetch.completed",
+                        source_url=detail_candidate.source_url,
+                        store_id=detail_candidate.store_id,
+                        title=detail_candidate.title,
+                    )
 
                     if expected_brand_name and not _amazon_brand_matches(detail_candidate, expected_brand_name):
+                        trace.log(
+                            "amazon_inventory.candidate.skipped_brand_mismatch",
+                            source_url=detail_candidate.source_url,
+                            store_id=detail_candidate.store_id,
+                            title=detail_candidate.title,
+                        )
                         continue
 
                     raise_if_cancelled(cancellation_token)
                     _apply_item_title_extractor(detail_candidate, item_title_extractor)
                     item_classifier(detail_candidate)
                     upsert_result = repository.upsert_item_candidate(detail_candidate)
+                    candidate_id = getattr(upsert_result, "candidate_id", None)
+                    trace.log(
+                        "amazon_inventory.candidate.upsert.completed",
+                        candidate_id=candidate_id,
+                        created=getattr(upsert_result, "created", None),
+                        should_process=getattr(upsert_result, "should_process", None),
+                        source_url=detail_candidate.source_url,
+                        store_id=detail_candidate.store_id,
+                        title=detail_candidate.title,
+                    )
                     if item_processor is not None and getattr(upsert_result, "should_process", False):
-                        item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
+                        trace.log(
+                            "amazon_inventory.candidate.process.start",
+                            candidate_id=candidate_id,
+                            source_url=detail_candidate.source_url,
+                            store_id=detail_candidate.store_id,
+                            title=detail_candidate.title,
+                        )
+                        try:
+                            item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
+                        except Exception as exc:
+                            trace.log(
+                                "amazon_inventory.candidate.process.failed",
+                                candidate_id=candidate_id,
+                                error=str(exc),
+                                source_url=detail_candidate.source_url,
+                                store_id=detail_candidate.store_id,
+                                title=detail_candidate.title,
+                            )
+                            raise
+                        trace.log(
+                            "amazon_inventory.candidate.process.completed",
+                            candidate_id=candidate_id,
+                            source_url=detail_candidate.source_url,
+                            store_id=detail_candidate.store_id,
+                            title=detail_candidate.title,
+                        )
                     records.append(detail_candidate)
                     if limit is not None and len(records) >= limit:
                         return records

@@ -16,6 +16,7 @@ from ludora.models import DiscoveryItemCandidateRecord
 class AdminItemMatcherTests(unittest.TestCase):
     def test_posts_boardgame_candidates_to_admin_confirm_endpoint(self):
         repository = Mock()
+        trace_logger = Mock()
         record = DiscoveryItemCandidateRecord(
             store_id=12,
             source_url="https://store.mx/products/catan",
@@ -26,7 +27,12 @@ class AdminItemMatcherTests(unittest.TestCase):
         with patch("ludora.admin_matching.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = b'{"data": {"id": 42}}'
 
-            AdminItemMatcher("http://admin.test/", repository, internal_api_token="internal-test-token").process_candidate(
+            AdminItemMatcher(
+                "http://admin.test/",
+                repository,
+                internal_api_token="internal-test-token",
+                trace_logger=trace_logger,
+            ).process_candidate(
                 42,
                 record,
             )
@@ -34,10 +40,17 @@ class AdminItemMatcherTests(unittest.TestCase):
         request = urlopen.call_args.args[0]
         self.assertEqual(request.full_url, "http://admin.test/discovery/listings/42/confirm-boardgame")
         self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 180)
         self.assertEqual(request.headers["Content-type"], "application/json")
         self.assertEqual(request.headers["X-ludora-internal-token"], "internal-test-token")
         self.assertEqual(json.loads(request.data.decode("utf-8")), {"confirmation_source": "automated"})
         repository.mark_item_candidate_processing_error.assert_not_called()
+        self.assertEqual(
+            [call.args[0] for call in trace_logger.log.call_args_list],
+            ["admin_matcher.request.start", "admin_matcher.request.completed"],
+        )
+        self.assertEqual(trace_logger.log.call_args_list[0].kwargs["candidate_id"], 42)
+        self.assertEqual(trace_logger.log.call_args_list[0].kwargs["title"], "Catan")
 
     def test_skips_non_boardgame_candidates(self):
         repository = Mock()
@@ -84,6 +97,7 @@ class AdminItemMatcherTests(unittest.TestCase):
 
     def test_records_network_error_message(self):
         repository = Mock()
+        trace_logger = Mock()
         record = DiscoveryItemCandidateRecord(
             store_id=12,
             source_url="https://store.mx/products/catan",
@@ -93,12 +107,17 @@ class AdminItemMatcherTests(unittest.TestCase):
 
         with patch("ludora.admin_matching.urlopen", side_effect=URLError("connection refused")):
             with self.assertRaisesRegex(RuntimeError, "Admin item matcher failed:"):
-                AdminItemMatcher("http://admin.test", repository).process_candidate(42, record)
+                AdminItemMatcher("http://admin.test", repository, trace_logger=trace_logger).process_candidate(42, record)
 
         self.assertIn(
             "Admin item matcher failed:",
             repository.mark_item_candidate_processing_error.call_args.args[1],
         )
+        self.assertEqual(
+            [call.args[0] for call in trace_logger.log.call_args_list],
+            ["admin_matcher.request.start", "admin_matcher.request.failed"],
+        )
+        self.assertIn("connection refused", trace_logger.log.call_args_list[1].kwargs["error"])
 
 
 if __name__ == "__main__":

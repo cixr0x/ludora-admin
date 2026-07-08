@@ -128,6 +128,18 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records[0].source_url, "https://example.mx/products/catan")
         self.assertEqual(repository.item_records[0].source_listing_url, "https://example.mx/")
 
+    def test_collect_store_inventory_raises_when_homepage_fetch_fails(self):
+        repository = FakeRepository()
+
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[]), patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=None,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Failed to fetch store listing page: https://example.mx/"):
+                collect_store_inventory("https://example.mx/", 12, repository)
+
+        self.assertEqual(repository.item_records, [])
+
     def test_collect_store_inventory_routes_amazon_platform_to_amazon_crawler(self):
         repository = FakeRepository()
         expected_records = [DiscoveryItemCandidateRecord(store_id=12, source_url="https://www.amazon.com.mx/dp/B0DZL3YFC5", title="Catfe")]
@@ -373,6 +385,21 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(repository.item_records, [])
 
+    def test_crawl_store_product_details_raises_when_detail_fetch_fails(self):
+        repository = FakeRepository()
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=["https://example.mx/products/catan"],
+        ), patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=None,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "Failed to fetch product detail page: https://example.mx/products/catan"):
+                crawl_store_product_details("https://example.mx/", 12, repository)
+
+        self.assertEqual(repository.item_records, [])
+
     def test_crawl_store_product_details_keeps_listing_title_when_browser_detail_is_cookie_only(self):
         cookie_html = """
         <html>
@@ -532,6 +559,25 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(repository.item_records[0].is_boardgame_confirmed)
         self.assertEqual(repository.item_records[0].category_confidence, 0.91)
         self.assertEqual(repository.item_records[0].classification_reasons, ["previously confirmed"])
+        self.assertEqual(repository.update_change_log_calls, [])
+
+    def test_update_confirmed_store_item_details_raises_when_detail_fetch_fails(self):
+        existing_record = DiscoveryItemCandidateRecord(
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record])
+
+        with patch("ludora.product_crawler.fetch_html", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "Failed to fetch product detail page: https://example.mx/products/catan"):
+                update_confirmed_store_item_details(repository, job_id=99, run_id="run-123")
+
+        self.assertEqual(repository.item_records, [])
         self.assertEqual(repository.update_change_log_calls, [])
 
     def test_update_confirmed_store_items_forwards_selected_store_ids(self):

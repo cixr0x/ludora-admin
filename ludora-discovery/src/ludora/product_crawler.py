@@ -12,6 +12,7 @@ from ludora.listing_extraction import extract_listing_candidates
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_detail_extraction import extract_product_detail_candidate
 from ludora.sitemap_discovery import _looks_like_site_protection_challenge, discover_product_urls_from_sitemaps
+from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import FetchResult
 from ludora.webfetch import fetch_html
 
@@ -72,10 +73,18 @@ def crawl_store_product_details(
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
+    trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     use_browser_fetch = browser_sitemap_fetch_enabled if browser_fetch_enabled is None else browser_fetch_enabled
+    trace = trace_logger or NullTraceLogger()
+    trace.log(
+        "inventory.crawl.start",
+        browser_fetch_enabled=use_browser_fetch,
+        store_id=store_id,
+        store_url=store_url,
+    )
     browser_session = None
     if use_browser_fetch and browser_fetcher is None:
         from ludora.browser_fetch import BrowserTextFetcher
@@ -84,11 +93,18 @@ def crawl_store_product_details(
         browser_fetcher = browser_session.__enter__().fetch
 
     try:
+        trace.log("inventory.sitemap_discovery.start", store_id=store_id, store_url=store_url)
         product_urls = discover_product_urls_from_sitemaps(
             store_url,
             browser_fetcher=browser_fetcher,
             browser_fallback_enabled=use_browser_fetch,
             limit=limit,
+        )
+        trace.log(
+            "inventory.sitemap_discovery.completed",
+            product_url_count=len(product_urls),
+            store_id=store_id,
+            store_url=store_url,
         )
         if product_urls:
             source_listing_url = urljoin(store_url, "/sitemap.xml")
@@ -102,9 +118,11 @@ def crawl_store_product_details(
                 for product_url in product_urls
             ]
         else:
+            trace.log("inventory.listing_fetch.start", source_url=store_url, store_id=store_id)
             fetched_listing = fetch_html(store_url)
             if fetched_listing is None:
-                return []
+                raise RuntimeError(f"Failed to fetch store listing page: {store_url}")
+            trace.log("inventory.listing_fetch.completed", fetched_url=fetched_listing.url, store_id=store_id)
 
             source_listing_url = fetched_listing.url
             listing_candidates = extract_listing_candidates(
@@ -113,24 +131,98 @@ def crawl_store_product_details(
                 store_id=store_id,
                 limit=limit,
             )
+            trace.log(
+                "inventory.listing_extract.completed",
+                listing_count=len(listing_candidates),
+                source_listing_url=source_listing_url,
+                store_id=store_id,
+            )
 
         records: list[DiscoveryItemCandidateRecord] = []
         for listing_candidate in listing_candidates:
             raise_if_cancelled(cancellation_token)
+            trace.log(
+                "inventory.candidate.exists_check.start",
+                source_url=listing_candidate.source_url,
+                store_id=listing_candidate.store_id,
+                title=listing_candidate.title,
+            )
             if repository.item_candidate_exists(listing_candidate.store_id, listing_candidate.source_url):
+                trace.log(
+                    "inventory.candidate.skipped_existing",
+                    source_url=listing_candidate.source_url,
+                    store_id=listing_candidate.store_id,
+                    title=listing_candidate.title,
+                )
                 continue
 
+            trace.log(
+                "inventory.candidate.detail_fetch.start",
+                source_url=listing_candidate.source_url,
+                store_id=listing_candidate.store_id,
+                title=listing_candidate.title,
+            )
             detail_candidate = _fetch_detail_candidate(
                 listing_candidate=listing_candidate,
                 source_listing_url=source_listing_url,
                 browser_fetcher=browser_fetcher if use_browser_fetch else None,
             )
+            trace.log(
+                "inventory.candidate.detail_fetch.completed",
+                source_url=detail_candidate.source_url,
+                store_id=detail_candidate.store_id,
+                title=detail_candidate.title,
+            )
             raise_if_cancelled(cancellation_token)
             item_classifier(detail_candidate)
+            trace.log(
+                "inventory.candidate.classified",
+                category_confidence=detail_candidate.category_confidence,
+                is_boardgame=detail_candidate.is_boardgame,
+                source_url=detail_candidate.source_url,
+                store_id=detail_candidate.store_id,
+                title=detail_candidate.title,
+            )
             upsert_result = repository.upsert_item_candidate(detail_candidate)
+            candidate_id = getattr(upsert_result, "candidate_id", None)
+            trace.log(
+                "inventory.candidate.upsert.completed",
+                candidate_id=candidate_id,
+                created=getattr(upsert_result, "created", None),
+                should_process=getattr(upsert_result, "should_process", None),
+                source_url=detail_candidate.source_url,
+                store_id=detail_candidate.store_id,
+                title=detail_candidate.title,
+            )
             if item_processor is not None and getattr(upsert_result, "should_process", False):
-                item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
+                trace.log(
+                    "inventory.candidate.process.start",
+                    candidate_id=candidate_id,
+                    source_url=detail_candidate.source_url,
+                    store_id=detail_candidate.store_id,
+                    title=detail_candidate.title,
+                )
+                try:
+                    item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
+                except Exception as exc:
+                    trace.log(
+                        "inventory.candidate.process.failed",
+                        candidate_id=candidate_id,
+                        error=str(exc),
+                        source_url=detail_candidate.source_url,
+                        store_id=detail_candidate.store_id,
+                        title=detail_candidate.title,
+                    )
+                    raise
+                trace.log(
+                    "inventory.candidate.process.completed",
+                    candidate_id=candidate_id,
+                    source_url=detail_candidate.source_url,
+                    store_id=detail_candidate.store_id,
+                    title=detail_candidate.title,
+                )
             records.append(detail_candidate)
+        trace.log("inventory.crawl.completed", record_count=len(records), store_id=store_id, store_url=store_url)
         return records
     finally:
         if browser_session is not None:
@@ -194,6 +286,7 @@ def _fetch_detail_candidate(
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
 ) -> DiscoveryItemCandidateRecord:
     fetched_detail = fetch_html(listing_candidate.source_url)
+    static_fetch_failed = fetched_detail is None
     if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
         fetched_detail = None
 
@@ -223,6 +316,10 @@ def _fetch_detail_candidate(
             )
             if browser_detail_candidate is not None:
                 detail_candidate = browser_detail_candidate
+                static_fetch_failed = False
+
+    if static_fetch_failed and fetched_detail is None:
+        raise RuntimeError(f"Failed to fetch product detail page: {listing_candidate.source_url}")
 
     if detail_candidate is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate):
         listing_candidate.source_listing_url = source_listing_url

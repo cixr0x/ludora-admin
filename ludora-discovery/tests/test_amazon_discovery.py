@@ -170,6 +170,47 @@ class AmazonDiscoveryTests(unittest.TestCase):
         )
         self.assertEqual(records[0].raw_payload["amazon"]["extracted_game_title"], "Yokai Pagoda")
 
+    def test_raises_when_amazon_search_fetch_fails(self):
+        repository = FakeRepository()
+
+        with self.assertRaisesRegex(RuntimeError, "Failed to fetch Amazon search page"):
+            crawl_amazon_store_inventory(
+                "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2",
+                12,
+                repository,
+                browser_fetcher=lambda _url: None,
+                delay_seconds=0,
+            )
+
+        self.assertEqual(repository.item_records, [])
+
+    def test_raises_when_amazon_detail_fetch_fails(self):
+        search_html = """
+        <html><body>
+          <a href="/Compania-Juegos-Yokai-Pagoda/dp/B0TEST1234?ref_=ast_sto_dp">
+            La Compania de los Juegos | Yokai Pagoda | Juego en Espanol
+          </a>
+        </body></html>
+        """
+
+        def fetcher(url):
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            return None
+
+        repository = FakeRepository()
+
+        with self.assertRaisesRegex(RuntimeError, "Failed to fetch Amazon product detail page: https://www.amazon.com.mx/dp/B0TEST1234"):
+            crawl_amazon_store_inventory(
+                "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2",
+                12,
+                repository,
+                browser_fetcher=fetcher,
+                delay_seconds=0,
+            )
+
+        self.assertEqual(repository.item_records, [])
+
     def test_crawls_brand_search_and_stores_only_matching_brand_products(self):
         brand_search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"
         search_html = """

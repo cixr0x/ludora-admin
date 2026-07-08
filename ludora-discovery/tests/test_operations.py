@@ -1,4 +1,6 @@
+import json
 import sys
+import tempfile
 import threading
 import time
 import unittest
@@ -165,7 +167,12 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         resolve_openai_base_url.assert_called_once()
         self.assertEqual(resolve_openai_base_url.call_args.kwargs["dotenv_path"], "custom.env")
         connect_database.assert_called_once_with("postgresql://ludora")
-        admin_item_matcher.assert_called_once_with("http://admin.test", repository, internal_api_token="internal-token")
+        admin_item_matcher.assert_called_once_with(
+            "http://admin.test",
+            repository,
+            internal_api_token="internal-token",
+            trace_logger=ANY,
+        )
         admin_title_extractor.assert_called_once_with("http://admin.test", internal_api_token="internal-token")
         openai_item_classifier.assert_called_once_with(
             api_key="openai-key",
@@ -199,6 +206,51 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(result.website_url, "https://example.mx/")
         self.assertEqual(result.item_candidates, 3)
         self.assertEqual(result.new_items, 1)
+
+    def test_run_item_discovery_writes_json_trace_file(self):
+        connection = Mock()
+        repository = Mock()
+        repository.upsert_item_candidate.return_value = ItemCandidateUpsertResult(
+            candidate_id=101,
+            listing_status="PENDING",
+            item_id=None,
+            should_process=False,
+            created=True,
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "ludora.operations.resolve_database_url", return_value="postgresql://ludora"
+        ), patch(
+            "ludora.operations.resolve_browser_fetch_enabled", return_value=False
+        ), patch(
+            "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
+        ), patch(
+            "ludora.operations.resolve_internal_api_token", return_value="internal-token"
+        ), patch(
+            "ludora.operations.resolve_ai_classifier_enabled", return_value=False
+        ), patch(
+            "ludora.operations.connect_database", return_value=connection
+        ), patch(
+            "ludora.operations.DiscoveryRepository", return_value=repository
+        ), patch(
+            "ludora.operations.collect_store_inventory", return_value=[]
+        ):
+            run_item_discovery(
+                store_id=12,
+                website_url="https://example.mx/",
+                env={"LUDORA_DISCOVERY_TRACE_DIR": temp_dir},
+                run_id="run-123",
+            )
+
+            trace_path = Path(temp_dir) / "item-discovery-run-123.jsonl"
+            events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
+
+        self.assertEqual(events[0]["event"], "item_discovery.run.start")
+        self.assertEqual(events[0]["run_id"], "run-123")
+        self.assertEqual(events[0]["store_id"], 12)
+        self.assertEqual(events[0]["website_url"], "https://example.mx/")
+        self.assertIn("item_discovery.config.resolved", [event["event"] for event in events])
+        self.assertEqual(events[-1]["event"], "item_discovery.run.completed")
 
     def test_run_item_discovery_logs_failed_run(self):
         connection = Mock()

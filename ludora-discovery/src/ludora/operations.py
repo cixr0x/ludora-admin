@@ -31,6 +31,7 @@ from ludora.embeddings import OpenAIEmbeddingClient, build_item_embedding_text, 
 from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.item_classification import apply_item_classification
 from ludora.models import DiscoveryItemCandidateRecord
+from ludora.trace import create_item_discovery_trace_logger
 
 
 RunStatus = Literal["running", "cancelling", "cancelled", "completed", "failed"]
@@ -192,6 +193,14 @@ def run_item_discovery(
     connection = connect_database(database_url)
     resolved_run_id = run_id or str(uuid.uuid4())
     resolved_started_at = started_at or _utc_now()
+    trace_logger = create_item_discovery_trace_logger(resolved_run_id, env=current_env, dotenv_path=env_file)
+    trace_logger.log(
+        "item_discovery.run.start",
+        platform=platform,
+        store_id=store_id,
+        store_name=store_name,
+        website_url=website_url,
+    )
     tracking_repository: _StoreItemDiscoveryTrackingRepository | None = None
     try:
         repository = DiscoveryRepository(connection)
@@ -206,8 +215,22 @@ def run_item_discovery(
             admin_api_url = resolve_admin_api_url(env=current_env, dotenv_path=env_file)
             internal_api_token = resolve_internal_api_token(env=current_env, dotenv_path=env_file)
             item_classifier = _resolve_item_classifier(current_env, env_file)
+            trace_logger.log(
+                "item_discovery.config.resolved",
+                admin_api_url=admin_api_url,
+                browser_sitemap_fetch_enabled=browser_sitemap_fetch_enabled,
+                has_internal_api_token=bool(internal_api_token),
+                item_classifier=getattr(item_classifier, "__qualname__", type(item_classifier).__name__),
+                platform=platform,
+                store_id=store_id,
+            )
             tracking_repository = _StoreItemDiscoveryTrackingRepository(repository)
-            item_processor = AdminItemMatcher(admin_api_url, repository, internal_api_token=internal_api_token)
+            item_processor = AdminItemMatcher(
+                admin_api_url,
+                repository,
+                internal_api_token=internal_api_token,
+                trace_logger=trace_logger,
+            )
             normalized_platform = platform.strip().casefold()
             item_title_extractor = (
                 AdminAmazonTitleExtractor(admin_api_url, internal_api_token=internal_api_token).extract_title
@@ -228,10 +251,17 @@ def run_item_discovery(
                 item_classifier=item_classifier,
                 item_processor=item_processor,
                 item_title_extractor=item_title_extractor,
+                trace_logger=trace_logger,
                 **collect_kwargs,
             )
             raise_if_cancelled(cancellation_token)
         except OperationCancelled as exc:
+            trace_logger.log(
+                "item_discovery.run.cancelled",
+                error=str(exc),
+                new_items=_new_items_count(tracking_repository),
+                store_id=store_id,
+            )
             repository.complete_store_item_discovery_log(
                 run_id=resolved_run_id,
                 status="cancelled",
@@ -241,6 +271,12 @@ def run_item_discovery(
             )
             raise
         except Exception as exc:
+            trace_logger.log(
+                "item_discovery.run.failed",
+                error=str(exc),
+                new_items=_new_items_count(tracking_repository),
+                store_id=store_id,
+            )
             repository.complete_store_item_discovery_log(
                 run_id=resolved_run_id,
                 status="failed",
@@ -251,6 +287,12 @@ def run_item_discovery(
             raise
 
         new_items = tracking_repository.new_items if tracking_repository is not None else 0
+        trace_logger.log(
+            "item_discovery.run.completed",
+            item_candidates=len(records),
+            new_items=new_items,
+            store_id=store_id,
+        )
         repository.complete_store_item_discovery_log(
             run_id=resolved_run_id,
             status="completed",

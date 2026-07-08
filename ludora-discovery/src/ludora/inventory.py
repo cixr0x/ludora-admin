@@ -13,6 +13,7 @@ from ludora.product_crawler import (
     update_confirmed_store_item_details,
 )
 from ludora.item_classification import apply_item_classification
+from ludora.trace import TraceLogger
 
 
 BROWSER_FETCH_REQUIRED_PLATFORMS = {
@@ -54,6 +55,7 @@ def collect_store_inventory(
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
     item_title_extractor: Callable[[DiscoveryItemCandidateRecord], str] | None = None,
+    trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
     platform: str = "",
     store_name: str = "",
@@ -69,6 +71,7 @@ def collect_store_inventory(
             item_classifier=item_classifier,
             item_processor=item_processor,
             item_title_extractor=item_title_extractor,
+            trace_logger=trace_logger,
             cancellation_token=cancellation_token,
         )
     if normalized_platform == "amazon_brand":
@@ -81,6 +84,7 @@ def collect_store_inventory(
             item_classifier=item_classifier,
             item_processor=item_processor,
             item_title_extractor=item_title_extractor,
+            trace_logger=trace_logger,
             cancellation_token=cancellation_token,
         )
 
@@ -92,6 +96,7 @@ def collect_store_inventory(
         browser_sitemap_fetch_enabled=browser_fetch_enabled,
         item_classifier=item_classifier,
         item_processor=item_processor,
+        trace_logger=trace_logger,
         cancellation_token=cancellation_token,
     )
 
