@@ -12,6 +12,18 @@ Use the fixed Codex startup commands for local development:
 
 Do not choose another port automatically. If one of these ports is busy, report the owning process and ask before stopping it or using a different port.
 
+## Production VM
+
+- Instance: `ludora-admin`
+- GCP project: `ludora-501213`
+- Zone: `us-central1-c`
+- SSH user: `robertorojas87`
+- Connect with `gcloud compute ssh robertorojas87@ludora-admin --project ludora-501213 --zone us-central1-c`
+- Admin checkout: `/opt/ludora/ludora-admin`
+- Codex API checkout: `/opt/ludora/codexapi`
+- Run application services as `robertorojas87`.
+- Do not use the automatically created `mcp13` account for deployment or service ownership.
+
 ## Completion
 
 When a task changes files, commit and push the task changes in each affected Git repository before reporting completion. If unrelated pre-existing changes are present, leave them untouched and report them separately.
