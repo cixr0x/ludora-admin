@@ -23,7 +23,7 @@ import {
   Tooltip,
   Typography
 } from '@mui/material';
-import { type FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adminApi, type AdminRecord, type CreateItemFromCandidateInput, type LocalCoverWorkflow } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
@@ -44,7 +44,7 @@ type ItemCandidateDetailField = {
 type BatchSelectionOptions = {
   enabled: boolean;
   isProcessing: boolean;
-  onToggle: (record: AdminRecord, checked: boolean) => void;
+  onToggle: (record: AdminRecord, checked: boolean, selectRange: boolean) => void;
   selectedIds: Set<string>;
 };
 
@@ -450,7 +450,7 @@ function batchSelectionColumn(options: BatchSelectionOptions): DataTableColumn<A
           inputProps={{ 'aria-label': `Select ${title}` }}
           size="small"
           onChange={(event) => {
-            options.onToggle(row, event.target.checked);
+            options.onToggle(row, event.target.checked, (event.nativeEvent as MouseEvent).shiftKey);
           }}
           onClick={(event) => event.stopPropagation()}
           onDoubleClick={(event) => event.stopPropagation()}
@@ -481,6 +481,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
   const [saveError, setSaveError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [selectedBatchCandidateIds, setSelectedBatchCandidateIds] = useState<Set<string>>(() => new Set());
+  const batchSelectionAnchorId = useRef<string | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('table');
@@ -526,22 +527,49 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     [setRows, table]
   );
 
-  const handleToggleBatchCandidate = useCallback((candidate: AdminRecord, checked: boolean) => {
-    const id = candidateId(candidate);
-    if (!id) {
-      return;
-    }
-
-    setSelectedBatchCandidateIds((currentIds) => {
-      const nextIds = new Set(currentIds);
-      if (checked) {
-        nextIds.add(id);
-      } else {
-        nextIds.delete(id);
+  const handleToggleBatchCandidate = useCallback(
+    (candidate: AdminRecord, checked: boolean, selectRange: boolean) => {
+      const id = candidateId(candidate);
+      if (!id) {
+        return;
       }
-      return nextIds;
-    });
-  }, []);
+
+      setSelectedBatchCandidateIds((currentIds) => {
+        const nextIds = new Set(currentIds);
+        const anchorIndex = batchSelectionAnchorId.current
+          ? rows.findIndex((row) => candidateId(row) === batchSelectionAnchorId.current)
+          : -1;
+        const candidateIndex = rows.findIndex((row) => candidateId(row) === id);
+
+        if (selectRange && anchorIndex >= 0 && candidateIndex >= 0) {
+          const rangeStart = Math.min(anchorIndex, candidateIndex);
+          const rangeEnd = Math.max(anchorIndex, candidateIndex);
+          rows.slice(rangeStart, rangeEnd + 1).forEach((row) => {
+            const rangeId = candidateId(row);
+            if (!rangeId || isBoardgameConfirmed(row)) {
+              return;
+            }
+            if (checked) {
+              nextIds.add(rangeId);
+            } else {
+              nextIds.delete(rangeId);
+            }
+          });
+        } else if (checked) {
+          nextIds.add(id);
+        } else {
+          nextIds.delete(id);
+        }
+
+        return nextIds;
+      });
+
+      if (!selectRange || !batchSelectionAnchorId.current) {
+        batchSelectionAnchorId.current = id;
+      }
+    },
+    [rows]
+  );
 
   async function handleBatchConfirmSelected(isBoardgame: boolean) {
     const candidatesById = new Map(rows.map((row) => [candidateId(row), row]));
@@ -792,6 +820,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
                 onClick={() => {
                   setIsBatchModeEnabled((current) => {
                     const next = !current;
+                    batchSelectionAnchorId.current = null;
                     if (!next) {
                       setSelectedBatchCandidateIds(new Set());
                     }
@@ -831,6 +860,11 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
                       ? `Confirming ${batchProgress.current} / ${batchProgress.total}`
                       : `${selectedBatchCandidateIds.size} selected`}
                   </Typography>
+                  {!batchProgress ? (
+                    <Typography color="text.secondary" variant="caption">
+                      Shift-click to select a row range
+                    </Typography>
+                  ) : null}
                 </>
               ) : null}
             </Stack>

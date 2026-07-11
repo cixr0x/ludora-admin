@@ -300,6 +300,38 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByRole('checkbox', { name: 'Select Second Game' })).not.toBeChecked();
   });
 
+  it('selects an inclusive range of store items with shift-click', async () => {
+    const user = userEvent.setup();
+    const candidates = [
+      { id: '111', is_boardgame_confirmed: false, title: 'First Range Item' },
+      { id: '112', is_boardgame_confirmed: false, title: 'Second Range Item' },
+      { id: '113', is_boardgame_confirmed: true, title: 'Already Confirmed Item' },
+      { id: '114', is_boardgame_confirmed: false, title: 'Fourth Range Item' }
+    ];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
+        return jsonResponse(candidates, 200, { page: 0, page_size: 100, total: candidates.length });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    expect(await screen.findByText('First Range Item')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Batch confirmation' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Select First Range Item' }));
+    await user.keyboard('{Shift>}');
+    await user.click(screen.getByRole('checkbox', { name: 'Select Fourth Range Item' }));
+    await user.keyboard('{/Shift}');
+
+    expect(screen.getByRole('checkbox', { name: 'Select First Range Item' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Second Range Item' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Already Confirmed Item' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Select Fourth Range Item' })).toBeChecked();
+    expect(screen.getByText('3 selected')).toBeInTheDocument();
+  });
+
   it('batch marks selected store items as not boardgames sequentially', async () => {
     const user = userEvent.setup();
     const originalCandidates = [
