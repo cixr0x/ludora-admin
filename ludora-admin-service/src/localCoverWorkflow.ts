@@ -302,7 +302,7 @@ async function completeWhenEditedFileExists(
 ): Promise<void> {
   try {
     const editedPath = await dependencies.waitForFile(state.expected_paths);
-    const editedFilename = path.basename(editedPath);
+    const editedFilename = configuredPathApi(config.workDir).basename(editedPath);
     const targetField = targetFieldForEditedFilename(editedFilename);
     const s3Key = keyFor(config.s3Prefix, editedFilename);
     const publicUrl = publicUrlFor(config.publicBaseUrl, s3Key);
