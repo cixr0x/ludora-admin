@@ -70,9 +70,10 @@ export function createLocalDiscoveryOperationsClient({
     };
 
     const args = ['-m', 'ludora.operation_cli', '--env-file', envFile, ...commandArgs];
+    const packagePath = /^[A-Za-z]:[\\/]/.test(packageDir) ? path.win32 : path;
     const childEnv = {
       ...process.env,
-      PYTHONPATH: path.join(packageDir, 'src'),
+      PYTHONPATH: packagePath.join(packageDir, 'src'),
       ...(internalApiToken?.trim() ? { LUDORA_INTERNAL_API_TOKEN: internalApiToken.trim() } : {})
     };
     const child = spawnProcess(pythonExecutable, args, {

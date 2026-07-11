@@ -149,8 +149,12 @@ export function createLocalCoverWorkflowManager(
     const englishFilename = `${baseFilename}.en.webp`;
     const spanishFilename = `${baseFilename}.es.webp`;
     const sourceExtension = imageExtensionFromUrl(sourceImageUrl);
-    const sourcePath = path.join(config.workDir, `${baseFilename}.source${sourceExtension}`);
-    const expectedPaths = [path.join(config.workDir, englishFilename), path.join(config.workDir, spanishFilename)];
+    const workPath = configuredPathApi(config.workDir);
+    const sourcePath = workPath.join(config.workDir, `${baseFilename}.source${sourceExtension}`);
+    const expectedPaths = [
+      workPath.join(config.workDir, englishFilename),
+      workPath.join(config.workDir, spanishFilename)
+    ];
     const expectedPath = expectedPaths[1];
     const s3Key = keyFor(config.s3Prefix, spanishFilename);
     const publicUrl = publicUrlFor(config.publicBaseUrl, s3Key);
@@ -370,6 +374,10 @@ function keyFor(prefix: string, filename: string): string {
 
 function publicUrlFor(baseUrl: string, key: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/${key.split('/').map(encodeURIComponent).join('/')}`;
+}
+
+function configuredPathApi(root: string): path.PlatformPath {
+  return /^[A-Za-z]:[\\/]/.test(root) ? path.win32 : path;
 }
 
 async function downloadFile(sourceUrl: string, destinationPath: string): Promise<void> {
