@@ -56,6 +56,29 @@ class TwoFaceCoverDetection:
 
 
 @dataclass(frozen=True)
+class ThreeFaceCoverCandidate:
+    candidate_id: int
+    first_parallel_source_line: str
+    first_anchor_vertex_index: int
+    second_parallel_source_line: str
+    second_anchor_vertex_index: int
+    missing_vertex: list[float]
+    cover_polygon: list[list[float]]
+    area: float
+    inside_silhouette: bool
+    convex: bool
+
+
+@dataclass(frozen=True)
+class ThreeFaceCoverCandidates:
+    longest_line_indices: list[int]
+    base_vertex_index: int
+    anchor_vertex_indices: list[int]
+    largest_area_candidate_id: int | None
+    candidates: list[ThreeFaceCoverCandidate]
+
+
+@dataclass(frozen=True)
 class SilhouetteDetection:
     vertices: list[list[float]]
     initial_vertices: list[list[float]]
@@ -67,6 +90,7 @@ class SilhouetteDetection:
     polygon_area_retention: float
     perspective: PerspectiveClassification
     two_face_cover: TwoFaceCoverDetection | None
+    three_face_cover_candidates: ThreeFaceCoverCandidates | None
 
 
 @dataclass(frozen=True)
@@ -75,6 +99,7 @@ class SilhouetteResult:
     overlay_path: str
     mask_path: str
     metadata_path: str
+    cover_candidates_path: str | None
     detection: SilhouetteDetection
 
 
@@ -505,6 +530,114 @@ def identify_two_face_cover(
     )
 
 
+def _parallel_line_through_point(coefficients: np.ndarray, point: np.ndarray) -> np.ndarray:
+    a, b, _ = coefficients
+    return np.array([a, b, -(a * point[0] + b * point[1])], dtype=np.float64)
+
+
+def identify_three_face_cover_candidates(
+    vertices: np.ndarray,
+    perspective: PerspectiveClassification,
+) -> ThreeFaceCoverCandidates | None:
+    points = np.asarray(vertices, dtype=np.float64).reshape(-1, 2)
+    if perspective.kind != "three_faces" or len(points) != 6:
+        return None
+
+    edge_lines = [
+        _fit_line(np.array([points[index], points[(index + 1) % len(points)]]))
+        for index in range(len(points))
+    ]
+    edge_lengths = [
+        float(np.linalg.norm(points[(index + 1) % len(points)] - points[index]))
+        for index in range(len(points))
+    ]
+    longest_line_indices = sorted(
+        sorted(range(len(points)), key=lambda index: edge_lengths[index], reverse=True)[:4]
+    )
+    longest_line_set = set(longest_line_indices)
+    base_vertices = [
+        vertex_index
+        for vertex_index in range(len(points))
+        if (vertex_index - 1) % len(points) in longest_line_set and vertex_index in longest_line_set
+    ]
+    if not base_vertices:
+        return None
+
+    def line_label(line_index: int) -> str:
+        return f"{'ABC'[line_index % 3]}{1 + line_index // 3}"
+
+    def candidates_for_base(base_vertex: int) -> list[ThreeFaceCoverCandidate]:
+        left_vertex = (base_vertex - 1) % len(points)
+        right_vertex = (base_vertex + 1) % len(points)
+        incoming_line = (base_vertex - 1) % len(points)
+        outgoing_line = base_vertex
+        outgoing_family = [outgoing_line, (outgoing_line + 3) % len(points)]
+        incoming_family = [incoming_line, (incoming_line + 3) % len(points)]
+        candidates: list[ThreeFaceCoverCandidate] = []
+
+        for outgoing_source in outgoing_family:
+            for incoming_source in incoming_family:
+                first_line = _parallel_line_through_point(edge_lines[outgoing_source], points[left_vertex])
+                second_line = _parallel_line_through_point(edge_lines[incoming_source], points[right_vertex])
+                missing_vertex = _intersect_lines(first_line, second_line)
+                if missing_vertex is None or not np.all(np.isfinite(missing_vertex)):
+                    continue
+                polygon = np.array(
+                    [points[left_vertex], points[base_vertex], points[right_vertex], missing_vertex],
+                    dtype=np.float64,
+                )
+                area = abs(float(cv2.contourArea(polygon.astype(np.float32))))
+                inside = cv2.pointPolygonTest(
+                    points.astype(np.float32),
+                    (float(missing_vertex[0]), float(missing_vertex[1])),
+                    False,
+                ) >= 0
+                convex = bool(cv2.isContourConvex(polygon.astype(np.float32)))
+                candidates.append(
+                    ThreeFaceCoverCandidate(
+                        candidate_id=len(candidates) + 1,
+                        first_parallel_source_line=line_label(outgoing_source),
+                        first_anchor_vertex_index=left_vertex + 1,
+                        second_parallel_source_line=line_label(incoming_source),
+                        second_anchor_vertex_index=right_vertex + 1,
+                        missing_vertex=[float(value) for value in missing_vertex.tolist()],
+                        cover_polygon=[
+                            [float(value) for value in polygon_point.tolist()]
+                            for polygon_point in polygon
+                        ],
+                        area=area,
+                        inside_silhouette=inside,
+                        convex=convex,
+                    )
+                )
+        return candidates
+
+    base_options = [(base_vertex, candidates_for_base(base_vertex)) for base_vertex in base_vertices]
+    base_vertex, candidates = max(
+        base_options,
+        key=lambda option: max(
+            (candidate.area for candidate in option[1] if candidate.inside_silhouette and candidate.convex),
+            default=-1.0,
+        ),
+    )
+    valid_candidates = [candidate for candidate in candidates if candidate.inside_silhouette and candidate.convex]
+    largest_area_candidate_id = (
+        max(valid_candidates, key=lambda candidate: candidate.area).candidate_id
+        if valid_candidates
+        else None
+    )
+    return ThreeFaceCoverCandidates(
+        longest_line_indices=[index + 1 for index in longest_line_indices],
+        base_vertex_index=base_vertex + 1,
+        anchor_vertex_indices=[
+            (base_vertex - 1) % len(points) + 1,
+            (base_vertex + 1) % len(points) + 1,
+        ],
+        largest_area_candidate_id=largest_area_candidate_id,
+        candidates=candidates,
+    )
+
+
 def lines_from_vertices(
     vertices: np.ndarray,
     fitted_lines: list[_BoundaryLineFit],
@@ -564,6 +697,7 @@ def detect_silhouette(
     lines = lines_from_vertices(vertices, fitted_lines)
     perspective = classify_perspective(vertices)
     two_face_cover = identify_two_face_cover(vertices, perspective)
+    three_face_cover_candidates = identify_three_face_cover_candidates(vertices, perspective)
 
     detection = SilhouetteDetection(
         vertices=[[float(x), float(y)] for x, y in vertices.tolist()],
@@ -576,6 +710,7 @@ def detect_silhouette(
         polygon_area_retention=polygon_area / hull_area if hull_area else 0.0,
         perspective=perspective,
         two_face_cover=two_face_cover,
+        three_face_cover_candidates=three_face_cover_candidates,
     )
     return detection, mask, hull
 
@@ -639,6 +774,49 @@ def draw_overlay(image: np.ndarray, detection: SilhouetteDetection, hull: np.nda
     return overlay
 
 
+def draw_three_face_cover_candidates(
+    image: np.ndarray,
+    detection: SilhouetteDetection,
+) -> np.ndarray | None:
+    candidate_set = detection.three_face_cover_candidates
+    if candidate_set is None or len(candidate_set.candidates) != 4:
+        return None
+
+    silhouette = np.rint(np.asarray(detection.vertices)).astype(np.int32)
+    panels: list[np.ndarray] = []
+    for candidate in candidate_set.candidates:
+        panel = image.copy()
+        polygon = np.rint(np.asarray(candidate.cover_polygon)).astype(np.int32)
+        missing_vertex = tuple(np.rint(candidate.missing_vertex).astype(np.int32))
+        first_anchor = tuple(polygon[0])
+        second_anchor = tuple(polygon[2])
+
+        tint = panel.copy()
+        cv2.fillPoly(tint, [polygon], (70, 220, 70), cv2.LINE_AA)
+        panel = cv2.addWeighted(tint, 0.17, panel, 0.83, 0)
+        cv2.polylines(panel, [silhouette], True, (0, 0, 255), 3, cv2.LINE_AA)
+        cv2.polylines(panel, [polygon], True, (0, 155, 0), 4, cv2.LINE_AA)
+        cv2.line(panel, first_anchor, missing_vertex, (255, 0, 255), 4, cv2.LINE_AA)
+        cv2.line(panel, second_anchor, missing_vertex, (255, 0, 255), 4, cv2.LINE_AA)
+        cv2.circle(panel, missing_vertex, 8, (0, 215, 255), -1, cv2.LINE_AA)
+        cv2.circle(panel, missing_vertex, 8, (0, 0, 0), 1, cv2.LINE_AA)
+
+        largest_marker = "  LARGEST AREA" if candidate.candidate_id == candidate_set.largest_area_candidate_id else ""
+        title = (
+            f"Candidate {candidate.candidate_id}: "
+            f"{candidate.first_parallel_source_line}@V{candidate.first_anchor_vertex_index} + "
+            f"{candidate.second_parallel_source_line}@V{candidate.second_anchor_vertex_index}"
+        )
+        subtitle = f"missing=({candidate.missing_vertex[0]:.1f}, {candidate.missing_vertex[1]:.1f})  area={candidate.area:.0f}{largest_marker}"
+        cv2.rectangle(panel, (0, 0), (image.shape[1], 58), (255, 255, 255), -1)
+        title_scale = min(0.55, max(0.35, image.shape[1] / 1300.0))
+        cv2.putText(panel, title, (12, 24), cv2.FONT_HERSHEY_SIMPLEX, title_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(panel, subtitle, (12, 49), cv2.FONT_HERSHEY_SIMPLEX, title_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        panels.append(panel)
+
+    return np.vstack([np.hstack(panels[:2]), np.hstack(panels[2:])])
+
+
 def process_image(
     source_path: str | Path,
     output_dir: str | Path,
@@ -661,14 +839,19 @@ def process_image(
     overlay_path = output / "silhouette-overlay.png"
     mask_path = output / "silhouette-mask.png"
     metadata_path = output / "silhouette.json"
+    cover_candidates_image = draw_three_face_cover_candidates(image, detection)
+    cover_candidates_path = output / "cover-candidates.png" if cover_candidates_image is not None else None
 
     cv2.imwrite(str(overlay_path), draw_overlay(image, detection, hull))
     cv2.imwrite(str(mask_path), mask)
+    if cover_candidates_path is not None and cover_candidates_image is not None:
+        cv2.imwrite(str(cover_candidates_path), cover_candidates_image)
     result = SilhouetteResult(
         source_path=str(source.resolve()),
         overlay_path=str(overlay_path.resolve()),
         mask_path=str(mask_path.resolve()),
         metadata_path=str(metadata_path.resolve()),
+        cover_candidates_path=str(cover_candidates_path.resolve()) if cover_candidates_path is not None else None,
         detection=detection,
     )
     metadata_path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")

@@ -10,6 +10,7 @@ from ludora.box_silhouette import (
     build_foreground_mask,
     classify_perspective,
     detect_silhouette,
+    identify_three_face_cover_candidates,
     identify_two_face_cover,
     process_image,
 )
@@ -164,6 +165,53 @@ class BoxSilhouetteTests(unittest.TestCase):
         perspective = classify_perspective(vertices)
 
         self.assertIsNone(identify_two_face_cover(vertices, perspective))
+
+    def test_three_face_cover_generates_four_parallel_line_candidates(self):
+        vertices = np.array(
+            [
+                [523.53, 116.50],
+                [610.80, 133.54],
+                [581.55, 571.32],
+                [164.96, 680.50],
+                [118.07, 603.54],
+                [85.16, 144.63],
+            ],
+            dtype=np.float64,
+        )
+        perspective = classify_perspective(vertices)
+
+        candidate_set = identify_three_face_cover_candidates(vertices, perspective)
+
+        self.assertIsNotNone(candidate_set)
+        self.assertEqual(candidate_set.longest_line_indices, [2, 3, 5, 6])
+        self.assertEqual(candidate_set.base_vertex_index, 3)
+        self.assertEqual(candidate_set.anchor_vertex_indices, [2, 4])
+        self.assertEqual(len(candidate_set.candidates), 4)
+        self.assertTrue(all(candidate.inside_silhouette for candidate in candidate_set.candidates))
+        self.assertTrue(all(candidate.convex for candidate in candidate_set.candidates))
+        self.assertEqual(candidate_set.largest_area_candidate_id, 4)
+        largest = candidate_set.candidates[3]
+        self.assertEqual(largest.first_parallel_source_line, "C2")
+        self.assertEqual(largest.first_anchor_vertex_index, 2)
+        self.assertEqual(largest.second_parallel_source_line, "B2")
+        self.assertEqual(largest.second_anchor_vertex_index, 4)
+        np.testing.assert_allclose(largest.missing_vertex, [128.0, 164.5], atol=0.6)
+
+    def test_two_face_outline_does_not_create_three_face_candidates(self):
+        vertices = np.array(
+            [
+                [126.87, 34.22],
+                [362.72, 56.31],
+                [362.80, 412.61],
+                [125.59, 424.48],
+                [92.21, 405.95],
+                [91.81, 46.77],
+            ],
+            dtype=np.float64,
+        )
+        perspective = classify_perspective(vertices)
+
+        self.assertIsNone(identify_three_face_cover_candidates(vertices, perspective))
 
     def test_classifies_ideal_abcabc_hexagon_as_three_faces(self):
         edge_vectors = np.array(
