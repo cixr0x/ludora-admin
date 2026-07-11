@@ -12,6 +12,17 @@ The detector deliberately does not select or warp the front panel yet. Its outpu
 
 In the overlay, red is the final fitted six-line silhouette, blue is the old six-point hull approximation, and the thinner cyan trace is the unsimplified convex hull. Each JSON line records whether it was fitted from an `image_edge` or inferred from the `mask_hull`.
 
+## Perspective Classification
+
+The six clockwise lines are labeled `A1 B1 C1 A2 B2 C2`. The detector compares the direction of each opposite pair: `A1-A2`, `B1-B2`, and `C1-C2`. Directions are compared modulo 180 degrees with a 12-degree tolerance.
+
+- Three matching pairs: `three_faces`, high confidence.
+- Two matching pairs: `three_faces`, lower confidence because one receding axis may converge strongly under projective perspective.
+- One matching pair: `two_faces`.
+- No matching pairs, or an outline without six sides: `ambiguous`.
+
+The JSON includes both line angles, their angular difference, whether they match, and their finite vanishing point when the lines are not nearly parallel. This evidence is retained so later stages can reject borderline classifications or add an interior-edge check.
+
 Run it from `ludora-admin/ludora-discovery`:
 
 ```powershell

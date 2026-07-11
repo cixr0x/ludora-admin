@@ -8,6 +8,7 @@ import numpy as np
 from ludora.box_silhouette import (
     approximate_hull,
     build_foreground_mask,
+    classify_perspective,
     detect_silhouette,
     process_image,
 )
@@ -76,6 +77,63 @@ class BoxSilhouetteTests(unittest.TestCase):
         for index, line in enumerate(detection.lines):
             next_line = detection.lines[(index + 1) % len(detection.lines)]
             np.testing.assert_allclose(line.end, next_line.start)
+
+    def test_classifies_three_faces_when_two_opposite_pairs_match(self):
+        vertices = np.array(
+            [
+                [523.53, 116.50],
+                [610.80, 133.54],
+                [581.55, 571.32],
+                [164.96, 680.50],
+                [118.07, 603.54],
+                [85.16, 144.63],
+            ],
+            dtype=np.float64,
+        )
+
+        perspective = classify_perspective(vertices)
+
+        self.assertEqual(perspective.kind, "three_faces")
+        self.assertEqual(perspective.matching_opposite_pairs, 2)
+        self.assertEqual([pair.axis_label for pair in perspective.pairs], ["A", "B", "C"])
+        self.assertEqual([pair.line_indices for pair in perspective.pairs], [[1, 4], [2, 5], [3, 6]])
+        self.assertFalse(perspective.pairs[0].similar_direction)
+        self.assertTrue(perspective.pairs[1].similar_direction)
+        self.assertTrue(perspective.pairs[2].similar_direction)
+
+    def test_classifies_two_faces_when_only_one_opposite_pair_matches(self):
+        vertices = np.array(
+            [
+                [126.87, 34.22],
+                [362.72, 56.31],
+                [362.80, 412.61],
+                [125.59, 424.48],
+                [92.21, 405.95],
+                [91.81, 46.77],
+            ],
+            dtype=np.float64,
+        )
+
+        perspective = classify_perspective(vertices)
+
+        self.assertEqual(perspective.kind, "two_faces")
+        self.assertEqual(perspective.matching_opposite_pairs, 1)
+        self.assertFalse(perspective.pairs[0].similar_direction)
+        self.assertTrue(perspective.pairs[1].similar_direction)
+        self.assertFalse(perspective.pairs[2].similar_direction)
+
+    def test_classifies_ideal_abcabc_hexagon_as_three_faces(self):
+        edge_vectors = np.array(
+            [[100, 10], [20, 100], [-80, 40], [-100, -10], [-20, -100], [80, -40]],
+            dtype=np.float64,
+        )
+        vertices = np.vstack([np.array([[100.0, 100.0]]), 100.0 + np.cumsum(edge_vectors[:-1], axis=0)])
+
+        perspective = classify_perspective(vertices)
+
+        self.assertEqual(perspective.kind, "three_faces")
+        self.assertEqual(perspective.matching_opposite_pairs, 3)
+        self.assertGreater(perspective.confidence, 0.99)
 
     def test_approximation_returns_requested_line_count(self):
         points = np.array(

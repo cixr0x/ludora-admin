@@ -15,8 +15,29 @@ class SilhouetteLine:
     end: list[float]
     length: float
     angle_degrees: float
+    axis_label: str
+    pair_member: int
     fit_source: str
     support_length: float
+
+
+@dataclass(frozen=True)
+class OppositeLinePair:
+    axis_label: str
+    line_indices: list[int]
+    angles_degrees: list[float]
+    difference_degrees: float
+    similar_direction: bool
+    vanishing_point: list[float] | None
+
+
+@dataclass(frozen=True)
+class PerspectiveClassification:
+    kind: str
+    confidence: float
+    matching_opposite_pairs: int
+    angle_tolerance_degrees: float
+    pairs: list[OppositeLinePair]
 
 
 @dataclass(frozen=True)
@@ -29,6 +50,7 @@ class SilhouetteDetection:
     foreground_area_ratio: float
     hull_area_ratio: float
     polygon_area_retention: float
+    perspective: PerspectiveClassification
 
 
 @dataclass(frozen=True)
@@ -323,6 +345,90 @@ def fit_boundary_lines(
     return refined, fitted_lines
 
 
+def classify_perspective(
+    vertices: np.ndarray,
+    *,
+    angle_tolerance_degrees: float = 12.0,
+) -> PerspectiveClassification:
+    points = np.asarray(vertices, dtype=np.float64).reshape(-1, 2)
+    if len(points) != 6:
+        return PerspectiveClassification(
+            kind="ambiguous",
+            confidence=0.0,
+            matching_opposite_pairs=0,
+            angle_tolerance_degrees=float(angle_tolerance_degrees),
+            pairs=[],
+        )
+    if angle_tolerance_degrees <= 0:
+        raise ValueError("perspective angle tolerance must be positive")
+
+    edge_lines = [
+        _fit_line(np.array([points[index], points[(index + 1) % len(points)]]))
+        for index in range(len(points))
+    ]
+    angles = [_line_angle_degrees(line) for line in edge_lines]
+    pairs: list[OppositeLinePair] = []
+    for index, axis_label in enumerate("ABC"):
+        opposite_index = index + 3
+        difference = _angle_difference(angles[index], angles[opposite_index])
+        intersection = _intersect_lines(edge_lines[index], edge_lines[opposite_index])
+        if difference < 0.25 or intersection is None or not np.all(np.isfinite(intersection)):
+            vanishing_point = None
+        else:
+            vanishing_point = [float(intersection[0]), float(intersection[1])]
+        pairs.append(
+            OppositeLinePair(
+                axis_label=axis_label,
+                line_indices=[index + 1, opposite_index + 1],
+                angles_degrees=[float(angles[index]), float(angles[opposite_index])],
+                difference_degrees=float(difference),
+                similar_direction=difference <= angle_tolerance_degrees,
+                vanishing_point=vanishing_point,
+            )
+        )
+
+    matching_pairs = sum(pair.similar_direction for pair in pairs)
+    matching_differences = [pair.difference_degrees for pair in pairs if pair.similar_direction]
+    mismatching_differences = [pair.difference_degrees for pair in pairs if not pair.similar_direction]
+    if matching_pairs >= 2:
+        kind = "three_faces"
+        matching_strength = float(
+            np.mean([1.0 - difference / angle_tolerance_degrees for difference in matching_differences])
+        )
+        if matching_pairs == 3:
+            confidence = 0.80 + 0.20 * matching_strength
+        else:
+            mismatch_strength = min(
+                1.0,
+                max(0.0, mismatching_differences[0] - angle_tolerance_degrees)
+                / angle_tolerance_degrees,
+            )
+            confidence = 0.55 + 0.20 * matching_strength + 0.15 * mismatch_strength
+    elif matching_pairs == 1:
+        kind = "two_faces"
+        matching_strength = 1.0 - matching_differences[0] / angle_tolerance_degrees
+        mismatch_strength = float(
+            np.mean(
+                [
+                    min(1.0, max(0.0, difference - angle_tolerance_degrees) / angle_tolerance_degrees)
+                    for difference in mismatching_differences
+                ]
+            )
+        )
+        confidence = 0.55 + 0.25 * matching_strength + 0.20 * mismatch_strength
+    else:
+        kind = "ambiguous"
+        confidence = 0.25
+
+    return PerspectiveClassification(
+        kind=kind,
+        confidence=float(min(1.0, max(0.0, confidence))),
+        matching_opposite_pairs=matching_pairs,
+        angle_tolerance_degrees=float(angle_tolerance_degrees),
+        pairs=pairs,
+    )
+
+
 def lines_from_vertices(
     vertices: np.ndarray,
     fitted_lines: list[_BoundaryLineFit],
@@ -338,6 +444,8 @@ def lines_from_vertices(
                 end=[float(end[0]), float(end[1])],
                 length=float(np.linalg.norm(delta)),
                 angle_degrees=float(np.degrees(np.arctan2(delta[1], delta[0]))),
+                axis_label="ABC"[index % 3],
+                pair_member=1 + index // 3,
                 fit_source=fit.source,
                 support_length=fit.support_length,
             )
@@ -377,16 +485,19 @@ def detect_silhouette(
     initial_vertices = normalize_vertices(polygon).astype(np.float64)
     vertices, fitted_lines = fit_boundary_lines(image, hull, initial_vertices)
     polygon_area = abs(float(cv2.contourArea(vertices.astype(np.float32))))
+    lines = lines_from_vertices(vertices, fitted_lines)
+    perspective = classify_perspective(vertices)
 
     detection = SilhouetteDetection(
         vertices=[[float(x), float(y)] for x, y in vertices.tolist()],
         initial_vertices=[[float(x), float(y)] for x, y in initial_vertices.tolist()],
-        lines=lines_from_vertices(vertices, fitted_lines),
+        lines=lines,
         background_bgr=[float(value) for value in background.tolist()],
         background_threshold=float(threshold),
         foreground_area_ratio=foreground_area_ratio,
         hull_area_ratio=hull_area / image_area,
         polygon_area_retention=polygon_area / hull_area if hull_area else 0.0,
+        perspective=perspective,
     )
     return detection, mask, hull
 
@@ -400,13 +511,14 @@ def draw_overlay(image: np.ndarray, detection: SilhouetteDetection, hull: np.nda
 
     vertices = np.rint(np.asarray(detection.vertices)).astype(np.int32)
     cv2.polylines(overlay, [vertices], True, (0, 0, 255), 4, cv2.LINE_AA)
-    for index, line in enumerate(detection.lines, start=1):
+    for line in detection.lines:
         start = np.asarray(line.start)
         end = np.asarray(line.end)
         midpoint = np.rint((start + end) / 2).astype(int)
         label_position = (int(midpoint[0] + 6), int(midpoint[1] - 6))
-        cv2.putText(overlay, f"L{index}", label_position, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 4, cv2.LINE_AA)
-        cv2.putText(overlay, f"L{index}", label_position, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
+        label = f"{line.axis_label}{line.pair_member}"
+        cv2.putText(overlay, label, label_position, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 4, cv2.LINE_AA)
+        cv2.putText(overlay, label, label_position, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
 
     for index, vertex in enumerate(vertices, start=1):
         point = (int(vertex[0]), int(vertex[1]))
@@ -415,6 +527,19 @@ def draw_overlay(image: np.ndarray, detection: SilhouetteDetection, hull: np.nda
         label_position = (point[0] + 8, point[1] + 18)
         cv2.putText(overlay, str(index), label_position, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 4, cv2.LINE_AA)
         cv2.putText(overlay, str(index), label_position, cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 1, cv2.LINE_AA)
+
+    perspective = detection.perspective
+    summary = (
+        f"{perspective.kind}  opposite pairs={perspective.matching_opposite_pairs}/3  "
+        f"confidence={perspective.confidence:.2f}"
+    )
+    summary_scale = 0.58
+    summary_width = cv2.getTextSize(summary, cv2.FONT_HERSHEY_SIMPLEX, summary_scale, 1)[0][0]
+    if summary_width > image.shape[1] - 30:
+        summary_scale *= (image.shape[1] - 30) / summary_width
+    summary_position = (15, image.shape[0] - 14)
+    cv2.putText(overlay, summary, summary_position, cv2.FONT_HERSHEY_SIMPLEX, summary_scale, (255, 255, 255), 4, cv2.LINE_AA)
+    cv2.putText(overlay, summary, summary_position, cv2.FONT_HERSHEY_SIMPLEX, summary_scale, (0, 0, 0), 1, cv2.LINE_AA)
 
     return overlay
 
