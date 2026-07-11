@@ -14,6 +14,7 @@ Do not choose another port automatically. If one of these ports is busy, report 
 
 ## Production VM
 
+- Follow `docs/production-deployment.md` for provisioning, routine deployment, rollback, and verification.
 - Instance: `ludora-admin`
 - GCP project: `ludora-501213`
 - Zone: `us-central1-c`
