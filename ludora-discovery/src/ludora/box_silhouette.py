@@ -11,15 +11,18 @@ import numpy as np
 
 @dataclass(frozen=True)
 class SilhouetteLine:
-    start: list[int]
-    end: list[int]
+    start: list[float]
+    end: list[float]
     length: float
     angle_degrees: float
+    fit_source: str
+    support_length: float
 
 
 @dataclass(frozen=True)
 class SilhouetteDetection:
-    vertices: list[list[int]]
+    vertices: list[list[float]]
+    initial_vertices: list[list[float]]
     lines: list[SilhouetteLine]
     background_bgr: list[float]
     background_threshold: float
@@ -134,17 +137,209 @@ def normalize_vertices(points: np.ndarray) -> np.ndarray:
     return np.roll(vertices, -start_index, axis=0)
 
 
-def lines_from_vertices(vertices: np.ndarray) -> list[SilhouetteLine]:
+@dataclass(frozen=True)
+class _BoundaryLineFit:
+    coefficients: np.ndarray
+    source: str
+    support_length: float
+
+
+def _fit_line(points: np.ndarray) -> np.ndarray:
+    fit_points = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+    if len(fit_points) < 2:
+        raise ValueError("at least two points are required to fit a line")
+    vx, vy, x0, y0 = [
+        float(value)
+        for value in cv2.fitLine(fit_points, cv2.DIST_WELSCH, 0, 0.01, 0.01).reshape(4)
+    ]
+    coefficients = np.array([-vy, vx, vy * x0 - vx * y0], dtype=np.float64)
+    normal_length = float(np.hypot(coefficients[0], coefficients[1]))
+    return coefficients / normal_length
+
+
+def _line_angle_degrees(coefficients: np.ndarray) -> float:
+    angle = float(np.degrees(np.arctan2(-coefficients[0], coefficients[1])))
+    return (angle + 90.0) % 180.0 - 90.0
+
+
+def _angle_difference(first: float, second: float) -> float:
+    return abs((first - second + 90.0) % 180.0 - 90.0)
+
+
+def _point_line_distance(point: np.ndarray, coefficients: np.ndarray) -> float:
+    return abs(float(coefficients[0] * point[0] + coefficients[1] * point[1] + coefficients[2]))
+
+
+def _intersect_lines(first: np.ndarray, second: np.ndarray) -> np.ndarray | None:
+    homogeneous_point = np.cross(first, second)
+    if abs(float(homogeneous_point[2])) < 1e-8:
+        return None
+    return homogeneous_point[:2] / homogeneous_point[2]
+
+
+def _segment_contrast(image: np.ndarray, endpoints: np.ndarray) -> float:
+    direction = endpoints[1] - endpoints[0]
+    length = float(np.linalg.norm(direction))
+    direction /= length
+    normal = np.array([-direction[1], direction[0]], dtype=np.float64)
+    sample_count = max(8, min(64, int(length / 4.0)))
+    positions = np.linspace(0.1, 0.9, sample_count)[:, None]
+    samples = endpoints[0] + positions * (endpoints[1] - endpoints[0])
+    first_side = np.rint(samples + normal * 3.0).astype(np.int32)
+    second_side = np.rint(samples - normal * 3.0).astype(np.int32)
+    for points in (first_side, second_side):
+        points[:, 0] = np.clip(points[:, 0], 0, image.shape[1] - 1)
+        points[:, 1] = np.clip(points[:, 1], 0, image.shape[0] - 1)
+    first_colors = image[first_side[:, 1], first_side[:, 0]].astype(np.float32)
+    second_colors = image[second_side[:, 1], second_side[:, 0]].astype(np.float32)
+    return float(np.median(np.linalg.norm(first_colors - second_colors, axis=1)))
+
+
+def _detect_image_segments(image: np.ndarray) -> list[tuple[float, float, np.ndarray, np.ndarray]]:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    detector = cv2.createLineSegmentDetector(cv2.LSD_REFINE_STD)
+    detected = detector.detect(gray)[0]
+    if detected is None:
+        return []
+
+    segments: list[tuple[float, float, np.ndarray, np.ndarray]] = []
+    for raw_segment in detected[:, 0, :]:
+        endpoints = raw_segment.astype(np.float64).reshape(2, 2)
+        length = float(np.linalg.norm(endpoints[1] - endpoints[0]))
+        if length < 18.0:
+            continue
+        segments.append((length, _segment_contrast(image, endpoints), _fit_line(endpoints), endpoints))
+    return segments
+
+
+def _hull_line_fit(
+    hull_points: np.ndarray,
+    start: np.ndarray,
+    end: np.ndarray,
+    base_line: np.ndarray,
+    band: float,
+) -> _BoundaryLineFit:
+    side = end - start
+    side_length = float(np.linalg.norm(side))
+    direction = side / side_length
+    extension = side_length * 0.25
+    support = [
+        point
+        for point in hull_points
+        if -extension <= float(np.dot(point - start, direction)) <= side_length + extension
+        and _point_line_distance(point, base_line) <= band
+    ]
+    if len(support) < 2:
+        support = [start, end]
+    support_array = np.asarray(support, dtype=np.float64)
+    projections = support_array @ direction
+    support_length = float(projections.max() - projections.min())
+    return _BoundaryLineFit(
+        coefficients=_fit_line(support_array),
+        source="mask_hull",
+        support_length=support_length,
+    )
+
+
+def _image_edge_line_fit(
+    segments: list[tuple[float, float, np.ndarray, np.ndarray]],
+    start: np.ndarray,
+    end: np.ndarray,
+    base_line: np.ndarray,
+    band: float,
+) -> _BoundaryLineFit | None:
+    side = end - start
+    side_length = float(np.linalg.norm(side))
+    direction = side / side_length
+    extension = side_length * 0.25
+    base_angle = _line_angle_degrees(base_line)
+    candidates: list[tuple[float, float, np.ndarray]] = []
+
+    for length, contrast, coefficients, endpoints in segments:
+        midpoint = endpoints.mean(axis=0)
+        projection = float(np.dot(midpoint - start, direction))
+        distance = _point_line_distance(midpoint, base_line)
+        angle_difference = _angle_difference(_line_angle_degrees(coefficients), base_angle)
+        if (
+            angle_difference <= 12.0
+            and distance <= band
+            and -extension <= projection <= side_length + extension
+            and length >= max(18.0, side_length * 0.08)
+        ):
+            score = length + 1.25 * contrast - 2.0 * distance - 1.5 * angle_difference
+            candidates.append((score, length, coefficients))
+
+    if not candidates:
+        return None
+    _, support_length, coefficients = max(candidates, key=lambda item: item[0])
+    if support_length < max(25.0, side_length * 0.18):
+        return None
+    return _BoundaryLineFit(
+        coefficients=coefficients,
+        source="image_edge",
+        support_length=support_length,
+    )
+
+
+def fit_boundary_lines(
+    image: np.ndarray,
+    hull: np.ndarray,
+    initial_vertices: np.ndarray,
+) -> tuple[np.ndarray, list[_BoundaryLineFit]]:
+    vertices = np.asarray(initial_vertices, dtype=np.float64).reshape(-1, 2)
+    hull_points = hull.reshape(-1, 2).astype(np.float64)
+    image_segments = _detect_image_segments(image)
+    hull_band = max(8.0, min(image.shape[:2]) * 0.025)
+    image_edge_band = max(12.0, min(image.shape[:2]) * 0.035)
+    fitted_lines: list[_BoundaryLineFit] = []
+
+    for index, start in enumerate(vertices):
+        end = vertices[(index + 1) % len(vertices)]
+        base_line = _fit_line(np.array([start, end]))
+        hull_fit = _hull_line_fit(hull_points, start, end, base_line, hull_band)
+        image_fit = _image_edge_line_fit(image_segments, start, end, base_line, image_edge_band)
+        fitted_lines.append(image_fit or hull_fit)
+
+    intersections: list[np.ndarray] = []
+    maximum_shift = max(30.0, min(image.shape[:2]) * 0.15)
+    for index, initial_vertex in enumerate(vertices):
+        intersection = _intersect_lines(
+            fitted_lines[(index - 1) % len(fitted_lines)].coefficients,
+            fitted_lines[index].coefficients,
+        )
+        if (
+            intersection is None
+            or not np.all(np.isfinite(intersection))
+            or float(np.linalg.norm(intersection - initial_vertex)) > maximum_shift
+        ):
+            intersection = initial_vertex
+        intersections.append(intersection)
+
+    refined = np.asarray(intersections, dtype=np.float64)
+    initial_area = abs(float(cv2.contourArea(vertices.astype(np.float32))))
+    refined_area = abs(float(cv2.contourArea(refined.astype(np.float32))))
+    if initial_area and not 0.65 <= refined_area / initial_area <= 1.35:
+        return vertices, fitted_lines
+    return refined, fitted_lines
+
+
+def lines_from_vertices(
+    vertices: np.ndarray,
+    fitted_lines: list[_BoundaryLineFit],
+) -> list[SilhouetteLine]:
     lines: list[SilhouetteLine] = []
     for index, start in enumerate(vertices):
         end = vertices[(index + 1) % len(vertices)]
         delta = end.astype(np.float64) - start.astype(np.float64)
+        fit = fitted_lines[index]
         lines.append(
             SilhouetteLine(
-                start=[int(start[0]), int(start[1])],
-                end=[int(end[0]), int(end[1])],
+                start=[float(start[0]), float(start[1])],
+                end=[float(end[0]), float(end[1])],
                 length=float(np.linalg.norm(delta)),
                 angle_degrees=float(np.degrees(np.arctan2(delta[1], delta[0]))),
+                fit_source=fit.source,
+                support_length=fit.support_length,
             )
         )
     return lines
@@ -179,12 +374,14 @@ def detect_silhouette(
     hull = cv2.convexHull(contour)
     hull_area = float(cv2.contourArea(hull))
     polygon = approximate_hull(hull, target_vertices=target_lines)
-    vertices = normalize_vertices(polygon)
-    polygon_area = float(cv2.contourArea(vertices))
+    initial_vertices = normalize_vertices(polygon).astype(np.float64)
+    vertices, fitted_lines = fit_boundary_lines(image, hull, initial_vertices)
+    polygon_area = abs(float(cv2.contourArea(vertices.astype(np.float32))))
 
     detection = SilhouetteDetection(
-        vertices=[[int(x), int(y)] for x, y in vertices.tolist()],
-        lines=lines_from_vertices(vertices),
+        vertices=[[float(x), float(y)] for x, y in vertices.tolist()],
+        initial_vertices=[[float(x), float(y)] for x, y in initial_vertices.tolist()],
+        lines=lines_from_vertices(vertices, fitted_lines),
         background_bgr=[float(value) for value in background.tolist()],
         background_threshold=float(threshold),
         foreground_area_ratio=foreground_area_ratio,
@@ -198,7 +395,10 @@ def draw_overlay(image: np.ndarray, detection: SilhouetteDetection, hull: np.nda
     overlay = image.copy()
     cv2.polylines(overlay, [hull.astype(np.int32)], True, (255, 160, 0), 2, cv2.LINE_AA)
 
-    vertices = np.asarray(detection.vertices, dtype=np.int32)
+    initial_vertices = np.rint(np.asarray(detection.initial_vertices)).astype(np.int32)
+    cv2.polylines(overlay, [initial_vertices], True, (255, 0, 0), 2, cv2.LINE_AA)
+
+    vertices = np.rint(np.asarray(detection.vertices)).astype(np.int32)
     cv2.polylines(overlay, [vertices], True, (0, 0, 255), 4, cv2.LINE_AA)
     for index, line in enumerate(detection.lines, start=1):
         start = np.asarray(line.start)

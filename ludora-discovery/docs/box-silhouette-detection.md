@@ -1,12 +1,16 @@
 # Box Silhouette Detection
 
-This is the first diagnostic stage of the box-to-flat-cover workflow. It finds the largest object against a mostly flat image background and simplifies its convex hull to six lines.
+This is the first diagnostic stage of the box-to-flat-cover workflow. It finds the largest object against a mostly flat image background, uses its convex hull as a coarse location, and then fits six straight lines to the source-image boundary.
+
+The convex hull does not define the final corners. It only initializes the six expected sides. The detector finds straight source-image segments near each side, prefers high-contrast box edges over lower-contrast cast-shadow edges, robustly fits each boundary line, and calculates subpixel corners from adjacent line intersections. A mask-hull line is used only when the real boundary is effectively invisible, such as a white box edge against a white background.
 
 The detector deliberately does not select or warp the front panel yet. Its outputs make the silhouette geometry visible before later stages depend on it:
 
 - `silhouette-overlay.png`: numbered polygon lines and vertices over the source image.
 - `silhouette-mask.png`: foreground pixels used to find the box.
 - `silhouette.json`: vertices, line endpoints, line angles, and fit metrics.
+
+In the overlay, red is the final fitted six-line silhouette, blue is the old six-point hull approximation, and the thinner cyan trace is the unsimplified convex hull. Each JSON line records whether it was fitted from an `image_edge` or inferred from the `mask_hull`.
 
 Run it from `ludora-admin/ludora-discovery`:
 
