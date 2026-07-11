@@ -1,5 +1,6 @@
 dist
 node_modules
 *.local
+.env.production
 vite-dev*.log
 *.log
