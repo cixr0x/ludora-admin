@@ -105,8 +105,8 @@ const app = createApp({
   translationService
 });
 
-const server = app.listen(config.port, () => {
-  console.log(`ludora-admin-service listening on port ${config.port}`);
+const server = app.listen(config.port, config.host, () => {
+  console.log(`ludora-admin-service listening on ${config.host}:${config.port}`);
 });
 
 let isShuttingDown = false;

@@ -13,6 +13,7 @@ export type Config = {
   adminAuth: AdminAuthOptions;
   bggApiBaseUrl: string;
   bggApiToken?: string;
+  host: string;
   openAiApiKey?: string;
   openAiBaseUrl?: string;
   openAiTranslationModel: string;
@@ -46,6 +47,7 @@ export function loadConfig(): Config {
     adminAuth: readAdminAuthConfig(),
     bggApiBaseUrl: process.env.BGG_API_BASE_URL ?? 'https://boardgamegeek.com/xmlapi2',
     bggApiToken: process.env.BGG_API_TOKEN,
+    host: readEnvWithDefault('HOST', '127.0.0.1'),
     openAiApiKey: process.env.OPENAI_API_KEY,
     openAiBaseUrl: readOptionalEnv('OPENAI_BASE_URL'),
     openAiTranslationModel: process.env.OPENAI_TRANSLATION_MODEL ?? 'gpt-5.4-nano',

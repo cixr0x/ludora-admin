@@ -21,6 +21,14 @@ describe('loadConfig', () => {
     expect(loadConfig().port).toBe(4001);
   });
 
+  it('defaults HOST to loopback and accepts an override', () => {
+    vi.stubEnv('HOST', undefined);
+    expect(loadConfig().host).toBe('127.0.0.1');
+
+    vi.stubEnv('HOST', '0.0.0.0');
+    expect(loadConfig().host).toBe('0.0.0.0');
+  });
+
   it.each(['abc', '0', '-1', '4001.5'])('rejects invalid PORT %s', (port) => {
     vi.stubEnv('PORT', port);
 
