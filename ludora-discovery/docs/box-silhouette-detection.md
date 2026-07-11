@@ -29,11 +29,16 @@ When exactly one opposite line pair matches, the four vertices incident to that 
 
 The overlay draws the inferred seam in magenta and shades the selected cover green. The JSON records the parallel pair, seam endpoints, both face polygons and areas, and the fraction of the combined visible-face area assigned to the cover.
 
-## Three-Face Cover Candidates
+## Three-Face Cover Construction: First Case
 
-For a three-face outline, the four longest silhouette lines define the two likely cover dimensions. The detector finds the long-edge corner that can produce the largest visible quadrilateral and keeps its two neighboring vertices as anchors. Each missing cover edge can copy either member of its `ABCABC` direction family, producing four combinations and four possible missing-corner intersections.
+The first three-face experiment performs exactly two translations without changing either source direction:
 
-All convex candidates whose missing point falls inside the silhouette are retained. `cover-candidates.png` renders the four alternatives in a 2-by-2 comparison. The JSON records the source line and anchor used for both inferred edges, the missing point, polygon, area, and validity checks. The largest-area candidate is marked as a heuristic only; it is not silently promoted to the canonical cover.
+1. Copy `C2` and translate it until it passes through vertex `V2`.
+2. Copy `B2` and translate it until it passes through vertex `V4`.
+3. Intersect the translated lines to obtain the missing cover corner.
+4. Form the cover quadrilateral from `V2`, `V3`, `V4`, and the intersection.
+
+`three-face-cover.png` draws the original `C2/B2` source segments in cyan and their translated copies in magenta. The JSON records both source and translated segments and their angular errors, which should be zero apart from floating-point precision. No alternative slope combinations are generated in this experiment.
 
 Run it from `ludora-admin/ludora-discovery`:
 
