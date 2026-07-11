@@ -14,6 +14,7 @@ import { OperationsPage } from './pages/OperationsPage';
 import { ReviewTasksPage } from './pages/ReviewTasksPage';
 import { StoreCandidatesPage } from './pages/StoreCandidatesPage';
 import { StoreItemDiscoveryLogPage } from './pages/StoreItemDiscoveryLogPage';
+import { StoreItemUpdateHistoryPage } from './pages/StoreItemUpdateHistoryPage';
 import { StoresPage } from './pages/StoresPage';
 
 const theme = createTheme({
@@ -132,7 +133,14 @@ function renderSection(
         <OperationsPage operation="item_discovery" />
       );
     case 'operations-store-item-update':
-      return <OperationsPage operation="item_update" />;
+      return route.params.get('run_id') ? (
+        <StoreItemUpdateHistoryPage
+          runId={route.params.get('run_id') ?? ''}
+          onBack={() => navigate('operations-store-item-update')}
+        />
+      ) : (
+        <OperationsPage operation="item_update" />
+      );
     case 'operations-item-embeddings':
       return <OperationsPage operation="item_embeddings" />;
     case 'operations-image-optimization':

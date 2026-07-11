@@ -308,6 +308,28 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /Run Store Discovery/i })).not.toBeInTheDocument();
   });
 
+  it('opens store item update history from a run hash route', async () => {
+    window.location.hash = '#operations-store-item-update?run_id=run-update-27';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/admin/operations/store-item-update-jobs/run-update-27/changes') {
+        return jsonResponse({
+          changes: [],
+          job: { id: 27, run_id: 'run-update-27', store_id: 12, store_name: 'Alpha Games' }
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Store Item Update History' })).toBeInTheDocument();
+    expect(screen.getByText('Alpha Games · Run run-update-27')).toBeInTheDocument();
+  });
+
   it('opens a store item discovery job log from its hash route', async () => {
     window.location.hash = '#operations-store-item-discovery?job_id=19';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {

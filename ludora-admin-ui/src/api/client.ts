@@ -26,6 +26,11 @@ export type StoreItemDiscoveryJobLog = {
   reset: boolean;
 };
 
+export type StoreItemUpdateHistory = {
+  changes: AdminRecord[];
+  job: AdminRecord;
+};
+
 export type AdminIdentity = {
   username: string;
 };
@@ -482,6 +487,10 @@ export const adminApi = {
     ),
   getStoreItemUpdateJobsPage: (query: TableQuery) =>
     fetchPagedRows<AdminRecord>(pagedPath('/admin/operations/store-item-update-jobs', query), query),
+  getStoreItemUpdateHistory: (runId: string) =>
+    fetchData<StoreItemUpdateHistory>(
+      `/admin/operations/store-item-update-jobs/${encodeURIComponent(runId)}/changes`
+    ),
   getLatestStoreDiscoveryRun: () => fetchData<StoreDiscoveryRun | null>('/admin/operations/store-discovery-runs/latest'),
   getCurrentLocalCoverWorkflow: () => fetchData<LocalCoverWorkflow | null>('/admin/local-cover-workflows/current'),
   startLocalCoverWorkflow: (storeItemId: string) =>

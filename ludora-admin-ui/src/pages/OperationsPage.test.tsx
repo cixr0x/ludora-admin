@@ -399,6 +399,10 @@ describe('OperationsPage', () => {
     render(<OperationsPage operation="item_update" />);
 
     expect(await screen.findByText('run-update-27')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'run-update-27' })).toHaveAttribute(
+      'href',
+      '#operations-store-item-update?run_id=run-update-27'
+    );
     expect(screen.getByRole('columnheader', { name: 'Store' })).toBeInTheDocument();
     expect(screen.getByText('Alpha Games')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Scanned items' })).toBeInTheDocument();

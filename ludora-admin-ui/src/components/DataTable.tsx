@@ -43,6 +43,7 @@ type DataTableProps<Row> = {
   ariaLabel: string;
   columns: DataTableColumn<Row>[];
   defaultSortColumnId?: string;
+  defaultSortDirection?: SortDirection;
   getRowKey: (row: Row, index: number) => string;
   minWidth?: number;
   onRowClick?: (row: Row) => void;
@@ -68,6 +69,7 @@ export function DataTable<Row>({
   ariaLabel,
   columns,
   defaultSortColumnId = '',
+  defaultSortDirection = 'asc',
   getRowKey,
   minWidth = 960,
   onRowClick,
@@ -82,7 +84,7 @@ export function DataTable<Row>({
     tableState ?? {
       filters: {},
       sortColumnId: defaultSortColumnId,
-      sortDirection: 'asc'
+      sortDirection: defaultSortDirection
     }
   );
   const { filters, sortColumnId, sortDirection } = currentTableState;

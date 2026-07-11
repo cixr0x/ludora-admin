@@ -414,6 +414,26 @@ describe('fetchRows', () => {
     );
   });
 
+  it('fetches store item update history by run id', async () => {
+    const history = {
+      changes: [{ created_at: '2026-07-11T20:01:00Z', field_name: 'price', id: 91 }],
+      job: { id: 27, run_id: 'run update/27', store_id: 12, store_name: 'Alpha Games' }
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: history }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getStoreItemUpdateHistory('run update/27')).resolves.toEqual(history);
+    expectFetch(
+      fetchMock,
+      'http://127.0.0.1:4001/admin/operations/store-item-update-jobs/run%20update%2F27/changes'
+    );
+  });
+
   it('fetches paged catalog items with page metadata', async () => {
     const records = [{ canonical_name: 'Coffee Rush', id: '377061', item_type: 'base_game' }];
     const { adminApi } = await importClient();

@@ -352,7 +352,14 @@ const storeItemUpdateJobColumns: DataTableColumn<AdminRecord>[] = [
     id: 'run_id',
     label: 'Run ID',
     minWidth: 180,
-    render: (row) => recordText(row, 'run_id'),
+    render: (row) => {
+      const runId = recordText(row, 'run_id');
+      return (
+        <Link href={`#operations-store-item-update?run_id=${encodeURIComponent(runId)}`}>
+          {runId}
+        </Link>
+      );
+    },
     sortValue: (row) => recordText(row, 'run_id')
   },
   {

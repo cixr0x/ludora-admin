@@ -3684,6 +3684,56 @@ describe('ludora admin service', () => {
     expect(countQuery?.params).toEqual(['%Alpha%']);
   });
 
+  it('lists store item update changes for the store that owns the selected run', async () => {
+    const job = {
+      completed_at: null,
+      id: 27,
+      run_id: 'run-update-27',
+      started_at: '2026-07-11T20:00:00Z',
+      status: 'running',
+      store_id: 12,
+      store_name: 'Alpha Games'
+    };
+    const changes = [
+      {
+        created_at: '2026-07-11T20:01:00Z',
+        field_name: 'price',
+        id: 91,
+        job_id: 27,
+        new_value: 799,
+        old_value: 899,
+        run_id: 'run-update-27',
+        source_url: 'https://alpha.example/game',
+        store_id: 12,
+        store_item_id: 501,
+        store_item_title: 'Coffee Rush',
+        store_name: 'Alpha Games'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return normalizeSql(sql).includes('from store_item_update_change_log') ? { rows: changes } : { rows: [job] };
+      }
+    };
+
+    const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
+      '/admin/operations/store-item-update-jobs/run-update-27/changes'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: { changes, job } });
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain(
+      'from job_store_item_update_log jobs left join stores on stores.id = jobs.store_id where jobs.run_id = $1'
+    );
+    expect(queries[0]?.params).toEqual(['run-update-27']);
+    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('from store_item_update_change_log changes');
+    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('where store_items.store_id = $1');
+    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('order by changes.created_at desc');
+    expect(queries[1]?.params).toEqual([12]);
+  });
+
   it('starts item update runs through the discovery operations client', async () => {
     const run: StoreDiscoveryRun = {
       completed_at: null,

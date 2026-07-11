@@ -211,6 +211,60 @@ export function createOperationsRouter(
     }
   });
 
+  router.get('/admin/operations/store-item-update-jobs/:runId/changes', async (request, response, next) => {
+    try {
+      const runId = request.params.runId.trim();
+      if (!runId) {
+        throw httpError(400, 'Run ID is required');
+      }
+      const jobResult = await database.query(
+        `select ${storeItemUpdateJobSelect}
+         from job_store_item_update_log jobs
+         left join stores on stores.id = jobs.store_id
+         where jobs.run_id = $1`,
+        [runId]
+      );
+      const job = jobResult.rows[0] as Record<string, unknown> | undefined;
+      if (!job) {
+        throw httpError(404, 'Store item update job not found');
+      }
+
+      const storeId = optionalPositiveInteger(job.store_id);
+      const scopeSql = storeId === null ? 'changes.run_id = $1' : 'store_items.store_id = $1';
+      const scopeValue = storeId === null ? runId : storeId;
+      const changesResult = await database.query(
+        `select
+           changes.id,
+           changes.job_id,
+           changes.run_id,
+           changes.store_item_id,
+           store_items.store_id,
+           stores.name as store_name,
+           store_items.title as store_item_title,
+           store_items.source_url,
+           changes.field_name,
+           changes.old_value,
+           changes.new_value,
+           changes.created_at
+         from store_item_update_change_log changes
+         join store_items on store_items.id = changes.store_item_id
+         left join stores on stores.id = store_items.store_id
+         where ${scopeSql}
+         order by changes.created_at desc`,
+        [scopeValue]
+      );
+
+      response.json({
+        data: {
+          changes: changesResult.rows,
+          job
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/admin/operations/item-update-runs', async (request, response, next) => {
     try {
       const run = await operationsClient.startItemUpdateRun(parseItemUpdateRunScope(request.body));
@@ -520,6 +574,14 @@ function numberField(value: Record<string, unknown>, key: string): number {
 
   const parsed = typeof field === 'number' ? field : Number(field);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function optionalPositiveInteger(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
