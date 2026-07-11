@@ -10,6 +10,7 @@ from ludora.box_silhouette import (
     build_foreground_mask,
     classify_perspective,
     detect_silhouette,
+    identify_two_face_cover,
     process_image,
 )
 
@@ -121,6 +122,48 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertFalse(perspective.pairs[0].similar_direction)
         self.assertTrue(perspective.pairs[1].similar_direction)
         self.assertFalse(perspective.pairs[2].similar_direction)
+
+    def test_two_face_cover_connects_vertices_not_touching_parallel_lines(self):
+        vertices = np.array(
+            [
+                [126.87, 34.22],
+                [362.72, 56.31],
+                [362.80, 412.61],
+                [125.59, 424.48],
+                [92.21, 405.95],
+                [91.81, 46.77],
+            ],
+            dtype=np.float64,
+        )
+        perspective = classify_perspective(vertices)
+
+        cover = identify_two_face_cover(vertices, perspective)
+
+        self.assertIsNotNone(cover)
+        self.assertEqual(cover.parallel_axis_label, "B")
+        self.assertEqual(cover.parallel_line_indices, [2, 5])
+        self.assertEqual(cover.seam_vertex_indices, [1, 4])
+        np.testing.assert_allclose(cover.seam, vertices[[0, 3]])
+        self.assertEqual(cover.cover_vertex_indices, [1, 2, 3, 4])
+        np.testing.assert_allclose(cover.cover_polygon, vertices[[0, 1, 2, 3]])
+        self.assertGreater(cover.cover_area, cover.side_area)
+        self.assertGreater(cover.cover_area_fraction, 0.80)
+
+    def test_three_face_outline_does_not_create_two_face_cover(self):
+        vertices = np.array(
+            [
+                [523.53, 116.50],
+                [610.80, 133.54],
+                [581.55, 571.32],
+                [164.96, 680.50],
+                [118.07, 603.54],
+                [85.16, 144.63],
+            ],
+            dtype=np.float64,
+        )
+        perspective = classify_perspective(vertices)
+
+        self.assertIsNone(identify_two_face_cover(vertices, perspective))
 
     def test_classifies_ideal_abcabc_hexagon_as_three_faces(self):
         edge_vectors = np.array(

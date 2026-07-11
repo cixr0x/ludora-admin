@@ -23,6 +23,12 @@ The six clockwise lines are labeled `A1 B1 C1 A2 B2 C2`. The detector compares t
 
 The JSON includes both line angles, their angular difference, whether they match, and their finite vanishing point when the lines are not nearly parallel. This evidence is retained so later stages can reject borderline classifications or add an interior-edge check.
 
+## Two-Face Cover Identification
+
+When exactly one opposite line pair matches, the four vertices incident to that pair belong to the outer vertical boundaries. The remaining two vertices are connected to form the shared seam between the visible faces. That seam divides the hexagon into two quadrilaterals; the larger quadrilateral is selected as the front cover and the smaller as the side face.
+
+The overlay draws the inferred seam in magenta and shades the selected cover green. The JSON records the parallel pair, seam endpoints, both face polygons and areas, and the fraction of the combined visible-face area assigned to the cover.
+
 Run it from `ludora-admin/ludora-discovery`:
 
 ```powershell

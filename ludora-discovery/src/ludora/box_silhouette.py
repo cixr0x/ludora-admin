@@ -41,6 +41,21 @@ class PerspectiveClassification:
 
 
 @dataclass(frozen=True)
+class TwoFaceCoverDetection:
+    parallel_axis_label: str
+    parallel_line_indices: list[int]
+    seam_vertex_indices: list[int]
+    seam: list[list[float]]
+    cover_vertex_indices: list[int]
+    cover_polygon: list[list[float]]
+    cover_area: float
+    side_vertex_indices: list[int]
+    side_polygon: list[list[float]]
+    side_area: float
+    cover_area_fraction: float
+
+
+@dataclass(frozen=True)
 class SilhouetteDetection:
     vertices: list[list[float]]
     initial_vertices: list[list[float]]
@@ -51,6 +66,7 @@ class SilhouetteDetection:
     hull_area_ratio: float
     polygon_area_retention: float
     perspective: PerspectiveClassification
+    two_face_cover: TwoFaceCoverDetection | None
 
 
 @dataclass(frozen=True)
@@ -429,6 +445,66 @@ def classify_perspective(
     )
 
 
+def identify_two_face_cover(
+    vertices: np.ndarray,
+    perspective: PerspectiveClassification,
+) -> TwoFaceCoverDetection | None:
+    points = np.asarray(vertices, dtype=np.float64).reshape(-1, 2)
+    matching_pairs = [pair for pair in perspective.pairs if pair.similar_direction]
+    if perspective.kind != "two_faces" or len(points) != 6 or len(matching_pairs) != 1:
+        return None
+
+    parallel_pair = matching_pairs[0]
+    touched_vertices: set[int] = set()
+    for one_based_line_index in parallel_pair.line_indices:
+        line_index = one_based_line_index - 1
+        touched_vertices.add(line_index)
+        touched_vertices.add((line_index + 1) % len(points))
+    seam_vertex_indices = sorted(set(range(len(points))) - touched_vertices)
+    if len(seam_vertex_indices) != 2:
+        return None
+
+    first_vertex, second_vertex = seam_vertex_indices
+
+    def clockwise_path(start: int, end: int) -> list[int]:
+        path = [start]
+        while path[-1] != end and len(path) <= len(points):
+            path.append((path[-1] + 1) % len(points))
+        return path
+
+    first_face_indices = clockwise_path(first_vertex, second_vertex)
+    return_path = clockwise_path(second_vertex, first_vertex)
+    second_face_indices = [first_vertex, *return_path[:-1]]
+    if len(first_face_indices) != 4 or len(second_face_indices) != 4:
+        return None
+
+    first_polygon = points[first_face_indices]
+    second_polygon = points[second_face_indices]
+    first_area = abs(float(cv2.contourArea(first_polygon.astype(np.float32))))
+    second_area = abs(float(cv2.contourArea(second_polygon.astype(np.float32))))
+    if first_area >= second_area:
+        cover_indices, cover_polygon, cover_area = first_face_indices, first_polygon, first_area
+        side_indices, side_polygon, side_area = second_face_indices, second_polygon, second_area
+    else:
+        cover_indices, cover_polygon, cover_area = second_face_indices, second_polygon, second_area
+        side_indices, side_polygon, side_area = first_face_indices, first_polygon, first_area
+    total_area = cover_area + side_area
+
+    return TwoFaceCoverDetection(
+        parallel_axis_label=parallel_pair.axis_label,
+        parallel_line_indices=parallel_pair.line_indices,
+        seam_vertex_indices=[index + 1 for index in seam_vertex_indices],
+        seam=[[float(value) for value in points[index].tolist()] for index in seam_vertex_indices],
+        cover_vertex_indices=[index + 1 for index in cover_indices],
+        cover_polygon=[[float(value) for value in point.tolist()] for point in cover_polygon],
+        cover_area=cover_area,
+        side_vertex_indices=[index + 1 for index in side_indices],
+        side_polygon=[[float(value) for value in point.tolist()] for point in side_polygon],
+        side_area=side_area,
+        cover_area_fraction=cover_area / total_area if total_area else 0.0,
+    )
+
+
 def lines_from_vertices(
     vertices: np.ndarray,
     fitted_lines: list[_BoundaryLineFit],
@@ -487,6 +563,7 @@ def detect_silhouette(
     polygon_area = abs(float(cv2.contourArea(vertices.astype(np.float32))))
     lines = lines_from_vertices(vertices, fitted_lines)
     perspective = classify_perspective(vertices)
+    two_face_cover = identify_two_face_cover(vertices, perspective)
 
     detection = SilhouetteDetection(
         vertices=[[float(x), float(y)] for x, y in vertices.tolist()],
@@ -498,12 +575,18 @@ def detect_silhouette(
         hull_area_ratio=hull_area / image_area,
         polygon_area_retention=polygon_area / hull_area if hull_area else 0.0,
         perspective=perspective,
+        two_face_cover=two_face_cover,
     )
     return detection, mask, hull
 
 
 def draw_overlay(image: np.ndarray, detection: SilhouetteDetection, hull: np.ndarray) -> np.ndarray:
     overlay = image.copy()
+    if detection.two_face_cover is not None:
+        cover_polygon = np.rint(np.asarray(detection.two_face_cover.cover_polygon)).astype(np.int32)
+        face_overlay = overlay.copy()
+        cv2.fillPoly(face_overlay, [cover_polygon], (70, 220, 70), cv2.LINE_AA)
+        overlay = cv2.addWeighted(face_overlay, 0.16, overlay, 0.84, 0)
     cv2.polylines(overlay, [hull.astype(np.int32)], True, (255, 160, 0), 2, cv2.LINE_AA)
 
     initial_vertices = np.rint(np.asarray(detection.initial_vertices)).astype(np.int32)
@@ -511,6 +594,18 @@ def draw_overlay(image: np.ndarray, detection: SilhouetteDetection, hull: np.nda
 
     vertices = np.rint(np.asarray(detection.vertices)).astype(np.int32)
     cv2.polylines(overlay, [vertices], True, (0, 0, 255), 4, cv2.LINE_AA)
+    if detection.two_face_cover is not None:
+        cover_polygon = np.rint(np.asarray(detection.two_face_cover.cover_polygon)).astype(np.int32)
+        seam = np.rint(np.asarray(detection.two_face_cover.seam)).astype(np.int32)
+        cv2.polylines(overlay, [cover_polygon], True, (0, 180, 0), 3, cv2.LINE_AA)
+        cv2.line(overlay, tuple(seam[0]), tuple(seam[1]), (255, 0, 255), 5, cv2.LINE_AA)
+        seam_center = np.rint(seam.mean(axis=0)).astype(int)
+        seam_label_position = (int(seam_center[0] + 8), int(seam_center[1]))
+        cv2.putText(overlay, "SEAM", seam_label_position, cv2.FONT_HERSHEY_SIMPLEX, 0.48, (255, 255, 255), 4, cv2.LINE_AA)
+        cv2.putText(overlay, "SEAM", seam_label_position, cv2.FONT_HERSHEY_SIMPLEX, 0.48, (120, 0, 120), 1, cv2.LINE_AA)
+        cover_center = np.rint(cover_polygon.mean(axis=0)).astype(int)
+        cv2.putText(overlay, "COVER", tuple(cover_center), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 255), 4, cv2.LINE_AA)
+        cv2.putText(overlay, "COVER", tuple(cover_center), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (0, 110, 0), 2, cv2.LINE_AA)
     for line in detection.lines:
         start = np.asarray(line.start)
         end = np.asarray(line.end)
