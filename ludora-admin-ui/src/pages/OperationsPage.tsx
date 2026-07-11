@@ -265,12 +265,12 @@ const storeItemDiscoveryJobColumns: DataTableColumn<AdminRecord>[] = [
     sortValue: (row) => recordText(row, 'run_id')
   },
   {
-    filterValue: (row) => recordText(row, 'store_id'),
-    id: 'store_id',
-    label: 'Store ID',
-    minWidth: 110,
-    render: (row) => recordText(row, 'store_id'),
-    sortValue: (row) => recordText(row, 'store_id')
+    filterValue: (row) => recordText(row, 'store_name', 'Multiple stores'),
+    id: 'store_name',
+    label: 'Store',
+    minWidth: 180,
+    render: (row) => recordText(row, 'store_name', 'Multiple stores'),
+    sortValue: (row) => recordText(row, 'store_name', 'Multiple stores')
   },
   {
     filterValue: (row) => recordText(row, 'website_url'),
@@ -356,12 +356,12 @@ const storeItemUpdateJobColumns: DataTableColumn<AdminRecord>[] = [
     sortValue: (row) => recordText(row, 'run_id')
   },
   {
-    filterValue: (row) => recordText(row, 'store_id'),
-    id: 'store_id',
-    label: 'Store ID',
-    minWidth: 110,
-    render: (row) => recordText(row, 'store_id'),
-    sortValue: (row) => recordText(row, 'store_id')
+    filterValue: (row) => recordText(row, 'store_name', 'Multiple stores'),
+    id: 'store_name',
+    label: 'Store',
+    minWidth: 180,
+    render: (row) => recordText(row, 'store_name', 'Multiple stores'),
+    sortValue: (row) => recordText(row, 'store_name', 'Multiple stores')
   },
   {
     filterValue: (row) => recordText(row, 'status'),

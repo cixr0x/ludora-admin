@@ -36,52 +36,56 @@ export type StoreItemDiscoveryLogOptions = {
 const MAX_LOG_CHUNK_BYTES = 512 * 1024;
 
 const storeItemDiscoveryJobSelect = `
-  id, run_id, store_id, website_url, status, error, started_at,
-  completed_at, new_items, created_at, updated_at
+  jobs.id, jobs.run_id, jobs.store_id, stores.name as store_name, jobs.website_url,
+  jobs.status, jobs.error, jobs.started_at, jobs.completed_at, jobs.new_items,
+  jobs.created_at, jobs.updated_at
 `;
 
 const storeItemUpdateJobSelect = `
-  id, run_id, store_id, status, error, started_at, completed_at,
-  scanned_items, updated_items, created_at, updated_at
+  jobs.id, jobs.run_id, jobs.store_id, stores.name as store_name, jobs.status,
+  jobs.error, jobs.started_at, jobs.completed_at, jobs.scanned_items,
+  jobs.updated_items, jobs.created_at, jobs.updated_at
 `;
 
 const storeItemDiscoveryJobsTableConfig: TableQueryConfig = {
   columns: {
-    completed_at: columnSql('completed_at'),
-    created_at: columnSql('created_at'),
-    error: columnSql('error'),
-    id: columnSql('id'),
-    new_items: columnSql('new_items'),
-    run_id: columnSql('run_id'),
-    started_at: columnSql('started_at'),
-    status: columnSql('status'),
-    store_id: columnSql('store_id'),
-    updated_at: columnSql('updated_at'),
-    website_url: columnSql('website_url')
+    completed_at: columnSql('jobs.completed_at'),
+    created_at: columnSql('jobs.created_at'),
+    error: columnSql('jobs.error'),
+    id: columnSql('jobs.id'),
+    new_items: columnSql('jobs.new_items'),
+    run_id: columnSql('jobs.run_id'),
+    started_at: columnSql('jobs.started_at'),
+    status: columnSql('jobs.status'),
+    store_id: columnSql('jobs.store_id'),
+    store_name: columnSql('stores.name'),
+    updated_at: columnSql('jobs.updated_at'),
+    website_url: columnSql('jobs.website_url')
   },
   defaultSortColumnId: 'started_at',
   defaultSortDirection: 'desc',
-  fromSql: 'from job_store_item_discovery_log',
+  fromSql: 'from job_store_item_discovery_log jobs left join stores on stores.id = jobs.store_id',
   selectSql: storeItemDiscoveryJobSelect
 };
 
 const storeItemUpdateJobsTableConfig: TableQueryConfig = {
   columns: {
-    completed_at: columnSql('completed_at'),
-    created_at: columnSql('created_at'),
-    error: columnSql('error'),
-    id: columnSql('id'),
-    run_id: columnSql('run_id'),
-    scanned_items: columnSql('scanned_items'),
-    started_at: columnSql('started_at'),
-    status: columnSql('status'),
-    store_id: columnSql('store_id'),
-    updated_at: columnSql('updated_at'),
-    updated_items: columnSql('updated_items')
+    completed_at: columnSql('jobs.completed_at'),
+    created_at: columnSql('jobs.created_at'),
+    error: columnSql('jobs.error'),
+    id: columnSql('jobs.id'),
+    run_id: columnSql('jobs.run_id'),
+    scanned_items: columnSql('jobs.scanned_items'),
+    started_at: columnSql('jobs.started_at'),
+    status: columnSql('jobs.status'),
+    store_id: columnSql('jobs.store_id'),
+    store_name: columnSql('stores.name'),
+    updated_at: columnSql('jobs.updated_at'),
+    updated_items: columnSql('jobs.updated_items')
   },
   defaultSortColumnId: 'started_at',
   defaultSortDirection: 'desc',
-  fromSql: 'from job_store_item_update_log',
+  fromSql: 'from job_store_item_update_log jobs left join stores on stores.id = jobs.store_id',
   selectSql: storeItemUpdateJobSelect
 };
 
@@ -164,8 +168,9 @@ export function createOperationsRouter(
       const requestedOffset = nonNegativeIntegerQueryField(request.query.offset, 'offset');
       const result = await database.query(
         `select ${storeItemDiscoveryJobSelect}
-         from job_store_item_discovery_log
-         where id = $1`,
+         from job_store_item_discovery_log jobs
+         left join stores on stores.id = jobs.store_id
+         where jobs.id = $1`,
         [jobId]
       );
       const job = result.rows[0] as Record<string, unknown> | undefined;

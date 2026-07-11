@@ -3538,6 +3538,7 @@ describe('ludora admin service', () => {
         started_at: '2026-07-05T20:00:00Z',
         status: 'completed',
         store_id: 12,
+        store_name: 'Alpha Games',
         updated_at: '2026-07-05T20:03:00Z',
         website_url: 'https://store.example'
       }
@@ -3554,7 +3555,7 @@ describe('ludora admin service', () => {
     };
 
     const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
-      '/admin/operations/store-item-discovery-jobs?page=0&page_size=25&sort=started_at&sort_direction=desc&filter_store_id=12'
+      '/admin/operations/store-item-discovery-jobs?page=0&page_size=25&sort=started_at&sort_direction=desc&filter_store_name=Alpha'
     );
 
     expect(response.status).toBe(200);
@@ -3566,13 +3567,14 @@ describe('ludora admin service', () => {
         total: 1
       }
     });
-    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, run_id, store_id'));
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select jobs.id, jobs.run_id'));
     const countQuery = queries.find((query) => normalizeSql(query.sql).includes('count(*)'));
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from job_store_item_discovery_log');
-    expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((store_id)::text, '') ilike $1 escape '\\'");
-    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by started_at desc');
-    expect(rowQuery?.params).toEqual(['%12%', 25, 0]);
-    expect(countQuery?.params).toEqual(['%12%']);
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('left join stores on stores.id = jobs.store_id');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((stores.name)::text, '') ilike $1 escape '\\'");
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by jobs.started_at desc');
+    expect(rowQuery?.params).toEqual(['%Alpha%', 25, 0]);
+    expect(countQuery?.params).toEqual(['%Alpha%']);
   });
 
   it('streams the JSONL trace for a store item discovery job by byte offset', async () => {
@@ -3586,7 +3588,8 @@ describe('ludora admin service', () => {
       run_id: 'run-batch:12',
       started_at: '2026-07-11T12:00:00Z',
       status: 'completed',
-      store_id: 12
+      store_id: 12,
+      store_name: 'Alpha Games'
     };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
@@ -3622,7 +3625,7 @@ describe('ludora admin service', () => {
         }
       });
       expect(normalizeSql(queries[0]?.sql ?? '')).toContain(
-        'from job_store_item_discovery_log where id = $1'
+        'from job_store_item_discovery_log jobs left join stores on stores.id = jobs.store_id where jobs.id = $1'
       );
       expect(queries[0]?.params).toEqual([19]);
     } finally {
@@ -3642,6 +3645,7 @@ describe('ludora admin service', () => {
         started_at: '2026-07-05T21:00:00Z',
         status: 'completed',
         store_id: 12,
+        store_name: 'Alpha Games',
         updated_at: '2026-07-05T21:04:00Z',
         updated_items: 5
       }
@@ -3658,7 +3662,7 @@ describe('ludora admin service', () => {
     };
 
     const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
-      '/admin/operations/store-item-update-jobs?page=0&page_size=25&sort=scanned_items&sort_direction=desc&filter_store_id=12'
+      '/admin/operations/store-item-update-jobs?page=0&page_size=25&sort=scanned_items&sort_direction=desc&filter_store_name=Alpha'
     );
 
     expect(response.status).toBe(200);
@@ -3670,13 +3674,14 @@ describe('ludora admin service', () => {
         total: 1
       }
     });
-    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, run_id, store_id'));
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select jobs.id, jobs.run_id'));
     const countQuery = queries.find((query) => normalizeSql(query.sql).includes('count(*)'));
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from job_store_item_update_log');
-    expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((store_id)::text, '') ilike $1 escape '\\'");
-    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by scanned_items desc');
-    expect(rowQuery?.params).toEqual(['%12%', 25, 0]);
-    expect(countQuery?.params).toEqual(['%12%']);
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('left join stores on stores.id = jobs.store_id');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((stores.name)::text, '') ilike $1 escape '\\'");
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by jobs.scanned_items desc');
+    expect(rowQuery?.params).toEqual(['%Alpha%', 25, 0]);
+    expect(countQuery?.params).toEqual(['%Alpha%']);
   });
 
   it('starts item update runs through the discovery operations client', async () => {

@@ -328,6 +328,7 @@ describe('OperationsPage', () => {
               started_at: '2026-07-05T20:00:00Z',
               status: 'completed',
               store_id: 12,
+              store_name: 'Alpha Games',
               website_url: 'https://store.example'
             }
           ],
@@ -348,7 +349,8 @@ describe('OperationsPage', () => {
       'href',
       '#operations-store-item-discovery?job_id=19'
     );
-    expect(screen.getByRole('columnheader', { name: 'Store ID' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Store' })).toBeInTheDocument();
+    expect(screen.getByText('Alpha Games')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Website URL' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'New items' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Accepted stores' })).not.toBeInTheDocument();
@@ -380,6 +382,7 @@ describe('OperationsPage', () => {
               started_at: '2026-07-05T21:00:00Z',
               status: 'completed',
               store_id: 12,
+              store_name: 'Alpha Games',
               updated_items: 5
             }
           ],
@@ -396,8 +399,8 @@ describe('OperationsPage', () => {
     render(<OperationsPage operation="item_update" />);
 
     expect(await screen.findByText('run-update-27')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Store ID' })).toBeInTheDocument();
-    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Store' })).toBeInTheDocument();
+    expect(screen.getByText('Alpha Games')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Scanned items' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Updated items' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Candidate domains' })).not.toBeInTheDocument();
