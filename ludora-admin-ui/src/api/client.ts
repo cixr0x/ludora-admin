@@ -17,6 +17,15 @@ type ErrorResponse = {
 
 export type AdminRecord = Record<string, unknown>;
 
+export type StoreItemDiscoveryJobLog = {
+  available: boolean;
+  content: string;
+  has_more: boolean;
+  job: AdminRecord;
+  next_offset: number;
+  reset: boolean;
+};
+
 export type AdminIdentity = {
   username: string;
 };
@@ -467,6 +476,10 @@ export const adminApi = {
   getReviewTasksPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/admin/review-tasks', query), query),
   getStoreItemDiscoveryJobsPage: (query: TableQuery) =>
     fetchPagedRows<AdminRecord>(pagedPath('/admin/operations/store-item-discovery-jobs', query), query),
+  getStoreItemDiscoveryJobLog: (jobId: string, offset = 0) =>
+    fetchData<StoreItemDiscoveryJobLog>(
+      `/admin/operations/store-item-discovery-jobs/${encodeURIComponent(jobId)}/log?offset=${encodeURIComponent(offset)}`
+    ),
   getStoreItemUpdateJobsPage: (query: TableQuery) =>
     fetchPagedRows<AdminRecord>(pagedPath('/admin/operations/store-item-update-jobs', query), query),
   getLatestStoreDiscoveryRun: () => fetchData<StoreDiscoveryRun | null>('/admin/operations/store-discovery-runs/latest'),

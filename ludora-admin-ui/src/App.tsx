@@ -13,6 +13,7 @@ import { OfferReviewPage } from './pages/OfferReviewPage';
 import { OperationsPage } from './pages/OperationsPage';
 import { ReviewTasksPage } from './pages/ReviewTasksPage';
 import { StoreCandidatesPage } from './pages/StoreCandidatesPage';
+import { StoreItemDiscoveryLogPage } from './pages/StoreItemDiscoveryLogPage';
 import { StoresPage } from './pages/StoresPage';
 
 const theme = createTheme({
@@ -122,7 +123,14 @@ function renderSection(
     case 'operations-store-discovery':
       return <OperationsPage operation="store_discovery" />;
     case 'operations-store-item-discovery':
-      return <OperationsPage operation="item_discovery" />;
+      return selectedId || route.params.get('job_id') ? (
+        <StoreItemDiscoveryLogPage
+          jobId={route.params.get('job_id') ?? selectedId ?? ''}
+          onBack={() => navigate('operations-store-item-discovery')}
+        />
+      ) : (
+        <OperationsPage operation="item_discovery" />
+      );
     case 'operations-store-item-update':
       return <OperationsPage operation="item_update" />;
     case 'operations-item-embeddings':

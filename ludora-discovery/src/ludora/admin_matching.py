@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin
@@ -48,7 +49,7 @@ class AdminItemMatcher:
         request = Request(
             url,
             data=json.dumps({"confirmation_source": "automated"}).encode("utf-8"),
-            headers=_admin_headers(self.internal_api_token),
+            headers=_admin_headers(self.internal_api_token, self.trace_logger),
             method="POST",
         )
         self.trace_logger.log(
@@ -88,10 +89,26 @@ class AdminItemMatcher:
         raise RuntimeError(message)
 
 
-def _admin_headers(internal_api_token: str) -> dict[str, str]:
+def _admin_headers(internal_api_token: str, trace_logger: TraceLogger | None = None) -> dict[str, str]:
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     if internal_api_token:
         headers["X-Ludora-Internal-Token"] = internal_api_token
+    headers.update(_trace_headers(trace_logger))
+    return headers
+
+
+def _trace_headers(trace_logger: TraceLogger | None) -> dict[str, str]:
+    if trace_logger is None:
+        return {}
+
+    run_id = getattr(trace_logger, "run_id", "")
+    trace_path = getattr(trace_logger, "path", "")
+    headers: dict[str, str] = {}
+
+    if isinstance(run_id, str) and run_id.strip():
+        headers["X-Ludora-Trace-Run-Id"] = run_id.strip()
+    if isinstance(trace_path, (str, Path)) and str(trace_path).strip():
+        headers["X-Ludora-Trace-Path"] = str(trace_path)
     return headers
 
 

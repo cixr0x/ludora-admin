@@ -351,6 +351,30 @@ describe('fetchRows', () => {
     );
   });
 
+  it('fetches a store item discovery job log from a byte offset', async () => {
+    const log = {
+      available: true,
+      content: '{"event":"item_discovery.run.completed"}\n',
+      has_more: false,
+      job: { id: 19, run_id: 'run-discovery-19', status: 'completed' },
+      next_offset: 47,
+      reset: false
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: log }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getStoreItemDiscoveryJobLog('19', 12)).resolves.toEqual(log);
+    expectFetch(
+      fetchMock,
+      'http://127.0.0.1:4001/admin/operations/store-item-discovery-jobs/19/log?offset=12'
+    );
+  });
+
   it('fetches paged store item update jobs with page metadata', async () => {
     const records = [{ id: 27, run_id: 'run-update-27', scanned_items: 18, status: 'completed', updated_items: 5 }];
     const { adminApi } = await importClient();

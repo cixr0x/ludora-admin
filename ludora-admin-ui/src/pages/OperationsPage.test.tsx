@@ -344,6 +344,10 @@ describe('OperationsPage', () => {
     render(<OperationsPage operation="item_discovery" />);
 
     expect(await screen.findByText('run-discovery-19')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '19' })).toHaveAttribute(
+      'href',
+      '#operations-store-item-discovery?job_id=19'
+    );
     expect(screen.getByRole('columnheader', { name: 'Store ID' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Website URL' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'New items' })).toBeInTheDocument();

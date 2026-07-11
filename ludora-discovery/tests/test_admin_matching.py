@@ -52,6 +52,26 @@ class AdminItemMatcherTests(unittest.TestCase):
         self.assertEqual(trace_logger.log.call_args_list[0].kwargs["candidate_id"], 42)
         self.assertEqual(trace_logger.log.call_args_list[0].kwargs["title"], "Catan")
 
+    def test_forwards_trace_context_to_admin_confirm_endpoint(self):
+        repository = Mock()
+        trace_path = Path("C:/tmp/item-discovery-run-123.jsonl")
+        trace_logger = Mock(run_id="run-123", path=trace_path)
+        record = DiscoveryItemCandidateRecord(
+            store_id=12,
+            source_url="https://store.mx/products/catan",
+            title="Catan",
+            is_boardgame=True,
+        )
+
+        with patch("ludora.admin_matching.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b'{"data": {"id": 42}}'
+
+            AdminItemMatcher("http://admin.test/", repository, trace_logger=trace_logger).process_candidate(42, record)
+
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.headers["X-ludora-trace-run-id"], "run-123")
+        self.assertEqual(request.headers["X-ludora-trace-path"], str(trace_path))
+
     def test_skips_non_boardgame_candidates(self):
         repository = Mock()
         record = DiscoveryItemCandidateRecord(

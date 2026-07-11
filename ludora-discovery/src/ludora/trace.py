@@ -17,7 +17,7 @@ class TraceLogger(Protocol):
 
 class JsonlTraceLogger:
     def __init__(self, path: str | Path, *, run_id: str) -> None:
-        self.path = Path(path)
+        self.path = Path(path).resolve()
         self.run_id = run_id
 
     def log(self, event: str, **fields: object) -> None:

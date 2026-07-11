@@ -768,6 +768,72 @@ describe('item matching service', () => {
     ]);
   });
 
+  it('logs each automated boardgame matching step', async () => {
+    const events: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 49,
+        item_type: 'base_game',
+        max_players: 4,
+        min_players: 2,
+        publisher: 'Korea Boardgames',
+        title: 'Coffee Rush'
+      },
+      [],
+      {
+        cachedSearchResults: [{ bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 }]
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async (bggId) => ({
+        details: bggThing({ bggId, name: 'Coffee Rush', yearPublished: 2023 }),
+        rawXml: '<items />'
+      }),
+      search: async () => {
+        throw new Error('BGG search API should not be called when cache is populated');
+      }
+    };
+    const bggItemImporter: BggItemImporter = {
+      importBggId: async () => 88
+    };
+    const traceLogger = {
+      log: (event: string, fields: Record<string, unknown> = {}) => {
+        events.push({ event, fields });
+      }
+    };
+
+    await createItemMatchingService(database, bggClient, undefined, bggItemImporter).confirmBoardgameAndMatch?.(49, {
+      confirmationSource: 'automated',
+      traceLogger
+    });
+
+    expect(events.map((event) => event.event)).toEqual([
+      'item_matcher.confirm.start',
+      'item_matcher.candidate.loaded',
+      'item_matcher.boardgame.confirmed',
+      'item_matcher.local_match.start',
+      'item_matcher.local_match.completed',
+      'item_matcher.bgg_match.start',
+      'item_matcher.bgg_cache.start',
+      'item_matcher.bgg_cache.completed',
+      'item_matcher.bgg_search.start',
+      'item_matcher.bgg_search.completed',
+      'item_matcher.bgg_thing_fetch.start',
+      'item_matcher.bgg_thing_fetch.completed',
+      'item_matcher.bgg_match.completed',
+      'item_matcher.bgg_import.start',
+      'item_matcher.bgg_import.completed',
+      'item_matcher.link.completed',
+      'item_matcher.confirm.completed'
+    ]);
+    expect(events[0].fields).toMatchObject({ candidate_id: 49, confirmation_source: 'automated' });
+    expect(events[1].fields).toMatchObject({ candidate_id: 49, title: 'Coffee Rush' });
+    expect(events[4].fields).toMatchObject({ best_score: null, candidate_id: 49, match_count: 0 });
+    expect(events[9].fields).toMatchObject({ query: 'Coffee Rush', result_count: 1, source: 'cache' });
+    expect(events[12].fields).toMatchObject({ best_bgg_id: 377061, best_score: 0.9, match_count: 1 });
+    expect(events[14].fields).toMatchObject({ bgg_id: 377061, item_id: 88 });
+  });
+
   it('does not mark a boardgame as confirmed when no item match is found', async () => {
     const updates: Array<{ params?: unknown[]; sql: string }> = [];
     const database = confirmMatchDatabase(

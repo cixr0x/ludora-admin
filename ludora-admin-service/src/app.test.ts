@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
@@ -2764,6 +2768,52 @@ describe('ludora admin service', () => {
     expect(calls).toEqual([{ id: 42, options: { confirmationSource: 'automated' } }]);
   });
 
+  it('passes trace logger context from internal matcher headers to boardgame matching', async () => {
+    const row = {
+      id: 42,
+      is_boardgame: true,
+      is_boardgame_confirmed: false,
+      item_id: null,
+      match_source: 'NONE',
+      listing_status: 'PENDING',
+      title: 'False Positive'
+    };
+    const calls: Array<{
+      id: number;
+      options:
+        | {
+            confirmationSource?: 'admin' | 'automated';
+            traceLogger?: { log(event: string, fields?: Record<string, unknown>): void };
+          }
+        | undefined;
+    }> = [];
+    const database: Database = {
+      query: async () => ({ rows: [row] })
+    };
+    const itemMatchingService: ItemMatchingService = {
+      confirmBoardgameAndMatch: async (id, options) => {
+        calls.push({ id, options });
+      },
+      generateMatchCandidates: async () => [],
+      listMatchCandidates: async () => []
+    };
+
+    const response = await request(createApp({ database, itemMatchingService }))
+      .post('/discovery/listings/42/confirm-boardgame')
+      .set('X-Ludora-Trace-Run-Id', 'run-123')
+      .set('X-Ludora-Trace-Path', 'C:\\tmp\\item-discovery-run-123.jsonl')
+      .send({ confirmation_source: 'automated' });
+
+    expect(response.status).toBe(200);
+    expect(calls[0]).toMatchObject({
+      id: 42,
+      options: {
+        confirmationSource: 'automated',
+        traceLogger: expect.objectContaining({ log: expect.any(Function) })
+      }
+    });
+  });
+
   it('lists item match candidates through the item matching service', async () => {
     const rows = [
       {
@@ -3523,6 +3573,61 @@ describe('ludora admin service', () => {
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by started_at desc');
     expect(rowQuery?.params).toEqual(['%12%', 25, 0]);
     expect(countQuery?.params).toEqual(['%12%']);
+  });
+
+  it('streams the JSONL trace for a store item discovery job by byte offset', async () => {
+    const traceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'ludora-discovery-log-'));
+    const firstLine = '{"ts":"2026-07-11T12:00:00Z","event":"item_discovery.run.start"}\n';
+    const secondLine = '{"ts":"2026-07-11T12:01:00Z","event":"item_discovery.run.completed"}\n';
+    fs.writeFileSync(path.join(traceDirectory, 'item-discovery-run-batch-12.jsonl'), `${firstLine}${secondLine}`);
+    const job = {
+      completed_at: '2026-07-11T12:01:00Z',
+      id: 19,
+      run_id: 'run-batch:12',
+      started_at: '2026-07-11T12:00:00Z',
+      status: 'completed',
+      store_id: 12
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [job] };
+      }
+    };
+
+    try {
+      const app = createApp({
+        database,
+        discoveryLogOptions: {
+          envFile: path.join(traceDirectory, '.env'),
+          packageDir: traceDirectory,
+          traceDirectory
+        },
+        operationsClient: idleOperationsClient()
+      });
+      const response = await request(app).get(
+        `/admin/operations/store-item-discovery-jobs/19/log?offset=${Buffer.byteLength(firstLine)}`
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        data: {
+          available: true,
+          content: secondLine,
+          has_more: false,
+          job,
+          next_offset: Buffer.byteLength(firstLine) + Buffer.byteLength(secondLine),
+          reset: false
+        }
+      });
+      expect(normalizeSql(queries[0]?.sql ?? '')).toContain(
+        'from job_store_item_discovery_log where id = $1'
+      );
+      expect(queries[0]?.params).toEqual([19]);
+    } finally {
+      fs.rmSync(traceDirectory, { force: true, recursive: true });
+    }
   });
 
   it('lists store item update job logs from the job table', async () => {

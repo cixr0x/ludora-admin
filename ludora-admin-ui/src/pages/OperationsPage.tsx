@@ -246,7 +246,14 @@ const storeItemDiscoveryJobColumns: DataTableColumn<AdminRecord>[] = [
     id: 'id',
     label: 'ID',
     minWidth: 90,
-    render: (row) => recordText(row, 'id'),
+    render: (row) => {
+      const id = recordText(row, 'id');
+      return (
+        <Link href={`#operations-store-item-discovery?job_id=${encodeURIComponent(id)}`}>
+          {id}
+        </Link>
+      );
+    },
     sortValue: (row) => recordText(row, 'id')
   },
   {

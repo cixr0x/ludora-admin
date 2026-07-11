@@ -1,3 +1,7 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
+import dotenv from 'dotenv';
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
@@ -22,6 +26,14 @@ type TableQueryConfig = {
 export type ExternalCoverImageOptimizerRunner = {
   run(options: ExternalCoverImageOptimizerOptions): Promise<ExternalCoverImageOptimizerResult>;
 };
+
+export type StoreItemDiscoveryLogOptions = {
+  envFile: string;
+  packageDir: string;
+  traceDirectory?: string;
+};
+
+const MAX_LOG_CHUNK_BYTES = 512 * 1024;
 
 const storeItemDiscoveryJobSelect = `
   id, run_id, store_id, website_url, status, error, started_at,
@@ -76,9 +88,11 @@ const storeItemUpdateJobsTableConfig: TableQueryConfig = {
 export function createOperationsRouter(
   operationsClient: DiscoveryOperationsClient,
   database: Database,
-  externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner
+  externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner,
+  discoveryLogOptions?: StoreItemDiscoveryLogOptions
 ): Router {
   const router = Router();
+  const discoveryTraceDirectory = resolveDiscoveryTraceDirectory(discoveryLogOptions);
 
   router.post('/admin/operations/store-discovery-runs', async (_request, response, next) => {
     try {
@@ -139,6 +153,37 @@ export function createOperationsRouter(
   router.get('/admin/operations/store-item-discovery-jobs', async (request, response, next) => {
     try {
       response.json(await queryTable(database, storeItemDiscoveryJobsTableConfig, request.query));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/admin/operations/store-item-discovery-jobs/:jobId/log', async (request, response, next) => {
+    try {
+      const jobId = positiveIntegerPathField(request.params.jobId, 'Job ID');
+      const requestedOffset = nonNegativeIntegerQueryField(request.query.offset, 'offset');
+      const result = await database.query(
+        `select ${storeItemDiscoveryJobSelect}
+         from job_store_item_discovery_log
+         where id = $1`,
+        [jobId]
+      );
+      const job = result.rows[0] as Record<string, unknown> | undefined;
+      if (!job) {
+        throw httpError(404, 'Store item discovery job not found');
+      }
+
+      const runId = String(job.run_id ?? '').trim();
+      const chunk =
+        discoveryTraceDirectory && runId
+          ? await readDiscoveryLogChunk(discoveryTraceDirectory, runId, requestedOffset)
+          : emptyLogChunk(requestedOffset);
+      response.json({
+        data: {
+          ...chunk,
+          job
+        }
+      });
     } catch (error) {
       next(error);
     }
@@ -365,6 +410,101 @@ function integerQueryField(value: unknown, fallback: number, min: number, max: n
     return fallback;
   }
   return Math.min(Math.max(parsed, min), max);
+}
+
+function positiveIntegerPathField(value: string, label: string): number {
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw httpError(400, `${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function nonNegativeIntegerQueryField(value: unknown, label: string): number {
+  const rawValue = stringQueryField(value);
+  if (!rawValue) {
+    return 0;
+  }
+  const parsed = Number(rawValue);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw httpError(400, `${label} must be a non-negative integer`);
+  }
+  return parsed;
+}
+
+function resolveDiscoveryTraceDirectory(options?: StoreItemDiscoveryLogOptions): string | null {
+  if (!options) {
+    return null;
+  }
+
+  const configuredDirectory =
+    options.traceDirectory?.trim() ||
+    process.env.LUDORA_DISCOVERY_TRACE_DIR?.trim() ||
+    readTraceDirectoryFromEnvFile(options.envFile);
+  return configuredDirectory ? path.resolve(options.packageDir, configuredDirectory) : null;
+}
+
+function readTraceDirectoryFromEnvFile(envFile: string): string {
+  try {
+    return String(dotenv.parse(fs.readFileSync(envFile)).LUDORA_DISCOVERY_TRACE_DIR ?? '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function readDiscoveryLogChunk(traceDirectory: string, runId: string, requestedOffset: number) {
+  const tracePath = path.join(traceDirectory, `item-discovery-${safeFilename(runId)}.jsonl`);
+  let handle: fs.promises.FileHandle | undefined;
+  try {
+    handle = await fs.promises.open(tracePath, 'r');
+    const size = (await handle.stat()).size;
+    const reset = requestedOffset > size;
+    const offset = reset ? 0 : requestedOffset;
+    const buffer = Buffer.alloc(Math.min(MAX_LOG_CHUNK_BYTES, size - offset));
+    if (buffer.length === 0) {
+      return {
+        available: true,
+        content: '',
+        has_more: false,
+        next_offset: offset,
+        reset
+      };
+    }
+
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+    const bytes = buffer.subarray(0, bytesRead);
+    const lastNewline = bytes.lastIndexOf(0x0a);
+    const completeBytes = lastNewline >= 0 ? bytes.subarray(0, lastNewline + 1) : Buffer.alloc(0);
+    const nextOffset = offset + completeBytes.length;
+    return {
+      available: true,
+      content: completeBytes.toString('utf8'),
+      has_more: nextOffset < size,
+      next_offset: nextOffset,
+      reset
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return emptyLogChunk(requestedOffset);
+    }
+    throw error;
+  } finally {
+    await handle?.close();
+  }
+}
+
+function emptyLogChunk(requestedOffset: number) {
+  return {
+    available: false,
+    content: '',
+    has_more: false,
+    next_offset: requestedOffset,
+    reset: false
+  };
+}
+
+function safeFilename(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'run';
 }
 
 function numberField(value: Record<string, unknown>, key: string): number {

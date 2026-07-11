@@ -308,6 +308,34 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: /Run Store Discovery/i })).not.toBeInTheDocument();
   });
 
+  it('opens a store item discovery job log from its hash route', async () => {
+    window.location.hash = '#operations-store-item-discovery?job_id=19';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/admin/operations/store-item-discovery-jobs/19/log') {
+        return jsonResponse({
+          available: true,
+          content: '{"ts":"2026-07-11T12:00:00Z","event":"item_discovery.run.completed"}\n',
+          has_more: false,
+          job: { id: 19, run_id: 'run-19', status: 'completed', store_id: 12 },
+          next_offset: 80,
+          reset: false
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Store Item Discovery Log' })).toBeInTheDocument();
+    expect(screen.getByRole('log', { name: 'Console output for discovery job 19' })).toHaveTextContent(
+      'item_discovery.run.completed'
+    );
+  });
+
   it('opens the image optimization operation sub page from a hash route', async () => {
     window.location.hash = '#operations-image-optimization';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {

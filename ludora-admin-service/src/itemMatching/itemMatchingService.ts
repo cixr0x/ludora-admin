@@ -2,6 +2,7 @@ import type { BggClient, BggThingResult } from '../bgg/bggClient.js';
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import type { BggSearchItem } from '../bgg/bggParser.js';
 import type { Database } from '../db.js';
+import { nullTraceLogger, type TraceLogger } from '../trace.js';
 import type { TranslationService } from '../translation/translationService.js';
 import {
   normalizeTitle,
@@ -29,10 +30,15 @@ export type ItemMatchCandidateRow = {
 export type ItemMatchingService = {
   confirmBoardgameAndMatch?(
     discoveryItemCandidateId: number,
-    options?: { confirmationSource?: 'admin' | 'automated' }
+    options?: ConfirmBoardgameOptions
   ): Promise<void>;
   generateMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]>;
   listMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]>;
+};
+
+type ConfirmBoardgameOptions = {
+  confirmationSource?: 'admin' | 'automated';
+  traceLogger?: TraceLogger;
 };
 
 type DiscoveryItemCandidateRow = {
@@ -74,14 +80,37 @@ export function createItemMatchingService(
   return {
     async confirmBoardgameAndMatch(
       discoveryItemCandidateId: number,
-      options: { confirmationSource?: 'admin' | 'automated' } = {}
+      options: ConfirmBoardgameOptions = {}
     ): Promise<void> {
+      const traceLogger = options.traceLogger ?? nullTraceLogger;
+      traceLog(traceLogger, 'item_matcher.confirm.start', {
+        candidate_id: discoveryItemCandidateId,
+        confirmation_source: options.confirmationSource ?? 'admin'
+      });
       const candidate = await loadDiscoveryItemCandidate(database, discoveryItemCandidateId);
+      traceLog(traceLogger, 'item_matcher.candidate.loaded', {
+        candidate_id: discoveryItemCandidateId,
+        item_type: candidate.item_type ?? null,
+        language: candidate.language ?? null,
+        title: candidate.title
+      });
       const isAdminConfirmation = options.confirmationSource === 'admin';
       await confirmStoreItemAsBoardgame(database, discoveryItemCandidateId, isAdminConfirmation);
+      traceLog(traceLogger, 'item_matcher.boardgame.confirmed', {
+        candidate_id: discoveryItemCandidateId,
+        is_boardgame_confirmed: isAdminConfirmation
+      });
 
       try {
-        const localMatch = bestMatchAboveThreshold(await generateLocalMatches(database, candidate));
+        traceLog(traceLogger, 'item_matcher.local_match.start', { candidate_id: discoveryItemCandidateId });
+        const localMatches = await generateLocalMatches(database, candidate);
+        const localMatch = bestMatchAboveThreshold(localMatches);
+        traceLog(traceLogger, 'item_matcher.local_match.completed', {
+          best_item_id: localMatch?.itemId ?? null,
+          best_score: localMatch?.matchScore ?? null,
+          candidate_id: discoveryItemCandidateId,
+          match_count: localMatches.length
+        });
         if (localMatch?.itemId) {
           await linkStoreItemMatch(
             database,
@@ -90,6 +119,17 @@ export function createItemMatchingService(
             localMatch.itemId,
             shouldConfirmBoardgameMatch(localMatch, isAdminConfirmation)
           );
+          traceLog(traceLogger, 'item_matcher.link.completed', {
+            candidate_id: discoveryItemCandidateId,
+            item_id: localMatch.itemId,
+            match_source: localMatch.source,
+            match_score: localMatch.matchScore,
+            matched_bgg_id: localMatch.bggId
+          });
+          traceLog(traceLogger, 'item_matcher.confirm.completed', {
+            candidate_id: discoveryItemCandidateId,
+            result: 'linked_local_match'
+          });
           return;
         }
 
@@ -100,12 +140,33 @@ export function createItemMatchingService(
             'BGG client is not configured',
             isAdminConfirmation
           );
+          traceLog(traceLogger, 'item_matcher.failed', {
+            candidate_id: discoveryItemCandidateId,
+            error: 'BGG client is not configured'
+          });
           return;
         }
 
-        const bggMatch = bestMatchAboveThreshold(await generateBggMatches(database, candidate, bggClient, translationService));
+        traceLog(traceLogger, 'item_matcher.bgg_match.start', { candidate_id: discoveryItemCandidateId });
+        const bggMatches = await generateBggMatches(database, candidate, bggClient, translationService, traceLogger);
+        const bggMatch = bestMatchAboveThreshold(bggMatches);
+        traceLog(traceLogger, 'item_matcher.bgg_match.completed', {
+          best_bgg_id: bggMatch?.bggId ?? null,
+          best_score: bggMatch?.matchScore ?? null,
+          candidate_id: discoveryItemCandidateId,
+          match_count: bggMatches.length
+        });
         if (!bggMatch?.bggId) {
           await markStoreItemMatchNotFound(database, discoveryItemCandidateId, ['no match above threshold'], isAdminConfirmation);
+          traceLog(traceLogger, 'item_matcher.no_match', {
+            candidate_id: discoveryItemCandidateId,
+            match_count: bggMatches.length,
+            reason: 'no match above threshold'
+          });
+          traceLog(traceLogger, 'item_matcher.confirm.completed', {
+            candidate_id: discoveryItemCandidateId,
+            result: 'no_match'
+          });
           return;
         }
 
@@ -116,10 +177,24 @@ export function createItemMatchingService(
             'BGG item importer is not configured',
             isAdminConfirmation
           );
+          traceLog(traceLogger, 'item_matcher.failed', {
+            bgg_id: bggMatch.bggId,
+            candidate_id: discoveryItemCandidateId,
+            error: 'BGG item importer is not configured'
+          });
           return;
         }
 
+        traceLog(traceLogger, 'item_matcher.bgg_import.start', {
+          bgg_id: bggMatch.bggId,
+          candidate_id: discoveryItemCandidateId
+        });
         const itemId = await bggItemImporter.importBggId(bggMatch.bggId);
+        traceLog(traceLogger, 'item_matcher.bgg_import.completed', {
+          bgg_id: bggMatch.bggId,
+          candidate_id: discoveryItemCandidateId,
+          item_id: itemId
+        });
         if (!itemId) {
           await markStoreItemProcessingError(
             database,
@@ -127,6 +202,11 @@ export function createItemMatchingService(
             'BGG item could not be imported',
             isAdminConfirmation
           );
+          traceLog(traceLogger, 'item_matcher.failed', {
+            bgg_id: bggMatch.bggId,
+            candidate_id: discoveryItemCandidateId,
+            error: 'BGG item could not be imported'
+          });
           return;
         }
 
@@ -137,13 +217,29 @@ export function createItemMatchingService(
           itemId,
           shouldConfirmBoardgameMatch(bggMatch, isAdminConfirmation)
         );
+        traceLog(traceLogger, 'item_matcher.link.completed', {
+          candidate_id: discoveryItemCandidateId,
+          item_id: itemId,
+          match_source: bggMatch.source,
+          match_score: bggMatch.matchScore,
+          matched_bgg_id: bggMatch.bggId
+        });
+        traceLog(traceLogger, 'item_matcher.confirm.completed', {
+          candidate_id: discoveryItemCandidateId,
+          result: 'linked_bgg_match'
+        });
       } catch (error) {
+        const message = error instanceof Error ? error.message : 'Item matching failed';
         await markStoreItemProcessingError(
           database,
           discoveryItemCandidateId,
-          error instanceof Error ? error.message : 'Item matching failed',
+          message,
           isAdminConfirmation
         );
+        traceLog(traceLogger, 'item_matcher.failed', {
+          candidate_id: discoveryItemCandidateId,
+          error: message
+        });
       }
     },
 
@@ -382,10 +478,22 @@ async function generateBggMatches(
   database: Database,
   candidate: DiscoveryItemCandidateRow,
   bggClient?: BggClient,
-  translationService?: TranslationService
+  translationService?: TranslationService,
+  traceLogger: TraceLogger = nullTraceLogger
 ): Promise<GeneratedMatchCandidate[]> {
   const originalQueries = dedupeStrings([candidate.title]);
+  traceLog(traceLogger, 'item_matcher.bgg_cache.start', {
+    candidate_id: candidate.id,
+    phase: 'original',
+    query_count: originalQueries.length
+  });
   const originalCacheMatches = await generateBggCacheMatches(database, candidate, originalQueries, originalQueries);
+  traceLog(traceLogger, 'item_matcher.bgg_cache.completed', {
+    candidate_id: candidate.id,
+    high_confidence: originalCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE),
+    match_count: originalCacheMatches.length,
+    phase: 'original'
+  });
   if (originalCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
     return originalCacheMatches;
   }
@@ -396,25 +504,36 @@ async function generateBggMatches(
 
   const originalMatches = mergeMatchesByBggId([
     ...originalCacheMatches,
-    ...(await searchBggMatches(database, candidate, bggClient, originalQueries, originalQueries))
+    ...(await searchBggMatches(database, candidate, bggClient, originalQueries, originalQueries, traceLogger))
   ]);
   if (originalMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
     return originalMatches;
   }
 
-  const translatedQueries = await translatedBggSearchQueries(candidate, translationService);
+  const translatedQueries = await translatedBggSearchQueries(candidate, translationService, traceLogger);
   if (translatedQueries.length === 0) {
     return originalMatches;
   }
 
   const titleVariants = [...originalQueries, ...translatedQueries];
+  traceLog(traceLogger, 'item_matcher.bgg_cache.start', {
+    candidate_id: candidate.id,
+    phase: 'translated',
+    query_count: translatedQueries.length
+  });
   const translatedCacheMatches = await generateBggCacheMatches(database, candidate, translatedQueries, titleVariants);
+  traceLog(traceLogger, 'item_matcher.bgg_cache.completed', {
+    candidate_id: candidate.id,
+    high_confidence: translatedCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE),
+    match_count: translatedCacheMatches.length,
+    phase: 'translated'
+  });
   const cacheMatches = mergeMatchesByBggId([...originalMatches, ...translatedCacheMatches]);
   if (translatedCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
     return cacheMatches;
   }
 
-  const translatedMatches = await searchBggMatches(database, candidate, bggClient, translatedQueries, titleVariants);
+  const translatedMatches = await searchBggMatches(database, candidate, bggClient, translatedQueries, titleVariants, traceLogger);
 
   return mergeMatchesByBggId([...cacheMatches, ...translatedMatches]);
 }
@@ -465,20 +584,38 @@ async function searchBggMatches(
   candidate: DiscoveryItemCandidateRow,
   bggClient: BggClient,
   searchQueries: string[],
-  titleVariants: string[]
+  titleVariants: string[],
+  traceLogger: TraceLogger = nullTraceLogger
 ): Promise<GeneratedMatchCandidate[]> {
   const searchResults: BggSearchItem[] = [];
   for (const query of searchQueries) {
-    searchResults.push(...(await cachedBggSearch(database, bggClient, query)));
+    searchResults.push(...(await cachedBggSearch(database, bggClient, query, traceLogger)));
   }
   const uniqueSearchResults = selectSearchResultsForScoring(dedupeSearchResults(searchResults), titleVariants).slice(0, 10);
   const matches: GeneratedMatchCandidate[] = [];
 
   for (const searchResult of uniqueSearchResults) {
+    traceLog(traceLogger, 'item_matcher.bgg_thing_fetch.start', {
+      bgg_id: searchResult.bggId,
+      candidate_id: candidate.id,
+      name: searchResult.name
+    });
     const thing = await bggClient.fetchThing(searchResult.bggId);
     if (!thing) {
+      traceLog(traceLogger, 'item_matcher.bgg_thing_fetch.completed', {
+        bgg_id: searchResult.bggId,
+        candidate_id: candidate.id,
+        found: false,
+        name: searchResult.name
+      });
       continue;
     }
+    traceLog(traceLogger, 'item_matcher.bgg_thing_fetch.completed', {
+      bgg_id: searchResult.bggId,
+      candidate_id: candidate.id,
+      found: true,
+      name: thing.details.name
+    });
     const score = scoreBggThingWithTitleVariants(candidate, titleVariants, thing.details);
     matches.push({
       bggId: thing.details.bggId,
@@ -494,12 +631,21 @@ async function searchBggMatches(
   return matches;
 }
 
-async function cachedBggSearch(database: Database, bggClient: BggClient, query: string): Promise<BggSearchItem[]> {
+async function cachedBggSearch(
+  database: Database,
+  bggClient: BggClient,
+  query: string,
+  traceLogger: TraceLogger = nullTraceLogger
+): Promise<BggSearchItem[]> {
   const normalizedQuery = normalizeTitle(query);
   if (!normalizedQuery) {
     return [];
   }
 
+  traceLog(traceLogger, 'item_matcher.bgg_search.start', {
+    normalized_query: normalizedQuery,
+    query
+  });
   const cachedQuery = await database.query(
     `
     select id
@@ -527,10 +673,27 @@ async function cachedBggSearch(database: Database, bggClient: BggClient, query: 
       `,
       [cachedQueryId]
     );
-    return bggSearchItems(cachedResults.rows);
+    const results = bggSearchItems(cachedResults.rows);
+    traceLog(traceLogger, 'item_matcher.bgg_search.completed', {
+      normalized_query: normalizedQuery,
+      query,
+      result_count: results.length,
+      source: 'cache'
+    });
+    return results;
   }
 
+  traceLog(traceLogger, 'item_matcher.bgg_search.api_start', {
+    normalized_query: normalizedQuery,
+    query
+  });
   const results = await bggClient.search(query);
+  traceLog(traceLogger, 'item_matcher.bgg_search.completed', {
+    normalized_query: normalizedQuery,
+    query,
+    result_count: results.length,
+    source: 'api'
+  });
   const queryWrite = await database.query(
     `
     insert into bgg_search_queries (
@@ -628,13 +791,23 @@ function compareNewestBggSearchItem(left: BggSearchItem, right: BggSearchItem): 
 
 async function translatedBggSearchQueries(
   candidate: DiscoveryItemCandidateRow,
-  translationService?: TranslationService
+  translationService?: TranslationService,
+  traceLogger: TraceLogger = nullTraceLogger
 ): Promise<string[]> {
   if (!translationService) {
+    traceLog(traceLogger, 'item_matcher.translation.skipped', {
+      candidate_id: candidate.id,
+      reason: 'translation service is not configured'
+    });
     return [];
   }
 
   try {
+    traceLog(traceLogger, 'item_matcher.translation.start', {
+      candidate_id: candidate.id,
+      source_language: languageCodeForTranslation(candidate.language),
+      title: candidate.title
+    });
     const translated = await translationService.translate({
       purpose: 'BGG_SEARCH_QUERY',
       sourceField: 'title',
@@ -644,8 +817,18 @@ async function translatedBggSearchQueries(
       targetLanguage: 'en',
       text: candidate.title
     });
-    return dedupeStrings([translated.translatedText, ...translated.alternates]);
+    const queries = dedupeStrings([translated.translatedText, ...translated.alternates]);
+    traceLog(traceLogger, 'item_matcher.translation.completed', {
+      candidate_id: candidate.id,
+      from_cache: translated.fromCache,
+      model: translated.model,
+      query_count: queries.length
+    });
+    return queries;
   } catch {
+    traceLog(traceLogger, 'item_matcher.translation.failed', {
+      candidate_id: candidate.id
+    });
     return [];
   }
 }
@@ -838,6 +1021,14 @@ function stringOrNull(value: unknown): string | null {
     return null;
   }
   return String(value);
+}
+
+function traceLog(traceLogger: TraceLogger, event: string, fields: Record<string, unknown> = {}): void {
+  try {
+    traceLogger.log(event, fields);
+  } catch {
+    return;
+  }
 }
 
 function httpError(status: number, message: string): Error & { status: number } {

@@ -9,6 +9,7 @@ import {
   type ProductDetailsEnrichmentService,
   type ProductDetailsExtractionResult
 } from '../productDetailsExtraction/productDetailsExtractionService.js';
+import { createTraceLoggerFromHeaders } from '../trace.js';
 
 type StoreCandidateInput = {
   canonical_domain: string;
@@ -1842,8 +1843,10 @@ export function createDiscoveryRouter(
       }
 
       const candidateId = integerPathParam(request.params.id);
+      const traceLogger = createTraceLoggerFromHeaders(request.headers);
       await itemMatchingService.confirmBoardgameAndMatch(candidateId, {
-        confirmationSource: parseConfirmationSource(request.body)
+        confirmationSource: parseConfirmationSource(request.body),
+        ...(traceLogger ? { traceLogger } : {})
       });
 
       const result = await database.query(
