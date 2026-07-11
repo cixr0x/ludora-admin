@@ -26,6 +26,15 @@ Connect from a workstation with:
 gcloud compute ssh robertorojas87@ludora-admin --project ludora-501213 --zone us-central1-c
 ```
 
+The external IP is not currently reserved as a static Compute Engine address. After any VM stop/start, verify the live IP and DNS before deploying or troubleshooting HTTPS:
+
+```powershell
+gcloud compute instances describe ludora-admin --project ludora-501213 --zone us-central1-c --format="value(networkInterfaces[0].accessConfigs[0].natIP)"
+Resolve-DnsName admin.ludora.bobbycrimson.com -Type A
+```
+
+Both results must match. If the VM IP changes, report it and update DNS or reserve a static address with user approval before continuing.
+
 ## Architecture
 
 ```text
