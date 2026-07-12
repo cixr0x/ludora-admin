@@ -18,14 +18,15 @@ The six clockwise lines are labeled `A1 B1 C1 A2 B2 C2`. The detector compares t
 
 - Three matching pairs: `three_faces`, high confidence.
 - Two matching pairs: `three_faces`, lower confidence because one receding axis may converge strongly under projective perspective.
-- One matching pair: `two_faces`.
+- One matching pair is also `three_faces` when at least two opposite pairs have similar projected lengths. This handles strong perspective where valid cuboid edges converge too much to satisfy the angular tolerance.
+- One matching pair with only one similar-length pair: `two_faces`.
 - No matching pairs, or an outline without six sides: `ambiguous`.
 
 The JSON includes both line angles and lengths, angular difference, length ratio, separate direction/length compatibility flags, the combined match result, and the finite vanishing point when the lines are not nearly parallel. This evidence is retained so later stages can reject borderline classifications or add an interior-edge check.
 
 ## Two-Face Cover Identification
 
-When exactly one opposite line pair matches, the four vertices incident to that pair belong to the outer vertical boundaries. The remaining two vertices are connected to form the shared seam between the visible faces. That seam divides the hexagon into two quadrilaterals; the larger quadrilateral is selected as the front cover and the smaller as the side face.
+When exactly one opposite line pair matches and the other pairs do not have three-face length symmetry, the four vertices incident to that pair belong to the outer vertical boundaries. The remaining two vertices are connected to form the shared seam between the visible faces. That seam divides the hexagon into two quadrilaterals; the larger quadrilateral is selected as the front cover and the smaller as the side face. A candidate is rejected when either pair of its opposite edges disagrees by more than 90%, preventing a false diagonal seam from producing an extremely distorted cover.
 
 The overlay draws the inferred seam in magenta and shades the selected cover green. The JSON records the parallel pair, seam endpoints, both face polygons and areas, and the fraction of the combined visible-face area assigned to the cover.
 

@@ -556,6 +556,13 @@ def classify_perspective(
         )
 
     matching_pairs = sum(pair.matching for pair in pairs)
+    similar_direction_pairs = sum(pair.similar_direction for pair in pairs)
+    similar_length_pairs = sum(pair.similar_length for pair in pairs)
+    strong_perspective_three_faces = (
+        matching_pairs >= 1
+        and similar_direction_pairs >= 1
+        and similar_length_pairs >= 2
+    )
     matching_differences = [pair.difference_degrees for pair in pairs if pair.matching]
     mismatching_differences = [pair.difference_degrees for pair in pairs if not pair.matching]
     if matching_pairs >= 2:
@@ -572,6 +579,21 @@ def classify_perspective(
                 / angle_tolerance_degrees,
             )
             confidence = 0.55 + 0.20 * matching_strength + 0.15 * mismatch_strength
+    elif strong_perspective_three_faces:
+        kind = "three_faces"
+        direction_strength = float(
+            np.mean(
+                [
+                    1.0 - pair.difference_degrees / angle_tolerance_degrees
+                    for pair in pairs
+                    if pair.similar_direction
+                ]
+            )
+        )
+        length_strength = float(
+            np.mean([pair.length_ratio for pair in pairs if pair.similar_length])
+        )
+        confidence = 0.50 + 0.20 * direction_strength + 0.25 * length_strength
     elif matching_pairs == 1:
         kind = "two_faces"
         matching_strength = 1.0 - matching_differences[0] / angle_tolerance_degrees
@@ -601,7 +623,12 @@ def classify_perspective(
 def identify_two_face_cover(
     vertices: np.ndarray,
     perspective: PerspectiveClassification,
+    *,
+    maximum_edge_disagreement: float = 0.9,
 ) -> TwoFaceCoverDetection | None:
+    if maximum_edge_disagreement <= 0:
+        raise ValueError("maximum edge disagreement must be positive")
+
     points = np.asarray(vertices, dtype=np.float64).reshape(-1, 2)
     matching_pairs = [pair for pair in perspective.pairs if pair.matching]
     if perspective.kind != "two_faces" or len(points) != 6 or len(matching_pairs) != 1:
@@ -641,6 +668,19 @@ def identify_two_face_cover(
     else:
         cover_indices, cover_polygon, cover_area = second_face_indices, second_polygon, second_area
         side_indices, side_polygon, side_area = first_face_indices, first_polygon, first_area
+
+    top_left, top_right, bottom_right, bottom_left = order_quadrilateral(cover_polygon)
+    top_length = float(np.linalg.norm(top_right - top_left))
+    bottom_length = float(np.linalg.norm(bottom_right - bottom_left))
+    left_length = float(np.linalg.norm(bottom_left - top_left))
+    right_length = float(np.linalg.norm(bottom_right - top_right))
+    estimated_width = (top_length + bottom_length) / 2.0
+    estimated_height = (left_length + right_length) / 2.0
+    width_disagreement = abs(top_length - bottom_length) / estimated_width
+    height_disagreement = abs(left_length - right_length) / estimated_height
+    if max(width_disagreement, height_disagreement) > maximum_edge_disagreement:
+        return None
+
     total_area = cover_area + side_area
 
     return TwoFaceCoverDetection(

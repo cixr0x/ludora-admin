@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -259,6 +260,27 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertLess(perspective.pairs[2].length_ratio, 0.17)
         self.assertEqual(perspective.minimum_length_ratio, 0.5)
 
+    def test_classifies_strong_three_face_perspective_from_length_symmetry(self):
+        vertices = np.array(
+            [
+                [1438.7418, 125.1114],
+                [1807.4877, 199.6587],
+                [1700.4412, 1499.9224],
+                [556.3910, 1942.3416],
+                [304.6030, 1674.6842],
+                [187.3440, 272.5297],
+            ],
+            dtype=np.float64,
+        )
+
+        perspective = classify_perspective(vertices)
+
+        self.assertEqual(perspective.kind, "three_faces")
+        self.assertEqual(perspective.matching_opposite_pairs, 1)
+        self.assertEqual(sum(pair.similar_direction for pair in perspective.pairs), 1)
+        self.assertEqual(sum(pair.similar_length for pair in perspective.pairs), 3)
+        self.assertEqual(len(identify_three_face_covers(vertices, perspective)), 2)
+
     def test_two_face_cover_connects_vertices_not_touching_parallel_lines(self):
         vertices = np.array(
             [
@@ -284,6 +306,22 @@ class BoxSilhouetteTests(unittest.TestCase):
         np.testing.assert_allclose(cover.cover_polygon, vertices[[0, 1, 2, 3]])
         self.assertGreater(cover.cover_area, cover.side_area)
         self.assertGreater(cover.cover_area_fraction, 0.80)
+
+    def test_rejects_extremely_distorted_two_face_candidate(self):
+        vertices = np.array(
+            [
+                [1438.7418, 125.1114],
+                [1807.4877, 199.6587],
+                [1700.4412, 1499.9224],
+                [556.3910, 1942.3416],
+                [304.6030, 1674.6842],
+                [187.3440, 272.5297],
+            ],
+            dtype=np.float64,
+        )
+        perspective = replace(classify_perspective(vertices), kind="two_faces")
+
+        self.assertIsNone(identify_two_face_cover(vertices, perspective))
 
     def test_three_face_outline_does_not_create_two_face_cover(self):
         vertices = np.array(
