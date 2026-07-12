@@ -100,6 +100,11 @@ class FlattenedCoverGeometry:
     right_length: float
     estimated_width: float
     estimated_height: float
+    untrimmed_width: int
+    untrimmed_height: int
+    trim_fraction: float
+    trim_x: int
+    trim_y: int
     width: int
     height: int
     aspect_ratio: float
@@ -771,9 +776,12 @@ def flatten_cover_quadrilateral(
     polygon: np.ndarray,
     *,
     max_dimension: int = 1600,
+    trim_fraction: float = 0.01,
 ) -> tuple[np.ndarray, FlattenedCoverGeometry]:
     if max_dimension <= 0:
         raise ValueError("maximum flattened cover dimension must be positive")
+    if not 0.0 <= trim_fraction < 0.5:
+        raise ValueError("cover trim fraction must be between zero and one half")
     top_left, top_right, bottom_right, bottom_left = order_quadrilateral(polygon)
     top_length = float(np.linalg.norm(top_right - top_left))
     bottom_length = float(np.linalg.norm(bottom_right - bottom_left))
@@ -785,21 +793,39 @@ def flatten_cover_quadrilateral(
         raise ValueError("flattened cover dimensions must be greater than one pixel")
 
     scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
-    width = max(2, int(round(estimated_width * scale)))
-    height = max(2, int(round(estimated_height * scale)))
+    untrimmed_width = max(2, int(round(estimated_width * scale)))
+    untrimmed_height = max(2, int(round(estimated_height * scale)))
     destination = np.array(
-        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+        [
+            [0, 0],
+            [untrimmed_width - 1, 0],
+            [untrimmed_width - 1, untrimmed_height - 1],
+            [0, untrimmed_height - 1],
+        ],
         dtype=np.float32,
     )
     ordered = np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
     transform = cv2.getPerspectiveTransform(ordered, destination)
-    flattened = cv2.warpPerspective(
+    untrimmed = cv2.warpPerspective(
         image,
         transform,
-        (width, height),
+        (untrimmed_width, untrimmed_height),
         flags=cv2.INTER_CUBIC,
         borderMode=cv2.BORDER_REPLICATE,
     )
+    trim_x = min(
+        max(1, int(round(untrimmed_width * trim_fraction))) if trim_fraction else 0,
+        (untrimmed_width - 2) // 2,
+    )
+    trim_y = min(
+        max(1, int(round(untrimmed_height * trim_fraction))) if trim_fraction else 0,
+        (untrimmed_height - 2) // 2,
+    )
+    flattened = untrimmed[
+        trim_y : untrimmed_height - trim_y,
+        trim_x : untrimmed_width - trim_x,
+    ].copy()
+    height, width = flattened.shape[:2]
     geometry = FlattenedCoverGeometry(
         ordered_corners=[[float(value) for value in point] for point in ordered],
         top_length=top_length,
@@ -808,6 +834,11 @@ def flatten_cover_quadrilateral(
         right_length=right_length,
         estimated_width=estimated_width,
         estimated_height=estimated_height,
+        untrimmed_width=untrimmed_width,
+        untrimmed_height=untrimmed_height,
+        trim_fraction=trim_fraction,
+        trim_x=trim_x,
+        trim_y=trim_y,
         width=width,
         height=height,
         aspect_ratio=width / height,

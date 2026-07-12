@@ -39,8 +39,41 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertAlmostEqual(geometry.estimated_width, float(expected_width), places=4)
         self.assertAlmostEqual(geometry.estimated_height, float(expected_height), places=4)
         self.assertEqual(flattened.shape[:2], (geometry.height, geometry.width))
-        self.assertEqual(geometry.width, round(float(expected_width)))
-        self.assertEqual(geometry.height, round(float(expected_height)))
+        self.assertEqual(geometry.untrimmed_width, round(float(expected_width)))
+        self.assertEqual(geometry.untrimmed_height, round(float(expected_height)))
+        self.assertEqual(geometry.width, geometry.untrimmed_width - 2 * geometry.trim_x)
+        self.assertEqual(geometry.height, geometry.untrimmed_height - 2 * geometry.trim_y)
+
+    def test_flatten_cover_trims_one_percent_from_every_side(self):
+        image = np.zeros((140, 220, 3), dtype=np.uint8)
+        polygon = np.array(
+            [[10, 10], [210, 10], [210, 110], [10, 110]],
+            dtype=np.float32,
+        )
+
+        flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+
+        self.assertEqual(geometry.trim_fraction, 0.01)
+        self.assertEqual(geometry.trim_x, 2)
+        self.assertEqual(geometry.trim_y, 1)
+        self.assertEqual(flattened.shape[:2], (98, 196))
+
+    def test_flatten_cover_trim_can_be_disabled(self):
+        image = np.zeros((100, 120, 3), dtype=np.uint8)
+        polygon = np.array(
+            [[10, 10], [110, 10], [110, 90], [10, 90]],
+            dtype=np.float32,
+        )
+
+        flattened, geometry = flatten_cover_quadrilateral(
+            image,
+            polygon,
+            trim_fraction=0.0,
+        )
+
+        self.assertEqual(geometry.trim_x, 0)
+        self.assertEqual(geometry.trim_y, 0)
+        self.assertEqual(flattened.shape[:2], (80, 100))
 
     def test_detects_six_sided_convex_box_silhouette(self):
         image = np.full((260, 320, 3), 255, dtype=np.uint8)
