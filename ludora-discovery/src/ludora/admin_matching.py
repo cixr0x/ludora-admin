@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Protocol
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin
@@ -102,13 +101,10 @@ def _trace_headers(trace_logger: TraceLogger | None) -> dict[str, str]:
         return {}
 
     run_id = getattr(trace_logger, "run_id", "")
-    trace_path = getattr(trace_logger, "path", "")
     headers: dict[str, str] = {}
 
     if isinstance(run_id, str) and run_id.strip():
         headers["X-Ludora-Trace-Run-Id"] = run_id.strip()
-    if isinstance(trace_path, (str, Path)) and str(trace_path).strip():
-        headers["X-Ludora-Trace-Path"] = str(trace_path)
     return headers
 
 

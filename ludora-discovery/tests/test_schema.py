@@ -54,6 +54,10 @@ class SchemaTests(unittest.TestCase):
                 "update store_items set listing_status = 'PENDING' where listing_status is null",
                 "alter table if exists store_items alter column listing_status set not null",
             ],
+            "20260712_002_store_item_discovery_trace_log.sql": [
+                "create table if not exists store_item_discovery_trace_log",
+                "store_item_discovery_trace_log_run_id_id_idx",
+            ],
         }
 
         for filename, expected_snippets in expected_patches.items():
@@ -91,6 +95,7 @@ class SchemaTests(unittest.TestCase):
             "item_match_candidates",
             "translation_jobs",
             "job_store_item_discovery_log",
+            "store_item_discovery_trace_log",
             "job_store_item_update_log",
             "store_item_update_change_log",
             "publishers",
@@ -307,6 +312,14 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("new_items integer not null default 0", table)
         self.assertIn("job_store_item_discovery_log_store_id_started_at_idx", schema)
         self.assertIn("job_store_item_discovery_log_status_idx", schema)
+
+    def test_schema_contains_store_item_discovery_trace_log(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+        self.assertIn("create table if not exists store_item_discovery_trace_log", schema)
+        table = schema.split("create table if not exists store_item_discovery_trace_log", 1)[1].split(");", 1)[0]
+        for column in ["run_id text not null", "source text not null", "event text not null", "payload jsonb not null"]:
+            self.assertIn(column, table)
+        self.assertIn("store_item_discovery_trace_log_run_id_id_idx", schema)
 
     def test_schema_contains_store_item_update_job_log(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()

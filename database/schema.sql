@@ -171,6 +171,18 @@ on job_store_item_discovery_log (store_id, started_at desc);
 create index if not exists job_store_item_discovery_log_status_idx
 on job_store_item_discovery_log (status);
 
+create table if not exists store_item_discovery_trace_log (
+    id bigserial primary key,
+    run_id text not null,
+    source text not null default 'discovery',
+    event text not null,
+    payload jsonb not null default '{}'::jsonb,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists store_item_discovery_trace_log_run_id_id_idx
+on store_item_discovery_trace_log (run_id, id);
+
 create table if not exists job_store_item_update_log (
     id bigserial primary key,
     run_id text not null unique,

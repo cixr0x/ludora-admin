@@ -1,12 +1,10 @@
-import json
 import sys
-import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import ANY, MagicMock, Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -207,8 +205,9 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(result.item_candidates, 3)
         self.assertEqual(result.new_items, 1)
 
-    def test_run_item_discovery_writes_json_trace_file(self):
-        connection = Mock()
+    def test_run_item_discovery_writes_database_trace_events(self):
+        connection = MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
         repository = Mock()
         repository.upsert_item_candidate.return_value = ItemCandidateUpsertResult(
             candidate_id=101,
@@ -218,9 +217,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             created=True,
         )
 
-        with tempfile.TemporaryDirectory() as temp_dir, patch(
-            "ludora.operations.resolve_database_url", return_value="postgresql://ludora"
-        ), patch(
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
             "ludora.operations.resolve_browser_fetch_enabled", return_value=False
         ), patch(
             "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
@@ -238,19 +235,22 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             run_item_discovery(
                 store_id=12,
                 website_url="https://example.mx/",
-                env={"LUDORA_DISCOVERY_TRACE_DIR": temp_dir},
                 run_id="run-123",
             )
 
-            trace_path = Path(temp_dir) / "item-discovery-run-123.jsonl"
-            events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines()]
-
-        self.assertEqual(events[0]["event"], "item_discovery.run.start")
-        self.assertEqual(events[0]["run_id"], "run-123")
-        self.assertEqual(events[0]["store_id"], 12)
-        self.assertEqual(events[0]["website_url"], "https://example.mx/")
-        self.assertIn("item_discovery.config.resolved", [event["event"] for event in events])
-        self.assertEqual(events[-1]["event"], "item_discovery.run.completed")
+        trace_calls = [
+            call
+            for call in cursor.execute.call_args_list
+            if "insert into store_item_discovery_trace_log" in call.args[0]
+        ]
+        events = [call.args[1][2] for call in trace_calls]
+        self.assertEqual(events[0], "item_discovery.run.start")
+        self.assertEqual(trace_calls[0].args[1][0], "run-123")
+        self.assertEqual(trace_calls[0].args[1][1], "discovery")
+        self.assertIn('"store_id":12', trace_calls[0].args[1][3])
+        self.assertIn('"website_url":"https://example.mx/"', trace_calls[0].args[1][3])
+        self.assertIn("item_discovery.config.resolved", events)
+        self.assertEqual(events[-1], "item_discovery.run.completed")
 
     def test_run_item_discovery_logs_failed_run(self):
         connection = Mock()

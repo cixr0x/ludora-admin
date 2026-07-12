@@ -108,10 +108,6 @@ const app = createApp({
   database,
   corsOrigin: config.corsOrigin,
   descriptionGenerationService,
-  discoveryLogOptions: {
-    envFile: config.discoveryRunner.envFile,
-    packageDir: config.discoveryRunner.packageDir
-  },
   externalCoverImageOptimizer: {
     run: (options) => optimizeExternalCoverImages(database, externalCoverImageOptimizerDependencies, options)
   },

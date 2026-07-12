@@ -54,8 +54,7 @@ class AdminItemMatcherTests(unittest.TestCase):
 
     def test_forwards_trace_context_to_admin_confirm_endpoint(self):
         repository = Mock()
-        trace_path = Path("C:/tmp/item-discovery-run-123.jsonl")
-        trace_logger = Mock(run_id="run-123", path=trace_path)
+        trace_logger = Mock(run_id="run-123")
         record = DiscoveryItemCandidateRecord(
             store_id=12,
             source_url="https://store.mx/products/catan",
@@ -70,7 +69,7 @@ class AdminItemMatcherTests(unittest.TestCase):
 
         request = urlopen.call_args.args[0]
         self.assertEqual(request.headers["X-ludora-trace-run-id"], "run-123")
-        self.assertEqual(request.headers["X-ludora-trace-path"], str(trace_path))
+        self.assertNotIn("X-ludora-trace-path", request.headers)
 
     def test_skips_non_boardgame_candidates(self):
         repository = Mock()

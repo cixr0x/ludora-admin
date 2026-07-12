@@ -1,34 +1,41 @@
-import fs from 'node:fs';
 import type { IncomingHttpHeaders } from 'node:http';
-import path from 'node:path';
+
+import type { Database } from './db.js';
 
 export type TraceLogger = {
   log(event: string, fields?: Record<string, unknown>): void;
+  flush?(): Promise<void>;
 };
 
-export class JsonlTraceLogger implements TraceLogger {
+export class DatabaseTraceLogger implements TraceLogger {
   private readonly startedAt = process.hrtime.bigint();
+  private pendingWrite = Promise.resolve();
 
   constructor(
-    private readonly tracePath: string,
+    private readonly database: Database,
     private readonly runId: string
   ) {}
 
   log(event: string, fields: Record<string, unknown> = {}): void {
-    const record = {
-      ts: new Date().toISOString(),
-      run_id: this.runId,
-      event,
+    const payload = {
       elapsed_ms: Number((process.hrtime.bigint() - this.startedAt) / 1_000_000n),
       ...fields
     };
 
-    try {
-      fs.mkdirSync(path.dirname(this.tracePath), { recursive: true });
-      fs.appendFileSync(this.tracePath, `${JSON.stringify(record)}\n`, 'utf8');
-    } catch {
-      return;
-    }
+    this.pendingWrite = this.pendingWrite
+      .then(() =>
+        this.database.query(
+          `insert into store_item_discovery_trace_log (run_id, source, event, payload)
+           values ($1, 'admin_service', $2, $3::jsonb)`,
+          [this.runId, event, JSON.stringify(payload)]
+        )
+      )
+      .then(() => undefined)
+      .catch(() => undefined);
+  }
+
+  async flush(): Promise<void> {
+    await this.pendingWrite;
   }
 }
 
@@ -36,13 +43,12 @@ export const nullTraceLogger: TraceLogger = {
   log: () => undefined
 };
 
-export function createTraceLoggerFromHeaders(headers: IncomingHttpHeaders): TraceLogger | undefined {
+export function createTraceLoggerFromHeaders(headers: IncomingHttpHeaders, database: Database): TraceLogger | undefined {
   const runId = singleHeaderValue(headers['x-ludora-trace-run-id']);
-  const tracePath = singleHeaderValue(headers['x-ludora-trace-path']);
-  if (!runId || !tracePath) {
+  if (!runId) {
     return undefined;
   }
-  return new JsonlTraceLogger(tracePath, runId);
+  return new DatabaseTraceLogger(database, runId);
 }
 
 function singleHeaderValue(value: string | string[] | undefined): string {

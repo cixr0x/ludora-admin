@@ -193,7 +193,7 @@ def run_item_discovery(
     connection = connect_database(database_url)
     resolved_run_id = run_id or str(uuid.uuid4())
     resolved_started_at = started_at or _utc_now()
-    trace_logger = create_item_discovery_trace_logger(resolved_run_id, env=current_env, dotenv_path=env_file)
+    trace_logger = create_item_discovery_trace_logger(connection, resolved_run_id)
     trace_logger.log(
         "item_discovery.run.start",
         platform=platform,

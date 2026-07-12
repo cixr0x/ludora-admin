@@ -2788,12 +2788,17 @@ describe('ludora admin service', () => {
           }
         | undefined;
     }> = [];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
-      query: async () => ({ rows: [row] })
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return normalizeSql(sql).startsWith('insert into store_item_discovery_trace_log') ? { rows: [] } : { rows: [row] };
+      }
     };
     const itemMatchingService: ItemMatchingService = {
       confirmBoardgameAndMatch: async (id, options) => {
         calls.push({ id, options });
+        options?.traceLogger?.log('item_matcher.test', { candidate_id: id });
       },
       generateMatchCandidates: async () => [],
       listMatchCandidates: async () => []
@@ -2802,7 +2807,6 @@ describe('ludora admin service', () => {
     const response = await request(createApp({ database, itemMatchingService }))
       .post('/discovery/listings/42/confirm-boardgame')
       .set('X-Ludora-Trace-Run-Id', 'run-123')
-      .set('X-Ludora-Trace-Path', 'C:\\tmp\\item-discovery-run-123.jsonl')
       .send({ confirmation_source: 'automated' });
 
     expect(response.status).toBe(200);
@@ -2813,6 +2817,8 @@ describe('ludora admin service', () => {
         traceLogger: expect.objectContaining({ log: expect.any(Function) })
       }
     });
+    const traceQuery = queries.find((query) => normalizeSql(query.sql).startsWith('insert into store_item_discovery_trace_log'));
+    expect(traceQuery?.params).toEqual(['run-123', 'item_matcher.test', expect.stringContaining('"candidate_id":42')]);
   });
 
   it('lists item match candidates through the item matching service', async () => {
@@ -3578,11 +3584,7 @@ describe('ludora admin service', () => {
     expect(countQuery?.params).toEqual(['%Alpha%']);
   });
 
-  it('streams the JSONL trace for a store item discovery job by byte offset', async () => {
-    const traceDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'ludora-discovery-log-'));
-    const firstLine = '{"ts":"2026-07-11T12:00:00Z","event":"item_discovery.run.start"}\n';
-    const secondLine = '{"ts":"2026-07-11T12:01:00Z","event":"item_discovery.run.completed"}\n';
-    fs.writeFileSync(path.join(traceDirectory, 'item-discovery-run-batch-12.jsonl'), `${firstLine}${secondLine}`);
+  it('streams database trace rows for a store item discovery job by row id', async () => {
     const job = {
       completed_at: '2026-07-11T12:01:00Z',
       id: 19,
@@ -3596,42 +3598,45 @@ describe('ludora admin service', () => {
     const database: Database = {
       query: async (sql, params) => {
         queries.push({ params, sql });
+        if (normalizeSql(sql).includes('from store_item_discovery_trace_log')) {
+          return {
+            rows: [
+              {
+                created_at: '2026-07-11T12:01:00Z',
+                event: 'item_discovery.run.completed',
+                id: 91,
+                payload: { elapsed_ms: 1000, new_items: 7 },
+                run_id: 'run-batch:12',
+                source: 'discovery'
+              }
+            ]
+          };
+        }
         return { rows: [job] };
       }
     };
 
-    try {
-      const app = createApp({
-        database,
-        discoveryLogOptions: {
-          envFile: path.join(traceDirectory, '.env'),
-          packageDir: traceDirectory,
-          traceDirectory
-        },
-        operationsClient: idleOperationsClient()
-      });
-      const response = await request(app).get(
-        `/admin/operations/store-item-discovery-jobs/19/log?offset=${Buffer.byteLength(firstLine)}`
-      );
+    const app = createApp({ database, operationsClient: idleOperationsClient() });
+    const response = await request(app).get('/admin/operations/store-item-discovery-jobs/19/log?offset=90');
 
-      expect(response.status).toBe(200);
-      expect(response.body).toEqual({
-        data: {
-          available: true,
-          content: secondLine,
-          has_more: false,
-          job,
-          next_offset: Buffer.byteLength(firstLine) + Buffer.byteLength(secondLine),
-          reset: false
-        }
-      });
-      expect(normalizeSql(queries[0]?.sql ?? '')).toContain(
-        'from job_store_item_discovery_log jobs left join stores on stores.id = jobs.store_id where jobs.id = $1'
-      );
-      expect(queries[0]?.params).toEqual([19]);
-    } finally {
-      fs.rmSync(traceDirectory, { force: true, recursive: true });
-    }
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: {
+        available: true,
+        content:
+          '{"ts":"2026-07-11T12:01:00Z","run_id":"run-batch:12","source":"discovery","event":"item_discovery.run.completed","elapsed_ms":1000,"new_items":7}\n',
+        has_more: false,
+        job,
+        next_offset: 91,
+        reset: false
+      }
+    });
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain(
+      'from job_store_item_discovery_log jobs left join stores on stores.id = jobs.store_id where jobs.id = $1'
+    );
+    expect(queries[0]?.params).toEqual([19]);
+    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('from store_item_discovery_trace_log');
+    expect(queries[1]?.params).toEqual(['run-batch:12', 90, 1001]);
   });
 
   it('lists store item update job logs from the job table', async () => {

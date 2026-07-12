@@ -1843,11 +1843,15 @@ export function createDiscoveryRouter(
       }
 
       const candidateId = integerPathParam(request.params.id);
-      const traceLogger = createTraceLoggerFromHeaders(request.headers);
-      await itemMatchingService.confirmBoardgameAndMatch(candidateId, {
-        confirmationSource: parseConfirmationSource(request.body),
-        ...(traceLogger ? { traceLogger } : {})
-      });
+      const traceLogger = createTraceLoggerFromHeaders(request.headers, database);
+      try {
+        await itemMatchingService.confirmBoardgameAndMatch(candidateId, {
+          confirmationSource: parseConfirmationSource(request.body),
+          ...(traceLogger ? { traceLogger } : {})
+        });
+      } finally {
+        await traceLogger?.flush?.();
+      }
 
       const result = await database.query(
         `select ${itemCandidateSelect}
