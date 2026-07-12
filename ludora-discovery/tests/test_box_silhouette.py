@@ -135,6 +135,29 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertEqual(int(mask[8, 8]), 0)
         self.assertEqual(int(mask[80, 100]), 255)
 
+    def test_mask_supports_white_letterbox_bars_around_a_black_background(self):
+        image = np.full((300, 240, 3), 255, dtype=np.uint8)
+        image[35:265, :] = 0
+        box = np.array(
+            [[62, 72], [164, 59], [191, 73], [188, 231], [76, 244], [57, 229]],
+            dtype=np.int32,
+        )
+        cv2.fillPoly(image, [box], (55, 135, 205))
+
+        mask, background, threshold = build_foreground_mask(image)
+
+        self.assertLessEqual(threshold, 6.0)
+        np.testing.assert_allclose(background, [255, 255, 255], atol=1)
+        self.assertEqual(int(mask[10, 10]), 0)
+        self.assertEqual(int(mask[150, 10]), 0)
+        self.assertEqual(int(mask[150, 120]), 255)
+        foreground_ratio = np.count_nonzero(mask) / mask.size
+        self.assertGreater(foreground_ratio, 0.20)
+        self.assertLess(foreground_ratio, 0.35)
+
+        detection, _, _ = detect_silhouette(image)
+        self.assertEqual(len(detection.lines), 6)
+
     def test_line_fitting_prefers_box_edges_over_cast_shadow(self):
         image = np.full((260, 320, 3), 255, dtype=np.uint8)
         expected = np.array(

@@ -156,15 +156,80 @@ def _border_pixels(image: np.ndarray) -> np.ndarray:
 
 
 def estimate_background(image: np.ndarray) -> tuple[np.ndarray, float]:
-    """Estimate a flat background color and a conservative color-distance cutoff."""
+    """Estimate the dominant border background color and a conservative cutoff."""
+
+    backgrounds, threshold = estimate_background_colors(image)
+    return backgrounds[0], threshold
+
+
+def estimate_background_colors(
+    image: np.ndarray,
+    *,
+    maximum_colors: int = 3,
+    minimum_cluster_fraction: float = 0.05,
+) -> tuple[np.ndarray, float]:
+    """Estimate dominant border colors for uniform or letterboxed backgrounds."""
+
+    if maximum_colors <= 0:
+        raise ValueError("maximum background colors must be positive")
+    if not 0.0 < minimum_cluster_fraction <= 1.0:
+        raise ValueError("minimum background cluster fraction must be between zero and one")
 
     border = _border_pixels(image)
-    background = np.median(border, axis=0)
-    distances = np.linalg.norm(border - background, axis=1)
+    centers = [np.median(border, axis=0)]
+    labels = np.zeros(len(border), dtype=np.int32)
+    for _ in range(1, maximum_colors):
+        distances_to_centers = np.stack(
+            [np.linalg.norm(border - center, axis=1) for center in centers],
+            axis=1,
+        )
+        nearest_distances = distances_to_centers.min(axis=1)
+        if float(nearest_distances.max()) < 6.0:
+            break
+        centers.append(border[int(np.argmax(nearest_distances))].copy())
+
+        for _ in range(12):
+            distances_to_centers = np.stack(
+                [np.linalg.norm(border - center, axis=1) for center in centers],
+                axis=1,
+            )
+            new_labels = np.argmin(distances_to_centers, axis=1).astype(np.int32)
+            updated_centers = []
+            for index, center in enumerate(centers):
+                members = border[new_labels == index]
+                updated_centers.append(np.median(members, axis=0) if len(members) else center)
+            if np.array_equal(new_labels, labels) and np.allclose(updated_centers, centers):
+                labels = new_labels
+                centers = updated_centers
+                break
+            labels = new_labels
+            centers = updated_centers
+
+    distances_to_centers = np.stack(
+        [np.linalg.norm(border - center, axis=1) for center in centers],
+        axis=1,
+    )
+    labels = np.argmin(distances_to_centers, axis=1)
+    minimum_cluster_size = max(1, int(round(len(border) * minimum_cluster_fraction)))
+    clusters = [
+        (int(np.count_nonzero(labels == index)), np.asarray(center, dtype=np.float32))
+        for index, center in enumerate(centers)
+        if int(np.count_nonzero(labels == index)) >= minimum_cluster_size
+    ]
+    if not clusters:
+        counts = [int(np.count_nonzero(labels == index)) for index in range(len(centers))]
+        largest_index = int(np.argmax(counts))
+        clusters = [(counts[largest_index], np.asarray(centers[largest_index], dtype=np.float32))]
+    clusters.sort(key=lambda cluster: cluster[0], reverse=True)
+    backgrounds = np.stack([center for _, center in clusters]).astype(np.float32)
+    distances = np.min(
+        np.stack([np.linalg.norm(border - background, axis=1) for background in backgrounds], axis=1),
+        axis=1,
+    )
     median_distance = float(np.median(distances))
     mad = float(np.median(np.abs(distances - median_distance)))
     threshold = max(6.0, median_distance + 6.0 * 1.4826 * mad)
-    return background, threshold
+    return backgrounds, threshold
 
 
 def build_foreground_mask(
@@ -172,12 +237,19 @@ def build_foreground_mask(
     *,
     background_threshold: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray, float]:
-    background, automatic_threshold = estimate_background(image)
+    backgrounds, automatic_threshold = estimate_background_colors(image)
+    background = backgrounds[0]
     threshold = automatic_threshold if background_threshold is None else float(background_threshold)
     if threshold <= 0:
         raise ValueError("background threshold must be positive")
 
-    distances = np.linalg.norm(image.astype(np.float32) - background, axis=2)
+    image_float = image.astype(np.float32)
+    distances = np.full(image.shape[:2], np.inf, dtype=np.float32)
+    for candidate_background in backgrounds:
+        distances = np.minimum(
+            distances,
+            np.linalg.norm(image_float - candidate_background, axis=2),
+        )
     mask = np.where(distances > threshold, 255, 0).astype(np.uint8)
 
     kernel_size = max(3, int(round(min(image.shape[:2]) * 0.006)))
