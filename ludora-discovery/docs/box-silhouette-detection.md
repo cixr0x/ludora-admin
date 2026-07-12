@@ -43,6 +43,18 @@ For the current example this automatically reproduces `C2@V2 + B2@V4` and `B1@V1
 
 `three-face-covers.png` draws both constructions side by side. Original source segments are cyan and translated copies are magenta. The JSON records both source and translated segments and their angular errors, which should be zero apart from floating-point precision. No mixed source-line combinations are generated.
 
+## Shared Cover Flattening
+
+Two-face and three-face paths use different methods to find cover quadrilaterals, but every accepted quadrilateral uses the same flattening stage:
+
+1. Order corners as top-left, top-right, bottom-right, and bottom-left.
+2. Measure all four Euclidean edge lengths.
+3. Estimate width from the average of the top and bottom lengths.
+4. Estimate height from the average of the left and right lengths.
+5. Map the quadrilateral to an axis-aligned rectangle with `cv2.getPerspectiveTransform` and `cv2.warpPerspective`.
+
+The JSON records the four source lengths, estimated dimensions, output size, aspect ratio, and opposite-edge disagreement. Individual results are written as `flattened-cover.png` or numbered `flattened-cover-N.png` files, with a combined `flattened-cover-previews.png` for candidate comparison. Rotation is implicit in the perspective transform; rotating a line does not change its measured Euclidean length.
+
 Run it from `ludora-admin/ludora-discovery`:
 
 ```powershell

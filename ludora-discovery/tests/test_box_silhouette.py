@@ -10,6 +10,7 @@ from ludora.box_silhouette import (
     build_foreground_mask,
     classify_perspective,
     detect_silhouette,
+    flatten_cover_quadrilateral,
     identify_three_face_covers,
     identify_two_face_cover,
     process_image,
@@ -17,6 +18,30 @@ from ludora.box_silhouette import (
 
 
 class BoxSilhouetteTests(unittest.TestCase):
+    def test_flatten_cover_averages_opposite_edge_lengths(self):
+        image = np.zeros((180, 220, 3), dtype=np.uint8)
+        image[:, :, 1] = np.arange(180, dtype=np.uint8)[:, None]
+        polygon = np.array(
+            [[20, 20], [180, 30], [160, 150], [30, 140]],
+            dtype=np.float32,
+        )
+
+        flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+
+        expected_width = (
+            np.linalg.norm(polygon[1] - polygon[0])
+            + np.linalg.norm(polygon[2] - polygon[3])
+        ) / 2
+        expected_height = (
+            np.linalg.norm(polygon[3] - polygon[0])
+            + np.linalg.norm(polygon[2] - polygon[1])
+        ) / 2
+        self.assertAlmostEqual(geometry.estimated_width, float(expected_width), places=4)
+        self.assertAlmostEqual(geometry.estimated_height, float(expected_height), places=4)
+        self.assertEqual(flattened.shape[:2], (geometry.height, geometry.width))
+        self.assertEqual(geometry.width, round(float(expected_width)))
+        self.assertEqual(geometry.height, round(float(expected_height)))
+
     def test_detects_six_sided_convex_box_silhouette(self):
         image = np.full((260, 320, 3), 255, dtype=np.uint8)
         expected = np.array(
@@ -330,6 +355,10 @@ class BoxSilhouetteTests(unittest.TestCase):
             self.assertTrue(Path(result.mask_path).exists())
             self.assertTrue(Path(result.metadata_path).exists())
             self.assertEqual(len(result.detection.lines), 6)
+            self.assertTrue(result.flattened_covers)
+            self.assertTrue(Path(result.flattened_covers[0].output_path).exists())
+            self.assertIsNotNone(result.flattened_cover_previews_path)
+            self.assertTrue(Path(result.flattened_cover_previews_path).exists())
 
 
 if __name__ == "__main__":

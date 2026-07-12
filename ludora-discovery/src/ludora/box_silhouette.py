@@ -92,12 +92,39 @@ class SilhouetteDetection:
 
 
 @dataclass(frozen=True)
+class FlattenedCoverGeometry:
+    ordered_corners: list[list[float]]
+    top_length: float
+    bottom_length: float
+    left_length: float
+    right_length: float
+    estimated_width: float
+    estimated_height: float
+    width: int
+    height: int
+    aspect_ratio: float
+    width_disagreement: float
+    height_disagreement: float
+
+
+@dataclass(frozen=True)
+class FlattenedCoverResult:
+    candidate_type: str
+    candidate_index: int
+    construction: str
+    output_path: str
+    geometry: FlattenedCoverGeometry
+
+
+@dataclass(frozen=True)
 class SilhouetteResult:
     source_path: str
     overlay_path: str
     mask_path: str
     metadata_path: str
     three_face_covers_path: str | None
+    flattened_cover_previews_path: str | None
+    flattened_covers: list[FlattenedCoverResult]
     detection: SilhouetteDetection
 
 
@@ -711,6 +738,85 @@ def lines_from_vertices(
     return lines
 
 
+def order_quadrilateral(points: np.ndarray) -> np.ndarray:
+    vertices = np.asarray(points, dtype=np.float32).reshape(-1, 2)
+    if vertices.shape != (4, 2):
+        raise ValueError("expected exactly four cover corners")
+
+    ordered = np.zeros((4, 2), dtype=np.float32)
+    sums = vertices.sum(axis=1)
+    differences = np.diff(vertices, axis=1).reshape(4)
+    indices = [
+        int(np.argmin(sums)),
+        int(np.argmin(differences)),
+        int(np.argmax(sums)),
+        int(np.argmax(differences)),
+    ]
+    if len(set(indices)) == 4:
+        ordered[:] = vertices[indices]
+        return ordered
+
+    center = vertices.mean(axis=0)
+    angles = np.arctan2(vertices[:, 1] - center[1], vertices[:, 0] - center[0])
+    cyclic = vertices[np.argsort(angles)]
+    start = int(np.argmin(cyclic.sum(axis=1)))
+    cyclic = np.roll(cyclic, -start, axis=0)
+    if cyclic[1][0] < cyclic[-1][0]:
+        cyclic = np.concatenate([cyclic[:1], cyclic[:0:-1]], axis=0)
+    return cyclic.astype(np.float32)
+
+
+def flatten_cover_quadrilateral(
+    image: np.ndarray,
+    polygon: np.ndarray,
+    *,
+    max_dimension: int = 1600,
+) -> tuple[np.ndarray, FlattenedCoverGeometry]:
+    if max_dimension <= 0:
+        raise ValueError("maximum flattened cover dimension must be positive")
+    top_left, top_right, bottom_right, bottom_left = order_quadrilateral(polygon)
+    top_length = float(np.linalg.norm(top_right - top_left))
+    bottom_length = float(np.linalg.norm(bottom_right - bottom_left))
+    left_length = float(np.linalg.norm(bottom_left - top_left))
+    right_length = float(np.linalg.norm(bottom_right - top_right))
+    estimated_width = (top_length + bottom_length) / 2.0
+    estimated_height = (left_length + right_length) / 2.0
+    if estimated_width <= 1.0 or estimated_height <= 1.0:
+        raise ValueError("flattened cover dimensions must be greater than one pixel")
+
+    scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
+    width = max(2, int(round(estimated_width * scale)))
+    height = max(2, int(round(estimated_height * scale)))
+    destination = np.array(
+        [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+        dtype=np.float32,
+    )
+    ordered = np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
+    transform = cv2.getPerspectiveTransform(ordered, destination)
+    flattened = cv2.warpPerspective(
+        image,
+        transform,
+        (width, height),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    geometry = FlattenedCoverGeometry(
+        ordered_corners=[[float(value) for value in point] for point in ordered],
+        top_length=top_length,
+        bottom_length=bottom_length,
+        left_length=left_length,
+        right_length=right_length,
+        estimated_width=estimated_width,
+        estimated_height=estimated_height,
+        width=width,
+        height=height,
+        aspect_ratio=width / height,
+        width_disagreement=abs(top_length - bottom_length) / estimated_width,
+        height_disagreement=abs(left_length - right_length) / estimated_height,
+    )
+    return flattened, geometry
+
+
 def detect_silhouette(
     image: np.ndarray,
     *,
@@ -868,6 +974,85 @@ def draw_three_face_covers(
     return np.hstack(panels)
 
 
+def write_flattened_covers(
+    image: np.ndarray,
+    detection: SilhouetteDetection,
+    output_dir: Path,
+) -> tuple[list[FlattenedCoverResult], np.ndarray | None]:
+    candidates: list[tuple[str, int, str, list[list[float]]]] = []
+    if detection.two_face_cover is not None:
+        candidates.append(
+            (
+                "two_faces",
+                1,
+                "two-face seam and larger-face selection",
+                detection.two_face_cover.cover_polygon,
+            )
+        )
+    else:
+        for index, construction in enumerate(detection.three_face_covers, start=1):
+            candidates.append(
+                (
+                    "three_faces",
+                    index,
+                    construction.construction,
+                    construction.cover_polygon,
+                )
+            )
+    if not candidates:
+        return [], None
+
+    results: list[FlattenedCoverResult] = []
+    preview_panels: list[np.ndarray] = []
+    target_preview_height = 700
+    for candidate_type, candidate_index, construction, polygon in candidates:
+        flattened, geometry = flatten_cover_quadrilateral(image, np.asarray(polygon))
+        filename = (
+            "flattened-cover.png"
+            if len(candidates) == 1
+            else f"flattened-cover-{candidate_index}.png"
+        )
+        output_path = output_dir / filename
+        cv2.imwrite(str(output_path), flattened)
+        results.append(
+            FlattenedCoverResult(
+                candidate_type=candidate_type,
+                candidate_index=candidate_index,
+                construction=construction,
+                output_path=str(output_path.resolve()),
+                geometry=geometry,
+            )
+        )
+
+        preview_scale = min(1.0, target_preview_height / flattened.shape[0])
+        preview_width = max(1, int(round(flattened.shape[1] * preview_scale)))
+        preview_height = max(1, int(round(flattened.shape[0] * preview_scale)))
+        preview = cv2.resize(flattened, (preview_width, preview_height), interpolation=cv2.INTER_AREA)
+        header = np.full((66, preview_width, 3), 255, dtype=np.uint8)
+        title = f"Candidate {candidate_index}: {construction}"
+        subtitle = (
+            f"{geometry.width}x{geometry.height}  ratio={geometry.aspect_ratio:.3f}  "
+            f"edge disagreement={geometry.width_disagreement:.1%}/{geometry.height_disagreement:.1%}"
+        )
+        text_scale = min(0.5, max(0.3, preview_width / 1050.0))
+        cv2.putText(header, title, (8, 25), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(header, subtitle, (8, 52), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        preview_panels.append(np.vstack([header, preview]))
+
+    maximum_panel_height = max(panel.shape[0] for panel in preview_panels)
+    padded_panels = []
+    for panel in preview_panels:
+        if panel.shape[0] < maximum_panel_height:
+            padding = np.full(
+                (maximum_panel_height - panel.shape[0], panel.shape[1], 3),
+                255,
+                dtype=np.uint8,
+            )
+            panel = np.vstack([panel, padding])
+        padded_panels.append(panel)
+    return results, np.hstack(padded_panels)
+
+
 def process_image(
     source_path: str | Path,
     output_dir: str | Path,
@@ -892,17 +1077,31 @@ def process_image(
     metadata_path = output / "silhouette.json"
     three_face_covers_image = draw_three_face_covers(image, detection)
     three_face_covers_path = output / "three-face-covers.png" if three_face_covers_image is not None else None
+    flattened_covers, flattened_cover_previews = write_flattened_covers(image, detection, output)
+    flattened_cover_previews_path = (
+        output / "flattened-cover-previews.png"
+        if flattened_cover_previews is not None
+        else None
+    )
 
     cv2.imwrite(str(overlay_path), draw_overlay(image, detection, hull))
     cv2.imwrite(str(mask_path), mask)
     if three_face_covers_path is not None and three_face_covers_image is not None:
         cv2.imwrite(str(three_face_covers_path), three_face_covers_image)
+    if flattened_cover_previews_path is not None and flattened_cover_previews is not None:
+        cv2.imwrite(str(flattened_cover_previews_path), flattened_cover_previews)
     result = SilhouetteResult(
         source_path=str(source.resolve()),
         overlay_path=str(overlay_path.resolve()),
         mask_path=str(mask_path.resolve()),
         metadata_path=str(metadata_path.resolve()),
         three_face_covers_path=str(three_face_covers_path.resolve()) if three_face_covers_path is not None else None,
+        flattened_cover_previews_path=(
+            str(flattened_cover_previews_path.resolve())
+            if flattened_cover_previews_path is not None
+            else None
+        ),
+        flattened_covers=flattened_covers,
         detection=detection,
     )
     metadata_path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
