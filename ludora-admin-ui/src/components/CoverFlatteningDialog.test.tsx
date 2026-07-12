@@ -90,8 +90,14 @@ describe('CoverFlatteningDialog', () => {
     expect(await screen.findByText('Two-face perspective detected. One cover candidate was generated.')).toBeInTheDocument();
     expect(await screen.findByAltText('Flattened cover candidate 1')).toHaveAttribute('src', 'blob:cover-candidate');
     expect(screen.getByText(/375 × 500 · ratio 0.750 · edge estimate/)).toBeInTheDocument();
+    expect(screen.getByTestId('aspect-ratio-preview-1')).toHaveStyle({ aspectRatio: '0.75' });
+    fireEvent.click(screen.getByLabelText('4:5', { selector: 'input' }));
+    fireEvent.click(screen.getByLabelText('Horizontal', { selector: 'input' }));
+    expect(screen.getByText(/625 × 500 · ratio 1.250 · reviewer override/)).toBeInTheDocument();
+    expect(screen.getByTestId('aspect-ratio-preview-1')).toHaveStyle({ aspectRatio: '1.25' });
     fireEvent.click(screen.getByLabelText('Square (1:1)', { selector: 'input' }));
     expect(screen.getByText(/500 × 500 · ratio 1.000 · reviewer override/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('4:5', { selector: 'input' }));
     fireEvent.click(screen.getByLabelText('Spanish image', { selector: 'input' }));
     fireEvent.click(screen.getByRole('button', { name: 'Accept candidate' }));
 
@@ -103,7 +109,7 @@ describe('CoverFlatteningDialog', () => {
     const startRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/admin/cover-flattening-workflows/items'));
     expect(JSON.parse(String(startRequest?.[1]?.body))).toEqual({ item_id: '77', source_field: 'image_url_es' });
     const acceptRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/flatten-77/accept'));
-    expect(JSON.parse(String(acceptRequest?.[1]?.body))).toMatchObject({ aspect_ratio: 1 });
+    expect(JSON.parse(String(acceptRequest?.[1]?.body))).toMatchObject({ aspect_ratio: 1.25 });
   });
 });
 

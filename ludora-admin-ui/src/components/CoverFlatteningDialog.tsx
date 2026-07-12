@@ -53,6 +53,7 @@ export function CoverFlatteningDialog({
   const [selectedCandidate, setSelectedCandidate] = useState<number | null>(null);
   const [aspectRatioChoice, setAspectRatioChoice] = useState<AspectRatioChoice>('auto');
   const [customAspectRatio, setCustomAspectRatio] = useState('1');
+  const [aspectRatioOrientation, setAspectRatioOrientation] = useState<AspectRatioOrientation>('vertical');
   const [sourceField, setSourceField] = useState<CoverImageField>('image_url');
   const [targetField, setTargetField] = useState<CoverImageField | ''>('');
   const [isStarting, setIsStarting] = useState(false);
@@ -76,6 +77,7 @@ export function CoverFlatteningDialog({
     setSelectedCandidate(null);
     setAspectRatioChoice('auto');
     setCustomAspectRatio('1');
+    setAspectRatioOrientation('vertical');
     setTargetField('');
     setError('');
     const preferredSource = request.kind === 'item' && request.sources.some((source) => source.field === 'image_url')
@@ -135,7 +137,11 @@ export function CoverFlatteningDialog({
         return;
       }
       setWorkflow(started);
-      setSelectedCandidate(started.candidates.length === 1 ? started.candidates[0]?.index ?? null : null);
+      const onlyCandidate = started.candidates.length === 1 ? started.candidates[0] : undefined;
+      setSelectedCandidate(onlyCandidate?.index ?? null);
+      if (onlyCandidate) {
+        setAspectRatioOrientation(orientationForRatio(onlyCandidate.aspect_ratio));
+      }
     } catch (startError) {
       if (!cancelRequestedRef.current) {
         setError(errorMessage(startError, 'Cover flattening could not be started.'));
@@ -154,16 +160,29 @@ export function CoverFlatteningDialog({
     setIsAccepting(true);
     setError('');
     try {
-      const aspectRatio = selectedAspectRatio(aspectRatioChoice, customAspectRatio);
+      const candidate = workflow.candidates.find((entry) => entry.index === selectedCandidate);
+      if (!candidate) {
+        setError('Selected cover candidate is no longer available.');
+        return;
+      }
+      const aspectRatio = selectedAspectRatio(
+        aspectRatioChoice,
+        customAspectRatio,
+        aspectRatioOrientation,
+        candidate.aspect_ratio
+      );
       if (aspectRatio === undefined) {
         setError('Custom aspect ratio must be between 0.2 and 5.');
         return;
       }
+      const aspectRatioOverride = Math.abs(aspectRatio - candidate.aspect_ratio) < 0.0005
+        ? null
+        : aspectRatio;
       const result = await adminApi.acceptCoverFlattening(
         workflow.workflow_id,
         selectedCandidate,
         targetField,
-        aspectRatio
+        aspectRatioOverride
       );
       setWorkflow(null);
       onAccepted(result);
@@ -238,8 +257,12 @@ export function CoverFlatteningDialog({
                 }}
               >
                 {workflow.candidates.map((candidate) => {
-                  const requestedRatio = selectedAspectRatio(aspectRatioChoice, customAspectRatio);
-                  const previewRatio = requestedRatio ?? candidate.aspect_ratio;
+                  const previewRatio = selectedAspectRatio(
+                    aspectRatioChoice,
+                    customAspectRatio,
+                    aspectRatioOrientation,
+                    candidate.aspect_ratio
+                  ) ?? candidate.aspect_ratio;
                   const previewWidth = Math.max(2, Math.round(candidate.height * previewRatio));
                   return (
                     <Paper
@@ -252,7 +275,12 @@ export function CoverFlatteningDialog({
                         p: 1.5
                       }}
                       variant="outlined"
-                      onClick={() => setSelectedCandidate(candidate.index)}
+                      onClick={() => {
+                        setSelectedCandidate(candidate.index);
+                        if (aspectRatioChoice === 'auto') {
+                          setAspectRatioOrientation(orientationForRatio(candidate.aspect_ratio));
+                        }
+                      }}
                     >
                       <Stack spacing={1}>
                         <FormControlLabel
@@ -262,17 +290,24 @@ export function CoverFlatteningDialog({
                         />
                         {candidateUrls[candidate.index] ? (
                           <Box
-                            alt={`Flattened cover candidate ${candidate.index}`}
-                            component="img"
-                            src={candidateUrls[candidate.index]}
+                            data-testid={`aspect-ratio-preview-${candidate.index}`}
                             sx={{
                               aspectRatio: previewRatio,
                               bgcolor: 'grey.100',
+                              maxWidth: '100%',
                               maxHeight: 560,
-                              objectFit: 'fill',
-                              width: '100%'
+                              mx: 'auto',
+                              overflow: 'hidden',
+                              width: previewRatio <= 1 ? `min(100%, ${560 * previewRatio}px)` : '100%'
                             }}
-                          />
+                          >
+                            <Box
+                              alt={`Flattened cover candidate ${candidate.index}`}
+                              component="img"
+                              src={candidateUrls[candidate.index]}
+                              sx={{ display: 'block', height: '100%', objectFit: 'fill', width: '100%' }}
+                            />
+                          </Box>
                         ) : (
                           <Stack alignItems="center" justifyContent="center" sx={{ minHeight: 240 }}>
                             <CircularProgress size={24} />
@@ -318,6 +353,18 @@ export function CoverFlatteningDialog({
               </FormControl>
 
               <FormControl>
+                <FormLabel>Rectangle orientation</FormLabel>
+                <RadioGroup
+                  row
+                  value={aspectRatioOrientation}
+                  onChange={(event) => setAspectRatioOrientation(event.target.value as AspectRatioOrientation)}
+                >
+                  <FormControlLabel control={<Radio />} label="Vertical" value="vertical" />
+                  <FormControlLabel control={<Radio />} label="Horizontal" value="horizontal" />
+                </RadioGroup>
+              </FormControl>
+
+              <FormControl>
                 <FormLabel>Save selected candidate as</FormLabel>
                 <RadioGroup
                   row
@@ -340,7 +387,12 @@ export function CoverFlatteningDialog({
             selectedCandidate === null ||
             !candidateUrls[selectedCandidate] ||
             !targetField ||
-            selectedAspectRatio(aspectRatioChoice, customAspectRatio) === undefined ||
+            selectedAspectRatio(
+              aspectRatioChoice,
+              customAspectRatio,
+              aspectRatioOrientation,
+              workflow?.candidates.find((candidate) => candidate.index === selectedCandidate)?.aspect_ratio ?? 1
+            ) === undefined ||
             isAccepting
           }
           startIcon={isAccepting ? <CircularProgress size={18} /> : undefined}
@@ -355,19 +407,36 @@ export function CoverFlatteningDialog({
 }
 
 type AspectRatioChoice = 'auto' | 'square' | '4:5' | '3:4' | '2:3' | 'custom';
+type AspectRatioOrientation = 'vertical' | 'horizontal';
 
-function selectedAspectRatio(choice: AspectRatioChoice, customValue: string): number | null | undefined {
-  if (choice === 'auto') {
-    return null;
-  }
+function selectedAspectRatio(
+  choice: AspectRatioChoice,
+  customValue: string,
+  orientation: AspectRatioOrientation,
+  automaticRatio: number
+): number | undefined {
   const presets: Record<Exclude<AspectRatioChoice, 'auto' | 'custom'>, number> = {
     '2:3': 2 / 3,
     '3:4': 3 / 4,
     '4:5': 4 / 5,
     square: 1
   };
-  const ratio = choice === 'custom' ? Number(customValue) : presets[choice];
-  return Number.isFinite(ratio) && ratio >= 0.2 && ratio <= 5 ? ratio : undefined;
+  const ratio = choice === 'auto'
+    ? automaticRatio
+    : choice === 'custom'
+      ? Number(customValue)
+      : presets[choice];
+  if (!Number.isFinite(ratio) || ratio < 0.2 || ratio > 5) {
+    return undefined;
+  }
+  if (Math.abs(ratio - 1) < 0.0005) {
+    return 1;
+  }
+  return orientation === 'vertical' ? Math.min(ratio, 1 / ratio) : Math.max(ratio, 1 / ratio);
+}
+
+function orientationForRatio(ratio: number): AspectRatioOrientation {
+  return ratio > 1 ? 'horizontal' : 'vertical';
 }
 
 function automaticSizingLabel(candidate: CoverFlatteningWorkflow['candidates'][number]): string {
