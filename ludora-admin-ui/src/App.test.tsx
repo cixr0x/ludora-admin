@@ -339,12 +339,19 @@ describe('App', () => {
       }
       if (url.pathname === '/admin/operations/store-item-discovery-jobs/19/log') {
         return jsonResponse({
-          available: true,
-          content: '{"ts":"2026-07-11T12:00:00Z","event":"item_discovery.run.completed"}\n',
+          entries: [
+            {
+              created_at: '2026-07-11T12:00:00Z',
+              event: 'item_discovery.run.completed',
+              id: 80,
+              payload: {},
+              run_id: 'run-19',
+              source: 'discovery'
+            }
+          ],
           has_more: false,
           job: { id: 19, run_id: 'run-19', status: 'completed', store_id: 12 },
-          next_offset: 80,
-          reset: false
+          next_cursor: 80
         });
       }
       throw new Error(`Unexpected request: ${url.toString()}`);

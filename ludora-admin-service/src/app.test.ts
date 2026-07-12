@@ -3584,7 +3584,7 @@ describe('ludora admin service', () => {
     expect(countQuery?.params).toEqual(['%Alpha%']);
   });
 
-  it('streams database trace rows for a store item discovery job by row id', async () => {
+  it('returns database trace entries for a store item discovery job after a row id', async () => {
     const job = {
       completed_at: '2026-07-11T12:01:00Z',
       id: 19,
@@ -3617,18 +3617,24 @@ describe('ludora admin service', () => {
     };
 
     const app = createApp({ database, operationsClient: idleOperationsClient() });
-    const response = await request(app).get('/admin/operations/store-item-discovery-jobs/19/log?offset=90');
+    const response = await request(app).get('/admin/operations/store-item-discovery-jobs/19/log?after_id=90');
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       data: {
-        available: true,
-        content:
-          '{"ts":"2026-07-11T12:01:00Z","run_id":"run-batch:12","source":"discovery","event":"item_discovery.run.completed","elapsed_ms":1000,"new_items":7}\n',
+        entries: [
+          {
+            created_at: '2026-07-11T12:01:00Z',
+            event: 'item_discovery.run.completed',
+            id: 91,
+            payload: { elapsed_ms: 1000, new_items: 7 },
+            run_id: 'run-batch:12',
+            source: 'discovery'
+          }
+        ],
         has_more: false,
         job,
-        next_offset: 91,
-        reset: false
+        next_cursor: 91
       }
     });
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain(

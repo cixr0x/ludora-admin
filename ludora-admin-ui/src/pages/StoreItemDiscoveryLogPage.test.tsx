@@ -12,10 +12,24 @@ describe('StoreItemDiscoveryLogPage', () => {
       new Response(
         JSON.stringify({
           data: {
-            available: true,
-            content:
-              '{"ts":"2026-07-11T12:00:00Z","run_id":"run-19","event":"item_discovery.run.start","store_id":12}\n' +
-              '{"ts":"2026-07-11T12:01:00Z","run_id":"run-19","event":"item_discovery.run.completed","new_items":7}\n',
+            entries: [
+              {
+                created_at: '2026-07-11T12:00:00Z',
+                event: 'item_discovery.run.start',
+                id: 219,
+                payload: { store_id: 12 },
+                run_id: 'run-19',
+                source: 'discovery'
+              },
+              {
+                created_at: '2026-07-11T12:01:00Z',
+                event: 'item_discovery.run.completed',
+                id: 220,
+                payload: { new_items: 7 },
+                run_id: 'run-19',
+                source: 'discovery'
+              }
+            ],
             has_more: false,
             job: {
               completed_at: '2026-07-11T12:01:00Z',
@@ -23,10 +37,10 @@ describe('StoreItemDiscoveryLogPage', () => {
               run_id: 'run-19',
               started_at: '2026-07-11T12:00:00Z',
               status: 'completed',
-              store_id: 12
+              store_id: 12,
+              store_name: 'Alpha Games'
             },
-            next_offset: 220,
-            reset: false
+            next_cursor: 220
           }
         }),
         { headers: { 'Content-Type': 'application/json' }, status: 200 }
@@ -37,11 +51,12 @@ describe('StoreItemDiscoveryLogPage', () => {
 
     expect(await screen.findByText('completed')).toBeInTheDocument();
     const consoleOutput = screen.getByRole('log', { name: 'Console output for discovery job 19' });
-    expect(consoleOutput).toHaveTextContent('item_discovery.run.start {"store_id":12}');
-    expect(consoleOutput).toHaveTextContent('item_discovery.run.completed {"new_items":7}');
+    expect(consoleOutput).toHaveTextContent('[discovery] item_discovery.run.start {"store_id":12}');
+    expect(consoleOutput).toHaveTextContent('[discovery] item_discovery.run.completed {"new_items":7}');
+    expect(screen.getByText('Alpha Games')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Follow log' })).toBeChecked();
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:4001/admin/operations/store-item-discovery-jobs/19/log?offset=0',
+      'http://127.0.0.1:4001/admin/operations/store-item-discovery-jobs/19/log?after_id=0',
       { credentials: 'include' }
     );
   });

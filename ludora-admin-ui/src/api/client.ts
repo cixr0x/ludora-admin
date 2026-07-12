@@ -17,13 +17,20 @@ type ErrorResponse = {
 
 export type AdminRecord = Record<string, unknown>;
 
+export type StoreItemDiscoveryTraceEntry = {
+  created_at: string;
+  event: string;
+  id: number;
+  payload: AdminRecord;
+  run_id: string;
+  source: string;
+};
+
 export type StoreItemDiscoveryJobLog = {
-  available: boolean;
-  content: string;
+  entries: StoreItemDiscoveryTraceEntry[];
   has_more: boolean;
   job: AdminRecord;
-  next_offset: number;
-  reset: boolean;
+  next_cursor: number;
 };
 
 export type StoreItemUpdateHistory = {
@@ -523,9 +530,9 @@ export const adminApi = {
   getReviewTasksPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/admin/review-tasks', query), query),
   getStoreItemDiscoveryJobsPage: (query: TableQuery) =>
     fetchPagedRows<AdminRecord>(pagedPath('/admin/operations/store-item-discovery-jobs', query), query),
-  getStoreItemDiscoveryJobLog: (jobId: string, offset = 0) =>
+  getStoreItemDiscoveryJobLog: (jobId: string, afterId = 0) =>
     fetchData<StoreItemDiscoveryJobLog>(
-      `/admin/operations/store-item-discovery-jobs/${encodeURIComponent(jobId)}/log?offset=${encodeURIComponent(offset)}`
+      `/admin/operations/store-item-discovery-jobs/${encodeURIComponent(jobId)}/log?after_id=${encodeURIComponent(afterId)}`
     ),
   getStoreItemUpdateJobsPage: (query: TableQuery) =>
     fetchPagedRows<AdminRecord>(pagedPath('/admin/operations/store-item-update-jobs', query), query),

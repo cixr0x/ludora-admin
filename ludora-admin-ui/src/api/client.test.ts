@@ -351,14 +351,21 @@ describe('fetchRows', () => {
     );
   });
 
-  it('fetches a store item discovery job log from a byte offset', async () => {
+  it('fetches store item discovery trace entries after a database row id', async () => {
     const log = {
-      available: true,
-      content: '{"event":"item_discovery.run.completed"}\n',
+      entries: [
+        {
+          created_at: '2026-07-11T12:01:00Z',
+          event: 'item_discovery.run.completed',
+          id: 47,
+          payload: {},
+          run_id: 'run-discovery-19',
+          source: 'discovery'
+        }
+      ],
       has_more: false,
       job: { id: 19, run_id: 'run-discovery-19', status: 'completed' },
-      next_offset: 47,
-      reset: false
+      next_cursor: 47
     };
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -371,7 +378,7 @@ describe('fetchRows', () => {
     await expect(adminApi.getStoreItemDiscoveryJobLog('19', 12)).resolves.toEqual(log);
     expectFetch(
       fetchMock,
-      'http://127.0.0.1:4001/admin/operations/store-item-discovery-jobs/19/log?offset=12'
+      'http://127.0.0.1:4001/admin/operations/store-item-discovery-jobs/19/log?after_id=12'
     );
   });
 

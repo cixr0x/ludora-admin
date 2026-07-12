@@ -153,7 +153,7 @@ export function createOperationsRouter(
   router.get('/admin/operations/store-item-discovery-jobs/:jobId/log', async (request, response, next) => {
     try {
       const jobId = positiveIntegerPathField(request.params.jobId, 'Job ID');
-      const requestedOffset = nonNegativeIntegerQueryField(request.query.offset, 'offset');
+      const afterId = nonNegativeIntegerQueryField(request.query.after_id, 'after_id');
       const result = await database.query(
         `select ${storeItemDiscoveryJobSelect}
          from job_store_item_discovery_log jobs
@@ -167,10 +167,10 @@ export function createOperationsRouter(
       }
 
       const runId = String(job.run_id ?? '').trim();
-      const chunk = runId ? await readDiscoveryLogChunk(database, runId, requestedOffset) : emptyLogChunk(requestedOffset);
+      const trace = runId ? await readDiscoveryTraceEntries(database, runId, afterId) : emptyDiscoveryTrace(afterId);
       response.json({
         data: {
-          ...chunk,
+          ...trace,
           job
         }
       });
@@ -476,45 +476,37 @@ function nonNegativeIntegerQueryField(value: unknown, label: string): number {
   return parsed;
 }
 
-async function readDiscoveryLogChunk(database: Database, runId: string, requestedOffset: number) {
+async function readDiscoveryTraceEntries(database: Database, runId: string, afterId: number) {
   const result = await database.query(
     `select id, run_id, source, event, payload, created_at
      from store_item_discovery_trace_log
      where run_id = $1 and id > $2
      order by id
      limit $3`,
-    [runId, requestedOffset, MAX_LOG_CHUNK_ROWS + 1]
+    [runId, afterId, MAX_LOG_CHUNK_ROWS + 1]
   );
   const rows = result.rows as Array<Record<string, unknown>>;
-  const chunkRows = rows.slice(0, MAX_LOG_CHUNK_ROWS);
-  const content = chunkRows
-    .map((row) =>
-      JSON.stringify({
-        ts: row.created_at,
-        run_id: row.run_id,
-        source: row.source,
-        event: row.event,
-        ...(isRecord(row.payload) ? row.payload : {})
-      })
-    )
-    .join('\n');
-  const lastRow = chunkRows.at(-1);
+  const entries = rows.slice(0, MAX_LOG_CHUNK_ROWS).map((row) => ({
+    created_at: row.created_at,
+    event: row.event,
+    id: Number(row.id),
+    payload: isRecord(row.payload) ? row.payload : {},
+    run_id: row.run_id,
+    source: row.source
+  }));
+  const lastEntry = entries.at(-1);
   return {
-    available: chunkRows.length > 0 || requestedOffset > 0,
-    content: content ? `${content}\n` : '',
+    entries,
     has_more: rows.length > MAX_LOG_CHUNK_ROWS,
-    next_offset: lastRow ? Number(lastRow.id) : requestedOffset,
-    reset: false
+    next_cursor: lastEntry?.id ?? afterId
   };
 }
 
-function emptyLogChunk(requestedOffset: number) {
+function emptyDiscoveryTrace(afterId: number) {
   return {
-    available: false,
-    content: '',
+    entries: [],
     has_more: false,
-    next_offset: requestedOffset,
-    reset: false
+    next_cursor: afterId
   };
 }
 

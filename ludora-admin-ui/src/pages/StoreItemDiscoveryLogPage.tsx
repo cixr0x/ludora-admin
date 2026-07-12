@@ -13,7 +13,7 @@ import {
   Typography
 } from '@mui/material';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { adminApi, type AdminRecord } from '../api/client';
+import { adminApi, type AdminRecord, type StoreItemDiscoveryTraceEntry } from '../api/client';
 
 const POLL_INTERVAL_MS = 2_000;
 const TERMINAL_STATUSES = new Set(['cancelled', 'completed', 'failed']);
@@ -23,13 +23,12 @@ type LoadState = 'loading' | 'ready' | 'error';
 export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; onBack: () => void }) {
   const [state, setState] = useState<LoadState>('loading');
   const [job, setJob] = useState<AdminRecord | null>(null);
-  const [content, setContent] = useState('');
-  const [isAvailable, setIsAvailable] = useState(false);
+  const [entries, setEntries] = useState<StoreItemDiscoveryTraceEntry[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [isFollowing, setIsFollowing] = useState(true);
   const [error, setError] = useState('');
   const consoleRef = useRef<HTMLDivElement | null>(null);
-  const offsetRef = useRef(0);
+  const cursorRef = useRef(0);
   const requestInFlightRef = useRef(false);
 
   const loadLog = useCallback(async () => {
@@ -38,12 +37,11 @@ export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; on
     }
     requestInFlightRef.current = true;
     try {
-      const result = await adminApi.getStoreItemDiscoveryJobLog(jobId, offsetRef.current);
+      const result = await adminApi.getStoreItemDiscoveryJobLog(jobId, cursorRef.current);
       setJob(result.job);
-      setIsAvailable(result.available);
       setHasMore(result.has_more);
-      setContent((current) => (result.reset ? result.content : `${current}${result.content}`));
-      offsetRef.current = result.next_offset;
+      setEntries((current) => [...current, ...result.entries]);
+      cursorRef.current = result.next_cursor;
       setError('');
       setState('ready');
     } catch (loadError) {
@@ -57,8 +55,8 @@ export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; on
   useEffect(() => {
     setState('loading');
     setJob(null);
-    setContent('');
-    offsetRef.current = 0;
+    setEntries([]);
+    cursorRef.current = 0;
     void loadLog();
   }, [jobId, loadLog]);
 
@@ -73,7 +71,7 @@ export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; on
     return () => window.clearInterval(timer);
   }, [loadLog, shouldPoll]);
 
-  const formattedContent = useMemo(() => formatJsonlLog(content), [content]);
+  const formattedContent = useMemo(() => entries.map(formatTraceEntry).join('\n'), [entries]);
 
   useEffect(() => {
     if (isFollowing && consoleRef.current) {
@@ -114,7 +112,7 @@ export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; on
         <Paper variant="outlined">
           <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1, md: 3 }} sx={{ p: 2 }}>
             <LogDetail label="Status" value={<Chip label={recordText(job, 'status', 'unknown')} size="small" />} />
-            <LogDetail label="Store ID" value={recordText(job, 'store_id', '-')} />
+            <LogDetail label="Store" value={recordText(job, 'store_name', recordText(job, 'store_id', '-'))} />
             <LogDetail label="Started" value={recordText(job, 'started_at', '-')} />
             <LogDetail label="Completed" value={recordText(job, 'completed_at', '-')} />
           </Stack>
@@ -162,7 +160,8 @@ export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; on
             wordBreak: 'break-word'
           }}
         >
-          {formattedContent || (state === 'ready' && !isAvailable ? 'Log output is not available for this job yet.' : 'Waiting for log output...')}
+          {formattedContent ||
+            (state === 'ready' ? 'No database log entries are available for this job yet.' : 'Waiting for log output...')}
         </Box>
       </Paper>
       <Typography color="text.secondary" variant="caption">
@@ -188,24 +187,9 @@ function recordText(record: AdminRecord | null, key: string, fallback = ''): str
   return value === null || value === undefined || value === '' ? fallback : String(value);
 }
 
-function formatJsonlLog(content: string): string {
-  return content
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        const record = JSON.parse(line) as Record<string, unknown>;
-        const timestamp = String(record.ts ?? '');
-        const event = String(record.event ?? 'log');
-        const elapsed = typeof record.elapsed_ms === 'number' ? ` +${record.elapsed_ms}ms` : '';
-        const details = Object.fromEntries(
-          Object.entries(record).filter(([key]) => !['elapsed_ms', 'event', 'run_id', 'ts'].includes(key))
-        );
-        const detailText = Object.keys(details).length ? ` ${JSON.stringify(details)}` : '';
-        return `${timestamp}${elapsed}  ${event}${detailText}`.trim();
-      } catch {
-        return line;
-      }
-    })
-    .join('\n');
+function formatTraceEntry(entry: StoreItemDiscoveryTraceEntry): string {
+  const elapsed = typeof entry.payload.elapsed_ms === 'number' ? ` +${entry.payload.elapsed_ms}ms` : '';
+  const details = Object.fromEntries(Object.entries(entry.payload).filter(([key]) => key !== 'elapsed_ms'));
+  const detailText = Object.keys(details).length ? ` ${JSON.stringify(details)}` : '';
+  return `${entry.created_at}${elapsed}  [${entry.source}] ${entry.event}${detailText}`.trim();
 }
