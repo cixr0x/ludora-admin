@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process';
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import sharp from 'sharp';
 
 import type { Database } from './db.js';
 import {
@@ -23,10 +24,12 @@ export type CoverFlatteningTargetField = CoverImageField;
 
 export type CoverFlatteningCandidate = {
   aspect_ratio: number;
+  aspect_ratio_method: 'edge_average' | 'near_square' | 'vanishing_points';
   construction: string;
   height: number;
   index: number;
   square_snapped: boolean;
+  vanishing_confidence: number;
   width: number;
 };
 
@@ -44,6 +47,7 @@ export type CoverFlatteningWorkflow = {
 export type AcceptedCoverFlattening = {
   item_id: number;
   optimized_size_bytes: number;
+  output_aspect_ratio: number;
   public_url: string;
   s3_key: string;
   target_field: CoverFlatteningTargetField;
@@ -90,8 +94,10 @@ type FlatteningMetadata = {
     construction?: string;
     geometry?: {
       aspect_ratio?: number;
+      aspect_ratio_method?: string;
       height?: number;
       square_snapped?: boolean;
+      vanishing_confidence?: number;
       width?: number;
     };
     output_path?: string;
@@ -104,6 +110,7 @@ export type CoverFlatteningWorkflowDependencies = {
   downloadImage(url: string): Promise<Buffer>;
   now?(): Date;
   optimizeImage(image: Buffer, options: { maxBytes: number; maxDimension: number }): Promise<Buffer>;
+  resizeImage(image: Buffer, dimensions: { height: number; width: number }): Promise<Buffer>;
   removeDirectory(directory: string): Promise<void>;
   runFlattening(sourcePath: string, outputDir: string): Promise<FlatteningMetadata>;
   uploadImage(image: Buffer, upload: CoverImageOptimizationUpload): Promise<void>;
@@ -115,7 +122,8 @@ export type CoverFlatteningWorkflowManager = {
   accept(
     workflowId: string,
     candidateIndex: number,
-    targetField: CoverFlatteningTargetField
+    targetField: CoverFlatteningTargetField,
+    aspectRatio?: number | null
   ): Promise<AcceptedCoverFlattening>;
   cancel(workflowId: string): Promise<void>;
   getCandidateFile(workflowId: string, candidateIndex: number): Promise<string>;
@@ -246,13 +254,24 @@ export function createCoverFlatteningWorkflowManager(
   async function accept(
     workflowId: string,
     candidateIndex: number,
-    targetField: CoverFlatteningTargetField
+    targetField: CoverFlatteningTargetField,
+    aspectRatio: number | null = null
   ): Promise<AcceptedCoverFlattening> {
     await cleanupExpired();
     const workflow = workflowFor(workflowId);
     const candidate = candidateFor(workflowId, candidateIndex);
+    if (aspectRatio !== null && (!Number.isFinite(aspectRatio) || aspectRatio < 0.2 || aspectRatio > 5)) {
+      throw new CoverFlatteningWorkflowError('Output aspect ratio must be between 0.2 and 5.', 400);
+    }
     const candidateImage = await readFile(candidate.path);
-    const optimized = await dependencies.optimizeImage(candidateImage, {
+    const outputAspectRatio = aspectRatio ?? candidate.aspect_ratio;
+    const sizedImage = aspectRatio === null
+      ? candidateImage
+      : await dependencies.resizeImage(candidateImage, {
+          height: candidate.height,
+          width: Math.max(2, Math.round(candidate.height * aspectRatio))
+        });
+    const optimized = await dependencies.optimizeImage(sizedImage, {
       maxBytes: MAX_OUTPUT_BYTES,
       maxDimension: MAX_OUTPUT_DIMENSION
     });
@@ -280,6 +299,7 @@ export function createCoverFlatteningWorkflowManager(
     return {
       item_id: workflow.item_id,
       optimized_size_bytes: optimized.length,
+      output_aspect_ratio: outputAspectRatio,
       public_url: publicUrl,
       s3_key: s3Key,
       target_field: targetField
@@ -344,6 +364,12 @@ export function createNodeCoverFlatteningWorkflowDependencies({
     config,
     downloadImage: imageDependencies.downloadImage,
     optimizeImage: imageDependencies.optimizeImage,
+    resizeImage: async (image, dimensions) => Buffer.from(
+      await sharp(image, { failOn: 'none' })
+        .resize({ fit: 'fill', height: dimensions.height, width: dimensions.width })
+        .png()
+        .toBuffer()
+    ),
     removeDirectory: async (directory) => {
       await rm(directory, { force: true, recursive: true });
     },
@@ -384,11 +410,13 @@ function parseCandidates(metadata: FlatteningMetadata): FlatteningCandidateFile[
     }
     return {
       aspect_ratio: aspectRatio,
+      aspect_ratio_method: parseAspectRatioMethod(geometry?.aspect_ratio_method),
       construction: text(candidate.construction) || `Candidate ${index}`,
       height,
       index,
       path: candidatePath,
       square_snapped: geometry?.square_snapped === true,
+      vanishing_confidence: finiteNumber(geometry?.vanishing_confidence, 0),
       width
     };
   });
@@ -396,6 +424,18 @@ function parseCandidates(metadata: FlatteningMetadata): FlatteningCandidateFile[
     throw new CoverFlatteningWorkflowError('Flattening must return one or two cover candidates.', 422);
   }
   return candidates;
+}
+
+function parseAspectRatioMethod(value: unknown): CoverFlatteningCandidate['aspect_ratio_method'] {
+  if (value === 'near_square' || value === 'vanishing_points') {
+    return value;
+  }
+  return 'edge_average';
+}
+
+function finiteNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 function parsePerspective(metadata: FlatteningMetadata): CoverFlatteningWorkflow['perspective'] {

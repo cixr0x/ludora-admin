@@ -51,6 +51,8 @@ export function CoverFlatteningDialog({
   const [workflow, setWorkflow] = useState<CoverFlatteningWorkflow | null>(null);
   const [candidateUrls, setCandidateUrls] = useState<Record<number, string>>({});
   const [selectedCandidate, setSelectedCandidate] = useState<number | null>(null);
+  const [aspectRatioChoice, setAspectRatioChoice] = useState<AspectRatioChoice>('auto');
+  const [customAspectRatio, setCustomAspectRatio] = useState('1');
   const [sourceField, setSourceField] = useState<CoverImageField>('image_url');
   const [targetField, setTargetField] = useState<CoverImageField | ''>('');
   const [isStarting, setIsStarting] = useState(false);
@@ -72,6 +74,8 @@ export function CoverFlatteningDialog({
     setWorkflow(null);
     setCandidateUrls({});
     setSelectedCandidate(null);
+    setAspectRatioChoice('auto');
+    setCustomAspectRatio('1');
     setTargetField('');
     setError('');
     const preferredSource = request.kind === 'item' && request.sources.some((source) => source.field === 'image_url')
@@ -150,7 +154,17 @@ export function CoverFlatteningDialog({
     setIsAccepting(true);
     setError('');
     try {
-      const result = await adminApi.acceptCoverFlattening(workflow.workflow_id, selectedCandidate, targetField);
+      const aspectRatio = selectedAspectRatio(aspectRatioChoice, customAspectRatio);
+      if (aspectRatio === undefined) {
+        setError('Custom aspect ratio must be between 0.2 and 5.');
+        return;
+      }
+      const result = await adminApi.acceptCoverFlattening(
+        workflow.workflow_id,
+        selectedCandidate,
+        targetField,
+        aspectRatio
+      );
       setWorkflow(null);
       onAccepted(result);
     } catch (acceptError) {
@@ -223,45 +237,85 @@ export function CoverFlatteningDialog({
                   gridTemplateColumns: { md: `repeat(${workflow.candidates.length}, minmax(0, 1fr))`, xs: '1fr' }
                 }}
               >
-                {workflow.candidates.map((candidate) => (
-                  <Paper
-                    key={candidate.index}
-                    sx={{
-                      border: 2,
-                      borderColor: selectedCandidate === candidate.index ? 'primary.main' : 'divider',
-                      cursor: 'pointer',
-                      overflow: 'hidden',
-                      p: 1.5
-                    }}
-                    variant="outlined"
-                    onClick={() => setSelectedCandidate(candidate.index)}
-                  >
-                    <Stack spacing={1}>
-                      <FormControlLabel
-                        control={<Radio checked={selectedCandidate === candidate.index} />}
-                        label={`Candidate ${candidate.index}`}
-                        value={candidate.index}
-                      />
-                      {candidateUrls[candidate.index] ? (
-                        <Box
-                          alt={`Flattened cover candidate ${candidate.index}`}
-                          component="img"
-                          src={candidateUrls[candidate.index]}
-                          sx={{ bgcolor: 'grey.100', maxHeight: 560, objectFit: 'contain', width: '100%' }}
+                {workflow.candidates.map((candidate) => {
+                  const requestedRatio = selectedAspectRatio(aspectRatioChoice, customAspectRatio);
+                  const previewRatio = requestedRatio ?? candidate.aspect_ratio;
+                  const previewWidth = Math.max(2, Math.round(candidate.height * previewRatio));
+                  return (
+                    <Paper
+                      key={candidate.index}
+                      sx={{
+                        border: 2,
+                        borderColor: selectedCandidate === candidate.index ? 'primary.main' : 'divider',
+                        cursor: 'pointer',
+                        overflow: 'hidden',
+                        p: 1.5
+                      }}
+                      variant="outlined"
+                      onClick={() => setSelectedCandidate(candidate.index)}
+                    >
+                      <Stack spacing={1}>
+                        <FormControlLabel
+                          control={<Radio checked={selectedCandidate === candidate.index} />}
+                          label={`Candidate ${candidate.index}`}
+                          value={candidate.index}
                         />
-                      ) : (
-                        <Stack alignItems="center" justifyContent="center" sx={{ minHeight: 240 }}>
-                          <CircularProgress size={24} />
-                        </Stack>
-                      )}
-                      <Typography color="text.secondary" variant="caption">
-                        {candidate.width} × {candidate.height} · ratio {candidate.aspect_ratio.toFixed(3)}
-                        {candidate.square_snapped ? ' · square corrected' : ''}
-                      </Typography>
-                    </Stack>
-                  </Paper>
-                ))}
+                        {candidateUrls[candidate.index] ? (
+                          <Box
+                            alt={`Flattened cover candidate ${candidate.index}`}
+                            component="img"
+                            src={candidateUrls[candidate.index]}
+                            sx={{
+                              aspectRatio: previewRatio,
+                              bgcolor: 'grey.100',
+                              maxHeight: 560,
+                              objectFit: 'fill',
+                              width: '100%'
+                            }}
+                          />
+                        ) : (
+                          <Stack alignItems="center" justifyContent="center" sx={{ minHeight: 240 }}>
+                            <CircularProgress size={24} />
+                          </Stack>
+                        )}
+                        <Typography color="text.secondary" variant="caption">
+                          {previewWidth} × {candidate.height} · ratio {previewRatio.toFixed(3)} ·{' '}
+                          {aspectRatioChoice === 'auto' ? automaticSizingLabel(candidate) : 'reviewer override'}
+                        </Typography>
+                      </Stack>
+                    </Paper>
+                  );
+                })}
               </Box>
+
+              <FormControl>
+                <FormLabel>Output aspect ratio</FormLabel>
+                <RadioGroup
+                  row
+                  value={aspectRatioChoice}
+                  onChange={(event) => setAspectRatioChoice(event.target.value as AspectRatioChoice)}
+                >
+                  <FormControlLabel control={<Radio />} label="Automatic" value="auto" />
+                  <FormControlLabel control={<Radio />} label="Square (1:1)" value="square" />
+                  <FormControlLabel control={<Radio />} label="4:5" value="4:5" />
+                  <FormControlLabel control={<Radio />} label="3:4" value="3:4" />
+                  <FormControlLabel control={<Radio />} label="2:3" value="2:3" />
+                  <FormControlLabel control={<Radio />} label="Custom" value="custom" />
+                </RadioGroup>
+                {aspectRatioChoice === 'custom' ? (
+                  <Box
+                    aria-label="Custom width to height ratio"
+                    component="input"
+                    max="5"
+                    min="0.2"
+                    step="0.01"
+                    type="number"
+                    value={customAspectRatio}
+                    sx={{ maxWidth: 180, px: 1.5, py: 1 }}
+                    onChange={(event) => setCustomAspectRatio(event.currentTarget.value)}
+                  />
+                ) : null}
+              </FormControl>
 
               <FormControl>
                 <FormLabel>Save selected candidate as</FormLabel>
@@ -286,6 +340,7 @@ export function CoverFlatteningDialog({
             selectedCandidate === null ||
             !candidateUrls[selectedCandidate] ||
             !targetField ||
+            selectedAspectRatio(aspectRatioChoice, customAspectRatio) === undefined ||
             isAccepting
           }
           startIcon={isAccepting ? <CircularProgress size={18} /> : undefined}
@@ -297,6 +352,32 @@ export function CoverFlatteningDialog({
       </DialogActions>
     </Dialog>
   );
+}
+
+type AspectRatioChoice = 'auto' | 'square' | '4:5' | '3:4' | '2:3' | 'custom';
+
+function selectedAspectRatio(choice: AspectRatioChoice, customValue: string): number | null | undefined {
+  if (choice === 'auto') {
+    return null;
+  }
+  const presets: Record<Exclude<AspectRatioChoice, 'auto' | 'custom'>, number> = {
+    '2:3': 2 / 3,
+    '3:4': 3 / 4,
+    '4:5': 4 / 5,
+    square: 1
+  };
+  const ratio = choice === 'custom' ? Number(customValue) : presets[choice];
+  return Number.isFinite(ratio) && ratio >= 0.2 && ratio <= 5 ? ratio : undefined;
+}
+
+function automaticSizingLabel(candidate: CoverFlatteningWorkflow['candidates'][number]): string {
+  if (candidate.aspect_ratio_method === 'vanishing_points') {
+    return `vanishing points ${(candidate.vanishing_confidence * 100).toFixed(0)}%`;
+  }
+  if (candidate.aspect_ratio_method === 'near_square') {
+    return 'near-square correction';
+  }
+  return 'edge estimate';
 }
 
 function errorMessage(error: unknown, fallback: string): string {

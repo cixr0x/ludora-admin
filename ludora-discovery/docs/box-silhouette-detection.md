@@ -30,6 +30,12 @@ When exactly one opposite line pair matches and the other pairs do not have thre
 
 The overlay draws the inferred seam in magenta and shades the selected cover green. The JSON records the parallel pair, seam endpoints, both face polygons and areas, and the fraction of the combined visible-face area assigned to the cover.
 
+### Two-Face Metric Sizing
+
+For a two-face outline, the front horizontal, vertical, and box-depth edge families provide three vanishing points. With square pixels and the image center as the principal-point approximation, every orthogonal vanishing-point pair independently estimates the camera focal length. The detector uses metric sizing only when all three estimates are positive, differ by no more than a factor of two, produce nearly orthogonal camera directions, and yield a stable null-space reconstruction. A valid reconstruction supplies the physical front width-to-height ratio and a confidence score.
+
+Store imagery is often composited or edited and may not describe one physically valid camera. In that case the vanishing estimates are rejected rather than forced, and sizing falls back to the edge-length estimate. The review dialog then provides `Automatic`, `Square`, `4:5`, `3:4`, `2:3`, and custom width-to-height choices. A reviewer override resizes the selected flattening before WebP optimization and upload; it does not change the detected corners.
+
 ## Three-Face Cover Constructions
 
 The constructions are derived from geometry rather than fixed labels:
@@ -52,11 +58,11 @@ Two-face and three-face paths use different methods to find cover quadrilaterals
 2. Measure all four Euclidean edge lengths.
 3. Estimate width from the average of the top and bottom lengths.
 4. Estimate height from the average of the left and right lengths.
-5. If width and height differ by 5% or less, snap both dimensions to their average so a near-square physical box produces an exact square cover. When edge lengths alone are more distorted, scan the provisional flattening for at least three distinct axis-aligned circular motifs. If their inferred horizontal scales agree and applying that scale makes the cover square within 5%, use the circle consensus to snap it to a square.
+5. If width and height differ by 5% or less, snap both dimensions to their average so a near-square physical box produces an exact square cover.
 6. Map the quadrilateral to an axis-aligned rectangle with `cv2.getPerspectiveTransform` and `cv2.warpPerspective`.
 7. Trim 1% from every side of the flattened rectangle to remove shiny, worn, or slightly inaccurate physical box edges.
 
-The default near-square threshold is 5% and can be overridden with the `square_threshold` argument to `flatten_cover_quadrilateral`. Circle-based snapping is deliberately conservative: repeated detections at the same center are deduplicated, at least three distinct motifs must form 60% of the evidence, and their logarithmic scale MAD must be at most 0.05. The JSON records the measured width/height difference, threshold, whether either square snap was applied, circle evidence and scale, four source lengths, estimated dimensions, untrimmed and final output sizes, trim amount, aspect ratio, and opposite-edge disagreement. Individual results are written as `flattened-cover.png` or numbered `flattened-cover-N.png` files, with a combined `flattened-cover-previews.png` for candidate comparison. Rotation is implicit in the perspective transform; rotating a line does not change its measured Euclidean length.
+The default near-square threshold is 5% and can be overridden with the `square_threshold` argument to `flatten_cover_quadrilateral`. The JSON records the sizing method, vanishing-point confidence and focal spread, measured width/height difference, threshold, whether square snapping was applied, four source lengths, estimated dimensions, untrimmed and final output sizes, trim amount, aspect ratio, and opposite-edge disagreement. Individual results are written as `flattened-cover.png` or numbered `flattened-cover-N.png` files, with a combined `flattened-cover-previews.png` for candidate comparison. Rotation is implicit in the perspective transform; rotating a line does not change its measured Euclidean length.
 
 Run it from `ludora-admin/ludora-discovery`:
 

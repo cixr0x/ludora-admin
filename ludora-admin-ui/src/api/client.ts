@@ -71,10 +71,12 @@ export type CoverImageField = 'image_url' | 'image_url_es';
 
 export type CoverFlatteningCandidate = {
   aspect_ratio: number;
+  aspect_ratio_method: 'edge_average' | 'near_square' | 'vanishing_points';
   construction: string;
   height: number;
   index: number;
   square_snapped: boolean;
+  vanishing_confidence: number;
   width: number;
 };
 
@@ -92,6 +94,7 @@ export type CoverFlatteningWorkflow = {
 export type AcceptedCoverFlattening = {
   item_id: number;
   optimized_size_bytes: number;
+  output_aspect_ratio: number;
   public_url: string;
   s3_key: string;
   target_field: CoverImageField;
@@ -553,12 +556,18 @@ export const adminApi = {
     fetchBlob(
       `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/candidates/${encodeURIComponent(candidateIndex)}`
     ),
-  acceptCoverFlattening: (workflowId: string, candidateIndex: number, targetField: CoverImageField) =>
+  acceptCoverFlattening: (
+    workflowId: string,
+    candidateIndex: number,
+    targetField: CoverImageField,
+    aspectRatio: number | null
+  ) =>
     sendJson<AcceptedCoverFlattening>(
       `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/accept`,
       'POST',
       {
         candidate_index: candidateIndex,
+        aspect_ratio: aspectRatio,
         target_field: targetField
       }
     ),

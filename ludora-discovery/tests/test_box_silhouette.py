@@ -11,6 +11,7 @@ from ludora.box_silhouette import (
     build_foreground_mask,
     classify_perspective,
     detect_silhouette,
+    estimate_two_face_vanishing_aspect_ratio,
     flatten_cover_quadrilateral,
     identify_three_face_covers,
     identify_two_face_cover,
@@ -107,35 +108,98 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertEqual(geometry.untrimmed_height, 94)
         self.assertNotEqual(flattened.shape[0], flattened.shape[1])
 
-    def test_flatten_cover_uses_repeated_circles_to_recover_a_square(self):
-        cover = np.full((400, 400, 3), (135, 70, 100), dtype=np.uint8)
-        for center in [(100, 100), (300, 100), (100, 300), (300, 300)]:
-            cv2.circle(cover, center, 42, (20, 20, 20), -1, cv2.LINE_AA)
-            cv2.circle(cover, center, 42, (220, 220, 220), 3, cv2.LINE_AA)
-        cv2.circle(cover, (200, 200), 75, (245, 245, 245), -1, cv2.LINE_AA)
-        cv2.circle(cover, (200, 200), 75, (40, 40, 40), 3, cv2.LINE_AA)
+    def test_recovers_aspect_ratio_from_consistent_cuboid_vanishing_points(self):
+        width = 2.0
+        height = 1.5
+        depth = 0.5
+        cuboid = np.array(
+            [
+                [0, 0, 0],
+                [width, 0, 0],
+                [width, height, 0],
+                [0, height, 0],
+                [0, height, depth],
+                [0, 0, depth],
+            ],
+            dtype=np.float64,
+        )
+        x_rotation = np.deg2rad(-8.0)
+        y_rotation = np.deg2rad(25.0)
+        rotate_x = np.array(
+            [
+                [1, 0, 0],
+                [0, np.cos(x_rotation), -np.sin(x_rotation)],
+                [0, np.sin(x_rotation), np.cos(x_rotation)],
+            ]
+        )
+        rotate_y = np.array(
+            [
+                [np.cos(y_rotation), 0, np.sin(y_rotation)],
+                [0, 1, 0],
+                [-np.sin(y_rotation), 0, np.cos(y_rotation)],
+            ]
+        )
+        camera_points = (rotate_x @ rotate_y @ cuboid.T).T + np.array([-1.0, -0.7, 6.0])
+        projected = np.column_stack(
+            [
+                900.0 * camera_points[:, 0] / camera_points[:, 2] + 500.0,
+                900.0 * camera_points[:, 1] / camera_points[:, 2] + 400.0,
+            ]
+        )
 
-        source = np.full((580, 580, 3), 255, dtype=np.uint8)
-        source_corners = np.array([[0, 0], [399, 0], [399, 399], [0, 399]], dtype=np.float32)
-        projected_corners = np.array(
-            [[110, 25], [455, 92], [455, 502], [110, 548]],
+        estimate = estimate_two_face_vanishing_aspect_ratio(
+            projected[:4],
+            projected[[0, 3, 4, 5]],
+            (800, 1000),
+        )
+
+        self.assertIsNotNone(estimate)
+        self.assertAlmostEqual(estimate.aspect_ratio, width / height, places=3)
+        self.assertGreater(estimate.confidence, 0.95)
+        self.assertLess(estimate.focal_spread, 1.01)
+
+    def test_rejects_inconsistent_store_render_vanishing_points(self):
+        cover = np.array(
+            [
+                [102.1642, 9.6320],
+                [440.9041, 75.3828],
+                [440.9152, 467.6147],
+                [101.8777, 501.1498],
+            ],
+            dtype=np.float64,
+        )
+        side = np.array(
+            [
+                [102.1642, 9.6320],
+                [101.8777, 501.1498],
+                [69.8824, 493.1691],
+                [69.8821, 27.8588],
+            ],
+            dtype=np.float64,
+        )
+
+        estimate = estimate_two_face_vanishing_aspect_ratio(cover, side, (512, 512))
+
+        self.assertIsNone(estimate)
+
+    def test_flatten_cover_applies_validated_vanishing_aspect_ratio(self):
+        image = np.zeros((260, 260, 3), dtype=np.uint8)
+        polygon = np.array(
+            [[30, 20], [150, 35], [145, 235], [25, 225]],
             dtype=np.float32,
         )
-        transform = cv2.getPerspectiveTransform(source_corners, projected_corners)
-        projected = cv2.warpPerspective(cover, transform, (580, 580), borderValue=(255, 255, 255))
-        projected_mask = cv2.warpPerspective(
-            np.full((400, 400), 255, dtype=np.uint8),
-            transform,
-            (580, 580),
+
+        flattened, geometry = flatten_cover_quadrilateral(
+            image,
+            polygon,
+            target_aspect_ratio=1.0,
+            vanishing_confidence=0.98,
+            vanishing_focal_spread=1.02,
         )
-        source[projected_mask > 0] = projected[projected_mask > 0]
 
-        flattened, geometry = flatten_cover_quadrilateral(source, projected_corners)
-
+        self.assertEqual(geometry.aspect_ratio_method, "vanishing_points")
         self.assertTrue(geometry.square_snapped)
-        self.assertTrue(geometry.circle_square_snapped)
-        self.assertGreaterEqual(geometry.circle_evidence_count, 3)
-        self.assertIsNotNone(geometry.circle_aspect_scale)
+        self.assertAlmostEqual(geometry.vanishing_confidence, 0.98)
         self.assertEqual(flattened.shape[0], flattened.shape[1])
 
     def test_detects_six_sided_convex_box_silhouette(self):

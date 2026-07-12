@@ -4083,10 +4083,12 @@ describe('ludora admin service', () => {
       candidates: [
         {
           aspect_ratio: 1,
+          aspect_ratio_method: 'vanishing_points',
           construction: 'two-face cover',
           height: 500,
           index: 1,
           square_snapped: true,
+          vanishing_confidence: 0.96,
           width: 500
         }
       ],
@@ -4100,11 +4102,12 @@ describe('ludora admin service', () => {
     };
     const calls: unknown[] = [];
     const manager: CoverFlatteningWorkflowManager = {
-      accept: async (workflowId, candidateIndex, targetField) => {
-        calls.push(['accept', workflowId, candidateIndex, targetField]);
+      accept: async (workflowId, candidateIndex, targetField, aspectRatio) => {
+        calls.push(['accept', workflowId, candidateIndex, targetField, aspectRatio]);
         return {
           item_id: 77,
           optimized_size_bytes: 88_000,
+          output_aspect_ratio: aspectRatio ?? 1,
           public_url: 'https://cdn.example/boardgame/cover.webp',
           s3_key: 'boardgame/cover.webp',
           target_field: targetField
@@ -4135,7 +4138,7 @@ describe('ludora admin service', () => {
       const candidate = await request(app).get('/admin/cover-flattening-workflows/flatten-77/candidates/1');
       const accepted = await request(app)
         .post('/admin/cover-flattening-workflows/flatten-77/accept')
-        .send({ candidate_index: 1, target_field: 'image_url' });
+        .send({ aspect_ratio: 1, candidate_index: 1, target_field: 'image_url' });
       const cancelled = await request(app).delete('/admin/cover-flattening-workflows/flatten-77');
 
       expect(start.status).toBe(201);
@@ -4147,7 +4150,7 @@ describe('ludora admin service', () => {
       expect(calls).toEqual([
         ['item', 77, 'image_url_es'],
         ['candidate', 'flatten-77', 1],
-        ['accept', 'flatten-77', 1, 'image_url'],
+        ['accept', 'flatten-77', 1, 'image_url', 1],
         ['cancel', 'flatten-77']
       ]);
     } finally {

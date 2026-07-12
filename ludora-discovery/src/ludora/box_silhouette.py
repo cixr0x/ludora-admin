@@ -46,6 +46,13 @@ class PerspectiveClassification:
 
 
 @dataclass(frozen=True)
+class VanishingAspectEstimate:
+    aspect_ratio: float
+    confidence: float
+    focal_spread: float
+
+
+@dataclass(frozen=True)
 class TwoFaceCoverDetection:
     parallel_axis_label: str
     parallel_line_indices: list[int]
@@ -58,6 +65,9 @@ class TwoFaceCoverDetection:
     side_polygon: list[list[float]]
     side_area: float
     cover_area_fraction: float
+    vanishing_aspect_ratio: float | None
+    vanishing_confidence: float
+    vanishing_focal_spread: float | None
 
 
 @dataclass(frozen=True)
@@ -105,10 +115,9 @@ class FlattenedCoverGeometry:
     right_length: float
     estimated_width: float
     estimated_height: float
-    circle_evidence_count: int
-    circle_aspect_scale: float | None
-    circle_aspect_log_mad: float | None
-    circle_square_snapped: bool
+    aspect_ratio_method: str
+    vanishing_confidence: float
+    vanishing_focal_spread: float | None
     untrimmed_width: int
     untrimmed_height: int
     square_threshold: float
@@ -122,13 +131,6 @@ class FlattenedCoverGeometry:
     aspect_ratio: float
     width_disagreement: float
     height_disagreement: float
-
-
-@dataclass(frozen=True)
-class CircularAspectEvidence:
-    count: int
-    horizontal_scale: float | None
-    log_mad: float | None
 
 
 @dataclass(frozen=True)
@@ -635,6 +637,7 @@ def identify_two_face_cover(
     vertices: np.ndarray,
     perspective: PerspectiveClassification,
     *,
+    image_shape: tuple[int, int] | None = None,
     maximum_edge_disagreement: float = 0.9,
 ) -> TwoFaceCoverDetection | None:
     if maximum_edge_disagreement <= 0:
@@ -693,6 +696,15 @@ def identify_two_face_cover(
         return None
 
     total_area = cover_area + side_area
+    vanishing_estimate = (
+        estimate_two_face_vanishing_aspect_ratio(
+            cover_polygon,
+            side_polygon,
+            image_shape,
+        )
+        if image_shape is not None
+        else None
+    )
 
     return TwoFaceCoverDetection(
         parallel_axis_label=parallel_pair.axis_label,
@@ -706,6 +718,15 @@ def identify_two_face_cover(
         side_polygon=[[float(value) for value in point.tolist()] for point in side_polygon],
         side_area=side_area,
         cover_area_fraction=cover_area / total_area if total_area else 0.0,
+        vanishing_aspect_ratio=(
+            vanishing_estimate.aspect_ratio if vanishing_estimate is not None else None
+        ),
+        vanishing_confidence=(
+            vanishing_estimate.confidence if vanishing_estimate is not None else 0.0
+        ),
+        vanishing_focal_spread=(
+            vanishing_estimate.focal_spread if vanishing_estimate is not None else None
+        ),
     )
 
 
@@ -920,98 +941,130 @@ def order_quadrilateral(points: np.ndarray) -> np.ndarray:
     return cyclic.astype(np.float32)
 
 
-def estimate_circular_aspect_scale(image: np.ndarray) -> CircularAspectEvidence:
-    """Estimate horizontal scale from repeated axis-aligned circular artwork."""
+def estimate_two_face_vanishing_aspect_ratio(
+    cover_polygon: np.ndarray,
+    side_polygon: np.ndarray,
+    image_shape: tuple[int, int],
+    *,
+    maximum_focal_spread: float = 2.0,
+    maximum_nullspace_residual: float = 0.05,
+) -> VanishingAspectEstimate | None:
+    """Recover a cover ratio only when three cuboid vanishing axes agree."""
 
-    if image.ndim != 3 or image.shape[2] != 3:
-        raise ValueError("expected a BGR color image")
+    if maximum_focal_spread <= 1.0:
+        raise ValueError("maximum focal spread must be greater than one")
+    if maximum_nullspace_residual <= 0.0:
+        raise ValueError("maximum nullspace residual must be positive")
+    height, width = image_shape
+    if height <= 1 or width <= 1:
+        raise ValueError("image dimensions must be greater than one pixel")
 
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    minimum_dimension = float(min(gray.shape))
-    candidates: list[tuple[float, float, float, float, float]] = []
-    for threshold in np.linspace(30, 225, 14).astype(int):
-        _, binary = cv2.threshold(gray, int(threshold), 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
-        for contour in contours:
-            if len(contour) < 24:
-                continue
-            area = abs(float(cv2.contourArea(contour)))
-            perimeter = float(cv2.arcLength(contour, True))
-            if area < 80.0 or perimeter <= 0.0:
-                continue
-            (center_x, center_y), (first_axis, second_axis), angle = cv2.fitEllipse(contour)
-            shorter_axis = min(first_axis, second_axis)
-            longer_axis = max(first_axis, second_axis)
-            if (
-                shorter_axis < minimum_dimension * 0.055
-                or longer_axis > minimum_dimension * 0.58
-                or shorter_axis / longer_axis < 0.5
-            ):
-                continue
-            ellipse_area = float(np.pi * first_axis * second_axis / 4.0)
-            fill_ratio = area / ellipse_area if ellipse_area else 0.0
-            circularity = float(4.0 * np.pi * area / (perimeter * perimeter))
-            if not 0.78 <= fill_ratio <= 1.18 or circularity < 0.58:
-                continue
-            axis_offset = min(angle % 90.0, 90.0 - angle % 90.0)
-            if axis_offset > 12.0:
-                continue
+    cover = order_quadrilateral(cover_polygon).astype(np.float64)
+    side = order_quadrilateral(side_polygon).astype(np.float64)
 
-            radians = np.deg2rad(angle)
-            horizontal_diameter = float(
-                np.hypot(first_axis * np.cos(radians), second_axis * np.sin(radians))
-            )
-            vertical_diameter = float(
-                np.hypot(first_axis * np.sin(radians), second_axis * np.cos(radians))
-            )
-            horizontal_scale = vertical_diameter / horizontal_diameter
-            if not 0.65 <= horizontal_scale <= 1.55:
-                continue
-            diameter = float(np.sqrt(horizontal_diameter * vertical_diameter))
-            quality = circularity * min(fill_ratio, 1.0 / fill_ratio)
-            candidates.append((center_x, center_y, diameter, horizontal_scale, quality))
+    def homogeneous_line(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+        return np.cross(np.append(first, 1.0), np.append(second, 1.0))
 
-    unique_candidates: list[tuple[float, float, float, float, float]] = []
-    for candidate in sorted(candidates, key=lambda item: item[4], reverse=True):
-        center = np.asarray(candidate[:2])
-        if any(
-            float(np.linalg.norm(center - np.asarray(existing[:2])))
-            <= max(6.0, 0.12 * min(candidate[2], existing[2]))
-            for existing in unique_candidates
-        ):
-            continue
-        unique_candidates.append(candidate)
-
-    if len(unique_candidates) < 3:
-        return CircularAspectEvidence(
-            count=len(unique_candidates),
-            horizontal_scale=None,
-            log_mad=None,
+    def finite_vanishing_point(
+        first_start: np.ndarray,
+        first_end: np.ndarray,
+        second_start: np.ndarray,
+        second_end: np.ndarray,
+    ) -> np.ndarray | None:
+        point = np.cross(
+            homogeneous_line(first_start, first_end),
+            homogeneous_line(second_start, second_end),
         )
+        if not np.all(np.isfinite(point)):
+            return None
+        if abs(float(point[2])) <= 1e-10 * max(1.0, float(np.linalg.norm(point[:2]))):
+            return None
+        normalized = point / point[2]
+        return normalized if np.all(np.isfinite(normalized)) else None
 
-    log_scales = np.log([candidate[3] for candidate in unique_candidates])
-    median_log_scale = float(np.median(log_scales))
-    inliers = np.abs(log_scales - median_log_scale) <= 0.10
-    inlier_scales = log_scales[inliers]
-    if len(inlier_scales) < 3 or len(inlier_scales) / len(log_scales) < 0.60:
-        return CircularAspectEvidence(
-            count=int(len(inlier_scales)),
-            horizontal_scale=None,
-            log_mad=None,
-        )
+    horizontal_vanishing = finite_vanishing_point(cover[0], cover[1], cover[3], cover[2])
+    vertical_vanishing = finite_vanishing_point(cover[0], cover[3], cover[1], cover[2])
+    depth_vanishing = finite_vanishing_point(side[0], side[1], side[3], side[2])
+    if horizontal_vanishing is None or vertical_vanishing is None or depth_vanishing is None:
+        return None
 
-    inlier_median = float(np.median(inlier_scales))
-    log_mad = float(np.median(np.abs(inlier_scales - inlier_median)))
-    if log_mad > 0.05:
-        return CircularAspectEvidence(
-            count=int(len(inlier_scales)),
-            horizontal_scale=None,
-            log_mad=log_mad,
-        )
-    return CircularAspectEvidence(
-        count=int(len(inlier_scales)),
-        horizontal_scale=float(np.exp(inlier_median)),
-        log_mad=log_mad,
+    principal_point = np.array([(width - 1.0) / 2.0, (height - 1.0) / 2.0])
+    vanishing_points = [horizontal_vanishing, vertical_vanishing, depth_vanishing]
+    focal_squared: list[float] = []
+    for first_index, second_index in ((0, 1), (0, 2), (1, 2)):
+        first = vanishing_points[first_index][:2] - principal_point
+        second = vanishing_points[second_index][:2] - principal_point
+        estimate = -float(np.dot(first, second))
+        if not np.isfinite(estimate) or estimate <= 0.0:
+            return None
+        focal_squared.append(estimate)
+
+    focal_spread = max(focal_squared) / min(focal_squared)
+    if focal_spread > maximum_focal_spread:
+        return None
+    focal_length = float(np.sqrt(np.median(focal_squared)))
+    image_diagonal = float(np.hypot(width, height))
+    if not 0.20 * image_diagonal <= focal_length <= 50.0 * image_diagonal:
+        return None
+
+    intrinsic = np.array(
+        [
+            [focal_length, 0.0, principal_point[0]],
+            [0.0, focal_length, principal_point[1]],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    inverse_intrinsic = np.linalg.inv(intrinsic)
+
+    def camera_direction(vanishing_point: np.ndarray) -> np.ndarray:
+        direction = inverse_intrinsic @ vanishing_point
+        return direction / np.linalg.norm(direction)
+
+    horizontal_direction = camera_direction(horizontal_vanishing)
+    vertical_direction = camera_direction(vertical_vanishing)
+    depth_direction = camera_direction(depth_vanishing)
+    maximum_orthogonality_error = max(
+        abs(float(np.dot(horizontal_direction, vertical_direction))),
+        abs(float(np.dot(horizontal_direction, depth_direction))),
+        abs(float(np.dot(vertical_direction, depth_direction))),
+    )
+    if maximum_orthogonality_error > 0.20:
+        return None
+
+    rays = [inverse_intrinsic @ np.append(point, 1.0) for point in cover]
+    system = np.zeros((6, 5), dtype=np.float64)
+    system[:3, 0] = -rays[0]
+    system[:3, 1] = rays[1]
+    system[:3, 3] = -horizontal_direction
+    system[3:, 0] = -rays[0]
+    system[3:, 2] = rays[3]
+    system[3:, 4] = -vertical_direction
+    _, singular_values, right_vectors = np.linalg.svd(system)
+    if len(singular_values) < 2 or singular_values[-2] <= 0.0:
+        return None
+    nullspace_residual = float(singular_values[-1] / singular_values[-2])
+    if nullspace_residual > maximum_nullspace_residual:
+        return None
+    solution = right_vectors[-1]
+    physical_width = abs(float(solution[3]))
+    physical_height = abs(float(solution[4]))
+    if physical_width <= 1e-9 or physical_height <= 1e-9:
+        return None
+    aspect_ratio = physical_width / physical_height
+    if not 0.20 <= aspect_ratio <= 5.0:
+        return None
+
+    spread_score = 1.0 - min(1.0, np.log(focal_spread) / np.log(maximum_focal_spread))
+    residual_score = 1.0 - min(1.0, nullspace_residual / maximum_nullspace_residual)
+    orthogonality_score = 1.0 - min(1.0, maximum_orthogonality_error / 0.20)
+    confidence = float(
+        0.45 * spread_score + 0.30 * residual_score + 0.25 * orthogonality_score
+    )
+    return VanishingAspectEstimate(
+        aspect_ratio=float(aspect_ratio),
+        confidence=confidence,
+        focal_spread=float(focal_spread),
     )
 
 
@@ -1021,12 +1074,19 @@ def flatten_cover_quadrilateral(
     *,
     max_dimension: int = 1600,
     square_threshold: float = 0.05,
+    target_aspect_ratio: float | None = None,
+    vanishing_confidence: float = 0.0,
+    vanishing_focal_spread: float | None = None,
     trim_fraction: float = 0.01,
 ) -> tuple[np.ndarray, FlattenedCoverGeometry]:
     if max_dimension <= 0:
         raise ValueError("maximum flattened cover dimension must be positive")
     if not 0.0 <= square_threshold < 1.0:
         raise ValueError("square threshold must be between zero and one")
+    if target_aspect_ratio is not None and not 0.20 <= target_aspect_ratio <= 5.0:
+        raise ValueError("target aspect ratio must be between 0.2 and 5")
+    if not 0.0 <= vanishing_confidence <= 1.0:
+        raise ValueError("vanishing confidence must be between zero and one")
     if not 0.0 <= trim_fraction < 0.5:
         raise ValueError("cover trim fraction must be between zero and one half")
     top_left, top_right, bottom_right, bottom_left = order_quadrilateral(polygon)
@@ -1043,57 +1103,27 @@ def flatten_cover_quadrilateral(
         estimated_width,
         estimated_height,
     )
-    square_snapped = square_difference <= square_threshold
-    circle_evidence = CircularAspectEvidence(count=0, horizontal_scale=None, log_mad=None)
-    circle_square_snapped = False
-    if not square_snapped:
-        provisional_scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
-        provisional_width = max(2, int(round(estimated_width * provisional_scale)))
-        provisional_height = max(2, int(round(estimated_height * provisional_scale)))
-        provisional_destination = np.array(
-            [
-                [0, 0],
-                [provisional_width - 1, 0],
-                [provisional_width - 1, provisional_height - 1],
-                [0, provisional_height - 1],
-            ],
-            dtype=np.float32,
-        )
-        ordered = np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
-        provisional_transform = cv2.getPerspectiveTransform(ordered, provisional_destination)
-        provisional = cv2.warpPerspective(
-            image,
-            provisional_transform,
-            (provisional_width, provisional_height),
-            flags=cv2.INTER_CUBIC,
-            borderMode=cv2.BORDER_REPLICATE,
-        )
-        circle_evidence = estimate_circular_aspect_scale(provisional)
-        if circle_evidence.horizontal_scale is not None:
-            circle_corrected_width = estimated_width * circle_evidence.horizontal_scale
-            circle_square_difference = abs(circle_corrected_width - estimated_height) / max(
-                circle_corrected_width,
-                estimated_height,
-            )
-            if circle_square_difference <= square_threshold:
-                square_snapped = True
-                circle_square_snapped = True
-
-    if square_snapped:
-        square_width = (
-            estimated_width * circle_evidence.horizontal_scale
-            if circle_square_snapped and circle_evidence.horizontal_scale is not None
-            else estimated_width
-        )
-        square_scale = min(1.0, max_dimension / max(square_width, estimated_height))
+    if target_aspect_ratio is not None:
+        aspect_ratio_method = "vanishing_points"
+        corrected_width = estimated_height * target_aspect_ratio
+        scale = min(1.0, max_dimension / max(corrected_width, estimated_height))
+        untrimmed_width = max(2, int(round(corrected_width * scale)))
+        untrimmed_height = max(2, int(round(estimated_height * scale)))
+        square_snapped = abs(target_aspect_ratio - 1.0) <= square_threshold
+    elif square_difference <= square_threshold:
+        aspect_ratio_method = "near_square"
+        scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
+        square_snapped = True
         square_size = max(
             2,
-            int(round(((square_width + estimated_height) / 2.0) * square_scale)),
+            int(round(((estimated_width + estimated_height) / 2.0) * scale)),
         )
         untrimmed_width = square_size
         untrimmed_height = square_size
     else:
+        aspect_ratio_method = "edge_average"
         scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
+        square_snapped = False
         untrimmed_width = max(2, int(round(estimated_width * scale)))
         untrimmed_height = max(2, int(round(estimated_height * scale)))
     destination = np.array(
@@ -1135,10 +1165,9 @@ def flatten_cover_quadrilateral(
         right_length=right_length,
         estimated_width=estimated_width,
         estimated_height=estimated_height,
-        circle_evidence_count=circle_evidence.count,
-        circle_aspect_scale=circle_evidence.horizontal_scale,
-        circle_aspect_log_mad=circle_evidence.log_mad,
-        circle_square_snapped=circle_square_snapped,
+        aspect_ratio_method=aspect_ratio_method,
+        vanishing_confidence=vanishing_confidence,
+        vanishing_focal_spread=vanishing_focal_spread,
         untrimmed_width=untrimmed_width,
         untrimmed_height=untrimmed_height,
         square_threshold=square_threshold,
@@ -1190,7 +1219,11 @@ def detect_silhouette(
     polygon_area = abs(float(cv2.contourArea(vertices.astype(np.float32))))
     lines = lines_from_vertices(vertices, fitted_lines)
     perspective = classify_perspective(vertices)
-    two_face_cover = identify_two_face_cover(vertices, perspective)
+    two_face_cover = identify_two_face_cover(
+        vertices,
+        perspective,
+        image_shape=(image.shape[0], image.shape[1]),
+    )
     three_face_covers = identify_three_face_covers(vertices, perspective)
 
     detection = SilhouetteDetection(
@@ -1318,7 +1351,9 @@ def write_flattened_covers(
     detection: SilhouetteDetection,
     output_dir: Path,
 ) -> tuple[list[FlattenedCoverResult], np.ndarray | None]:
-    candidates: list[tuple[str, int, str, list[list[float]]]] = []
+    candidates: list[
+        tuple[str, int, str, list[list[float]], float | None, float, float | None]
+    ] = []
     if detection.two_face_cover is not None:
         candidates.append(
             (
@@ -1326,6 +1361,9 @@ def write_flattened_covers(
                 1,
                 "two-face seam and larger-face selection",
                 detection.two_face_cover.cover_polygon,
+                detection.two_face_cover.vanishing_aspect_ratio,
+                detection.two_face_cover.vanishing_confidence,
+                detection.two_face_cover.vanishing_focal_spread,
             )
         )
     else:
@@ -1336,6 +1374,9 @@ def write_flattened_covers(
                     index,
                     construction.construction,
                     construction.cover_polygon,
+                    None,
+                    0.0,
+                    None,
                 )
             )
     if not candidates:
@@ -1344,8 +1385,22 @@ def write_flattened_covers(
     results: list[FlattenedCoverResult] = []
     preview_panels: list[np.ndarray] = []
     target_preview_height = 700
-    for candidate_type, candidate_index, construction, polygon in candidates:
-        flattened, geometry = flatten_cover_quadrilateral(image, np.asarray(polygon))
+    for (
+        candidate_type,
+        candidate_index,
+        construction,
+        polygon,
+        target_aspect_ratio,
+        vanishing_confidence,
+        vanishing_focal_spread,
+    ) in candidates:
+        flattened, geometry = flatten_cover_quadrilateral(
+            image,
+            np.asarray(polygon),
+            target_aspect_ratio=target_aspect_ratio,
+            vanishing_confidence=vanishing_confidence,
+            vanishing_focal_spread=vanishing_focal_spread,
+        )
         filename = (
             "flattened-cover.png"
             if len(candidates) == 1
@@ -1375,6 +1430,8 @@ def write_flattened_covers(
         )
         if geometry.square_snapped:
             subtitle += "  square-snapped"
+        if geometry.aspect_ratio_method == "vanishing_points":
+            subtitle += f"  vanishing confidence={geometry.vanishing_confidence:.2f}"
         text_scale = min(0.5, max(0.3, preview_width / 1050.0))
         cv2.putText(header, title, (8, 25), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 0, 0), 1, cv2.LINE_AA)
         cv2.putText(header, subtitle, (8, 52), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 0, 0), 1, cv2.LINE_AA)

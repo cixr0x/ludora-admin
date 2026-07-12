@@ -111,6 +111,40 @@ describe('cover flattening workflow', () => {
     expect(workflow.store_item_id).toBeNull();
   });
 
+  it('applies the reviewer-selected aspect ratio before WebP optimization', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const resizeCalls: Array<{ height: number; width: number }> = [];
+    const optimizedInputs: string[] = [];
+    const database: Database = {
+      query: async (sql) => ({
+        rows: sql.includes('from items i')
+          ? [{ canonical_name: 'Coffee Rush', image_url: 'https://example.com/box.jpg', item_id: 77 }]
+          : [{ id: 77 }]
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(
+      database,
+      fakeDependencies(root, {
+        optimizeImage: async (image) => {
+          optimizedInputs.push(image.toString('utf8'));
+          return Buffer.alloc(80_000);
+        },
+        resizeImage: async (_image, dimensions) => {
+          resizeCalls.push(dimensions);
+          return Buffer.from('resized-square');
+        }
+      })
+    );
+    const workflow = await manager.startFromItem(77, 'image_url');
+
+    const accepted = await manager.accept(workflow.workflow_id, 2, 'image_url', 1);
+
+    expect(resizeCalls).toEqual([{ height: 700, width: 700 }]);
+    expect(optimizedInputs).toEqual(['resized-square']);
+    expect(accepted.output_aspect_ratio).toBe(1);
+  });
+
   it('rejects an unlinked store item before downloading', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
     temporaryDirectories.push(root);
@@ -165,6 +199,7 @@ function fakeDependencies(
     now: () => new Date('2026-07-11T12:00:00.000Z'),
     optimizeImage: async () => Buffer.alloc(80_000),
     removeDirectory: async (directory) => rm(directory, { force: true, recursive: true }),
+    resizeImage: async (image) => image,
     runFlattening: async (_sourcePath, outputDir) => {
       const candidate1 = path.join(outputDir, 'flattened-cover-1.png');
       const candidate2 = path.join(outputDir, 'flattened-cover-2.png');

@@ -44,8 +44,9 @@ export function createCoverFlatteningWorkflowRouter(manager: CoverFlatteningWork
     try {
       const candidateIndex = positiveInteger(request.body, 'candidate_index');
       const targetField = imageField(request.body, 'target_field') as CoverFlatteningTargetField;
+      const aspectRatio = optionalAspectRatio(request.body, 'aspect_ratio');
       response.json({
-        data: await manager.accept(request.params.workflowId, candidateIndex, targetField)
+        data: await manager.accept(request.params.workflowId, candidateIndex, targetField, aspectRatio)
       });
     } catch (error) {
       next(asHttpError(error));
@@ -79,6 +80,18 @@ function imageField(source: unknown, key: string): 'image_url' | 'image_url_es' 
     return value[key];
   }
   throw httpError(400, `${key} must be image_url or image_url_es`);
+}
+
+function optionalAspectRatio(source: unknown, key: string): number | null {
+  const value = (source ?? {}) as Record<string, unknown>;
+  if (value[key] === undefined || value[key] === null || value[key] === '') {
+    return null;
+  }
+  const parsed = Number(value[key]);
+  if (!Number.isFinite(parsed) || parsed < 0.2 || parsed > 5) {
+    throw httpError(400, `${key} must be between 0.2 and 5`);
+  }
+  return parsed;
 }
 
 function asHttpError(error: unknown): unknown {
