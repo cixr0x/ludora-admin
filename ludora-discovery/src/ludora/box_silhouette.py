@@ -58,6 +58,8 @@ class TwoFaceCoverDetection:
 @dataclass(frozen=True)
 class ThreeFaceCoverConstruction:
     construction: str
+    source_intersection_vertex_index: int
+    source_line_indices: list[int]
     first_parallel_source_line: str
     first_anchor_vertex_index: int
     first_source_segment: list[list[float]]
@@ -535,6 +537,7 @@ def _construct_three_face_cover(
     points: np.ndarray,
     *,
     construction: str,
+    source_intersection_vertex_index: int,
     first_source_label: str,
     first_source_line_index: int,
     first_anchor_vertex_index: int,
@@ -579,6 +582,8 @@ def _construct_three_face_cover(
     )
     return ThreeFaceCoverConstruction(
         construction=construction,
+        source_intersection_vertex_index=source_intersection_vertex_index + 1,
+        source_line_indices=[first_source_line_index + 1, second_source_line_index + 1],
         first_parallel_source_line=first_source_label,
         first_anchor_vertex_index=first_anchor_vertex_index + 1,
         first_source_segment=[[float(value) for value in point] for point in first_source_segment],
@@ -617,30 +622,68 @@ def identify_three_face_covers(
     if perspective.kind != "three_faces" or len(points) != 6:
         return []
 
-    constructions = [
-        _construct_three_face_cover(
-            points,
-            construction="C2@V2 + B2@V4",
-            first_source_label="C2",
-            first_source_line_index=5,
-            first_anchor_vertex_index=1,
-            second_source_label="B2",
-            second_source_line_index=4,
-            second_anchor_vertex_index=3,
-            polygon_vertex_indices=[1, 2, 3, None],
-        ),
-        _construct_three_face_cover(
-            points,
-            construction="B1@V1 + C1@V5",
-            first_source_label="B1",
-            first_source_line_index=1,
-            first_anchor_vertex_index=0,
-            second_source_label="C1",
-            second_source_line_index=2,
-            second_anchor_vertex_index=4,
-            polygon_vertex_indices=[0, None, 4, 5],
-        ),
+    edge_lines = [
+        _fit_line(np.array([points[index], points[(index + 1) % len(points)]]))
+        for index in range(len(points))
     ]
+    edge_lengths = [
+        float(np.linalg.norm(points[(index + 1) % len(points)] - points[index]))
+        for index in range(len(points))
+    ]
+    longest_lines = set(
+        sorted(range(len(points)), key=lambda index: edge_lengths[index], reverse=True)[:4]
+    )
+    source_intersections = [
+        vertex_index
+        for vertex_index in range(len(points))
+        if (vertex_index - 1) % len(points) in longest_lines and vertex_index in longest_lines
+    ]
+    if len(source_intersections) != 2:
+        return []
+    source_intersections.sort(
+        key=lambda vertex_index: (
+            edge_lengths[(vertex_index - 1) % len(points)] + edge_lengths[vertex_index]
+        ),
+        reverse=True,
+    )
+
+    def line_label(line_index: int) -> str:
+        return f"{'ABC'[line_index % 3]}{1 + line_index // 3}"
+
+    def closest_non_touching_vertex(line_index: int) -> int:
+        touching_vertices = {line_index, (line_index + 1) % len(points)}
+        return min(
+            (vertex_index for vertex_index in range(len(points)) if vertex_index not in touching_vertices),
+            key=lambda vertex_index: _point_line_distance(points[vertex_index], edge_lines[line_index]),
+        )
+
+    constructions: list[ThreeFaceCoverConstruction | None] = []
+    for source_intersection in source_intersections:
+        source_line_indices = [(source_intersection - 1) % len(points), source_intersection]
+        sources_with_anchors = [
+            (line_index, closest_non_touching_vertex(line_index))
+            for line_index in source_line_indices
+        ]
+        sources_with_anchors.sort(key=lambda item: item[1])
+        (first_line, first_anchor), (second_line, second_anchor) = sources_with_anchors
+        opposite_vertex = (source_intersection + 3) % len(points)
+        constructions.append(
+            _construct_three_face_cover(
+                points,
+                construction=(
+                    f"{line_label(first_line)}@V{first_anchor + 1} + "
+                    f"{line_label(second_line)}@V{second_anchor + 1}"
+                ),
+                source_intersection_vertex_index=source_intersection,
+                first_source_label=line_label(first_line),
+                first_source_line_index=first_line,
+                first_anchor_vertex_index=first_anchor,
+                second_source_label=line_label(second_line),
+                second_source_line_index=second_line,
+                second_anchor_vertex_index=second_anchor,
+                polygon_vertex_indices=[first_anchor, opposite_vertex, second_anchor, None],
+            )
+        )
     return [construction for construction in constructions if construction is not None]
 
 

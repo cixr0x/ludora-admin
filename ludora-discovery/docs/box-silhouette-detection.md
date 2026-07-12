@@ -31,18 +31,15 @@ The overlay draws the inferred seam in magenta and shades the selected cover gre
 
 ## Three-Face Cover Constructions
 
-The first three-face experiment performs exactly two translations without changing either source direction:
+The constructions are derived from geometry rather than fixed labels:
 
-1. Copy `C2` and translate it until it passes through vertex `V2`.
-2. Copy `B2` and translate it until it passes through vertex `V4`.
-3. Intersect the translated lines to obtain the missing cover corner.
-4. Form the cover quadrilateral from `V2`, `V3`, `V4`, and the intersection.
+1. Select the four longest silhouette lines.
+2. Find vertices where two selected lines meet. A valid cuboid outline should produce exactly two such vertices.
+3. For each source line, find the closest silhouette vertex that is not one of that line's endpoints.
+4. Copy the source line without rotating it and translate the copy through that closest vertex.
+5. Intersect the two translated lines and combine that point with their anchors and the opposite silhouette vertex.
 
-The second construction applies the same exact operation on the opposite side:
-
-1. Copy `B1` and translate it through `V1`.
-2. Copy `C1` and translate it through `V5`.
-3. Intersect the translated lines and form the quadrilateral from `V1`, the intersection, `V5`, and `V6`.
+For the current example this automatically reproduces `C2@V2 + B2@V4` and `B1@V1 + C1@V5`; those labels are results of the general rule, not hardcoded cases.
 
 `three-face-covers.png` draws both constructions side by side. Original source segments are cyan and translated copies are magenta. The JSON records both source and translated segments and their angular errors, which should be zero apart from floating-point precision. No mixed source-line combinations are generated.
 

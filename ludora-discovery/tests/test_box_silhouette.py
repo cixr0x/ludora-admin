@@ -183,8 +183,14 @@ class BoxSilhouetteTests(unittest.TestCase):
         covers = identify_three_face_covers(vertices, perspective)
 
         self.assertEqual(len(covers), 2)
+        self.assertEqual(
+            sorted({line_index for item in covers for line_index in item.source_line_indices}),
+            [2, 3, 5, 6],
+        )
         cover = covers[0]
         self.assertEqual(cover.construction, "C2@V2 + B2@V4")
+        self.assertEqual(cover.source_intersection_vertex_index, 6)
+        self.assertEqual(set(cover.source_line_indices), {5, 6})
         self.assertEqual(cover.first_parallel_source_line, "C2")
         self.assertEqual(cover.first_anchor_vertex_index, 2)
         self.assertEqual(cover.second_parallel_source_line, "B2")
@@ -215,6 +221,8 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertEqual(len(covers), 2)
         cover = covers[1]
         self.assertEqual(cover.construction, "B1@V1 + C1@V5")
+        self.assertEqual(cover.source_intersection_vertex_index, 3)
+        self.assertEqual(set(cover.source_line_indices), {2, 3})
         self.assertEqual(cover.first_parallel_source_line, "B1")
         self.assertEqual(cover.first_anchor_vertex_index, 1)
         self.assertEqual(cover.second_parallel_source_line, "C1")
@@ -225,6 +233,38 @@ class BoxSilhouetteTests(unittest.TestCase):
         np.testing.assert_allclose(cover.parallel_error_degrees, [0.0, 0.0], atol=1e-9)
         self.assertTrue(cover.inside_silhouette)
         self.assertTrue(cover.convex)
+
+    def test_three_face_constructions_are_derived_after_vertex_rotation(self):
+        vertices = np.array(
+            [
+                [523.53, 116.50],
+                [610.80, 133.54],
+                [581.55, 571.32],
+                [164.96, 680.50],
+                [118.07, 603.54],
+                [85.16, 144.63],
+            ],
+            dtype=np.float64,
+        )
+        vertices = np.roll(vertices, 2, axis=0)
+        perspective = classify_perspective(vertices)
+        lengths = [
+            float(np.linalg.norm(vertices[(index + 1) % 6] - vertices[index]))
+            for index in range(6)
+        ]
+        expected_longest = sorted(
+            index + 1 for index in sorted(range(6), key=lambda index: lengths[index], reverse=True)[:4]
+        )
+
+        covers = identify_three_face_covers(vertices, perspective)
+
+        self.assertEqual(len(covers), 2)
+        self.assertEqual(
+            sorted({line_index for cover in covers for line_index in cover.source_line_indices}),
+            expected_longest,
+        )
+        for cover in covers:
+            np.testing.assert_allclose(cover.parallel_error_degrees, [0.0, 0.0], atol=1e-9)
 
     def test_two_face_outline_does_not_create_three_face_cover(self):
         vertices = np.array(
