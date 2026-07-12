@@ -105,6 +105,10 @@ class FlattenedCoverGeometry:
     right_length: float
     estimated_width: float
     estimated_height: float
+    circle_evidence_count: int
+    circle_aspect_scale: float | None
+    circle_aspect_log_mad: float | None
+    circle_square_snapped: bool
     untrimmed_width: int
     untrimmed_height: int
     square_threshold: float
@@ -118,6 +122,13 @@ class FlattenedCoverGeometry:
     aspect_ratio: float
     width_disagreement: float
     height_disagreement: float
+
+
+@dataclass(frozen=True)
+class CircularAspectEvidence:
+    count: int
+    horizontal_scale: float | None
+    log_mad: float | None
 
 
 @dataclass(frozen=True)
@@ -909,6 +920,101 @@ def order_quadrilateral(points: np.ndarray) -> np.ndarray:
     return cyclic.astype(np.float32)
 
 
+def estimate_circular_aspect_scale(image: np.ndarray) -> CircularAspectEvidence:
+    """Estimate horizontal scale from repeated axis-aligned circular artwork."""
+
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("expected a BGR color image")
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    minimum_dimension = float(min(gray.shape))
+    candidates: list[tuple[float, float, float, float, float]] = []
+    for threshold in np.linspace(30, 225, 14).astype(int):
+        _, binary = cv2.threshold(gray, int(threshold), 255, cv2.THRESH_BINARY)
+        contours, _ = cv2.findContours(binary, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+        for contour in contours:
+            if len(contour) < 24:
+                continue
+            area = abs(float(cv2.contourArea(contour)))
+            perimeter = float(cv2.arcLength(contour, True))
+            if area < 80.0 or perimeter <= 0.0:
+                continue
+            (center_x, center_y), (first_axis, second_axis), angle = cv2.fitEllipse(contour)
+            shorter_axis = min(first_axis, second_axis)
+            longer_axis = max(first_axis, second_axis)
+            if (
+                shorter_axis < minimum_dimension * 0.055
+                or longer_axis > minimum_dimension * 0.58
+                or shorter_axis / longer_axis < 0.5
+            ):
+                continue
+            ellipse_area = float(np.pi * first_axis * second_axis / 4.0)
+            fill_ratio = area / ellipse_area if ellipse_area else 0.0
+            circularity = float(4.0 * np.pi * area / (perimeter * perimeter))
+            if not 0.78 <= fill_ratio <= 1.18 or circularity < 0.58:
+                continue
+            axis_offset = min(angle % 90.0, 90.0 - angle % 90.0)
+            if axis_offset > 12.0:
+                continue
+
+            radians = np.deg2rad(angle)
+            horizontal_diameter = float(
+                np.hypot(first_axis * np.cos(radians), second_axis * np.sin(radians))
+            )
+            vertical_diameter = float(
+                np.hypot(first_axis * np.sin(radians), second_axis * np.cos(radians))
+            )
+            horizontal_scale = vertical_diameter / horizontal_diameter
+            if not 0.65 <= horizontal_scale <= 1.55:
+                continue
+            diameter = float(np.sqrt(horizontal_diameter * vertical_diameter))
+            quality = circularity * min(fill_ratio, 1.0 / fill_ratio)
+            candidates.append((center_x, center_y, diameter, horizontal_scale, quality))
+
+    unique_candidates: list[tuple[float, float, float, float, float]] = []
+    for candidate in sorted(candidates, key=lambda item: item[4], reverse=True):
+        center = np.asarray(candidate[:2])
+        if any(
+            float(np.linalg.norm(center - np.asarray(existing[:2])))
+            <= max(6.0, 0.12 * min(candidate[2], existing[2]))
+            for existing in unique_candidates
+        ):
+            continue
+        unique_candidates.append(candidate)
+
+    if len(unique_candidates) < 3:
+        return CircularAspectEvidence(
+            count=len(unique_candidates),
+            horizontal_scale=None,
+            log_mad=None,
+        )
+
+    log_scales = np.log([candidate[3] for candidate in unique_candidates])
+    median_log_scale = float(np.median(log_scales))
+    inliers = np.abs(log_scales - median_log_scale) <= 0.10
+    inlier_scales = log_scales[inliers]
+    if len(inlier_scales) < 3 or len(inlier_scales) / len(log_scales) < 0.60:
+        return CircularAspectEvidence(
+            count=int(len(inlier_scales)),
+            horizontal_scale=None,
+            log_mad=None,
+        )
+
+    inlier_median = float(np.median(inlier_scales))
+    log_mad = float(np.median(np.abs(inlier_scales - inlier_median)))
+    if log_mad > 0.05:
+        return CircularAspectEvidence(
+            count=int(len(inlier_scales)),
+            horizontal_scale=None,
+            log_mad=log_mad,
+        )
+    return CircularAspectEvidence(
+        count=int(len(inlier_scales)),
+        horizontal_scale=float(np.exp(inlier_median)),
+        log_mad=log_mad,
+    )
+
+
 def flatten_cover_quadrilateral(
     image: np.ndarray,
     polygon: np.ndarray,
@@ -933,20 +1039,61 @@ def flatten_cover_quadrilateral(
     if estimated_width <= 1.0 or estimated_height <= 1.0:
         raise ValueError("flattened cover dimensions must be greater than one pixel")
 
-    scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
     square_difference = abs(estimated_width - estimated_height) / max(
         estimated_width,
         estimated_height,
     )
     square_snapped = square_difference <= square_threshold
+    circle_evidence = CircularAspectEvidence(count=0, horizontal_scale=None, log_mad=None)
+    circle_square_snapped = False
+    if not square_snapped:
+        provisional_scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
+        provisional_width = max(2, int(round(estimated_width * provisional_scale)))
+        provisional_height = max(2, int(round(estimated_height * provisional_scale)))
+        provisional_destination = np.array(
+            [
+                [0, 0],
+                [provisional_width - 1, 0],
+                [provisional_width - 1, provisional_height - 1],
+                [0, provisional_height - 1],
+            ],
+            dtype=np.float32,
+        )
+        ordered = np.array([top_left, top_right, bottom_right, bottom_left], dtype=np.float32)
+        provisional_transform = cv2.getPerspectiveTransform(ordered, provisional_destination)
+        provisional = cv2.warpPerspective(
+            image,
+            provisional_transform,
+            (provisional_width, provisional_height),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+        circle_evidence = estimate_circular_aspect_scale(provisional)
+        if circle_evidence.horizontal_scale is not None:
+            circle_corrected_width = estimated_width * circle_evidence.horizontal_scale
+            circle_square_difference = abs(circle_corrected_width - estimated_height) / max(
+                circle_corrected_width,
+                estimated_height,
+            )
+            if circle_square_difference <= square_threshold:
+                square_snapped = True
+                circle_square_snapped = True
+
     if square_snapped:
+        square_width = (
+            estimated_width * circle_evidence.horizontal_scale
+            if circle_square_snapped and circle_evidence.horizontal_scale is not None
+            else estimated_width
+        )
+        square_scale = min(1.0, max_dimension / max(square_width, estimated_height))
         square_size = max(
             2,
-            int(round(((estimated_width + estimated_height) / 2.0) * scale)),
+            int(round(((square_width + estimated_height) / 2.0) * square_scale)),
         )
         untrimmed_width = square_size
         untrimmed_height = square_size
     else:
+        scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
         untrimmed_width = max(2, int(round(estimated_width * scale)))
         untrimmed_height = max(2, int(round(estimated_height * scale)))
     destination = np.array(
@@ -988,6 +1135,10 @@ def flatten_cover_quadrilateral(
         right_length=right_length,
         estimated_width=estimated_width,
         estimated_height=estimated_height,
+        circle_evidence_count=circle_evidence.count,
+        circle_aspect_scale=circle_evidence.horizontal_scale,
+        circle_aspect_log_mad=circle_evidence.log_mad,
+        circle_square_snapped=circle_square_snapped,
         untrimmed_width=untrimmed_width,
         untrimmed_height=untrimmed_height,
         square_threshold=square_threshold,

@@ -107,6 +107,37 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertEqual(geometry.untrimmed_height, 94)
         self.assertNotEqual(flattened.shape[0], flattened.shape[1])
 
+    def test_flatten_cover_uses_repeated_circles_to_recover_a_square(self):
+        cover = np.full((400, 400, 3), (135, 70, 100), dtype=np.uint8)
+        for center in [(100, 100), (300, 100), (100, 300), (300, 300)]:
+            cv2.circle(cover, center, 42, (20, 20, 20), -1, cv2.LINE_AA)
+            cv2.circle(cover, center, 42, (220, 220, 220), 3, cv2.LINE_AA)
+        cv2.circle(cover, (200, 200), 75, (245, 245, 245), -1, cv2.LINE_AA)
+        cv2.circle(cover, (200, 200), 75, (40, 40, 40), 3, cv2.LINE_AA)
+
+        source = np.full((580, 580, 3), 255, dtype=np.uint8)
+        source_corners = np.array([[0, 0], [399, 0], [399, 399], [0, 399]], dtype=np.float32)
+        projected_corners = np.array(
+            [[110, 25], [455, 92], [455, 502], [110, 548]],
+            dtype=np.float32,
+        )
+        transform = cv2.getPerspectiveTransform(source_corners, projected_corners)
+        projected = cv2.warpPerspective(cover, transform, (580, 580), borderValue=(255, 255, 255))
+        projected_mask = cv2.warpPerspective(
+            np.full((400, 400), 255, dtype=np.uint8),
+            transform,
+            (580, 580),
+        )
+        source[projected_mask > 0] = projected[projected_mask > 0]
+
+        flattened, geometry = flatten_cover_quadrilateral(source, projected_corners)
+
+        self.assertTrue(geometry.square_snapped)
+        self.assertTrue(geometry.circle_square_snapped)
+        self.assertGreaterEqual(geometry.circle_evidence_count, 3)
+        self.assertIsNotNone(geometry.circle_aspect_scale)
+        self.assertEqual(flattened.shape[0], flattened.shape[1])
+
     def test_detects_six_sided_convex_box_silhouette(self):
         image = np.full((260, 320, 3), 255, dtype=np.uint8)
         expected = np.array(
