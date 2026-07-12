@@ -14,14 +14,14 @@ In the overlay, red is the final fitted six-line silhouette, blue is the old six
 
 ## Perspective Classification
 
-The six clockwise lines are labeled `A1 B1 C1 A2 B2 C2`. The detector compares the direction of each opposite pair: `A1-A2`, `B1-B2`, and `C1-C2`. Directions are compared modulo 180 degrees with a 12-degree tolerance.
+The six clockwise lines are labeled `A1 B1 C1 A2 B2 C2`. The detector compares the direction and projected length of each opposite pair: `A1-A2`, `B1-B2`, and `C1-C2`. A pair matches only when its directions are within 12 degrees modulo 180 degrees and its shorter/longer length ratio is at least 0.5. The length guard prevents a short JPEG-sensitive bevel from accidentally matching a much longer cover edge solely because their fitted angles happen to be similar.
 
 - Three matching pairs: `three_faces`, high confidence.
 - Two matching pairs: `three_faces`, lower confidence because one receding axis may converge strongly under projective perspective.
 - One matching pair: `two_faces`.
 - No matching pairs, or an outline without six sides: `ambiguous`.
 
-The JSON includes both line angles, their angular difference, whether they match, and their finite vanishing point when the lines are not nearly parallel. This evidence is retained so later stages can reject borderline classifications or add an interior-edge check.
+The JSON includes both line angles and lengths, angular difference, length ratio, separate direction/length compatibility flags, the combined match result, and the finite vanishing point when the lines are not nearly parallel. This evidence is retained so later stages can reject borderline classifications or add an interior-edge check.
 
 ## Two-Face Cover Identification
 

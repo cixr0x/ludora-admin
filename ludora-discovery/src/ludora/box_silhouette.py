@@ -27,7 +27,11 @@ class OppositeLinePair:
     line_indices: list[int]
     angles_degrees: list[float]
     difference_degrees: float
+    lengths: list[float]
+    length_ratio: float
     similar_direction: bool
+    similar_length: bool
+    matching: bool
     vanishing_point: list[float] | None
 
 
@@ -37,6 +41,7 @@ class PerspectiveClassification:
     confidence: float
     matching_opposite_pairs: int
     angle_tolerance_degrees: float
+    minimum_length_ratio: float
     pairs: list[OppositeLinePair]
 
 
@@ -423,6 +428,7 @@ def classify_perspective(
     vertices: np.ndarray,
     *,
     angle_tolerance_degrees: float = 12.0,
+    minimum_length_ratio: float = 0.5,
 ) -> PerspectiveClassification:
     points = np.asarray(vertices, dtype=np.float64).reshape(-1, 2)
     if len(points) != 6:
@@ -431,16 +437,23 @@ def classify_perspective(
             confidence=0.0,
             matching_opposite_pairs=0,
             angle_tolerance_degrees=float(angle_tolerance_degrees),
+            minimum_length_ratio=float(minimum_length_ratio),
             pairs=[],
         )
     if angle_tolerance_degrees <= 0:
         raise ValueError("perspective angle tolerance must be positive")
+    if not 0.0 < minimum_length_ratio <= 1.0:
+        raise ValueError("perspective minimum length ratio must be between zero and one")
 
     edge_lines = [
         _fit_line(np.array([points[index], points[(index + 1) % len(points)]]))
         for index in range(len(points))
     ]
     angles = [_line_angle_degrees(line) for line in edge_lines]
+    lengths = [
+        float(np.linalg.norm(points[(index + 1) % len(points)] - points[index]))
+        for index in range(len(points))
+    ]
     pairs: list[OppositeLinePair] = []
     for index, axis_label in enumerate("ABC"):
         opposite_index = index + 3
@@ -450,20 +463,29 @@ def classify_perspective(
             vanishing_point = None
         else:
             vanishing_point = [float(intersection[0]), float(intersection[1])]
+        first_length = lengths[index]
+        second_length = lengths[opposite_index]
+        length_ratio = min(first_length, second_length) / max(first_length, second_length)
+        similar_direction = difference <= angle_tolerance_degrees
+        similar_length = length_ratio >= minimum_length_ratio
         pairs.append(
             OppositeLinePair(
                 axis_label=axis_label,
                 line_indices=[index + 1, opposite_index + 1],
                 angles_degrees=[float(angles[index]), float(angles[opposite_index])],
                 difference_degrees=float(difference),
-                similar_direction=difference <= angle_tolerance_degrees,
+                lengths=[float(first_length), float(second_length)],
+                length_ratio=float(length_ratio),
+                similar_direction=similar_direction,
+                similar_length=similar_length,
+                matching=similar_direction and similar_length,
                 vanishing_point=vanishing_point,
             )
         )
 
-    matching_pairs = sum(pair.similar_direction for pair in pairs)
-    matching_differences = [pair.difference_degrees for pair in pairs if pair.similar_direction]
-    mismatching_differences = [pair.difference_degrees for pair in pairs if not pair.similar_direction]
+    matching_pairs = sum(pair.matching for pair in pairs)
+    matching_differences = [pair.difference_degrees for pair in pairs if pair.matching]
+    mismatching_differences = [pair.difference_degrees for pair in pairs if not pair.matching]
     if matching_pairs >= 2:
         kind = "three_faces"
         matching_strength = float(
@@ -499,6 +521,7 @@ def classify_perspective(
         confidence=float(min(1.0, max(0.0, confidence))),
         matching_opposite_pairs=matching_pairs,
         angle_tolerance_degrees=float(angle_tolerance_degrees),
+        minimum_length_ratio=float(minimum_length_ratio),
         pairs=pairs,
     )
 
@@ -508,7 +531,7 @@ def identify_two_face_cover(
     perspective: PerspectiveClassification,
 ) -> TwoFaceCoverDetection | None:
     points = np.asarray(vertices, dtype=np.float64).reshape(-1, 2)
-    matching_pairs = [pair for pair in perspective.pairs if pair.similar_direction]
+    matching_pairs = [pair for pair in perspective.pairs if pair.matching]
     if perspective.kind != "two_faces" or len(points) != 6 or len(matching_pairs) != 1:
         return None
 

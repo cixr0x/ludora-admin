@@ -213,6 +213,29 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertTrue(perspective.pairs[1].similar_direction)
         self.assertFalse(perspective.pairs[2].similar_direction)
 
+    def test_rejects_accidental_parallelism_between_very_different_edge_lengths(self):
+        vertices = np.array(
+            [
+                [129.2695, 34.4528],
+                [362.5094, 56.2963],
+                [362.9697, 412.6043],
+                [125.6831, 424.4649],
+                [92.2247, 406.0437],
+                [91.7836, 38.7720],
+            ],
+            dtype=np.float64,
+        )
+
+        perspective = classify_perspective(vertices)
+
+        self.assertEqual(perspective.kind, "two_faces")
+        self.assertEqual(perspective.matching_opposite_pairs, 1)
+        self.assertTrue(perspective.pairs[2].similar_direction)
+        self.assertFalse(perspective.pairs[2].similar_length)
+        self.assertFalse(perspective.pairs[2].matching)
+        self.assertLess(perspective.pairs[2].length_ratio, 0.17)
+        self.assertEqual(perspective.minimum_length_ratio, 0.5)
+
     def test_two_face_cover_connects_vertices_not_touching_parallel_lines(self):
         vertices = np.array(
             [
@@ -382,6 +405,7 @@ class BoxSilhouetteTests(unittest.TestCase):
 
         self.assertEqual(perspective.kind, "three_faces")
         self.assertEqual(perspective.matching_opposite_pairs, 3)
+        self.assertTrue(all(pair.matching for pair in perspective.pairs))
         self.assertGreater(perspective.confidence, 0.99)
 
     def test_approximation_returns_requested_line_count(self):
