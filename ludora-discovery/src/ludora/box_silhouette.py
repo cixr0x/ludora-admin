@@ -102,6 +102,9 @@ class FlattenedCoverGeometry:
     estimated_height: float
     untrimmed_width: int
     untrimmed_height: int
+    square_threshold: float
+    square_difference: float
+    square_snapped: bool
     trim_fraction: float
     trim_x: int
     trim_y: int
@@ -776,10 +779,13 @@ def flatten_cover_quadrilateral(
     polygon: np.ndarray,
     *,
     max_dimension: int = 1600,
+    square_threshold: float = 0.05,
     trim_fraction: float = 0.01,
 ) -> tuple[np.ndarray, FlattenedCoverGeometry]:
     if max_dimension <= 0:
         raise ValueError("maximum flattened cover dimension must be positive")
+    if not 0.0 <= square_threshold < 1.0:
+        raise ValueError("square threshold must be between zero and one")
     if not 0.0 <= trim_fraction < 0.5:
         raise ValueError("cover trim fraction must be between zero and one half")
     top_left, top_right, bottom_right, bottom_left = order_quadrilateral(polygon)
@@ -793,8 +799,21 @@ def flatten_cover_quadrilateral(
         raise ValueError("flattened cover dimensions must be greater than one pixel")
 
     scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
-    untrimmed_width = max(2, int(round(estimated_width * scale)))
-    untrimmed_height = max(2, int(round(estimated_height * scale)))
+    square_difference = abs(estimated_width - estimated_height) / max(
+        estimated_width,
+        estimated_height,
+    )
+    square_snapped = square_difference <= square_threshold
+    if square_snapped:
+        square_size = max(
+            2,
+            int(round(((estimated_width + estimated_height) / 2.0) * scale)),
+        )
+        untrimmed_width = square_size
+        untrimmed_height = square_size
+    else:
+        untrimmed_width = max(2, int(round(estimated_width * scale)))
+        untrimmed_height = max(2, int(round(estimated_height * scale)))
     destination = np.array(
         [
             [0, 0],
@@ -836,6 +855,9 @@ def flatten_cover_quadrilateral(
         estimated_height=estimated_height,
         untrimmed_width=untrimmed_width,
         untrimmed_height=untrimmed_height,
+        square_threshold=square_threshold,
+        square_difference=square_difference,
+        square_snapped=square_snapped,
         trim_fraction=trim_fraction,
         trim_x=trim_x,
         trim_y=trim_y,
@@ -1065,6 +1087,8 @@ def write_flattened_covers(
             f"{geometry.width}x{geometry.height}  ratio={geometry.aspect_ratio:.3f}  "
             f"edge disagreement={geometry.width_disagreement:.1%}/{geometry.height_disagreement:.1%}"
         )
+        if geometry.square_snapped:
+            subtitle += "  square-snapped"
         text_scale = min(0.5, max(0.3, preview_width / 1050.0))
         cv2.putText(header, title, (8, 25), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 0, 0), 1, cv2.LINE_AA)
         cv2.putText(header, subtitle, (8, 52), cv2.FONT_HERSHEY_SIMPLEX, text_scale, (0, 0, 0), 1, cv2.LINE_AA)

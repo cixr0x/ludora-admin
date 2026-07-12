@@ -75,6 +75,37 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertEqual(geometry.trim_y, 0)
         self.assertEqual(flattened.shape[:2], (80, 100))
 
+    def test_flatten_cover_snaps_near_square_dimensions(self):
+        image = np.zeros((130, 130, 3), dtype=np.uint8)
+        polygon = np.array(
+            [[10, 10], [110, 10], [110, 106], [10, 106]],
+            dtype=np.float32,
+        )
+
+        flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+
+        self.assertAlmostEqual(geometry.square_difference, 0.04)
+        self.assertEqual(geometry.square_threshold, 0.05)
+        self.assertTrue(geometry.square_snapped)
+        self.assertEqual(geometry.untrimmed_width, 98)
+        self.assertEqual(geometry.untrimmed_height, 98)
+        self.assertEqual(flattened.shape[0], flattened.shape[1])
+
+    def test_flatten_cover_does_not_snap_outside_square_threshold(self):
+        image = np.zeros((130, 130, 3), dtype=np.uint8)
+        polygon = np.array(
+            [[10, 10], [110, 10], [110, 104], [10, 104]],
+            dtype=np.float32,
+        )
+
+        flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+
+        self.assertAlmostEqual(geometry.square_difference, 0.06)
+        self.assertFalse(geometry.square_snapped)
+        self.assertEqual(geometry.untrimmed_width, 100)
+        self.assertEqual(geometry.untrimmed_height, 94)
+        self.assertNotEqual(flattened.shape[0], flattened.shape[1])
+
     def test_detects_six_sided_convex_box_silhouette(self):
         image = np.full((260, 320, 3), 255, dtype=np.uint8)
         expected = np.array(

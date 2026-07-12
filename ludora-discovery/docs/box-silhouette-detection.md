@@ -51,10 +51,11 @@ Two-face and three-face paths use different methods to find cover quadrilaterals
 2. Measure all four Euclidean edge lengths.
 3. Estimate width from the average of the top and bottom lengths.
 4. Estimate height from the average of the left and right lengths.
-5. Map the quadrilateral to an axis-aligned rectangle with `cv2.getPerspectiveTransform` and `cv2.warpPerspective`.
-6. Trim 1% from every side of the flattened rectangle to remove shiny, worn, or slightly inaccurate physical box edges.
+5. If width and height differ by 5% or less, snap both dimensions to their average so a near-square physical box produces an exact square cover.
+6. Map the quadrilateral to an axis-aligned rectangle with `cv2.getPerspectiveTransform` and `cv2.warpPerspective`.
+7. Trim 1% from every side of the flattened rectangle to remove shiny, worn, or slightly inaccurate physical box edges.
 
-The JSON records the four source lengths, estimated dimensions, untrimmed and final output sizes, trim amount, aspect ratio, and opposite-edge disagreement. Individual results are written as `flattened-cover.png` or numbered `flattened-cover-N.png` files, with a combined `flattened-cover-previews.png` for candidate comparison. Rotation is implicit in the perspective transform; rotating a line does not change its measured Euclidean length.
+The default near-square threshold is 5% and can be overridden with the `square_threshold` argument to `flatten_cover_quadrilateral`. The JSON records the measured width/height difference, threshold, whether square snapping was applied, four source lengths, estimated dimensions, untrimmed and final output sizes, trim amount, aspect ratio, and opposite-edge disagreement. Individual results are written as `flattened-cover.png` or numbered `flattened-cover-N.png` files, with a combined `flattened-cover-previews.png` for candidate comparison. Rotation is implicit in the perspective transform; rotating a line does not change its measured Euclidean length.
 
 Run it from `ludora-admin/ludora-discovery`:
 
