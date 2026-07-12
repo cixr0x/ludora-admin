@@ -29,7 +29,7 @@ When exactly one opposite line pair matches, the four vertices incident to that 
 
 The overlay draws the inferred seam in magenta and shades the selected cover green. The JSON records the parallel pair, seam endpoints, both face polygons and areas, and the fraction of the combined visible-face area assigned to the cover.
 
-## Three-Face Cover Construction: First Case
+## Three-Face Cover Constructions
 
 The first three-face experiment performs exactly two translations without changing either source direction:
 
@@ -38,7 +38,13 @@ The first three-face experiment performs exactly two translations without changi
 3. Intersect the translated lines to obtain the missing cover corner.
 4. Form the cover quadrilateral from `V2`, `V3`, `V4`, and the intersection.
 
-`three-face-cover.png` draws the original `C2/B2` source segments in cyan and their translated copies in magenta. The JSON records both source and translated segments and their angular errors, which should be zero apart from floating-point precision. No alternative slope combinations are generated in this experiment.
+The second construction applies the same exact operation on the opposite side:
+
+1. Copy `B1` and translate it through `V1`.
+2. Copy `C1` and translate it through `V5`.
+3. Intersect the translated lines and form the quadrilateral from `V1`, the intersection, `V5`, and `V6`.
+
+`three-face-covers.png` draws both constructions side by side. Original source segments are cyan and translated copies are magenta. The JSON records both source and translated segments and their angular errors, which should be zero apart from floating-point precision. No mixed source-line combinations are generated.
 
 Run it from `ludora-admin/ludora-discovery`:
 

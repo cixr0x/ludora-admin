@@ -86,7 +86,7 @@ class SilhouetteDetection:
     polygon_area_retention: float
     perspective: PerspectiveClassification
     two_face_cover: TwoFaceCoverDetection | None
-    three_face_cover: ThreeFaceCoverConstruction | None
+    three_face_covers: list[ThreeFaceCoverConstruction]
 
 
 @dataclass(frozen=True)
@@ -95,7 +95,7 @@ class SilhouetteResult:
     overlay_path: str
     mask_path: str
     metadata_path: str
-    three_face_cover_path: str | None
+    three_face_covers_path: str | None
     detection: SilhouetteDetection
 
 
@@ -531,40 +531,71 @@ def _parallel_line_through_point(coefficients: np.ndarray, point: np.ndarray) ->
     return np.array([a, b, -(a * point[0] + b * point[1])], dtype=np.float64)
 
 
-def identify_three_face_cover(
-    vertices: np.ndarray,
-    perspective: PerspectiveClassification,
+def _construct_three_face_cover(
+    points: np.ndarray,
+    *,
+    construction: str,
+    first_source_label: str,
+    first_source_line_index: int,
+    first_anchor_vertex_index: int,
+    second_source_label: str,
+    second_source_line_index: int,
+    second_anchor_vertex_index: int,
+    polygon_vertex_indices: list[int | None],
 ) -> ThreeFaceCoverConstruction | None:
-    points = np.asarray(vertices, dtype=np.float64).reshape(-1, 2)
-    if perspective.kind != "three_faces" or len(points) != 6:
-        return None
-
-    c2_source_segment = np.array([points[5], points[0]], dtype=np.float64)
-    b2_source_segment = np.array([points[4], points[5]], dtype=np.float64)
-    c2_source_line = _fit_line(c2_source_segment)
-    b2_source_line = _fit_line(b2_source_segment)
-    c2_through_v2 = _parallel_line_through_point(c2_source_line, points[1])
-    b2_through_v4 = _parallel_line_through_point(b2_source_line, points[3])
-    missing_vertex = _intersect_lines(c2_through_v2, b2_through_v4)
+    first_source_segment = np.array(
+        [points[first_source_line_index], points[(first_source_line_index + 1) % len(points)]],
+        dtype=np.float64,
+    )
+    second_source_segment = np.array(
+        [points[second_source_line_index], points[(second_source_line_index + 1) % len(points)]],
+        dtype=np.float64,
+    )
+    first_source_line = _fit_line(first_source_segment)
+    second_source_line = _fit_line(second_source_segment)
+    first_translated_line = _parallel_line_through_point(
+        first_source_line,
+        points[first_anchor_vertex_index],
+    )
+    second_translated_line = _parallel_line_through_point(
+        second_source_line,
+        points[second_anchor_vertex_index],
+    )
+    missing_vertex = _intersect_lines(first_translated_line, second_translated_line)
     if missing_vertex is None or not np.all(np.isfinite(missing_vertex)):
         return None
 
-    polygon = np.array([points[1], points[2], points[3], missing_vertex], dtype=np.float64)
-    translated_c2_segment = np.array([points[1], missing_vertex], dtype=np.float64)
-    translated_b2_segment = np.array([points[3], missing_vertex], dtype=np.float64)
+    polygon = np.array(
+        [missing_vertex if index is None else points[index] for index in polygon_vertex_indices],
+        dtype=np.float64,
+    )
+    first_translated_segment = np.array(
+        [points[first_anchor_vertex_index], missing_vertex],
+        dtype=np.float64,
+    )
+    second_translated_segment = np.array(
+        [points[second_anchor_vertex_index], missing_vertex],
+        dtype=np.float64,
+    )
     return ThreeFaceCoverConstruction(
-        construction="C2@V2 + B2@V4",
-        first_parallel_source_line="C2",
-        first_anchor_vertex_index=2,
-        first_source_segment=[[float(value) for value in point] for point in c2_source_segment],
-        first_translated_segment=[[float(value) for value in point] for point in translated_c2_segment],
-        second_parallel_source_line="B2",
-        second_anchor_vertex_index=4,
-        second_source_segment=[[float(value) for value in point] for point in b2_source_segment],
-        second_translated_segment=[[float(value) for value in point] for point in translated_b2_segment],
+        construction=construction,
+        first_parallel_source_line=first_source_label,
+        first_anchor_vertex_index=first_anchor_vertex_index + 1,
+        first_source_segment=[[float(value) for value in point] for point in first_source_segment],
+        first_translated_segment=[[float(value) for value in point] for point in first_translated_segment],
+        second_parallel_source_line=second_source_label,
+        second_anchor_vertex_index=second_anchor_vertex_index + 1,
+        second_source_segment=[[float(value) for value in point] for point in second_source_segment],
+        second_translated_segment=[[float(value) for value in point] for point in second_translated_segment],
         parallel_error_degrees=[
-            _angle_difference(_line_angle_degrees(c2_source_line), _line_angle_degrees(c2_through_v2)),
-            _angle_difference(_line_angle_degrees(b2_source_line), _line_angle_degrees(b2_through_v4)),
+            _angle_difference(
+                _line_angle_degrees(first_source_line),
+                _line_angle_degrees(first_translated_line),
+            ),
+            _angle_difference(
+                _line_angle_degrees(second_source_line),
+                _line_angle_degrees(second_translated_line),
+            ),
         ],
         missing_vertex=[float(value) for value in missing_vertex.tolist()],
         cover_polygon=[[float(value) for value in point] for point in polygon],
@@ -576,6 +607,41 @@ def identify_three_face_cover(
         ) >= 0,
         convex=bool(cv2.isContourConvex(polygon.astype(np.float32))),
     )
+
+
+def identify_three_face_covers(
+    vertices: np.ndarray,
+    perspective: PerspectiveClassification,
+) -> list[ThreeFaceCoverConstruction]:
+    points = np.asarray(vertices, dtype=np.float64).reshape(-1, 2)
+    if perspective.kind != "three_faces" or len(points) != 6:
+        return []
+
+    constructions = [
+        _construct_three_face_cover(
+            points,
+            construction="C2@V2 + B2@V4",
+            first_source_label="C2",
+            first_source_line_index=5,
+            first_anchor_vertex_index=1,
+            second_source_label="B2",
+            second_source_line_index=4,
+            second_anchor_vertex_index=3,
+            polygon_vertex_indices=[1, 2, 3, None],
+        ),
+        _construct_three_face_cover(
+            points,
+            construction="B1@V1 + C1@V5",
+            first_source_label="B1",
+            first_source_line_index=1,
+            first_anchor_vertex_index=0,
+            second_source_label="C1",
+            second_source_line_index=2,
+            second_anchor_vertex_index=4,
+            polygon_vertex_indices=[0, None, 4, 5],
+        ),
+    ]
+    return [construction for construction in constructions if construction is not None]
 
 
 def lines_from_vertices(
@@ -637,7 +703,7 @@ def detect_silhouette(
     lines = lines_from_vertices(vertices, fitted_lines)
     perspective = classify_perspective(vertices)
     two_face_cover = identify_two_face_cover(vertices, perspective)
-    three_face_cover = identify_three_face_cover(vertices, perspective)
+    three_face_covers = identify_three_face_covers(vertices, perspective)
 
     detection = SilhouetteDetection(
         vertices=[[float(x), float(y)] for x, y in vertices.tolist()],
@@ -650,7 +716,7 @@ def detect_silhouette(
         polygon_area_retention=polygon_area / hull_area if hull_area else 0.0,
         perspective=perspective,
         two_face_cover=two_face_cover,
-        three_face_cover=three_face_cover,
+        three_face_covers=three_face_covers,
     )
     return detection, mask, hull
 
@@ -714,46 +780,49 @@ def draw_overlay(image: np.ndarray, detection: SilhouetteDetection, hull: np.nda
     return overlay
 
 
-def draw_three_face_cover(
+def draw_three_face_covers(
     image: np.ndarray,
     detection: SilhouetteDetection,
 ) -> np.ndarray | None:
-    construction = detection.three_face_cover
-    if construction is None:
+    if not detection.three_face_covers:
         return None
 
-    panel = image.copy()
     silhouette = np.rint(np.asarray(detection.vertices)).astype(np.int32)
-    polygon = np.rint(np.asarray(construction.cover_polygon)).astype(np.int32)
-    first_source = np.rint(np.asarray(construction.first_source_segment)).astype(np.int32)
-    second_source = np.rint(np.asarray(construction.second_source_segment)).astype(np.int32)
-    first_translated = np.rint(np.asarray(construction.first_translated_segment)).astype(np.int32)
-    second_translated = np.rint(np.asarray(construction.second_translated_segment)).astype(np.int32)
-    missing_vertex = tuple(np.rint(construction.missing_vertex).astype(np.int32))
+    panels: list[np.ndarray] = []
+    for case_number, construction in enumerate(detection.three_face_covers, start=1):
+        panel = image.copy()
+        polygon = np.rint(np.asarray(construction.cover_polygon)).astype(np.int32)
+        first_source = np.rint(np.asarray(construction.first_source_segment)).astype(np.int32)
+        second_source = np.rint(np.asarray(construction.second_source_segment)).astype(np.int32)
+        first_translated = np.rint(np.asarray(construction.first_translated_segment)).astype(np.int32)
+        second_translated = np.rint(np.asarray(construction.second_translated_segment)).astype(np.int32)
+        missing_vertex = tuple(np.rint(construction.missing_vertex).astype(np.int32))
 
-    tint = panel.copy()
-    cv2.fillPoly(tint, [polygon], (70, 220, 70), cv2.LINE_AA)
-    panel = cv2.addWeighted(tint, 0.17, panel, 0.83, 0)
-    cv2.polylines(panel, [silhouette], True, (0, 0, 255), 3, cv2.LINE_AA)
-    cv2.line(panel, tuple(first_source[0]), tuple(first_source[1]), (255, 160, 0), 7, cv2.LINE_AA)
-    cv2.line(panel, tuple(second_source[0]), tuple(second_source[1]), (255, 160, 0), 7, cv2.LINE_AA)
-    cv2.line(panel, tuple(first_translated[0]), tuple(first_translated[1]), (255, 0, 255), 5, cv2.LINE_AA)
-    cv2.line(panel, tuple(second_translated[0]), tuple(second_translated[1]), (255, 0, 255), 5, cv2.LINE_AA)
-    cv2.polylines(panel, [polygon], True, (0, 155, 0), 3, cv2.LINE_AA)
-    cv2.circle(panel, missing_vertex, 9, (0, 215, 255), -1, cv2.LINE_AA)
-    cv2.circle(panel, missing_vertex, 9, (0, 0, 0), 1, cv2.LINE_AA)
+        tint = panel.copy()
+        cv2.fillPoly(tint, [polygon], (70, 220, 70), cv2.LINE_AA)
+        panel = cv2.addWeighted(tint, 0.17, panel, 0.83, 0)
+        cv2.polylines(panel, [silhouette], True, (0, 0, 255), 3, cv2.LINE_AA)
+        cv2.line(panel, tuple(first_source[0]), tuple(first_source[1]), (255, 160, 0), 7, cv2.LINE_AA)
+        cv2.line(panel, tuple(second_source[0]), tuple(second_source[1]), (255, 160, 0), 7, cv2.LINE_AA)
+        cv2.line(panel, tuple(first_translated[0]), tuple(first_translated[1]), (255, 0, 255), 5, cv2.LINE_AA)
+        cv2.line(panel, tuple(second_translated[0]), tuple(second_translated[1]), (255, 0, 255), 5, cv2.LINE_AA)
+        cv2.polylines(panel, [polygon], True, (0, 155, 0), 3, cv2.LINE_AA)
+        cv2.circle(panel, missing_vertex, 9, (0, 215, 255), -1, cv2.LINE_AA)
+        cv2.circle(panel, missing_vertex, 9, (0, 0, 0), 1, cv2.LINE_AA)
 
-    title = "C2 translated through V2 + B2 translated through V4"
-    subtitle = (
-        f"intersection=({construction.missing_vertex[0]:.1f}, {construction.missing_vertex[1]:.1f})  "
-        f"parallel errors={construction.parallel_error_degrees[0]:.4f}, "
-        f"{construction.parallel_error_degrees[1]:.4f} deg"
-    )
-    cv2.rectangle(panel, (0, 0), (image.shape[1], 62), (255, 255, 255), -1)
-    title_scale = min(0.58, max(0.36, image.shape[1] / 1200.0))
-    cv2.putText(panel, title, (12, 25), cv2.FONT_HERSHEY_SIMPLEX, title_scale, (0, 0, 0), 1, cv2.LINE_AA)
-    cv2.putText(panel, subtitle, (12, 51), cv2.FONT_HERSHEY_SIMPLEX, title_scale, (0, 0, 0), 1, cv2.LINE_AA)
-    return panel
+        title = f"Case {case_number}: {construction.construction}"
+        subtitle = (
+            f"intersection=({construction.missing_vertex[0]:.1f}, {construction.missing_vertex[1]:.1f})  "
+            f"parallel errors={construction.parallel_error_degrees[0]:.4f}, "
+            f"{construction.parallel_error_degrees[1]:.4f} deg"
+        )
+        cv2.rectangle(panel, (0, 0), (image.shape[1], 62), (255, 255, 255), -1)
+        title_scale = min(0.58, max(0.36, image.shape[1] / 1200.0))
+        cv2.putText(panel, title, (12, 25), cv2.FONT_HERSHEY_SIMPLEX, title_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        cv2.putText(panel, subtitle, (12, 51), cv2.FONT_HERSHEY_SIMPLEX, title_scale, (0, 0, 0), 1, cv2.LINE_AA)
+        panels.append(panel)
+
+    return np.hstack(panels)
 
 
 def process_image(
@@ -778,19 +847,19 @@ def process_image(
     overlay_path = output / "silhouette-overlay.png"
     mask_path = output / "silhouette-mask.png"
     metadata_path = output / "silhouette.json"
-    three_face_cover_image = draw_three_face_cover(image, detection)
-    three_face_cover_path = output / "three-face-cover.png" if three_face_cover_image is not None else None
+    three_face_covers_image = draw_three_face_covers(image, detection)
+    three_face_covers_path = output / "three-face-covers.png" if three_face_covers_image is not None else None
 
     cv2.imwrite(str(overlay_path), draw_overlay(image, detection, hull))
     cv2.imwrite(str(mask_path), mask)
-    if three_face_cover_path is not None and three_face_cover_image is not None:
-        cv2.imwrite(str(three_face_cover_path), three_face_cover_image)
+    if three_face_covers_path is not None and three_face_covers_image is not None:
+        cv2.imwrite(str(three_face_covers_path), three_face_covers_image)
     result = SilhouetteResult(
         source_path=str(source.resolve()),
         overlay_path=str(overlay_path.resolve()),
         mask_path=str(mask_path.resolve()),
         metadata_path=str(metadata_path.resolve()),
-        three_face_cover_path=str(three_face_cover_path.resolve()) if three_face_cover_path is not None else None,
+        three_face_covers_path=str(three_face_covers_path.resolve()) if three_face_covers_path is not None else None,
         detection=detection,
     )
     metadata_path.write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")

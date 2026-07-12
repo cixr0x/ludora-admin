@@ -10,7 +10,7 @@ from ludora.box_silhouette import (
     build_foreground_mask,
     classify_perspective,
     detect_silhouette,
-    identify_three_face_cover,
+    identify_three_face_covers,
     identify_two_face_cover,
     process_image,
 )
@@ -180,9 +180,10 @@ class BoxSilhouetteTests(unittest.TestCase):
         )
         perspective = classify_perspective(vertices)
 
-        cover = identify_three_face_cover(vertices, perspective)
+        covers = identify_three_face_covers(vertices, perspective)
 
-        self.assertIsNotNone(cover)
+        self.assertEqual(len(covers), 2)
+        cover = covers[0]
         self.assertEqual(cover.construction, "C2@V2 + B2@V4")
         self.assertEqual(cover.first_parallel_source_line, "C2")
         self.assertEqual(cover.first_anchor_vertex_index, 2)
@@ -191,6 +192,36 @@ class BoxSilhouetteTests(unittest.TestCase):
         np.testing.assert_allclose(cover.first_translated_segment[0], vertices[1])
         np.testing.assert_allclose(cover.second_translated_segment[0], vertices[3])
         np.testing.assert_allclose(cover.missing_vertex, [128.0, 164.5], atol=0.6)
+        np.testing.assert_allclose(cover.parallel_error_degrees, [0.0, 0.0], atol=1e-9)
+        self.assertTrue(cover.inside_silhouette)
+        self.assertTrue(cover.convex)
+
+    def test_second_three_face_cover_translates_b1_through_v1_and_c1_through_v5(self):
+        vertices = np.array(
+            [
+                [523.53, 116.50],
+                [610.80, 133.54],
+                [581.55, 571.32],
+                [164.96, 680.50],
+                [118.07, 603.54],
+                [85.16, 144.63],
+            ],
+            dtype=np.float64,
+        )
+        perspective = classify_perspective(vertices)
+
+        covers = identify_three_face_covers(vertices, perspective)
+
+        self.assertEqual(len(covers), 2)
+        cover = covers[1]
+        self.assertEqual(cover.construction, "B1@V1 + C1@V5")
+        self.assertEqual(cover.first_parallel_source_line, "B1")
+        self.assertEqual(cover.first_anchor_vertex_index, 1)
+        self.assertEqual(cover.second_parallel_source_line, "C1")
+        self.assertEqual(cover.second_anchor_vertex_index, 5)
+        np.testing.assert_allclose(cover.first_translated_segment[0], vertices[0])
+        np.testing.assert_allclose(cover.second_translated_segment[0], vertices[4])
+        np.testing.assert_allclose(cover.missing_vertex, [497.6, 504.1], atol=0.6)
         np.testing.assert_allclose(cover.parallel_error_degrees, [0.0, 0.0], atol=1e-9)
         self.assertTrue(cover.inside_silhouette)
         self.assertTrue(cover.convex)
@@ -209,7 +240,7 @@ class BoxSilhouetteTests(unittest.TestCase):
         )
         perspective = classify_perspective(vertices)
 
-        self.assertIsNone(identify_three_face_cover(vertices, perspective))
+        self.assertEqual(identify_three_face_covers(vertices, perspective), [])
 
     def test_classifies_ideal_abcabc_hexagon_as_three_faces(self):
         edge_vectors = np.array(
