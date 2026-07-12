@@ -9,6 +9,10 @@ import { createBggClient } from './bgg/bggClient.js';
 import { createCachedBggClient } from './bgg/cachedBggClient.js';
 import { createBggItemImporter } from './bgg/bggItemImporter.js';
 import { createDescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
+import {
+  createCoverFlatteningWorkflowManager,
+  createNodeCoverFlatteningWorkflowDependencies
+} from './coverFlatteningWorkflow.js';
 import { createOpenAiDescriptionGenerationClient } from './descriptionGeneration/openAiDescriptionGenerationClient.js';
 import { createDiscoveryOperationsClient } from './discoveryOperationsClient.js';
 import { createNodeExternalCoverImageOptimizerDependencies, optimizeExternalCoverImages } from './externalCoverImageOptimizer.js';
@@ -88,10 +92,19 @@ const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
 );
 const externalCoverImageOptimizerDependencies = createNodeExternalCoverImageOptimizerDependencies(config.localCoverWorkflow);
+const coverFlatteningWorkflowManager = createCoverFlatteningWorkflowManager(
+  database,
+  createNodeCoverFlatteningWorkflowDependencies({
+    config: { ...config.localCoverWorkflow, workDir: config.coverFlatteningWorkDir },
+    packageDir: config.discoveryRunner.packageDir,
+    pythonExecutable: config.discoveryRunner.pythonExecutable
+  })
+);
 const app = createApp({
   adminAuth: { ...config.adminAuth, internalApiToken },
   amazonTitleExtractionService,
   bggItemImporter,
+  coverFlatteningWorkflowManager,
   database,
   corsOrigin: config.corsOrigin,
   descriptionGenerationService,

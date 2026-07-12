@@ -327,9 +327,11 @@ async function downloadImageWithLimit(url: string): Promise<Buffer> {
 }
 
 async function optimizeImageToWebp(image: Buffer, options: CoverImageOptimizeOptions): Promise<Buffer> {
-  let best = Buffer.alloc(0);
-  for (const maxDimension of [options.maxDimension, 700, 600, 500]) {
-    for (const quality of [82, 76, 70, 64, 58, 52, 46, 40]) {
+  const dimensions = [...new Set([options.maxDimension, 700, 600, 500, 400, 320, 256, 192, 128])]
+    .filter((dimension) => dimension > 0)
+    .sort((left, right) => right - left);
+  for (const maxDimension of dimensions) {
+    for (const quality of [82, 76, 70, 64, 58, 52, 46, 40, 34, 28, 22]) {
       const output = Buffer.from(
         await sharp(image, { failOn: 'none' })
           .rotate()
@@ -342,13 +344,12 @@ async function optimizeImageToWebp(image: Buffer, options: CoverImageOptimizeOpt
           .webp({ quality })
           .toBuffer()
       );
-      best = output;
-      if (output.length <= options.maxBytes) {
+      if (output.length < options.maxBytes) {
         return output;
       }
     }
   }
-  return best;
+  throw new Error(`Image could not be reduced below ${options.maxBytes} bytes`);
 }
 
 function isManagedImageUrl(url: string, publicBaseUrl: string): boolean {

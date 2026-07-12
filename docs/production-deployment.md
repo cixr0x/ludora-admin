@@ -101,6 +101,7 @@ LUDORA_DISCOVERY_RUNNER=local
 LUDORA_DISCOVERY_PACKAGE_DIR=/opt/ludora/ludora-admin/ludora-discovery
 LUDORA_DISCOVERY_PYTHON=/opt/ludora/ludora-admin/ludora-discovery/.venv/bin/python
 LUDORA_DISCOVERY_ENV_FILE=/opt/ludora/ludora-admin/ludora-discovery/.env
+LUDORA_COVER_FLATTENING_WORK_DIR=/tmp/ludora-cover-flattening
 ```
 
 The production UI file contains:

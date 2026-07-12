@@ -69,6 +69,34 @@ export type LocalCoverWorkflow = {
 
 export type CoverImageField = 'image_url' | 'image_url_es';
 
+export type CoverFlatteningCandidate = {
+  aspect_ratio: number;
+  construction: string;
+  height: number;
+  index: number;
+  square_snapped: boolean;
+  width: number;
+};
+
+export type CoverFlatteningWorkflow = {
+  candidates: CoverFlatteningCandidate[];
+  created_at: string;
+  expires_at: string;
+  item_id: number;
+  perspective: 'two_faces' | 'three_faces';
+  source_field: CoverImageField | 'store_item_image';
+  store_item_id: number | null;
+  workflow_id: string;
+};
+
+export type AcceptedCoverFlattening = {
+  item_id: number;
+  optimized_size_bytes: number;
+  public_url: string;
+  s3_key: string;
+  target_field: CoverImageField;
+};
+
 export type OptimizedCoverImage = {
   applied: boolean;
   field: CoverImageField;
@@ -314,6 +342,17 @@ async function fetchEnvelope<T>(path: string, init?: RequestInit): Promise<DataR
   return (await response.json()) as DataResponse<T>;
 }
 
+async function fetchBlob(path: string): Promise<Blob> {
+  const response = await fetch(buildApiUrl(path), { credentials: 'include' });
+  if (!response.ok) {
+    if (response.status === 401) {
+      unauthorizedHandler?.();
+    }
+    throw new Error(await readErrorMessage(response));
+  }
+  return response.blob();
+}
+
 async function readErrorMessage(response: Response): Promise<string> {
   try {
     const payload = (await response.json()) as ErrorResponse;
@@ -500,6 +539,32 @@ export const adminApi = {
   startItemLocalCoverWorkflow: (itemId: string) =>
     sendJson<LocalCoverWorkflow>('/admin/local-cover-workflows/items', 'POST', {
       item_id: itemId
+    }),
+  startStoreItemCoverFlattening: (storeItemId: string) =>
+    sendJson<CoverFlatteningWorkflow>('/admin/cover-flattening-workflows/store-items', 'POST', {
+      store_item_id: storeItemId
+    }),
+  startItemCoverFlattening: (itemId: string, sourceField: CoverImageField) =>
+    sendJson<CoverFlatteningWorkflow>('/admin/cover-flattening-workflows/items', 'POST', {
+      item_id: itemId,
+      source_field: sourceField
+    }),
+  getCoverFlatteningCandidate: (workflowId: string, candidateIndex: number) =>
+    fetchBlob(
+      `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/candidates/${encodeURIComponent(candidateIndex)}`
+    ),
+  acceptCoverFlattening: (workflowId: string, candidateIndex: number, targetField: CoverImageField) =>
+    sendJson<AcceptedCoverFlattening>(
+      `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/accept`,
+      'POST',
+      {
+        candidate_index: candidateIndex,
+        target_field: targetField
+      }
+    ),
+  cancelCoverFlattening: (workflowId: string) =>
+    fetchData<{ cancelled: true }>(`/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}`, {
+      method: 'DELETE'
     }),
   getStoreDiscoveryRun: (runId: string) =>
     fetchData<StoreDiscoveryRun | null>(`/admin/operations/store-discovery-runs/${encodeURIComponent(runId)}`),

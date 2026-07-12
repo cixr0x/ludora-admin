@@ -1,0 +1,95 @@
+import { Router } from 'express';
+
+import {
+  CoverFlatteningWorkflowError,
+  type CoverFlatteningSourceField,
+  type CoverFlatteningTargetField,
+  type CoverFlatteningWorkflowManager
+} from '../coverFlatteningWorkflow.js';
+
+export function createCoverFlatteningWorkflowRouter(manager: CoverFlatteningWorkflowManager): Router {
+  const router = Router();
+
+  router.post('/admin/cover-flattening-workflows/store-items', async (request, response, next) => {
+    try {
+      const storeItemId = positiveInteger(request.body, 'store_item_id');
+      response.status(201).json({ data: await manager.startFromStoreItem(storeItemId) });
+    } catch (error) {
+      next(asHttpError(error));
+    }
+  });
+
+  router.post('/admin/cover-flattening-workflows/items', async (request, response, next) => {
+    try {
+      const itemId = positiveInteger(request.body, 'item_id');
+      const sourceField = imageField(request.body, 'source_field') as CoverFlatteningSourceField;
+      response.status(201).json({ data: await manager.startFromItem(itemId, sourceField) });
+    } catch (error) {
+      next(asHttpError(error));
+    }
+  });
+
+  router.get('/admin/cover-flattening-workflows/:workflowId/candidates/:candidateIndex', async (request, response, next) => {
+    try {
+      const candidateIndex = positiveInteger(request.params, 'candidateIndex');
+      const candidatePath = await manager.getCandidateFile(request.params.workflowId, candidateIndex);
+      response.setHeader('Cache-Control', 'no-store');
+      response.type('png').sendFile(candidatePath);
+    } catch (error) {
+      next(asHttpError(error));
+    }
+  });
+
+  router.post('/admin/cover-flattening-workflows/:workflowId/accept', async (request, response, next) => {
+    try {
+      const candidateIndex = positiveInteger(request.body, 'candidate_index');
+      const targetField = imageField(request.body, 'target_field') as CoverFlatteningTargetField;
+      response.json({
+        data: await manager.accept(request.params.workflowId, candidateIndex, targetField)
+      });
+    } catch (error) {
+      next(asHttpError(error));
+    }
+  });
+
+  router.delete('/admin/cover-flattening-workflows/:workflowId', async (request, response, next) => {
+    try {
+      await manager.cancel(request.params.workflowId);
+      response.json({ data: { cancelled: true } });
+    } catch (error) {
+      next(asHttpError(error));
+    }
+  });
+
+  return router;
+}
+
+function positiveInteger(source: unknown, key: string): number {
+  const value = (source ?? {}) as Record<string, unknown>;
+  const parsed = Number(value[key]);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw httpError(400, `${key} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function imageField(source: unknown, key: string): 'image_url' | 'image_url_es' {
+  const value = (source ?? {}) as Record<string, unknown>;
+  if (value[key] === 'image_url' || value[key] === 'image_url_es') {
+    return value[key];
+  }
+  throw httpError(400, `${key} must be image_url or image_url_es`);
+}
+
+function asHttpError(error: unknown): unknown {
+  if (error instanceof CoverFlatteningWorkflowError) {
+    return httpError(error.status, error.message);
+  }
+  return error;
+}
+
+function httpError(status: number, message: string): Error & { status: number } {
+  const error = new Error(message) as Error & { status: number };
+  error.status = status;
+  return error;
+}

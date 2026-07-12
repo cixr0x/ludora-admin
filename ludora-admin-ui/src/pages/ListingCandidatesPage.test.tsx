@@ -651,6 +651,7 @@ describe('ListingCandidatesPage', () => {
 
     const titleCells = await screen.findAllByText('Kitchen Rush');
     await user.dblClick(titleCells[0]);
+    expect(screen.getByRole('button', { name: 'Flatten cover for Kitchen Rush' })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Start cover workflow for Kitchen Rush' }));
 
     await waitFor(() =>

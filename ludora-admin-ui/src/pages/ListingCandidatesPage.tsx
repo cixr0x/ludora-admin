@@ -1,5 +1,6 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import AddCircleIcon from '@mui/icons-material/AddCircle';
+import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import CancelIcon from '@mui/icons-material/Cancel';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import ImageSearchIcon from '@mui/icons-material/ImageSearch';
@@ -25,6 +26,7 @@ import {
 } from '@mui/material';
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adminApi, type AdminRecord, type CreateItemFromCandidateInput, type LocalCoverWorkflow } from '../api/client';
+import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
@@ -484,6 +486,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
   const batchSelectionAnchorId = useRef<string | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
+  const [coverFlatteningRequest, setCoverFlatteningRequest] = useState<CoverFlatteningRequest | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const table = useServerTableState('last_updated', 'desc');
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
@@ -799,6 +802,18 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     }
   }
 
+  function handleStartCoverFlattening(candidate: AdminRecord) {
+    const candidateId = field(candidate, ['id'], '');
+    if (!candidateId) {
+      return;
+    }
+    setCoverFlatteningRequest({
+      id: candidateId,
+      kind: 'store_item',
+      title: field(candidate, ['title'], 'Store item')
+    });
+  }
+
   return (
     <Stack spacing={2}>
       <Box>
@@ -889,6 +904,14 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
       {state === 'error' && viewMode === 'table' ? <Alert severity="error">Store items could not be loaded.</Alert> : null}
       {detailState === 'error' && viewMode === 'form' ? <Alert severity="error">Store item could not be loaded.</Alert> : null}
       <FloatingSuccessAlert message={saveMessage} onClose={() => setSaveMessage('')} />
+      <CoverFlatteningDialog
+        request={coverFlatteningRequest}
+        onAccepted={(result) => {
+          setCoverFlatteningRequest(null);
+          setSaveMessage(`Flattened cover saved as ${result.target_field === 'image_url' ? 'image' : 'Spanish image'}.`);
+        }}
+        onClose={() => setCoverFlatteningRequest(null)}
+      />
       {viewMode === 'table' && saveError ? <Alert severity="error">{saveError}</Alert> : null}
 
       {detailState === 'ready' && viewMode === 'form' && selectedCandidate ? (
@@ -912,6 +935,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
           onCreateItemFromBggId={handleCreateItemFromBggId}
           onSave={handleSaveCandidate}
           onCreateItem={handleCreateItemFromCandidate}
+          onStartCoverFlattening={handleStartCoverFlattening}
           onStartLocalCoverWorkflow={handleStartLocalCoverWorkflow}
           saveError={saveError}
           startingCoverWorkflowId={startingCoverWorkflowId}
@@ -961,6 +985,7 @@ function ItemCandidateForm({
   onCreateItemFromBggId,
   onCreateItem,
   onSave,
+  onStartCoverFlattening,
   onStartLocalCoverWorkflow,
   saveError,
   startingCoverWorkflowId
@@ -975,6 +1000,7 @@ function ItemCandidateForm({
   onCreateItemFromBggId: (bggId: string) => void;
   onCreateItem: (input?: CreateItemFromCandidateInput) => Promise<void>;
   onSave: (input: AdminRecord) => void;
+  onStartCoverFlattening: (candidate: AdminRecord) => void;
   onStartLocalCoverWorkflow: (candidate: AdminRecord) => void;
   saveError: string;
   startingCoverWorkflowId: string;
@@ -1054,6 +1080,21 @@ function ItemCandidateForm({
                   onClick={() => onStartLocalCoverWorkflow(candidate)}
                 >
                   {isStartingCoverWorkflow ? 'Starting...' : 'Start cover workflow'}
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={canStartCoverWorkflow ? 'Flatten cover' : 'Requires a linked item and image'}>
+              <span>
+                <Button
+                  aria-label={`Flatten cover for ${title}`}
+                  disabled={!canStartCoverWorkflow}
+                  startIcon={<AutoFixHighIcon />}
+                  sx={{ width: { sm: 'auto', xs: '100%' } }}
+                  type="button"
+                  variant="outlined"
+                  onClick={() => onStartCoverFlattening(candidate)}
+                >
+                  Flatten cover
                 </Button>
               </span>
             </Tooltip>

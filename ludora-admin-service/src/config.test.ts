@@ -218,6 +218,12 @@ describe('loadConfig', () => {
     });
   });
 
+  it('loads the ephemeral cover flattening work directory override', () => {
+    vi.stubEnv('LUDORA_COVER_FLATTENING_WORK_DIR', 'D:\\flattened-covers');
+
+    expect(loadConfig().coverFlatteningWorkDir).toBe('D:\\flattened-covers');
+  });
+
   it('defaults local cover S3 region to the Ludora bucket region', () => {
     vi.stubEnv('LUDORA_COVER_S3_REGION', undefined);
     vi.stubEnv('AWS_REGION', undefined);

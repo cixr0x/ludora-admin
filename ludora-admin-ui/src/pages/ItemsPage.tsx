@@ -7,6 +7,7 @@ import SaveIcon from '@mui/icons-material/Save';
 import { Alert, Box, Button, Chip, CircularProgress, IconButton, Link, MenuItem, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import { Fragment, type FormEvent, type MouseEvent, useEffect, useState } from 'react';
 import { adminApi, type AdminRecord, type ItemRelationshipInput, type ItemTaxonomy, type LocalCoverWorkflow } from '../api/client';
+import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
@@ -367,9 +368,11 @@ const baseLinkedCandidateColumns: DataTableColumn<AdminRecord>[] = [
 ];
 
 function linkedCandidateColumns({
+  onStartCoverFlattening,
   onStartCoverWorkflow,
   startingCoverWorkflowId
 }: {
+  onStartCoverFlattening: (record: AdminRecord) => void;
   onStartCoverWorkflow: (record: AdminRecord) => void;
   startingCoverWorkflowId: string;
 }): DataTableColumn<AdminRecord>[] {
@@ -382,11 +385,29 @@ function linkedCandidateColumns({
       label: 'Cover',
       minWidth: 90,
       render: (row) => (
-        <CoverWorkflowAction
-          record={row}
-          startingCoverWorkflowId={startingCoverWorkflowId}
-          onStartCoverWorkflow={onStartCoverWorkflow}
-        />
+        <Stack direction="row" justifyContent="center" spacing={0.5}>
+          <CoverWorkflowAction
+            record={row}
+            startingCoverWorkflowId={startingCoverWorkflowId}
+            onStartCoverWorkflow={onStartCoverWorkflow}
+          />
+          <Tooltip title={field(row, ['item_id'], '') && field(row, ['image_url'], '') ? 'Flatten cover' : 'Requires a linked item and image'}>
+            <span>
+              <IconButton
+                aria-label={`Flatten cover for ${field(row, ['title'], 'store item')}`}
+                disabled={!field(row, ['item_id'], '') || !field(row, ['image_url'], '')}
+                size="small"
+                sx={{ p: 0.5 }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onStartCoverFlattening(row);
+                }}
+              >
+                <AutoFixHighIcon fontSize="small" />
+              </IconButton>
+            </span>
+          </Tooltip>
+        </Stack>
       ),
       sortable: false
     }
@@ -564,6 +585,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
   const [saveMessage, setSaveMessage] = useState('');
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
   const [startingItemCoverWorkflowId, setStartingItemCoverWorkflowId] = useState('');
+  const [coverFlatteningRequest, setCoverFlatteningRequest] = useState<CoverFlatteningRequest | null>(null);
   const table = useServerTableState('canonical_name');
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
     table,
@@ -825,6 +847,35 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
     }
   }
 
+  function handleStartStoreItemCoverFlattening(record: AdminRecord) {
+    const storeItemId = field(record, ['id'], '');
+    if (!storeItemId) {
+      return;
+    }
+    setCoverFlatteningRequest({
+      id: storeItemId,
+      kind: 'store_item',
+      title: field(record, ['title'], 'Store item')
+    });
+  }
+
+  function handleStartItemCoverFlattening(item: AdminRecord) {
+    const itemId = field(item, ['id'], '');
+    const sources = [
+      { field: 'image_url' as const, url: field(item, ['image_url'], '') },
+      { field: 'image_url_es' as const, url: field(item, ['image_url_es'], '') }
+    ].filter((source) => source.url);
+    if (!itemId || sources.length === 0) {
+      return;
+    }
+    setCoverFlatteningRequest({
+      id: itemId,
+      kind: 'item',
+      sources,
+      title: field(item, ['canonical_name_es', 'canonical_name'], 'Item')
+    });
+  }
+
   return (
     <Stack spacing={2}>
       <Box>
@@ -853,6 +904,22 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
       {state === 'error' && viewMode === 'table' ? <Alert severity="error">Items could not be loaded.</Alert> : null}
       {detailState === 'error' && viewMode === 'form' ? <Alert severity="error">Item could not be loaded.</Alert> : null}
       <FloatingSuccessAlert message={saveMessage} onClose={() => setSaveMessage('')} />
+      <CoverFlatteningDialog
+        request={coverFlatteningRequest}
+        onAccepted={(result) => {
+          setCoverFlatteningRequest(null);
+          setSelectedItem((currentItem) => currentItem ? { ...currentItem, [result.target_field]: result.public_url } : currentItem);
+          setRows((currentRows) =>
+            currentRows.map((row) =>
+              field(row, ['id'], '') === String(result.item_id)
+                ? { ...row, [result.target_field]: result.public_url }
+                : row
+            )
+          );
+          setSaveMessage(`Flattened cover saved as ${result.target_field === 'image_url' ? 'image' : 'Spanish image'}.`);
+        }}
+        onClose={() => setCoverFlatteningRequest(null)}
+      />
 
       {detailState === 'ready' && viewMode === 'form' && selectedItem ? (
         <ItemForm
@@ -888,7 +955,9 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
           onDeleteRelationship={handleDeleteRelationship}
           onGenerateSpanishDescription={handleGenerateSpanishDescription}
           onSave={handleSaveItem}
+          onStartItemCoverFlattening={handleStartItemCoverFlattening}
           onStartItemLocalCoverWorkflow={handleStartItemLocalCoverWorkflow}
+          onStartStoreItemCoverFlattening={handleStartStoreItemCoverFlattening}
           onStartLocalCoverWorkflow={handleStartLocalCoverWorkflow}
           relatedState={relatedState}
           relationshipError={relationshipError}
@@ -952,8 +1021,10 @@ function ItemForm({
   onDeleteRelationship,
   onGenerateSpanishDescription,
   onSave,
+  onStartItemCoverFlattening,
   onStartItemLocalCoverWorkflow,
   onStartLocalCoverWorkflow,
+  onStartStoreItemCoverFlattening,
   relatedState,
   relationshipError,
   saveError,
@@ -975,8 +1046,10 @@ function ItemForm({
   onDeleteRelationship: (record: AdminRecord) => void;
   onGenerateSpanishDescription: (input: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
+  onStartItemCoverFlattening: (item: AdminRecord) => void;
   onStartItemLocalCoverWorkflow: (item: AdminRecord) => void;
   onStartLocalCoverWorkflow: (record: AdminRecord) => void;
+  onStartStoreItemCoverFlattening: (record: AdminRecord) => void;
   relatedState: LoadState;
   relationshipError: string;
   saveError: string;
@@ -993,6 +1066,7 @@ function ItemForm({
   const canGenerateDescription = hasSourceDescriptions && !isGeneratingDescription && !isSaving;
   const isStartingItemCoverWorkflow = Boolean(itemId && itemId === startingItemCoverWorkflowId);
   const canStartItemCoverWorkflow = Boolean(itemId && imageUrl && !isStartingItemCoverWorkflow);
+  const canFlattenItemCover = Boolean(itemId && (imageUrl || imageUrlEs));
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1050,6 +1124,20 @@ function ItemForm({
                     onClick={() => onStartItemLocalCoverWorkflow(item)}
                   >
                     {isStartingItemCoverWorkflow ? 'Starting...' : 'Start cover workflow'}
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title={canFlattenItemCover ? 'Flatten an item cover image' : 'Requires an item image'}>
+                <span>
+                  <Button
+                    aria-label={`Flatten cover for ${title}`}
+                    disabled={!canFlattenItemCover}
+                    startIcon={<AutoFixHighIcon />}
+                    type="button"
+                    variant="outlined"
+                    onClick={() => onStartItemCoverFlattening(item)}
+                  >
+                    Flatten cover
                   </Button>
                 </span>
               </Tooltip>
@@ -1223,6 +1311,7 @@ function ItemForm({
         relationshipError={relationshipError}
         state={relatedState}
         storeItems={linkedStoreItems}
+        onStartCoverFlattening={onStartStoreItemCoverFlattening}
         startingCoverWorkflowId={startingCoverWorkflowId}
         taxonomy={itemTaxonomy}
         onStartCoverWorkflow={onStartLocalCoverWorkflow}
@@ -1237,6 +1326,7 @@ function ItemRelations({
   itemRelationships,
   onCreateRelationship,
   onDeleteRelationship,
+  onStartCoverFlattening,
   relationshipError,
   state,
   storeItems,
@@ -1249,6 +1339,7 @@ function ItemRelations({
   itemRelationships: AdminRecord[];
   onCreateRelationship: (input: ItemRelationshipInput) => Promise<boolean>;
   onDeleteRelationship: (record: AdminRecord) => void;
+  onStartCoverFlattening: (record: AdminRecord) => void;
   relationshipError: string;
   state: LoadState;
   storeItems: AdminRecord[];
@@ -1317,7 +1408,7 @@ function ItemRelations({
       </Box>
       <DataTable
         ariaLabel="Linked store items"
-        columns={linkedCandidateColumns({ onStartCoverWorkflow, startingCoverWorkflowId })}
+        columns={linkedCandidateColumns({ onStartCoverFlattening, onStartCoverWorkflow, startingCoverWorkflowId })}
         defaultSortColumnId="last_updated"
         getRowKey={(row, index) => field(row, ['id'], String(index))}
         minWidth={1190}

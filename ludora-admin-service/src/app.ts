@@ -8,10 +8,12 @@ import type { BggItemImporter } from './bgg/bggItemImporter.js';
 import type { DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
 import type { DiscoveryOperationsClient } from './discoveryOperations.js';
+import type { CoverFlatteningWorkflowManager } from './coverFlatteningWorkflow.js';
 import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { createAmazonTitleExtractionRouter } from './routes/amazonTitleExtraction.js';
 import { createAuthRouter } from './routes/auth.js';
 import { createDescriptionGenerationRouter } from './routes/descriptionGeneration.js';
+import { createCoverFlatteningWorkflowRouter } from './routes/coverFlatteningWorkflow.js';
 import { createDiscoveryRouter } from './routes/discovery.js';
 import { createHealthRouter } from './routes/health.js';
 import { createLocalCoverWorkflowRouter } from './routes/localCoverWorkflow.js';
@@ -35,6 +37,7 @@ type CreateAppOptions = {
   adminAuth?: AdminAuthOptions;
   amazonTitleExtractionService?: AmazonTitleExtractionService;
   bggItemImporter?: BggItemImporter;
+  coverFlatteningWorkflowManager?: CoverFlatteningWorkflowManager;
   database: Database;
   corsOrigin?: string | string[];
   descriptionGenerationService?: DescriptionGenerationService;
@@ -51,6 +54,7 @@ export function createApp({
   adminAuth,
   amazonTitleExtractionService,
   bggItemImporter,
+  coverFlatteningWorkflowManager,
   database,
   corsOrigin,
   descriptionGenerationService,
@@ -76,6 +80,9 @@ export function createApp({
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
   app.use(createTranslationRouter(translationService));
   app.use(createTutorialCurationRouter(database));
+  if (coverFlatteningWorkflowManager) {
+    app.use(createCoverFlatteningWorkflowRouter(coverFlatteningWorkflowManager));
+  }
   if (localCoverWorkflowManager) {
     app.use(createLocalCoverWorkflowRouter(localCoverWorkflowManager));
   }

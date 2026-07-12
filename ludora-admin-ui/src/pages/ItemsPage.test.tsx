@@ -497,6 +497,7 @@ describe('ItemsPage', () => {
     render(<ItemsPage selectedItemId="77" />);
 
     const storeItemsTable = await screen.findByRole('table', { name: 'Linked store items' });
+    expect(within(storeItemsTable).getByRole('button', { name: 'Flatten cover for Coffee Rush' })).toBeEnabled();
     await user.click(within(storeItemsTable).getByRole('button', { name: 'Start cover workflow for Coffee Rush' }));
 
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/local-cover-workflows', {
@@ -568,6 +569,7 @@ describe('ItemsPage', () => {
     render(<ItemsPage selectedItemId="77" />);
 
     await screen.findByRole('heading', { name: 'Item Details' });
+    expect(screen.getByRole('button', { name: 'Flatten cover for Coffee Rush' })).toBeEnabled();
     await user.click(screen.getByRole('button', { name: 'Start cover workflow from item image for Coffee Rush' }));
 
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/local-cover-workflows/items', {

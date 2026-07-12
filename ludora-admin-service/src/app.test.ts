@@ -6,6 +6,7 @@ import request from 'supertest';
 import { describe, expect, it } from 'vitest';
 
 import { createApp } from './app.js';
+import type { CoverFlatteningWorkflow, CoverFlatteningWorkflowManager } from './coverFlatteningWorkflow.js';
 import type { AmazonTitleExtractionRequest, AmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
 import type { DescriptionGenerationRequest, DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
@@ -4072,6 +4073,86 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(404);
     expect(response.body).toEqual({ error: { message: 'Store not found' } });
+  });
+
+  it('serves the automatic cover flattening workflow through the injected manager', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-flattening-route-'));
+    const candidatePath = path.join(directory, 'candidate.png');
+    fs.writeFileSync(candidatePath, Buffer.from('candidate-image'));
+    const workflow: CoverFlatteningWorkflow = {
+      candidates: [
+        {
+          aspect_ratio: 1,
+          construction: 'two-face cover',
+          height: 500,
+          index: 1,
+          square_snapped: true,
+          width: 500
+        }
+      ],
+      created_at: '2026-07-11T12:00:00.000Z',
+      expires_at: '2026-07-11T12:30:00.000Z',
+      item_id: 77,
+      perspective: 'two_faces',
+      source_field: 'image_url_es',
+      store_item_id: null,
+      workflow_id: 'flatten-77'
+    };
+    const calls: unknown[] = [];
+    const manager: CoverFlatteningWorkflowManager = {
+      accept: async (workflowId, candidateIndex, targetField) => {
+        calls.push(['accept', workflowId, candidateIndex, targetField]);
+        return {
+          item_id: 77,
+          optimized_size_bytes: 88_000,
+          public_url: 'https://cdn.example/boardgame/cover.webp',
+          s3_key: 'boardgame/cover.webp',
+          target_field: targetField
+        };
+      },
+      cancel: async (workflowId) => {
+        calls.push(['cancel', workflowId]);
+      },
+      getCandidateFile: async (workflowId, candidateIndex) => {
+        calls.push(['candidate', workflowId, candidateIndex]);
+        return candidatePath;
+      },
+      startFromItem: async (itemId, sourceField) => {
+        calls.push(['item', itemId, sourceField]);
+        return workflow;
+      },
+      startFromStoreItem: async (storeItemId) => {
+        calls.push(['store-item', storeItemId]);
+        return workflow;
+      }
+    };
+    const app = createApp({ coverFlatteningWorkflowManager: manager, database: idleDatabase() });
+
+    try {
+      const start = await request(app)
+        .post('/admin/cover-flattening-workflows/items')
+        .send({ item_id: 77, source_field: 'image_url_es' });
+      const candidate = await request(app).get('/admin/cover-flattening-workflows/flatten-77/candidates/1');
+      const accepted = await request(app)
+        .post('/admin/cover-flattening-workflows/flatten-77/accept')
+        .send({ candidate_index: 1, target_field: 'image_url' });
+      const cancelled = await request(app).delete('/admin/cover-flattening-workflows/flatten-77');
+
+      expect(start.status).toBe(201);
+      expect(start.body).toEqual({ data: workflow });
+      expect(candidate.status).toBe(200);
+      expect(candidate.headers['cache-control']).toBe('no-store');
+      expect(accepted.body.data).toMatchObject({ item_id: 77, target_field: 'image_url' });
+      expect(cancelled.body).toEqual({ data: { cancelled: true } });
+      expect(calls).toEqual([
+        ['item', 77, 'image_url_es'],
+        ['candidate', 'flatten-77', 1],
+        ['accept', 'flatten-77', 1, 'image_url'],
+        ['cancel', 'flatten-77']
+      ]);
+    } finally {
+      fs.rmSync(directory, { force: true, recursive: true });
+    }
   });
 
   it('starts a local cover workflow through the injected manager', async () => {

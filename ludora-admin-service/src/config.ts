@@ -1,4 +1,5 @@
 import path from 'node:path';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 
 import dotenv from 'dotenv';
@@ -14,6 +15,7 @@ export type Config = {
   bggApiBaseUrl: string;
   bggApiToken?: string;
   host: string;
+  coverFlatteningWorkDir: string;
   openAiApiKey?: string;
   openAiBaseUrl?: string;
   openAiTranslationModel: string;
@@ -48,6 +50,10 @@ export function loadConfig(): Config {
     bggApiBaseUrl: process.env.BGG_API_BASE_URL ?? 'https://boardgamegeek.com/xmlapi2',
     bggApiToken: process.env.BGG_API_TOKEN,
     host: readEnvWithDefault('HOST', '127.0.0.1'),
+    coverFlatteningWorkDir: readEnvWithDefault(
+      'LUDORA_COVER_FLATTENING_WORK_DIR',
+      path.join(os.tmpdir(), 'ludora-cover-flattening')
+    ),
     openAiApiKey: process.env.OPENAI_API_KEY,
     openAiBaseUrl: readOptionalEnv('OPENAI_BASE_URL'),
     openAiTranslationModel: process.env.OPENAI_TRANSLATION_MODEL ?? 'gpt-5.4-nano',
