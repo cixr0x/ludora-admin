@@ -401,6 +401,11 @@ def _find_product(value: Any) -> dict[str, Any]:
     types = [type_value] if isinstance(type_value, str) else type_value if isinstance(type_value, list) else []
     if any(str(item).casefold() == "product" for item in types):
         return value
+    main_entity = value.get("mainEntity")
+    if main_entity:
+        product = _find_product(main_entity)
+        if product:
+            return product
     graph = value.get("@graph")
     if graph:
         return _find_product(graph)
