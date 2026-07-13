@@ -24,6 +24,8 @@ import {
   createProductDetailsEnrichmentService,
   createProductDetailsExtractionService
 } from './productDetailsExtraction/productDetailsExtractionService.js';
+import { createOpenAiStoreProfileDetectionClient } from './storeProfileDetection/openAiStoreProfileDetectionClient.js';
+import { createStoreProfileDetectionService } from './storeProfileDetection/storeProfileDetectionService.js';
 import { createOpenAiTranslationClient } from './translation/openAiTranslationClient.js';
 import { createTranslationService } from './translation/translationService.js';
 
@@ -69,6 +71,13 @@ const productDetailsExtractionService = productDetailsExtractionClient
 const productDetailsEnrichmentService = productDetailsExtractionService
   ? createProductDetailsEnrichmentService(database, productDetailsExtractionService)
   : undefined;
+const storeProfileAiClient = config.openAiApiKey
+  ? createOpenAiStoreProfileDetectionClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
+  : undefined;
+const storeProfileDetectionService = createStoreProfileDetectionService({
+  aiClient: storeProfileAiClient,
+  model: config.openAiTranslationModel
+});
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
 const itemMatchingService = createItemMatchingService(database, bggClient, translationService, bggItemImporter);
 const localOperationsClient =
@@ -115,6 +124,7 @@ const app = createApp({
   localCoverWorkflowManager,
   operationsClient,
   productDetailsEnrichmentService,
+  storeProfileDetectionService,
   translationService
 });
 

@@ -1,4 +1,6 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
+import AddBusinessIcon from '@mui/icons-material/AddBusiness';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import SaveIcon from '@mui/icons-material/Save';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import UpdateIcon from '@mui/icons-material/Update';
@@ -16,11 +18,12 @@ import {
 } from '@mui/material';
 import { type FormEvent, useState } from 'react';
 import { adminApi, type AdminRecord, type StoreInput } from '../api/client';
+import { storeCreationApi } from '../api/stores';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
-type FormMode = 'edit' | 'table';
+type FormMode = 'create' | 'edit' | 'table';
 
 type StoreFormState = {
   canonical_domain: string;
@@ -263,10 +266,12 @@ export function StoresPage() {
   const [formMode, setFormMode] = useState<FormMode>('table');
   const [editingId, setEditingId] = useState('');
   const [formState, setFormState] = useState<StoreFormState>(emptyFormState);
+  const [isDetecting, setIsDetecting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isRunningDiscovery, setIsRunningDiscovery] = useState(false);
   const [isRunningItemUpdate, setIsRunningItemUpdate] = useState(false);
   const [saveError, setSaveError] = useState('');
+  const [detectionMessage, setDetectionMessage] = useState('');
   const [operationError, setOperationError] = useState('');
   const [operationMessage, setOperationMessage] = useState('');
   const table = useServerTableState('canonical_domain');
@@ -279,9 +284,20 @@ export function StoresPage() {
     setFormState(formStateFromRecord(row));
     setEditingId(valueFor(row, ['id'], ''));
     setSaveError('');
+    setDetectionMessage('');
     setOperationError('');
     setOperationMessage('');
     setFormMode('edit');
+  }
+
+  function handleCreateStore() {
+    setFormState(emptyFormState);
+    setEditingId('');
+    setSaveError('');
+    setDetectionMessage('');
+    setOperationError('');
+    setOperationMessage('');
+    setFormMode('create');
   }
 
   function handleFieldChange(field: keyof StoreFormState, value: string) {
@@ -296,15 +312,50 @@ export function StoresPage() {
     setOperationMessage('');
 
     try {
-      const saved = await adminApi.updateStore(editingId, inputFromForm(formState));
+      const input = inputFromForm(formState);
+      const saved =
+        formMode === 'create' ? await storeCreationApi.createStore(input) : await adminApi.updateStore(editingId, input);
       setRows((currentRows) =>
-        currentRows.map((row, index) => (valueFor(row, ['id'], String(index)) === editingId ? saved : row))
+        formMode === 'create'
+          ? [saved, ...currentRows]
+          : currentRows.map((row, index) => (valueFor(row, ['id'], String(index)) === editingId ? saved : row))
       );
       setFormMode('table');
     } catch {
       setSaveError('Store could not be saved.');
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function handleDetectStoreProfile() {
+    const websiteUrl = formState.website_url.trim();
+    if (!websiteUrl) {
+      setSaveError('Enter a website URL before detecting store details.');
+      return;
+    }
+
+    setIsDetecting(true);
+    setSaveError('');
+    setDetectionMessage('');
+    try {
+      const detected = await storeCreationApi.detectStoreProfile(websiteUrl);
+      setFormState((current) => ({
+        ...current,
+        ...detected.profile,
+        country: detected.profile.country || current.country,
+        status: current.status
+      }));
+      const unresolved = detected.unresolved_fields.map((field) => field.replaceAll('_', ' '));
+      setDetectionMessage(
+        unresolved.length > 0
+          ? `Details detected${detected.ai_used ? ' with AI enrichment' : ''}. Review unresolved fields: ${unresolved.join(', ')}.`
+          : `All store details detected${detected.ai_used ? ' with AI enrichment' : ''}. Review them before saving.`
+      );
+    } catch {
+      setSaveError('Store details could not be detected from this website.');
+    } finally {
+      setIsDetecting(false);
     }
   }
 
@@ -346,14 +397,21 @@ export function StoresPage() {
 
   return (
     <Stack spacing={2}>
-      <Box>
-        <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
-          Stores
-        </Typography>
-        <Typography color="text.secondary" variant="body2">
-          Approved stores served by the platform.
-        </Typography>
-      </Box>
+      <Stack alignItems={{ sm: 'center' }} direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={1}>
+        <Box>
+          <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
+            Stores
+          </Typography>
+          <Typography color="text.secondary" variant="body2">
+            Approved stores served by the platform.
+          </Typography>
+        </Box>
+        {!isFormMode ? (
+          <Button startIcon={<AddBusinessIcon />} variant="contained" onClick={handleCreateStore}>
+            Create Store
+          </Button>
+        ) : null}
+      </Stack>
 
       {state === 'loading' && !isFormMode ? (
         <Stack alignItems="center" direction="row" spacing={1.5}>
@@ -369,9 +427,10 @@ export function StoresPage() {
         <Paper component="section" variant="outlined" sx={{ maxWidth: 980, p: 2 }}>
           <Box component="form" onSubmit={handleSave}>
             <Stack spacing={2}>
-              <Typography variant="h6">Edit Store</Typography>
+              <Typography variant="h6">{formMode === 'create' ? 'Create Store from Website' : 'Edit Store'}</Typography>
 
               {saveError ? <Alert severity="error">{saveError}</Alert> : null}
+              {detectionMessage ? <Alert severity="info">{detectionMessage}</Alert> : null}
               {operationError ? <Alert severity="error">{operationError}</Alert> : null}
 
               <Box
@@ -453,35 +512,51 @@ export function StoresPage() {
               </Box>
 
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+                {formMode === 'create' ? (
+                  <Button
+                    disabled={isDetecting || isSaving}
+                    startIcon={isDetecting ? <CircularProgress color="inherit" size={16} /> : <AutoAwesomeIcon />}
+                    type="button"
+                    variant="outlined"
+                    onClick={handleDetectStoreProfile}
+                  >
+                    Detect Store Details
+                  </Button>
+                ) : null}
                 <Button disabled={isSaving} startIcon={<SaveIcon />} type="submit" variant="contained">
-                  Save Store
+                  {formMode === 'create' ? 'Create Store' : 'Save Store'}
                 </Button>
+                {formMode === 'edit' ? (
+                  <>
+                    <Button
+                      disabled={isRunningDiscovery || isRunningItemUpdate}
+                      startIcon={isRunningDiscovery ? <CircularProgress color="inherit" size={16} /> : <TravelExploreIcon />}
+                      type="button"
+                      variant="outlined"
+                      onClick={handleRunItemDiscovery}
+                    >
+                      Run Item Discovery
+                    </Button>
+                    <Button
+                      disabled={isRunningDiscovery || isRunningItemUpdate}
+                      startIcon={isRunningItemUpdate ? <CircularProgress color="inherit" size={16} /> : <UpdateIcon />}
+                      type="button"
+                      variant="outlined"
+                      onClick={handleRunItemUpdate}
+                    >
+                      Run Item Update
+                    </Button>
+                  </>
+                ) : null}
                 <Button
-                  disabled={isRunningDiscovery || isRunningItemUpdate}
-                  startIcon={isRunningDiscovery ? <CircularProgress color="inherit" size={16} /> : <TravelExploreIcon />}
-                  type="button"
-                  variant="outlined"
-                  onClick={handleRunItemDiscovery}
-                >
-                  Run Item Discovery
-                </Button>
-                <Button
-                  disabled={isRunningDiscovery || isRunningItemUpdate}
-                  startIcon={isRunningItemUpdate ? <CircularProgress color="inherit" size={16} /> : <UpdateIcon />}
-                  type="button"
-                  variant="outlined"
-                  onClick={handleRunItemUpdate}
-                >
-                  Run Item Update
-                </Button>
-                <Button
-                  disabled={isSaving || isRunningDiscovery || isRunningItemUpdate}
+                  disabled={isDetecting || isSaving || isRunningDiscovery || isRunningItemUpdate}
                   startIcon={<ArrowBackIcon />}
                   type="button"
                   variant="outlined"
                   onClick={() => {
                     setFormMode('table');
                     setSaveError('');
+                    setDetectionMessage('');
                     setOperationError('');
                     setOperationMessage('');
                   }}

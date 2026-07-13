@@ -107,6 +107,65 @@ describe('StoresPage', () => {
     });
   });
 
+  it('detects website fields and creates a reviewed store', async () => {
+    const user = userEvent.setup();
+    const createdStore = {
+      canonical_domain: 'newstore.mx',
+      city: 'Mérida',
+      country: 'Mexico',
+      facebook_url: 'https://facebook.com/newstore',
+      id: 91,
+      instagram_url: 'https://instagram.com/newstore',
+      logo_url: 'https://newstore.mx/logo.png',
+      name: 'New Store',
+      platform: 'woocommerce',
+      state: 'Yucatán',
+      status: 'active',
+      website_url: 'https://newstore.mx/'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/stores' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (pathOf(url) === '/admin/store-profile-detections' && init?.method === 'POST') {
+        return jsonResponse({
+          ai_used: true,
+          profile: Object.fromEntries(Object.entries(createdStore).filter(([key]) => !['id', 'status'].includes(key))),
+          unresolved_fields: []
+        });
+      }
+      if (pathOf(url) === '/stores' && init?.method === 'POST') {
+        return jsonResponse(createdStore, 201);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<StoresPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Create Store' }));
+    await user.type(screen.getByLabelText('Website URL'), 'newstore.mx');
+    await user.click(screen.getByRole('button', { name: 'Detect Store Details' }));
+
+    expect(await screen.findByText('All store details detected with AI enrichment. Review them before saving.')).toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('New Store');
+    expect(screen.getByLabelText('Canonical domain')).toHaveValue('newstore.mx');
+    expect(screen.getByLabelText('Platform')).toHaveValue('woocommerce');
+
+    await user.click(screen.getByRole('button', { name: 'Create Store' }));
+
+    expect(await screen.findByText('New Store')).toBeInTheDocument();
+    const createCall = fetchMock.mock.calls.find(
+      ([url, init]) => pathOf(String(url)) === '/stores' && init?.method === 'POST'
+    );
+    expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      canonical_domain: 'newstore.mx',
+      name: 'New Store',
+      platform: 'woocommerce',
+      website_url: 'https://newstore.mx/'
+    });
+  });
+
   it('starts item discovery from the clean store form', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

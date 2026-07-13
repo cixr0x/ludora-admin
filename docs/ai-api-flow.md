@@ -24,6 +24,7 @@ LUDORA_INTERNAL_API_TOKEN=optional_shared_internal_token
 - `POST /admin/description-generations`
 - `POST /admin/discovery/item-candidates/:id/product-details`
 - `POST /admin/ai/amazon-title-extractions`
+- `POST /admin/store-profile-detections` (website metadata first, AI only for unresolved store fields)
 
 Each OpenAI-backed client should call `createOpenAiResponsesClient(apiKey, { baseURL })` instead of constructing its own SDK instance. Keep request and response contracts structured with Responses JSON schema output.
 

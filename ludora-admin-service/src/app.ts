@@ -21,11 +21,13 @@ import {
   createOperationsRouter,
   type ExternalCoverImageOptimizerRunner
 } from './routes/operations.js';
+import { createStoresRouter } from './routes/stores.js';
 import { createTutorialCurationRouter } from './routes/tutorialCuration.js';
 import { createTranslationRouter } from './routes/translation.js';
 import type { TranslationService } from './translation/translationService.js';
 import type { LocalCoverWorkflowManager } from './localCoverWorkflow.js';
 import type { ProductDetailsEnrichmentService } from './productDetailsExtraction/productDetailsExtractionService.js';
+import type { StoreProfileDetectionService } from './storeProfileDetection/storeProfileDetectionService.js';
 
 type HttpError = Error & {
   status?: number;
@@ -45,6 +47,7 @@ type CreateAppOptions = {
   localCoverWorkflowManager?: LocalCoverWorkflowManager;
   operationsClient?: DiscoveryOperationsClient;
   productDetailsEnrichmentService?: ProductDetailsEnrichmentService;
+  storeProfileDetectionService?: StoreProfileDetectionService;
   translationService?: TranslationService;
 };
 
@@ -61,6 +64,7 @@ export function createApp({
   localCoverWorkflowManager,
   operationsClient,
   productDetailsEnrichmentService,
+  storeProfileDetectionService,
   translationService
 }: CreateAppOptions): Express {
   const app = express();
@@ -72,6 +76,7 @@ export function createApp({
     app.use(createAuthRouter(adminAuth));
     app.use(requireAdminAuth(adminAuth));
   }
+  app.use(createStoresRouter(database, storeProfileDetectionService));
   app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter, productDetailsEnrichmentService));
   app.use(createAmazonTitleExtractionRouter(amazonTitleExtractionService));
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
