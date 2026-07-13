@@ -143,7 +143,7 @@ describe('StoresPage', () => {
 
     render(<StoresPage />);
 
-    await user.click(await screen.findByRole('button', { name: 'Create Store' }));
+    await user.click(await screen.findByRole('button', { name: 'Create from Website' }));
     await user.type(screen.getByLabelText('Website URL'), 'newstore.mx');
     await user.click(screen.getByRole('button', { name: 'Detect Store Details' }));
 

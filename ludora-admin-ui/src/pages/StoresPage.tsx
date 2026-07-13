@@ -408,7 +408,7 @@ export function StoresPage() {
         </Box>
         {!isFormMode ? (
           <Button startIcon={<AddBusinessIcon />} variant="contained" onClick={handleCreateStore}>
-            Create Store
+            Create from Website
           </Button>
         ) : null}
       </Stack>
