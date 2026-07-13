@@ -162,7 +162,7 @@ def _crawl_amazon_search_inventory(
     if browser_fetcher is None:
         from ludora.browser_fetch import BrowserTextFetcher
 
-        browser_session = BrowserTextFetcher()
+        browser_session = BrowserTextFetcher(trace_logger=trace)
         browser_fetcher = browser_session.__enter__().fetch
 
     records: list[DiscoveryItemCandidateRecord] = []

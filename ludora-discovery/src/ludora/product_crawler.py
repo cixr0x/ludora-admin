@@ -89,7 +89,7 @@ def crawl_store_product_details(
     if use_browser_fetch and browser_fetcher is None:
         from ludora.browser_fetch import BrowserTextFetcher
 
-        browser_session = BrowserTextFetcher()
+        browser_session = BrowserTextFetcher(trace_logger=trace)
         browser_fetcher = browser_session.__enter__().fetch
 
     try:

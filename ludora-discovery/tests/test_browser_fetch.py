@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -117,6 +118,33 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertEqual(context.created_pages, [first_page, second_page])
         self.assertTrue(first_page.closed)
         self.assertTrue(second_page.closed)
+
+    def test_fetch_logs_exact_exception_to_trace_logger(self):
+        class FailingPage:
+            url = "chrome-error://chromewebdata/"
+
+            def goto(self, url, wait_until, timeout):
+                raise RuntimeError("net::ERR_FAILED at https://example.mx/products/catan")
+
+            def close(self):
+                return None
+
+        trace_logger = Mock()
+        fetcher = BrowserTextFetcher(timeout_ms=12_345, trace_logger=trace_logger)
+        fetcher._page = FailingPage()
+        fetcher._playwright_error = RuntimeError
+
+        result = fetcher.fetch("https://example.mx/products/catan")
+
+        self.assertIsNone(result)
+        trace_logger.log.assert_called_once_with(
+            "browser_fetch.failed",
+            error="net::ERR_FAILED at https://example.mx/products/catan",
+            error_type="RuntimeError",
+            final_url="chrome-error://chromewebdata/",
+            timeout_ms=12_345,
+            url="https://example.mx/products/catan",
+        )
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlparse
 
+from ludora.trace import TraceLogger
 from ludora.webfetch import FetchResult
 
 
@@ -18,8 +19,9 @@ def fetch_sitemap_text_with_browser(url: str, timeout_ms: int = 30_000) -> Fetch
 
 
 class BrowserTextFetcher:
-    def __init__(self, timeout_ms: int = 30_000) -> None:
+    def __init__(self, timeout_ms: int = 30_000, trace_logger: TraceLogger | None = None) -> None:
         self.timeout_ms = timeout_ms
+        self.trace_logger = trace_logger
         self._playwright = None
         self._browser = None
         self._context = None
@@ -84,7 +86,16 @@ class BrowserTextFetcher:
                 timeout_error=self._playwright_timeout_error,
             )
             return FetchResult(url=page.url, text=page.content())
-        except (self._playwright_error, self._playwright_timeout_error, OSError, ValueError):
+        except (self._playwright_error, self._playwright_timeout_error, OSError, ValueError) as exc:
+            if self.trace_logger is not None:
+                self.trace_logger.log(
+                    "browser_fetch.failed",
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                    final_url=getattr(page, "url", ""),
+                    timeout_ms=self.timeout_ms,
+                    url=url,
+                )
             return None
         finally:
             if close_page_after_fetch:
