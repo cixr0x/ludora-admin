@@ -111,7 +111,7 @@ def _navigate_past_reload_challenge(page, url: str, *, timeout_ms: int):
     response = None
     for attempt in range(3):
         response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
-        text = response.text() if response is not None else page.content()
+        text = page.content()
         if not _looks_like_reload_challenge(text):
             return response
         if attempt < 2:

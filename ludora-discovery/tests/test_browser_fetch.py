@@ -146,6 +146,25 @@ class BrowserFetchTests(unittest.TestCase):
             url="https://example.mx/products/catan",
         )
 
+    def test_fetch_inspects_rendered_html_without_reading_navigation_response_body(self):
+        class ResponseWithUnavailableBody(FakeResponse):
+            def text(self):
+                raise RuntimeError("Network.getResponseBody: No resource with given identifier found")
+
+        response = ResponseWithUnavailableBody(
+            "https://www.amazon.com.mx/s?page=3",
+            "<html><body>unused response body</body></html>",
+            "text/html;charset=utf-8",
+        )
+        page = FakePage(response, "<html><body><h1>Amazon search results</h1></body></html>")
+        fetcher = BrowserTextFetcher()
+        fetcher._page = page
+
+        result = fetcher.fetch(response.url)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.text, page.rendered_html)
 
 if __name__ == "__main__":
     unittest.main()
