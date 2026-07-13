@@ -69,7 +69,6 @@ const matchCandidateSelect = `
 const BGG_SEARCH_ITEM_TYPES = ['boardgame', 'boardgameexpansion'];
 const BGG_SEARCH_TYPE = BGG_SEARCH_ITEM_TYPES.join(',');
 const AUTO_MATCH_SCORE_THRESHOLD = 0.9;
-const HIGH_CONFIDENCE_BGG_MATCH_SCORE = 0.85;
 
 export function createItemMatchingService(
   database: Database,
@@ -490,11 +489,11 @@ async function generateBggMatches(
   const originalCacheMatches = await generateBggCacheMatches(database, candidate, originalQueries, originalQueries);
   traceLog(traceLogger, 'item_matcher.bgg_cache.completed', {
     candidate_id: candidate.id,
-    high_confidence: originalCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE),
+    auto_match: hasAcceptedMatch(originalCacheMatches),
     match_count: originalCacheMatches.length,
     phase: 'original'
   });
-  if (originalCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
+  if (hasAcceptedMatch(originalCacheMatches)) {
     return originalCacheMatches;
   }
 
@@ -502,11 +501,19 @@ async function generateBggMatches(
     return originalCacheMatches;
   }
 
-  const originalMatches = mergeMatchesByBggId([
+  let originalMatches = mergeMatchesByBggId([
     ...originalCacheMatches,
     ...(await searchBggMatches(database, candidate, bggClient, originalQueries, originalQueries, traceLogger))
   ]);
-  if (originalMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
+  if (hasAcceptedMatch(originalMatches)) {
+    return originalMatches;
+  }
+
+  originalMatches = mergeMatchesByBggId([
+    ...originalMatches,
+    ...(await searchBggMatches(database, candidate, bggClient, originalQueries, originalQueries, traceLogger, true))
+  ]);
+  if (hasAcceptedMatch(originalMatches)) {
     return originalMatches;
   }
 
@@ -524,18 +531,36 @@ async function generateBggMatches(
   const translatedCacheMatches = await generateBggCacheMatches(database, candidate, translatedQueries, titleVariants);
   traceLog(traceLogger, 'item_matcher.bgg_cache.completed', {
     candidate_id: candidate.id,
-    high_confidence: translatedCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE),
+    auto_match: hasAcceptedMatch(translatedCacheMatches),
     match_count: translatedCacheMatches.length,
     phase: 'translated'
   });
-  const cacheMatches = mergeMatchesByBggId([...originalMatches, ...translatedCacheMatches]);
-  if (translatedCacheMatches.some((match) => match.matchScore >= HIGH_CONFIDENCE_BGG_MATCH_SCORE)) {
+  let cacheMatches = mergeMatchesByBggId([...originalMatches, ...translatedCacheMatches]);
+  if (hasAcceptedMatch(translatedCacheMatches)) {
     return cacheMatches;
   }
 
-  const translatedMatches = await searchBggMatches(database, candidate, bggClient, translatedQueries, titleVariants, traceLogger);
+  let translatedMatches = await searchBggMatches(database, candidate, bggClient, translatedQueries, titleVariants, traceLogger);
+  cacheMatches = mergeMatchesByBggId([...cacheMatches, ...translatedMatches]);
+  if (hasAcceptedMatch(cacheMatches)) {
+    return cacheMatches;
+  }
+
+  translatedMatches = await searchBggMatches(
+    database,
+    candidate,
+    bggClient,
+    translatedQueries,
+    titleVariants,
+    traceLogger,
+    true
+  );
 
   return mergeMatchesByBggId([...cacheMatches, ...translatedMatches]);
+}
+
+function hasAcceptedMatch(matches: GeneratedMatchCandidate[]): boolean {
+  return matches.some((match) => match.matchScore >= AUTO_MATCH_SCORE_THRESHOLD);
 }
 
 async function generateBggCacheMatches(
@@ -585,11 +610,12 @@ async function searchBggMatches(
   bggClient: BggClient,
   searchQueries: string[],
   titleVariants: string[],
-  traceLogger: TraceLogger = nullTraceLogger
+  traceLogger: TraceLogger = nullTraceLogger,
+  forceRefresh = false
 ): Promise<GeneratedMatchCandidate[]> {
   const searchResults: BggSearchItem[] = [];
   for (const query of searchQueries) {
-    searchResults.push(...(await cachedBggSearch(database, bggClient, query, traceLogger)));
+    searchResults.push(...(await cachedBggSearch(database, bggClient, query, traceLogger, forceRefresh)));
   }
   const uniqueSearchResults = selectSearchResultsForScoring(dedupeSearchResults(searchResults), titleVariants).slice(0, 10);
   const matches: GeneratedMatchCandidate[] = [];
@@ -635,7 +661,8 @@ async function cachedBggSearch(
   database: Database,
   bggClient: BggClient,
   query: string,
-  traceLogger: TraceLogger = nullTraceLogger
+  traceLogger: TraceLogger = nullTraceLogger,
+  forceRefresh = false
 ): Promise<BggSearchItem[]> {
   const normalizedQuery = normalizeTitle(query);
   if (!normalizedQuery) {
@@ -646,6 +673,22 @@ async function cachedBggSearch(
     normalized_query: normalizedQuery,
     query
   });
+  if (forceRefresh) {
+    traceLog(traceLogger, 'item_matcher.bgg_search.api_start', {
+      normalized_query: normalizedQuery,
+      query,
+      refresh: true
+    });
+    const results = await (bggClient.searchFresh?.(query) ?? bggClient.search(query));
+    traceLog(traceLogger, 'item_matcher.bgg_search.completed', {
+      normalized_query: normalizedQuery,
+      query,
+      result_count: results.length,
+      source: 'api_refresh'
+    });
+    return results;
+  }
+
   const cachedQuery = await database.query(
     `
     select id

@@ -37,6 +37,40 @@ const storeItemUpdateJobSelect = `
   jobs.updated_items, jobs.created_at, jobs.updated_at
 `;
 
+const storeItemUpdateChangeSelect = `
+  changes.id, changes.job_id, changes.run_id, changes.store_item_id,
+  store_items.store_id, stores.name as store_name, store_items.title as store_item_title,
+  store_items.source_url, changes.field_name, changes.old_value, changes.new_value,
+  changes.created_at
+`;
+
+const storeItemUpdateEventSql = `case
+  when changes.field_name = 'store_active' and changes.new_value = 'false'::jsonb then 'Item deactivated'
+  when changes.field_name = 'store_active' and changes.new_value = 'true'::jsonb then 'Item activated'
+  when changes.field_name = '' then 'Item updated'
+  else initcap(replace(changes.field_name, '_', ' ')) || ' changed'
+end`;
+
+const storeItemUpdateChangesTableConfig: TableQueryConfig = {
+  columns: {
+    created_at: columnSql('changes.created_at'),
+    event: columnSql(storeItemUpdateEventSql),
+    field_name: columnSql('changes.field_name'),
+    new_value: columnSql('changes.new_value'),
+    old_value: columnSql('changes.old_value'),
+    run_id: columnSql('changes.run_id'),
+    store_item_id: columnSql('changes.store_item_id'),
+    store_item_title: columnSql('store_items.title'),
+    store_name: columnSql('stores.name')
+  },
+  defaultSortColumnId: 'created_at',
+  defaultSortDirection: 'desc',
+  fromSql: `from store_item_update_change_log changes
+    join store_items on store_items.id = changes.store_item_id
+    left join stores on stores.id = store_items.store_id`,
+  selectSql: storeItemUpdateChangeSelect
+};
+
 const storeItemDiscoveryJobsTableConfig: TableQueryConfig = {
   columns: {
     completed_at: columnSql('jobs.completed_at'),
@@ -217,32 +251,36 @@ export function createOperationsRouter(
       const storeId = optionalPositiveInteger(job.store_id);
       const scopeSql = storeId === null ? 'changes.run_id = $1' : 'store_items.store_id = $1';
       const scopeValue = storeId === null ? runId : storeId;
+      const pagination = parsePagination(request.query);
+      const tableQuery = parseTableQuery(request.query, storeItemUpdateChangesTableConfig);
+      const whereClause = buildScopedWhereClause(tableQuery.filters, scopeSql, scopeValue);
+      const limitParam = whereClause.params.length + 1;
+      const offsetParam = whereClause.params.length + 2;
       const changesResult = await database.query(
-        `select
-           changes.id,
-           changes.job_id,
-           changes.run_id,
-           changes.store_item_id,
-           store_items.store_id,
-           stores.name as store_name,
-           store_items.title as store_item_title,
-           store_items.source_url,
-           changes.field_name,
-           changes.old_value,
-           changes.new_value,
-           changes.created_at
-         from store_item_update_change_log changes
-         join store_items on store_items.id = changes.store_item_id
-         left join stores on stores.id = store_items.store_id
-         where ${scopeSql}
-         order by changes.created_at desc`,
-        [scopeValue]
+        `select ${storeItemUpdateChangesTableConfig.selectSql}
+         ${storeItemUpdateChangesTableConfig.fromSql}
+         ${whereClause.sql}
+         order by ${tableQuery.sortSql} ${tableQuery.sortDirection}, changes.id ${tableQuery.sortDirection}
+         limit $${limitParam} offset $${offsetParam}`,
+        [...whereClause.params, pagination.pageSize, pagination.page * pagination.pageSize]
       );
+      const countResult = await database.query(
+        `select count(*)::int as total
+         ${storeItemUpdateChangesTableConfig.fromSql}
+         ${whereClause.sql}`,
+        whereClause.params
+      );
+      const total = numberField((countResult.rows[0] ?? {}) as Record<string, unknown>, 'total');
 
       response.json({
         data: {
           changes: changesResult.rows,
           job
+        },
+        meta: {
+          page: pagination.page,
+          page_size: pagination.pageSize,
+          total
         }
       });
     } catch (error) {
@@ -421,6 +459,25 @@ function buildWhereClause(filters: Array<{ column: TableColumnConfig; value: str
   };
 }
 
+function buildScopedWhereClause(
+  filters: Array<{ column: TableColumnConfig; value: string }>,
+  scopeSql: string,
+  scopeValue: number | string
+): { params: Array<number | string>; sql: string } {
+  const params: Array<number | string> = [scopeValue];
+  const predicates = [scopeSql];
+
+  for (const filter of filters) {
+    params.push(likePattern(filter.value));
+    predicates.push(`${filter.column.filterSql} ilike $${params.length} escape '\\'`);
+  }
+
+  return {
+    params,
+    sql: `where ${predicates.join(' and ')}`
+  };
+}
+
 function columnSql(columnName: string): TableColumnConfig {
   return {
     filterSql: textSql(columnName),
@@ -449,7 +506,11 @@ function stringQueryField(value: unknown): string {
 }
 
 function integerQueryField(value: unknown, fallback: number, min: number, max: number): number {
-  const parsed = Number(stringQueryField(value));
+  const rawValue = stringQueryField(value).trim();
+  if (!rawValue) {
+    return fallback;
+  }
+  const parsed = Number(rawValue);
   if (!Number.isInteger(parsed)) {
     return fallback;
   }

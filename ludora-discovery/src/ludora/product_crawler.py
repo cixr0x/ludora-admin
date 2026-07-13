@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections.abc import Callable
+from html import unescape
 from typing import Protocol
 from urllib.parse import urljoin, urlparse
 
@@ -17,6 +18,14 @@ from ludora.webfetch import FetchResult
 from ludora.webfetch import fetch_html
 
 
+AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
+
+
+class StoreItemSource(Protocol):
+    store_id: int
+    platform: str
+
+
 class ItemCandidateRepository(Protocol):
     def item_candidate_exists(self, store_id: int | None, source_url: str) -> bool:
         ...
@@ -29,6 +38,13 @@ class ItemCandidateRepository(Protocol):
         limit: int | None = None,
         store_ids: list[int] | None = None,
     ) -> list[DiscoveryItemCandidateRecord]:
+        ...
+
+    def list_store_item_discovery_sources(
+        self,
+        *,
+        store_ids: list[int] | None = None,
+    ) -> list[StoreItemSource]:
         ...
 
     def update_item_candidate_with_change_log(
@@ -48,6 +64,15 @@ class ItemCandidateRepository(Protocol):
     ) -> object | None:
         ...
 
+    def mark_item_candidate_inactive(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        *,
+        job_id: int | None = None,
+        run_id: str | None = None,
+    ) -> object | None:
+        ...
+
 
 class ItemCandidateProcessor(Protocol):
     def process_candidate(self, candidate_id: int, record: DiscoveryItemCandidateRecord) -> None:
@@ -55,6 +80,10 @@ class ItemCandidateProcessor(Protocol):
 
 
 ItemClassifier = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidateRecord]
+
+
+class ProductPageRemovedError(RuntimeError):
+    pass
 
 
 class StoreItemUpdateRecords(list[DiscoveryItemCandidateRecord]):
@@ -240,6 +269,10 @@ def update_confirmed_store_item_details(
     store_ids: list[int] | None = None,
 ) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
+    store_platforms = {
+        source.store_id: source.platform.strip().casefold()
+        for source in repository.list_store_item_discovery_sources(store_ids=store_ids)
+    }
     browser_session = None
     if browser_fetch_enabled and browser_fetcher is None:
         from ludora.browser_fetch import BrowserTextFetcher
@@ -251,11 +284,27 @@ def update_confirmed_store_item_details(
         records = StoreItemUpdateRecords()
         for existing_record in repository.list_confirmed_boardgame_item_candidates(limit=limit, store_ids=store_ids):
             raise_if_cancelled(cancellation_token)
-            refreshed_record = _fetch_detail_candidate(
-                listing_candidate=existing_record,
-                source_listing_url=existing_record.source_listing_url or existing_record.source_url,
-                browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
-            )
+            try:
+                refreshed_record = _fetch_detail_candidate(
+                    listing_candidate=existing_record,
+                    source_listing_url=existing_record.source_listing_url or existing_record.source_url,
+                    platform=store_platforms.get(existing_record.store_id, ""),
+                    browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
+                    detect_removed=True,
+                )
+            except ProductPageRemovedError:
+                if run_id and job_id is None:
+                    raise ValueError("job id is required to log update changes")
+                update_result = repository.mark_item_candidate_inactive(
+                    existing_record,
+                    job_id=job_id,
+                    run_id=run_id,
+                )
+                if getattr(update_result, "changed", False):
+                    records.updated_items += 1
+                existing_record.store_active = False
+                records.append(existing_record)
+                continue
             raise_if_cancelled(cancellation_token)
             _preserve_confirmed_item_state(refreshed_record, existing_record)
             if run_id:
@@ -283,19 +332,26 @@ def update_confirmed_store_item_details(
 def _fetch_detail_candidate(
     listing_candidate: DiscoveryItemCandidateRecord,
     source_listing_url: str,
+    platform: str = "",
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
+    detect_removed: bool = False,
 ) -> DiscoveryItemCandidateRecord:
-    fetched_detail = fetch_html(listing_candidate.source_url)
+    fetched_detail = _fetch_static_product_detail(
+        listing_candidate.source_url,
+        detect_removed=detect_removed,
+    )
+    _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
     static_fetch_failed = fetched_detail is None
     if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
         fetched_detail = None
+        static_fetch_failed = True
 
     detail_candidate = (
-        extract_product_detail_candidate(
-            html=fetched_detail.text,
-            product_url=fetched_detail.url,
-            store_id=listing_candidate.store_id,
+        _extract_refresh_detail_candidate(
+            fetched_detail=fetched_detail,
+            listing_candidate=listing_candidate,
             source_listing_url=source_listing_url,
+            platform=platform,
         )
         if fetched_detail is not None
         else None
@@ -305,14 +361,17 @@ def _fetch_detail_candidate(
         fetched_detail is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate)
     ):
         fetched_detail = browser_fetcher(listing_candidate.source_url)
+        _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
+        if fetched_detail is not None and fetched_detail.status_code >= 400:
+            fetched_detail = None
         if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
             fetched_detail = None
         if fetched_detail is not None:
-            browser_detail_candidate = extract_product_detail_candidate(
-                html=fetched_detail.text,
-                product_url=fetched_detail.url,
-                store_id=listing_candidate.store_id,
+            browser_detail_candidate = _extract_refresh_detail_candidate(
+                fetched_detail=fetched_detail,
+                listing_candidate=listing_candidate,
                 source_listing_url=source_listing_url,
+                platform=platform,
             )
             if browser_detail_candidate is not None:
                 detail_candidate = browser_detail_candidate
@@ -328,19 +387,109 @@ def _fetch_detail_candidate(
     return _apply_listing_fallbacks(detail_candidate, listing_candidate)
 
 
+def _extract_refresh_detail_candidate(
+    *,
+    fetched_detail: FetchResult,
+    listing_candidate: DiscoveryItemCandidateRecord,
+    source_listing_url: str,
+    platform: str,
+) -> DiscoveryItemCandidateRecord | None:
+    if platform.strip().casefold() in AMAZON_STORE_PLATFORMS:
+        # Imported lazily because amazon_discovery reuses the repository and processor
+        # protocols defined in this module.
+        from ludora.amazon_discovery import _extract_amazon_detail_candidate
+
+        return _extract_amazon_detail_candidate(
+            html=fetched_detail.text,
+            product_url=listing_candidate.source_url,
+            store_id=listing_candidate.store_id,
+            source_listing_url=source_listing_url,
+            search_title=listing_candidate.title,
+        )
+
+    return extract_product_detail_candidate(
+        html=fetched_detail.text,
+        product_url=fetched_detail.url,
+        store_id=listing_candidate.store_id,
+        source_listing_url=source_listing_url,
+    )
+
+
+def _fetch_static_product_detail(source_url: str, *, detect_removed: bool) -> FetchResult | None:
+    if not detect_removed:
+        return fetch_html(source_url)
+
+    fetched_detail = fetch_html(source_url, include_http_error_status=True)
+    if fetched_detail is None:
+        fetched_detail = fetch_html(source_url, include_http_error_status=True)
+    return fetched_detail
+
+
+def _raise_if_product_page_removed(
+    fetched_detail: FetchResult | None,
+    source_url: str,
+    *,
+    detect_removed: bool,
+) -> None:
+    if not detect_removed or fetched_detail is None:
+        return
+    if fetched_detail.status_code in {404, 410}:
+        reason = f"HTTP {fetched_detail.status_code}"
+    elif _looks_like_removed_product_page(fetched_detail.text):
+        reason = "an explicit not-found page"
+    else:
+        return
+    raise ProductPageRemovedError(f"Product detail page returned {reason}: {source_url}")
+
+
+def _looks_like_removed_product_page(html: str) -> bool:
+    headings = re.findall(r"<(?:title|h1)\b[^>]*>(.*?)</(?:title|h1)>", html, flags=re.IGNORECASE | re.DOTALL)
+    normalized_headings = []
+    for heading in headings:
+        text = re.sub(r"<[^>]+>", " ", unescape(heading))
+        normalized = unicodedata.normalize("NFKD", text.casefold()).encode("ascii", "ignore").decode("ascii")
+        normalized_headings.append(" ".join(normalized.split()))
+
+    not_found_phrases = (
+        "page not found",
+        "product not found",
+        "pagina no encontrada",
+        "producto no encontrado",
+        "this page does not exist",
+        "esta pagina no existe",
+        "product is no longer available",
+        "producto ya no esta disponible",
+    )
+    return any(
+        heading in {"404", "410"} or any(phrase in heading for phrase in not_found_phrases)
+        for heading in normalized_headings
+    )
+
+
 def _apply_listing_fallbacks(
     detail_candidate: DiscoveryItemCandidateRecord,
     listing_candidate: DiscoveryItemCandidateRecord,
 ) -> DiscoveryItemCandidateRecord:
-    if not detail_candidate.raw_price:
+    preserve_listing_price = not _is_amazon_without_direct_buy_option(detail_candidate)
+    if preserve_listing_price and not detail_candidate.raw_price:
         detail_candidate.raw_price = listing_candidate.raw_price
-    if not detail_candidate.price:
+    if preserve_listing_price and not detail_candidate.price:
         detail_candidate.price = listing_candidate.price
         detail_candidate.price_source = listing_candidate.price_source
     if detail_candidate.availability == "unknown":
         detail_candidate.availability = listing_candidate.availability
         detail_candidate.availability_source = listing_candidate.availability_source
     return detail_candidate
+
+
+def _is_amazon_without_direct_buy_option(record: DiscoveryItemCandidateRecord) -> bool:
+    amazon_payload = record.raw_payload.get("amazon")
+    return (
+        record.availability == "out_of_stock"
+        and isinstance(amazon_payload, dict)
+        and amazon_payload.get("has_add_to_cart") is False
+        and amazon_payload.get("has_buy_now") is False
+    )
 
 
 def _should_retry_detail_with_browser(
@@ -401,6 +550,7 @@ def _preserve_confirmed_item_state(
     refreshed_record.store_item_id = existing_record.store_item_id
     refreshed_record.item_id = existing_record.item_id
     refreshed_record.listing_status = existing_record.listing_status
+    refreshed_record.store_active = existing_record.store_active
     refreshed_record.is_boardgame = True
     refreshed_record.is_boardgame_confirmed = True
     refreshed_record.category_confidence = existing_record.category_confidence

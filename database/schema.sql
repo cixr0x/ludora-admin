@@ -108,6 +108,7 @@ create table if not exists store_items (
     currency text not null default 'MXN',
     availability text not null default 'unknown',
     availability_source text not null default 'none',
+    store_active boolean not null default true,
     store_sku text not null default '',
     raw_payload jsonb not null default '{}'::jsonb,
     is_boardgame boolean not null default false,
@@ -134,6 +135,11 @@ alter table if exists store_items add column if not exists refreshed_date timest
 update store_items set refreshed_date = last_updated where refreshed_date is null;
 alter table if exists store_items alter column refreshed_date set default now();
 alter table if exists store_items alter column refreshed_date set not null;
+
+alter table if exists store_items add column if not exists store_active boolean;
+update store_items set store_active = true where store_active is null;
+alter table if exists store_items alter column store_active set default true;
+alter table if exists store_items alter column store_active set not null;
 
 create index if not exists store_items_store_id_idx
 on store_items (store_id);

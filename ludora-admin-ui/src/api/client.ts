@@ -54,6 +54,10 @@ export type PagedRows<T extends AdminRecord> = {
   total: number;
 };
 
+export type StoreItemUpdateHistoryPage = PagedRows<AdminRecord> & {
+  job: AdminRecord;
+};
+
 export type ItemTaxonomy = {
   categories: AdminRecord[];
   families: AdminRecord[];
@@ -392,6 +396,24 @@ async function fetchPagedRows<T extends AdminRecord>(
   };
 }
 
+async function fetchStoreItemUpdateHistoryPage(
+  path: string,
+  fallback: { page: number; pageSize: number }
+): Promise<StoreItemUpdateHistoryPage> {
+  const response = await fetchEnvelope<StoreItemUpdateHistory>(path);
+  if (!Array.isArray(response.data.changes)) {
+    throw new Error(INVALID_DATA_ERROR);
+  }
+
+  return {
+    job: response.data.job,
+    page: response.meta?.page ?? fallback.page,
+    pageSize: response.meta?.page_size ?? fallback.pageSize,
+    rows: response.data.changes,
+    total: response.meta?.total ?? response.data.changes.length
+  };
+}
+
 function sendJson<T>(path: string, method: 'PATCH' | 'POST', body: unknown): Promise<T> {
   return fetchData<T>(path, {
     body: JSON.stringify(body),
@@ -536,9 +558,10 @@ export const adminApi = {
     ),
   getStoreItemUpdateJobsPage: (query: TableQuery) =>
     fetchPagedRows<AdminRecord>(pagedPath('/admin/operations/store-item-update-jobs', query), query),
-  getStoreItemUpdateHistory: (runId: string) =>
-    fetchData<StoreItemUpdateHistory>(
-      `/admin/operations/store-item-update-jobs/${encodeURIComponent(runId)}/changes`
+  getStoreItemUpdateHistoryPage: (runId: string, query: TableQuery) =>
+    fetchStoreItemUpdateHistoryPage(
+      pagedPath(`/admin/operations/store-item-update-jobs/${encodeURIComponent(runId)}/changes`, query),
+      query
     ),
   getLatestStoreDiscoveryRun: () => fetchData<StoreDiscoveryRun | null>('/admin/operations/store-discovery-runs/latest'),
   getCurrentLocalCoverWorkflow: () => fetchData<LocalCoverWorkflow | null>('/admin/local-cover-workflows/current'),

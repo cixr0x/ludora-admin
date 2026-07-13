@@ -8,6 +8,7 @@ export type BggThingResult = {
 export type BggClient = {
   fetchThing(bggId: number): Promise<BggThingResult | null>;
   search(query: string): Promise<BggSearchItem[]>;
+  searchFresh?(query: string): Promise<BggSearchItem[]>;
 };
 
 export type BggThingXmlClient = BggClient & {
@@ -98,6 +99,17 @@ export function createBggClient({
     );
   }
 
+  async function search(query: string): Promise<BggSearchItem[]> {
+    const xml = await getXml(
+      'search',
+      new URLSearchParams({
+        query,
+        type: 'boardgame,boardgameexpansion'
+      })
+    );
+    return parseBggSearchResponse(xml);
+  }
+
   return {
     fetchThingXml,
 
@@ -107,16 +119,8 @@ export function createBggClient({
       return details ? { details, rawXml: xml } : null;
     },
 
-    async search(query: string): Promise<BggSearchItem[]> {
-      const xml = await getXml(
-        'search',
-        new URLSearchParams({
-          query,
-          type: 'boardgame,boardgameexpansion'
-        })
-      );
-      return parseBggSearchResponse(xml);
-    }
+    search,
+    searchFresh: search
   };
 }
 

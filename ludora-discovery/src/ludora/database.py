@@ -411,6 +411,65 @@ class DiscoveryRepository:
             changed=bool(changes),
         )
 
+    def mark_item_candidate_inactive(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        *,
+        job_id: int | None = None,
+        run_id: str | None = None,
+    ) -> ItemCandidateUpsertResult:
+        store_item_id = existing_record.store_item_id
+        if store_item_id is None:
+            raise ValueError("store item id is required to mark it inactive")
+        if run_id is not None and job_id is None:
+            raise ValueError("job id is required to log update changes")
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update store_items
+                set store_active = false,
+                    refreshed_date = now()
+                where id = %s
+                  and store_active = true
+                returning id
+                """,
+                (store_item_id,),
+            )
+            changed = cursor.fetchone() is not None
+            if changed and run_id is not None:
+                cursor.execute(
+                    """
+                    insert into store_item_update_change_log (
+                        job_id,
+                        run_id,
+                        store_item_id,
+                        field_name,
+                        old_value,
+                        new_value
+                    )
+                    values (%s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                    """,
+                    (
+                        job_id,
+                        run_id,
+                        store_item_id,
+                        "store_active",
+                        _jsonb_log_value(True),
+                        _jsonb_log_value(False),
+                    ),
+                )
+        self.connection.commit()
+        existing_record.store_active = False
+        return ItemCandidateUpsertResult(
+            candidate_id=store_item_id,
+            listing_status=existing_record.listing_status,
+            item_id=existing_record.item_id,
+            should_process=False,
+            created=False,
+            changed=changed,
+        )
+
     def _find_item_candidate(self, cursor: Any, record: DiscoveryItemCandidateRecord):
         cursor.execute(
             """
@@ -514,6 +573,7 @@ class DiscoveryRepository:
               and item_id is not null
               and source_url <> ''
               and listing_status = 'LISTED'
+              and store_active = true
         """
         params: list[object] = []
         if store_ids:
@@ -849,6 +909,7 @@ def _item_candidate_select_columns() -> str:
         currency,
         availability,
         availability_source,
+        store_active,
         store_sku,
         raw_payload,
         is_boardgame,
@@ -894,22 +955,23 @@ def _item_candidate_from_row(row: Any) -> DiscoveryItemCandidateRecord:
         currency=_text(row[21]) or "MXN",
         availability=_text(row[22]) or "unknown",
         availability_source=_text(row[23]) or "none",
-        store_sku=_text(row[24]),
-        raw_payload=_json_object(row[25]),
-        is_boardgame=bool(row[26]),
-        is_boardgame_confirmed=bool(row[27]),
-        category_confidence=_optional_float(row[28]),
-        classification_reasons=_json_list(row[29]),
-        match_source=_text(row[30]),
-        matched_bgg_id=_optional_int(row[31]),
-        matched_name=_text(row[32]),
-        match_score=_optional_float(row[33]),
-        match_reasons=_json_list(row[34]),
-        match_payload=_json_object(row[35]),
-        matched_at=_text(row[36]) or None,
-        processed_at=_text(row[37]) or None,
-        processing_error=_text(row[38]),
-        store_item_id=_optional_int(row[39]),
+        store_active=bool(row[24]),
+        store_sku=_text(row[25]),
+        raw_payload=_json_object(row[26]),
+        is_boardgame=bool(row[27]),
+        is_boardgame_confirmed=bool(row[28]),
+        category_confidence=_optional_float(row[29]),
+        classification_reasons=_json_list(row[30]),
+        match_source=_text(row[31]),
+        matched_bgg_id=_optional_int(row[32]),
+        matched_name=_text(row[33]),
+        match_score=_optional_float(row[34]),
+        match_reasons=_json_list(row[35]),
+        match_payload=_json_object(row[36]),
+        matched_at=_text(row[37]) or None,
+        processed_at=_text(row[38]) or None,
+        processing_error=_text(row[39]),
+        store_item_id=_optional_int(row[40]),
     )
 
 

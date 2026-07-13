@@ -337,14 +337,6 @@ function buildItemCandidateColumns(
     sortValue: (row) => field(row, ['language_source'])
   },
   {
-    filterValue: (row) => field(row, ['language_evidence']),
-    id: 'language_evidence',
-    label: 'Language Evidence',
-    minWidth: 280,
-    render: (row) => field(row, ['language_evidence']),
-    sortValue: (row) => field(row, ['language_evidence'])
-  },
-  {
     filterValue: (row) => field(row, ['raw_price', 'price']),
     id: 'price',
     label: 'Price',
@@ -947,7 +939,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
           ariaLabel="Store items"
           columns={itemCandidateColumns}
           getRowKey={(row, index) => field(row, ['id'], String(index))}
-          minWidth={isBatchModeEnabled ? 3746 : 3674}
+          minWidth={isBatchModeEnabled ? 3466 : 3394}
           onRowDoubleClick={(row) => {
             setDetailState('ready');
             setLocalCoverWorkflow(null);

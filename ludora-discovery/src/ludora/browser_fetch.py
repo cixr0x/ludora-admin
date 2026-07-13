@@ -14,6 +14,10 @@ class BrowserFetchUnavailable(RuntimeError):
     pass
 
 
+AMAZON_STORE_SCROLL_WAIT_MS = 750
+AMAZON_STORE_STABLE_SCROLL_ROUNDS = 3
+
+
 def fetch_sitemap_text_with_browser(url: str, timeout_ms: int = 30_000) -> FetchResult | None:
     return fetch_text_with_browser(url, timeout_ms=timeout_ms)
 
@@ -78,14 +82,24 @@ class BrowserTextFetcher:
             if response is None:
                 return FetchResult(url=page.url, text=page.content())
             if _is_xml_response(response):
-                return FetchResult(url=response.url, text=response.text())
+                return FetchResult(
+                    url=response.url,
+                    text=response.text(),
+                    status_code=int(getattr(response, "status", 200)),
+                )
             _wait_for_rendered_html(
                 page,
                 url,
                 timeout_ms=self.timeout_ms,
                 timeout_error=self._playwright_timeout_error,
             )
-            return FetchResult(url=page.url, text=page.content())
+            if _is_amazon_store_search_url(page.url or url):
+                _scroll_amazon_store_search_to_end(page, timeout_ms=self.timeout_ms)
+            return FetchResult(
+                url=page.url,
+                text=page.content(),
+                status_code=int(getattr(response, "status", 200)),
+            )
         except (self._playwright_error, self._playwright_timeout_error, OSError, ValueError) as exc:
             if self.trace_logger is not None:
                 self.trace_logger.log(
@@ -133,6 +147,52 @@ def _looks_like_reload_challenge(text: str) -> bool:
 def _is_xml_response(response) -> bool:
     content_type = str(response.headers.get("content-type", "")).casefold()
     return "xml" in content_type and "html" not in content_type
+
+
+def _is_amazon_store_search_url(url: str) -> bool:
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").casefold()
+    path = parsed.path.rstrip("/").casefold()
+    is_amazon_host = bool(re.search(r"(^|\.)amazon\.", hostname))
+    return is_amazon_host and bool(re.fullmatch(r"/stores/page/[^/]+/search", path))
+
+
+def _scroll_amazon_store_search_to_end(page, *, timeout_ms: int) -> None:
+    max_rounds = max(1, min(50, timeout_ms // AMAZON_STORE_SCROLL_WAIT_MS))
+    previous_product_count = -1
+    previous_scroll_height = -1
+    stable_rounds = 0
+
+    for _ in range(max_rounds):
+        snapshot = page.evaluate(
+            r"""
+            () => {
+              const asinPattern = /\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:[/?#]|$)/i;
+              const asins = new Set();
+              for (const link of document.querySelectorAll('a[href]')) {
+                const match = link.href.match(asinPattern);
+                if (match) asins.add(match[1].toUpperCase());
+              }
+              const scrollHeight = document.documentElement.scrollHeight;
+              window.scrollTo(0, scrollHeight);
+              return { productCount: asins.size, scrollHeight };
+            }
+            """
+        )
+        product_count = int(snapshot.get("productCount", 0))
+        scroll_height = int(snapshot.get("scrollHeight", 0))
+
+        if product_count == previous_product_count and scroll_height == previous_scroll_height:
+            stable_rounds += 1
+        else:
+            stable_rounds = 0
+
+        if stable_rounds >= AMAZON_STORE_STABLE_SCROLL_ROUNDS:
+            break
+
+        previous_product_count = product_count
+        previous_scroll_height = scroll_height
+        page.wait_for_timeout(AMAZON_STORE_SCROLL_WAIT_MS)
 
 
 def _wait_for_rendered_html(page, url: str, *, timeout_ms: int, timeout_error) -> None:

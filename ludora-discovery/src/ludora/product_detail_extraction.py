@@ -98,6 +98,10 @@ VOID_LIKE_TAGS = {
     "track",
     "wbr",
 }
+JSON_LD_LEADING_ZERO_GTIN_RE = re.compile(
+    r'("gtin(?:8|12|13|14)?"\s*:\s*)(0\d+)(?=\s*[,}])',
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -378,14 +382,26 @@ def extract_product_detail_candidate(
 
 def _extract_json_ld_product(scripts: list[str]) -> dict[str, Any]:
     for script in scripts:
-        try:
-            parsed = json.loads(script)
-        except json.JSONDecodeError:
+        parsed = _parse_json_ld(script)
+        if parsed is None:
             continue
         product = _find_product(parsed)
         if product:
             return product
     return {}
+
+
+def _parse_json_ld(script: str) -> Any | None:
+    try:
+        return json.loads(script)
+    except json.JSONDecodeError:
+        repaired = JSON_LD_LEADING_ZERO_GTIN_RE.sub(r'\1"\2"', script)
+        if repaired == script:
+            return None
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            return None
 
 
 def _find_product(value: Any) -> dict[str, Any]:

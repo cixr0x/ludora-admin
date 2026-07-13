@@ -54,6 +54,12 @@ class SchemaTests(unittest.TestCase):
                 "update store_items set listing_status = 'PENDING' where listing_status is null",
                 "alter table if exists store_items alter column listing_status set not null",
             ],
+            "20260712_001_store_item_active.sql": [
+                "alter table if exists store_items add column if not exists store_active boolean",
+                "update store_items set store_active = true where store_active is null",
+                "alter table if exists store_items alter column store_active set default true",
+                "alter table if exists store_items alter column store_active set not null",
+            ],
             "20260712_002_store_item_discovery_trace_log.sql": [
                 "create table if not exists store_item_discovery_trace_log",
                 "store_item_discovery_trace_log_run_id_id_idx",
@@ -196,6 +202,7 @@ class SchemaTests(unittest.TestCase):
             "currency",
             "availability",
             "availability_source",
+            "store_active",
             "store_sku",
             "raw_payload",
             "is_boardgame",
@@ -243,6 +250,11 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("price_source text not null default 'none'", item_candidate_table)
         self.assertIn("currency text not null default 'mxn'", item_candidate_table)
         self.assertIn("availability_source text not null default 'none'", item_candidate_table)
+        self.assertIn("store_active boolean not null default true", item_candidate_table)
+        self.assertIn("alter table if exists store_items add column if not exists store_active boolean", schema)
+        self.assertIn("update store_items set store_active = true where store_active is null", schema)
+        self.assertIn("alter table if exists store_items alter column store_active set default true", schema)
+        self.assertIn("alter table if exists store_items alter column store_active set not null", schema)
         self.assertIn("raw_payload jsonb not null default '{}'::jsonb", item_candidate_table)
         self.assertIn("category_confidence numeric(4, 2)", item_candidate_table)
         self.assertIn("classification_reasons jsonb not null default '[]'::jsonb", item_candidate_table)

@@ -156,6 +156,7 @@ class DiscoveryItemCandidateRecord:
     currency: str = "MXN"
     availability: str = "unknown"
     availability_source: str = "none"
+    store_active: bool = True
     store_sku: str = ""
     raw_payload: dict[str, object] = field(default_factory=dict)
     is_boardgame: bool = False
@@ -199,6 +200,7 @@ class DiscoveryItemCandidateRecord:
             "currency": self.currency,
             "availability": self.availability,
             "availability_source": self.availability_source,
+            "store_active": self.store_active,
             "store_sku": self.store_sku,
             "raw_payload": self.raw_payload,
             "is_boardgame": self.is_boardgame,

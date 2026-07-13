@@ -46,6 +46,22 @@ class FakePage:
         self.closed = True
 
 
+class FakeInfiniteScrollPage(FakePage):
+    def __init__(self, response, rendered_html, scroll_snapshots):
+        super().__init__(response, rendered_html)
+        self.scroll_snapshots = list(scroll_snapshots)
+        self.evaluate_calls = 0
+        self.wait_timeouts = []
+
+    def evaluate(self, expression):
+        snapshot_index = min(self.evaluate_calls, len(self.scroll_snapshots) - 1)
+        self.evaluate_calls += 1
+        return self.scroll_snapshots[snapshot_index]
+
+    def wait_for_timeout(self, timeout):
+        self.wait_timeouts.append(timeout)
+
+
 class FakeContext:
     def __init__(self, pages):
         self.pages = list(pages)
@@ -75,6 +91,34 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertEqual(result.text, "<html><body><h1>Catan</h1></body></html>")
         self.assertTrue(page.waited_for_load)
         self.assertTrue(page.waited_for_function)
+
+    def test_fetch_scrolls_amazon_store_search_until_products_stop_growing(self):
+        response = FakeResponse(
+            "https://www.amazon.com.mx/stores/page/STORE-PAGE-ID/search?terms=jue",
+            "<html></html>",
+            "text/html;charset=utf-8",
+        )
+        page = FakeInfiniteScrollPage(
+            response,
+            "<html><body><a href='/dp/B0LAST0001'>Last product</a></body></html>",
+            [
+                {"productCount": 20, "scrollHeight": 2_000},
+                {"productCount": 40, "scrollHeight": 4_000},
+                {"productCount": 40, "scrollHeight": 4_000},
+                {"productCount": 40, "scrollHeight": 4_000},
+                {"productCount": 40, "scrollHeight": 4_000},
+            ],
+        )
+        fetcher = BrowserTextFetcher()
+        fetcher._page = page
+
+        result = fetcher.fetch(response.url)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIn("B0LAST0001", result.text)
+        self.assertEqual(page.evaluate_calls, 5)
+        self.assertEqual(page.wait_timeouts, [750, 750, 750, 750])
 
     def test_wait_tokens_ignore_short_common_slug_words(self):
         self.assertEqual(
@@ -165,6 +209,7 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertIsNotNone(result)
         assert result is not None
         self.assertEqual(result.text, page.rendered_html)
+
 
 if __name__ == "__main__":
     unittest.main()

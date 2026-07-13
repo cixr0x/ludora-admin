@@ -24,8 +24,20 @@ export function createCachedBggClient(database: Database, upstreamClient: BggThi
       return details ? { details, rawXml } : null;
     },
 
-    search: (query) => cachedSearch(database, upstreamClient, query)
+    search: (query) => cachedSearch(database, upstreamClient, query),
+    searchFresh: (query) => freshSearch(database, upstreamClient, query)
   };
+}
+
+async function freshSearch(database: Database, upstreamClient: BggThingXmlClient, query: string): Promise<BggSearchItem[]> {
+  const normalizedQuery = normalizeTitle(query);
+  if (!normalizedQuery) {
+    return [];
+  }
+
+  const results = await upstreamClient.search(query);
+  await writeSearchCache(database, query, normalizedQuery, results);
+  return results;
 }
 
 async function cachedSearch(database: Database, upstreamClient: BggThingXmlClient, query: string): Promise<BggSearchItem[]> {

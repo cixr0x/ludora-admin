@@ -15,7 +15,14 @@ from ludora.webfetch import FetchResult
 
 
 class FakeRepository:
-    def __init__(self, upsert_result=None, existing_urls=None, confirmed_items=None, update_change_log_results=None):
+    def __init__(
+        self,
+        upsert_result=None,
+        existing_urls=None,
+        confirmed_items=None,
+        update_change_log_results=None,
+        store_platforms=None,
+    ):
         self.item_records = []
         self.upsert_result = upsert_result
         self.existing_urls = set(existing_urls or [])
@@ -26,6 +33,9 @@ class FakeRepository:
         self.update_change_log_calls = []
         self.update_change_log_results = list(update_change_log_results or [])
         self.price_availability_update_calls = []
+        self.inactive_update_calls = []
+        self.store_platforms = dict(store_platforms or {})
+        self.discovery_source_store_ids = None
 
     def item_candidate_exists(self, store_id, source_url):
         self.exists_checks.append((store_id, source_url))
@@ -40,6 +50,14 @@ class FakeRepository:
         self.confirmed_items_store_ids = store_ids
         return self.confirmed_items
 
+    def list_store_item_discovery_sources(self, *, store_ids=None):
+        self.discovery_source_store_ids = store_ids
+        selected_store_ids = store_ids if store_ids is not None else self.store_platforms
+        return [
+            SimpleNamespace(store_id=store_id, platform=self.store_platforms.get(store_id, ""))
+            for store_id in selected_store_ids
+        ]
+
     def update_item_candidate_with_change_log(self, existing_record, refreshed_record, *, job_id, run_id):
         self.update_change_log_calls.append((existing_record, refreshed_record, job_id, run_id))
         self.item_records.append(refreshed_record)
@@ -51,6 +69,18 @@ class FakeRepository:
         self.price_availability_update_calls.append((existing_record, refreshed_record))
         self.item_records.append(refreshed_record)
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="LISTED", item_id=refreshed_record.item_id, should_process=False)
+
+    def mark_item_candidate_inactive(self, existing_record, *, job_id=None, run_id=None):
+        self.inactive_update_calls.append((existing_record, job_id, run_id))
+        existing_record.store_active = False
+        self.item_records.append(existing_record)
+        return ItemCandidateUpsertResult(
+            candidate_id=existing_record.store_item_id or 101,
+            listing_status=existing_record.listing_status,
+            item_id=existing_record.item_id,
+            should_process=False,
+            changed=True,
+        )
 
 
 class FakeItemProcessor:
@@ -546,7 +576,10 @@ class InventoryTests(unittest.TestCase):
         ) as fetch_html:
             records = update_confirmed_store_item_details(repository, limit=25)
 
-        fetch_html.assert_called_once_with("https://example.mx/products/catan")
+        fetch_html.assert_called_once_with(
+            "https://example.mx/products/catan",
+            include_http_error_status=True,
+        )
         self.assertEqual(repository.confirmed_items_limit, 25)
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].title, "Catan Nueva Edicion")
@@ -560,6 +593,88 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records[0].category_confidence, 0.91)
         self.assertEqual(repository.item_records[0].classification_reasons, ["previously confirmed"])
         self.assertEqual(repository.update_change_log_calls, [])
+
+    def test_update_confirmed_amazon_item_uses_amazon_detail_parser(self):
+        product_html = """
+        <html><body>
+          <span id="productTitle">Catan - Juego de Mesa</span>
+          <span class="a-offscreen">$799.00</span>
+          <div id="availability">Disponible</div>
+          <input id="add-to-cart-button" type="submit" value="Agregar al carrito">
+          <input id="buy-now-button" type="submit" value="Comprar ahora">
+          <table><tr><th>ASIN</th><td>B0TEST1234</td></tr></table>
+        </body></html>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://www.amazon.com.mx/dp/B0TEST1234",
+            source_listing_url="https://www.amazon.com.mx/stores/page/store-id/search?terms=jue",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            price_source="amazon_detail",
+            availability_source="amazon_detail",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record], store_platforms={12: "amazon"})
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=existing_record.source_url, text=product_html),
+        ), patch("ludora.product_crawler.extract_product_detail_candidate") as generic_parser:
+            records = update_confirmed_store_item_details(repository, job_id=99, run_id="run-amazon")
+
+        generic_parser.assert_not_called()
+        self.assertEqual(repository.discovery_source_store_ids, None)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].price, "799.00")
+        self.assertEqual(records[0].price_source, "amazon_detail")
+        self.assertEqual(records[0].availability, "available")
+        self.assertEqual(records[0].availability_source, "amazon_detail")
+        self.assertEqual(len(repository.update_change_log_calls), 1)
+
+    def test_update_confirmed_amazon_item_marks_missing_direct_buy_option_out_of_stock(self):
+        product_html = """
+        <html><body>
+          <span id="productTitle">Asmodee Survive The Island Monster Pack</span>
+          <div id="availability"><div id="all-offers-display"></div></div>
+          <div id="recommendations"><span class="a-offscreen">$635.11</span></div>
+          <table><tr><th>ASIN</th><td>B0DQVHVBX6</td></tr></table>
+        </body></html>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=57,
+            store_id=12,
+            source_url="https://www.amazon.com.mx/dp/B0DQVHVBX6",
+            source_listing_url="https://www.amazon.com.mx/stores/page/store-id/search?terms=jue",
+            title="Survive The Island Monster Pack",
+            raw_price="$199.00",
+            price="199.00",
+            price_source="amazon_detail",
+            availability="available",
+            availability_source="amazon_detail",
+            item_id=78,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record], store_platforms={12: "amazon"})
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=existing_record.source_url, text=product_html),
+        ):
+            records = update_confirmed_store_item_details(repository, job_id=100, run_id="run-amazon-out")
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].availability, "out_of_stock")
+        self.assertEqual(records[0].availability_source, "amazon_detail")
+        self.assertEqual(records[0].raw_price, "")
+        self.assertEqual(records[0].price, "")
+        self.assertEqual(records[0].price_source, "none")
+        self.assertEqual(len(repository.update_change_log_calls), 1)
 
     def test_update_confirmed_store_item_details_raises_when_detail_fetch_fails(self):
         existing_record = DiscoveryItemCandidateRecord(
@@ -579,6 +694,114 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(repository.item_records, [])
         self.assertEqual(repository.update_change_log_calls, [])
+
+    def test_update_confirmed_store_item_details_marks_http_404_as_inactive(self):
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record])
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(
+                url=existing_record.source_url,
+                text="",
+                status_code=404,
+            ),
+        ):
+            records = update_confirmed_store_item_details(repository, job_id=99, run_id="run-123")
+
+        self.assertEqual(len(records), 1)
+        self.assertFalse(records[0].store_active)
+        self.assertEqual(records.updated_items, 1)
+        self.assertEqual(repository.inactive_update_calls, [(existing_record, 99, "run-123")])
+        self.assertEqual(repository.update_change_log_calls, [])
+        self.assertEqual(repository.price_availability_update_calls, [])
+
+    def test_update_confirmed_store_item_details_retries_ambiguous_failure_before_marking_404_inactive(self):
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=3529,
+            store_id=4,
+            source_url="https://caravanagameshop.com/producto/pareja-de-pacotilla/",
+            title="Pareja de Pacotilla",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record])
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=[
+                None,
+                FetchResult(url=existing_record.source_url, text="", status_code=404),
+            ],
+        ) as fetch_html:
+            records = update_confirmed_store_item_details(repository, job_id=12, run_id="run-retry")
+
+        self.assertEqual(fetch_html.call_count, 2)
+        self.assertEqual(len(records), 1)
+        self.assertFalse(records[0].store_active)
+        self.assertEqual(records.updated_items, 1)
+        self.assertEqual(repository.inactive_update_calls, [(existing_record, 12, "run-retry")])
+
+    def test_update_confirmed_store_item_details_marks_browser_http_410_as_inactive(self):
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record])
+
+        with patch("ludora.product_crawler.fetch_html", return_value=None):
+            records = update_confirmed_store_item_details(
+                repository,
+                browser_fetch_enabled=True,
+                browser_fetcher=lambda url: FetchResult(url=url, text="", status_code=410),
+            )
+
+        self.assertEqual(len(records), 1)
+        self.assertFalse(records[0].store_active)
+        self.assertEqual(records.updated_items, 1)
+        self.assertEqual(repository.inactive_update_calls, [(existing_record, None, None)])
+
+    def test_update_confirmed_store_item_details_marks_explicit_soft_404_as_inactive(self):
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record])
+        soft_404_html = "<html><head><title>Página no encontrada</title></head><body></body></html>"
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=existing_record.source_url, text=soft_404_html),
+        ):
+            records = update_confirmed_store_item_details(repository)
+
+        self.assertEqual(len(records), 1)
+        self.assertFalse(records[0].store_active)
+        self.assertEqual(records.updated_items, 1)
+        self.assertEqual(repository.inactive_update_calls, [(existing_record, None, None)])
 
     def test_update_confirmed_store_items_forwards_selected_store_ids(self):
         repository = FakeRepository()
@@ -600,6 +823,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records, [])
         self.assertEqual(repository.confirmed_items_limit, 25)
         self.assertEqual(repository.confirmed_items_store_ids, [12, 34])
+        self.assertEqual(repository.discovery_source_store_ids, [12, 34])
 
     def test_update_confirmed_store_item_details_logs_changes_when_job_id_is_available(self):
         detail_html = """

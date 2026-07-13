@@ -115,6 +115,25 @@ describe('cached BGG client', () => {
     expect(normalizeSql(queries[1]?.sql ?? '')).toContain('from bgg_search_query_results');
   });
 
+  it('bypasses cached search results when a fresh upstream search is requested', async () => {
+    const { database, queries } = fakeDatabase([]);
+    const upstreamSearches: string[] = [];
+    const upstream = fakeUpstreamClient(
+      async () => coffeeRushXml,
+      async (query) => {
+        upstreamSearches.push(query);
+        return [{ bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 }];
+      }
+    );
+
+    const results = await createCachedBggClient(database, upstream).searchFresh?.('Coffee Rush');
+
+    expect(results).toEqual([{ bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 }]);
+    expect(upstreamSearches).toEqual(['Coffee Rush']);
+    expect(queries.some((query) => normalizeSql(query.sql).includes('from bgg_search_queries'))).toBe(false);
+    expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into bgg_search_queries'))).toBe(true);
+  });
+
   it('stores upstream search results when the search cache misses', async () => {
     const { database, queries } = fakeDatabase([[]]);
     const upstreamSearches: string[] = [];

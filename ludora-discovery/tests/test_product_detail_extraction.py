@@ -398,6 +398,50 @@ class ProductDetailExtractionTests(unittest.TestCase):
         self.assertEqual(record.store_sku, "THPMED001")
         self.assertEqual(record.raw_payload["json_ld"]["name"], "Mago: El Despertar (2\u00aa Edici\u00f3n)")
 
+    def test_repairs_unquoted_leading_zero_gtin_before_reading_shopify_availability(self):
+        html = """
+        <html lang="es">
+          <head>
+            <title>Sobre Plano - 2 Tomatoes Games Mexico</title>
+            <script type="application/ld+json">
+            {
+              "@context": "http://schema.org/",
+              "@type": "Product",
+              "name": "Sobre Plano",
+              "offers": [{
+                "@type": "Offer",
+                "gtin13": 0730170686659,
+                "availability": "http://schema.org/InStock",
+                "price": 655.0,
+                "priceCurrency": "MXN"
+              }]
+            }
+            </script>
+          </head>
+          <body>
+            <h1>Sobre Plano</h1>
+            <span class="badge price__badge-sold-out">Agotado</span>
+            <button type="submit" name="add">Agregar al carrito</button>
+          </body>
+        </html>
+        """
+
+        record = extract_product_detail_candidate(
+            html,
+            "https://2tomatoesgames.mx/products/sobre-plano",
+            6,
+            "https://2tomatoesgames.mx/sitemap.xml",
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.raw_price, "655.0")
+        self.assertEqual(record.price, "655.0")
+        self.assertEqual(record.price_source, "json_ld_offer")
+        self.assertEqual(record.availability, "available")
+        self.assertEqual(record.availability_source, "json_ld_offer")
+        self.assertEqual(record.raw_payload["json_ld"]["offers"][0]["gtin13"], "0730170686659")
+
     def test_extracts_shopify_product_detail_labels_to_raw_payload(self):
         html = """
         <html lang="es">

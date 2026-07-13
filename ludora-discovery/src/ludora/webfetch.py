@@ -10,9 +10,15 @@ from urllib.request import Request, urlopen
 class FetchResult:
     url: str
     text: str
+    status_code: int = 200
 
 
-def fetch_html(url: str, timeout: int = 20) -> FetchResult | None:
+def fetch_html(
+    url: str,
+    timeout: int = 20,
+    *,
+    include_http_error_status: bool = False,
+) -> FetchResult | None:
     request = Request(
         url,
         headers={
@@ -28,6 +34,18 @@ def fetch_html(url: str, timeout: int = 20) -> FetchResult | None:
                 return None
             charset = response.headers.get_content_charset() or "utf-8"
             body = response.read().decode(charset, errors="replace")
-            return FetchResult(url=response.geturl(), text=body)
-    except (HTTPError, HTTPException, URLError, TimeoutError, ValueError):
+            return FetchResult(
+                url=response.geturl(),
+                text=body,
+                status_code=int(getattr(response, "status", 200)),
+            )
+    except HTTPError as exc:
+        if include_http_error_status and exc.code in {404, 410}:
+            return FetchResult(
+                url=exc.geturl() or url,
+                text="",
+                status_code=int(exc.code),
+            )
+        return None
+    except (HTTPException, URLError, TimeoutError, ValueError):
         return None

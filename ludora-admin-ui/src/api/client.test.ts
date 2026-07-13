@@ -421,23 +421,36 @@ describe('fetchRows', () => {
     );
   });
 
-  it('fetches store item update history by run id', async () => {
+  it('fetches paged store item update history by run id', async () => {
     const history = {
       changes: [{ created_at: '2026-07-11T20:01:00Z', field_name: 'price', id: 91 }],
       job: { id: 27, run_id: 'run update/27', store_id: 12, store_name: 'Alpha Games' }
     };
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: history }), {
+      new Response(JSON.stringify({ data: history, meta: { page: 1, page_size: 100, total: 205 } }), {
         headers: { 'Content-Type': 'application/json' },
         status: 200
       })
     );
 
-    await expect(adminApi.getStoreItemUpdateHistory('run update/27')).resolves.toEqual(history);
+    await expect(
+      adminApi.getStoreItemUpdateHistoryPage('run update/27', {
+        page: 1,
+        pageSize: 100,
+        sortColumnId: 'created_at',
+        sortDirection: 'desc'
+      })
+    ).resolves.toEqual({
+      job: history.job,
+      page: 1,
+      pageSize: 100,
+      rows: history.changes,
+      total: 205
+    });
     expectFetch(
       fetchMock,
-      'http://127.0.0.1:4001/admin/operations/store-item-update-jobs/run%20update%2F27/changes'
+      'http://127.0.0.1:4001/admin/operations/store-item-update-jobs/run%20update%2F27/changes?page=1&page_size=100&sort=created_at&sort_direction=desc'
     );
   });
 

@@ -1907,7 +1907,7 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(mutation.sql);
     expect(sql).toContain('insert into items');
     expect(sql).toContain('rating');
-    expect(sql).toContain('select candidate.title, $2, $3, $9::bigint, null, \'\', null, 5');
+    expect(sql).toContain('select candidate.title, $2, $3, $9::bigint, null, \'\', null, null');
     expect(sql).toContain('insert into publishers');
     expect(sql).toContain('insert into item_publishers');
     expect(sql).not.toContain('insert into offers');
@@ -3726,24 +3726,38 @@ describe('ludora admin service', () => {
     const database: Database = {
       query: async (sql, params) => {
         queries.push({ params, sql });
-        return normalizeSql(sql).includes('from store_item_update_change_log') ? { rows: changes } : { rows: [job] };
+        const normalizedSql = normalizeSql(sql);
+        if (normalizedSql.includes('from job_store_item_update_log')) {
+          return { rows: [job] };
+        }
+        if (normalizedSql.startsWith('select count(*)')) {
+          return { rows: [{ total: changes.length }] };
+        }
+        return { rows: changes };
       }
     };
 
     const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
-      '/admin/operations/store-item-update-jobs/run-update-27/changes'
+      '/admin/operations/store-item-update-jobs/run-update-27/changes?filter_field_name=price'
     );
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ data: { changes, job } });
+    expect(response.body).toEqual({
+      data: { changes, job },
+      meta: { page: 0, page_size: 25, total: 1 }
+    });
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain(
       'from job_store_item_update_log jobs left join stores on stores.id = jobs.store_id where jobs.run_id = $1'
     );
     expect(queries[0]?.params).toEqual(['run-update-27']);
     expect(normalizeSql(queries[1]?.sql ?? '')).toContain('from store_item_update_change_log changes');
     expect(normalizeSql(queries[1]?.sql ?? '')).toContain('where store_items.store_id = $1');
-    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('order by changes.created_at desc');
-    expect(queries[1]?.params).toEqual([12]);
+    expect(normalizeSql(queries[1]?.sql ?? '')).toContain("coalesce((changes.field_name)::text, '') ilike $2 escape '\\'");
+    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('order by changes.created_at desc, changes.id desc');
+    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('limit $3 offset $4');
+    expect(queries[1]?.params).toEqual([12, '%price%', 25, 0]);
+    expect(normalizeSql(queries[2]?.sql ?? '')).toContain('select count(*)::int as total');
+    expect(queries[2]?.params).toEqual([12, '%price%']);
   });
 
   it('starts item update runs through the discovery operations client', async () => {

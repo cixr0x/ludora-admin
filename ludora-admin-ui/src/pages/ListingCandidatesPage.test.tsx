@@ -84,7 +84,8 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getAllByText('json_ld_offer').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('es')).toBeInTheDocument();
     expect(screen.getByText('product_highlights')).toBeInTheDocument();
-    expect(screen.getByText('Highlights: 10+ 2-4 jugadores 45 min Español')).toBeInTheDocument();
+    expect(screen.queryByRole('columnheader', { name: 'Language Evidence' })).not.toBeInTheDocument();
+    expect(screen.queryByText('Highlights: 10+ 2-4 jugadores 45 min Español')).not.toBeInTheDocument();
     expect(screen.getByText('2-4')).toBeInTheDocument();
     expect(screen.getByText('LISTED')).toBeInTheDocument();
     expect(screen.getByText('LOCAL')).toBeInTheDocument();

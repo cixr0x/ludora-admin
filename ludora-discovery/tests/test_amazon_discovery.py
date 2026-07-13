@@ -5,7 +5,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.amazon_discovery import build_amazon_store_search_url, crawl_amazon_brand_inventory, crawl_amazon_store_inventory
+from ludora.amazon_discovery import (
+    _extract_amazon_detail_candidate,
+    build_amazon_store_search_url,
+    crawl_amazon_brand_inventory,
+    crawl_amazon_store_inventory,
+)
 from ludora.database import ItemCandidateUpsertResult
 from ludora.webfetch import FetchResult
 
@@ -52,6 +57,8 @@ class AmazonDiscoveryTests(unittest.TestCase):
           <img id="landingImage" src="https://m.media-amazon.com/images/I/catfe.jpg">
           <span class="a-offscreen">$417.00</span>
           <div id="availability">Disponible</div>
+          <input id="add-to-cart-button" type="submit" value="Agregar al carrito">
+          <input id="buy-now-button" type="submit" value="Comprar ahora">
           <table>
             <tr><th>Marca</th><td>CJ LA COMPAÑÍA DE LOS JUEGOS</td></tr>
             <tr><th>Fabricante</th><td>Meeple Angel</td></tr>
@@ -121,6 +128,36 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(record.raw_payload["amazon"]["product_details"]["Cantidad de jugadores"], "2-5")
         self.assertEqual(classified, [record.title])
         self.assertEqual(repository.item_records[0].classification_reasons, ["amazon test"])
+
+    def test_marks_amazon_product_without_direct_buy_option_out_of_stock(self):
+        product_html = """
+        <html><body>
+          <span id="productTitle">Asmodee Survive The Island Monster Pack</span>
+          <div id="availability">
+            <div id="all-offers-display"></div>
+          </div>
+          <div id="recommendations">
+            <span class="a-offscreen">$635.11</span>
+          </div>
+          <table><tr><th>ASIN</th><td>B0DQVHVBX6</td></tr></table>
+        </body></html>
+        """
+
+        record = _extract_amazon_detail_candidate(
+            html=product_html,
+            product_url="https://www.amazon.com.mx/dp/B0DQVHVBX6",
+            store_id=12,
+            source_listing_url="https://www.amazon.com.mx/stores/page/store-id/search?terms=jue",
+            search_title="Survive The Island Monster Pack",
+        )
+
+        self.assertEqual(record.availability, "out_of_stock")
+        self.assertEqual(record.availability_source, "amazon_detail")
+        self.assertEqual(record.raw_price, "")
+        self.assertEqual(record.price, "")
+        self.assertEqual(record.price_source, "none")
+        self.assertFalse(record.raw_payload["amazon"]["has_add_to_cart"])
+        self.assertFalse(record.raw_payload["amazon"]["has_buy_now"])
 
     def test_applies_title_extractor_before_classification_and_upsert(self):
         search_html = """

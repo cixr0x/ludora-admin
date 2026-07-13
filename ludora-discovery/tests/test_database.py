@@ -156,6 +156,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         sql, params = connection.cursor_instance.executions[1]
         self.assertEqual(sql.count("%s"), len(params))
         self.assertIn("insert into store_items", sql.casefold())
+        self.assertNotIn("store_active", sql.casefold())
         self.assertNotIn("on conflict (store_id, source_url)", sql.casefold())
         self.assertNotIn("title = excluded.title", sql.casefold())
         self.assertNotIn("on conflict (store_id, source_url, title)", sql.casefold())
@@ -452,6 +453,57 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(connection.cursor_instance.executions, [])
         self.assertEqual(connection.commits, 0)
 
+    def test_mark_item_candidate_inactive_updates_flag_and_logs_change(self):
+        connection = FakeConnection(fetchone_rows=[(56,)])
+        repository = DiscoveryRepository(connection)
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            store_active=True,
+        )
+
+        result = repository.mark_item_candidate_inactive(
+            existing_record,
+            job_id=99,
+            run_id="run-123",
+        )
+
+        self.assertTrue(result.changed)
+        self.assertFalse(existing_record.store_active)
+        self.assertEqual(len(connection.cursor_instance.executions), 2)
+        update_sql, update_params = connection.cursor_instance.executions[0]
+        self.assertIn("store_active = false", update_sql.casefold())
+        self.assertIn("refreshed_date = now()", update_sql.casefold())
+        self.assertIn("store_active = true", update_sql.casefold())
+        self.assertEqual(update_params, (56,))
+        log_sql, log_params = connection.cursor_instance.executions[1]
+        self.assertIn("insert into store_item_update_change_log", log_sql.casefold())
+        self.assertEqual(log_params[:4], (99, "run-123", 56, "store_active"))
+        self.assertEqual(json.loads(log_params[4]), True)
+        self.assertEqual(json.loads(log_params[5]), False)
+        self.assertEqual(connection.commits, 1)
+
+    def test_mark_item_candidate_inactive_does_not_log_when_already_inactive(self):
+        connection = FakeConnection(fetchone_rows=[])
+        repository = DiscoveryRepository(connection)
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            title="Catan",
+            store_active=False,
+        )
+
+        result = repository.mark_item_candidate_inactive(existing_record, job_id=99, run_id="run-123")
+
+        self.assertFalse(result.changed)
+        self.assertEqual(len(connection.cursor_instance.executions), 1)
+        self.assertEqual(connection.commits, 1)
+
     def test_upsert_tutorial_link_refreshes_existing_item_url(self):
         connection = FakeConnection(fetchone_rows=[(44,), (44,)])
         repository = DiscoveryRepository(connection)
@@ -577,6 +629,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
                         "MXN",
                         "available",
                         "json_ld_offer",
+                        True,
                         "CATAN-ES",
                         '{"json_ld": {"name": "Catan"}}',
                         True,
@@ -603,12 +656,15 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         sql, params = connection.cursor_instance.executions[0]
         normalized_sql = sql.casefold()
+        compact_sql = " ".join(normalized_sql.split())
         self.assertIn("from store_items", normalized_sql)
         self.assertIn("is_boardgame = true", normalized_sql)
         self.assertIn("is_boardgame_confirmed = true", normalized_sql)
         self.assertIn("item_id is not null", normalized_sql)
         self.assertIn("source_url <> ''", normalized_sql)
         self.assertIn("listing_status = 'listed'", normalized_sql)
+        self.assertIn("store_active = true", normalized_sql)
+        self.assertIn("availability_source, store_active, store_sku", compact_sql)
         self.assertIn("order by refreshed_date asc nulls first, id asc", normalized_sql)
         self.assertIn("limit %s", normalized_sql)
         self.assertEqual(params, (50,))
@@ -619,6 +675,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(records[0].item_id, 77)
         self.assertTrue(records[0].is_boardgame)
         self.assertTrue(records[0].is_boardgame_confirmed)
+        self.assertTrue(records[0].store_active)
         self.assertEqual(records[0].raw_payload, {"json_ld": {"name": "Catan"}})
         self.assertEqual(records[0].classification_reasons, ["previously confirmed"])
         self.assertEqual(records[0].match_payload, {"source": "local"})

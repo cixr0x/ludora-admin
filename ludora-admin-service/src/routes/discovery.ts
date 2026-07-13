@@ -1631,7 +1631,7 @@ export function createDiscoveryRouter(
             null,
             '',
             null,
-            5,
+            null,
             candidate.description,
             candidate.min_players,
             candidate.max_players,

@@ -2,12 +2,11 @@ import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { Alert, Button, CircularProgress, Link, Paper, Stack, Typography } from '@mui/material';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { adminApi, type AdminRecord } from '../api/client';
+import { adminApi, type AdminRecord, type TableQuery } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
+import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 const REFRESH_INTERVAL_MS = 10_000;
-
-type LoadState = 'loading' | 'ready' | 'error';
 
 const updateChangeColumns: DataTableColumn<AdminRecord>[] = [
   {
@@ -46,6 +45,14 @@ const updateChangeColumns: DataTableColumn<AdminRecord>[] = [
     sortValue: (row) => recordText(row, 'store_item_title')
   },
   {
+    filterValue: (row) => changeEventLabel(row),
+    id: 'event',
+    label: 'Event',
+    minWidth: 190,
+    render: (row) => changeEventLabel(row),
+    sortValue: (row) => changeEventLabel(row)
+  },
+  {
     filterValue: (row) => recordText(row, 'field_name'),
     id: 'field_name',
     label: 'Field',
@@ -80,39 +87,30 @@ const updateChangeColumns: DataTableColumn<AdminRecord>[] = [
 ];
 
 export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; onBack: () => void }) {
-  const [state, setState] = useState<LoadState>('loading');
   const [job, setJob] = useState<AdminRecord | null>(null);
-  const [changes, setChanges] = useState<AdminRecord[]>([]);
-  const [error, setError] = useState('');
-  const requestInFlightRef = useRef(false);
-
-  const loadHistory = useCallback(async () => {
-    if (requestInFlightRef.current) {
-      return;
-    }
-    requestInFlightRef.current = true;
-    try {
-      const result = await adminApi.getStoreItemUpdateHistory(runId);
-      setJob(result.job);
-      setChanges(result.changes);
-      setError('');
-      setState('ready');
-    } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'Store item update history could not be loaded.');
-      setState('error');
-    } finally {
-      requestInFlightRef.current = false;
-    }
+  const table = useServerTableState('created_at', 'desc');
+  const fetchHistoryPage = useCallback(async (query: TableQuery) => {
+    const result = await adminApi.getStoreItemUpdateHistoryPage(runId, query);
+    setJob(result.job);
+    return result;
   }, [runId]);
+  const { hasMore, isLoadingMore, loadMore, rows: changes, state, totalRows } = useInfiniteServerRows(
+    table,
+    fetchHistoryPage
+  );
+  const refreshRef = useRef(table.refresh);
+  const currentPageRef = useRef(table.page);
+  refreshRef.current = table.refresh;
+  currentPageRef.current = table.page;
 
   useEffect(() => {
-    setState('loading');
-    setJob(null);
-    setChanges([]);
-    void loadHistory();
-    const timer = window.setInterval(() => void loadHistory(), REFRESH_INTERVAL_MS);
+    const timer = window.setInterval(() => {
+      if (currentPageRef.current === 0) {
+        refreshRef.current();
+      }
+    }, REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [loadHistory]);
+  }, [runId]);
 
   const storeName = recordText(job, 'store_name', 'Multiple stores');
 
@@ -131,7 +129,7 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
           <Button startIcon={<ArrowBackIcon />} variant="outlined" onClick={onBack}>
             Back to update jobs
           </Button>
-          <Button startIcon={<RefreshIcon />} variant="contained" onClick={() => void loadHistory()}>
+          <Button startIcon={<RefreshIcon />} variant="contained" onClick={table.refresh}>
             Refresh
           </Button>
         </Stack>
@@ -143,7 +141,7 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
           <Typography variant="body2">Loading update history</Typography>
         </Stack>
       ) : null}
-      {state === 'error' ? <Alert severity="error">{error}</Alert> : null}
+      {state === 'error' ? <Alert severity="error">Store item update history could not be loaded.</Alert> : null}
 
       {state === 'ready' ? (
         changes.length ? (
@@ -153,8 +151,18 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
             defaultSortColumnId="created_at"
             defaultSortDirection="desc"
             getRowKey={(row, index) => recordText(row, 'id', String(index))}
-            minWidth={1590}
+            infiniteScroll={{
+              hasMore,
+              isLoading: isLoadingMore,
+              loadedCount: changes.length,
+              onLoadMore: loadMore,
+              totalCount: totalRows
+            }}
+            minWidth={1780}
             rows={changes}
+            serverSide
+            tableState={table.tableState}
+            onTableStateChange={table.handleTableStateChange}
           />
         ) : (
           <Paper variant="outlined" sx={{ p: 3 }}>
@@ -164,7 +172,7 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
       ) : null}
 
       <Typography color="text.secondary" variant="caption">
-        Automatically refreshes every 10 seconds. Newest changes are shown first.
+        Loads more changes as you scroll. The first page refreshes every 10 seconds; manual refresh returns to the newest changes.
       </Typography>
     </Stack>
   );
@@ -186,4 +194,22 @@ function formatValue(value: unknown): string {
     return value;
   }
   return JSON.stringify(value);
+}
+
+function changeEventLabel(row: AdminRecord): string {
+  const fieldName = recordText(row, 'field_name');
+  if (fieldName === 'store_active') {
+    if (row.new_value === false || row.new_value === 'false') {
+      return 'Item deactivated';
+    }
+    if (row.new_value === true || row.new_value === 'true') {
+      return 'Item activated';
+    }
+  }
+
+  const readableField = fieldName.replaceAll('_', ' ').trim();
+  if (!readableField) {
+    return 'Item updated';
+  }
+  return `${readableField.charAt(0).toUpperCase()}${readableField.slice(1)} changed`;
 }

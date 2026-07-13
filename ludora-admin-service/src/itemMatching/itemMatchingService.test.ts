@@ -549,6 +549,80 @@ describe('item matching service', () => {
     expect(result[0].bgg_id).toBe(377061);
   });
 
+  it('refreshes BGG search when a cached title overlap is below the acceptance threshold', async () => {
+    const importedBggIds: number[] = [];
+    const refreshedQueries: string[] = [];
+    const updates: Array<{ params?: unknown[]; sql: string }> = [];
+    const database = confirmMatchDatabase(
+      {
+        id: 14966,
+        item_type: 'unknown',
+        max_players: 5,
+        min_players: 5,
+        publisher: 'Asmodee',
+        title: 'Star Wars: Imperial Assault'
+      },
+      [],
+      {
+        cachedSearchResults: [
+          {
+            bggId: 177086,
+            name: 'Star Wars: Imperial Assault – Wookiee Warriors Ally Pack',
+            type: 'boardgameexpansion',
+            yearPublished: 2015
+          }
+        ],
+        onStoreItemUpdate: (sql, params) => updates.push({ params, sql })
+      }
+    );
+    const bggClient: BggClient = {
+      fetchThing: async (bggId) => ({
+        details: {
+          ...bggThing({
+            bggId,
+            name:
+              bggId === 164153
+                ? 'Star Wars: Imperial Assault'
+                : 'Star Wars: Imperial Assault – Wookiee Warriors Ally Pack',
+            yearPublished: bggId === 164153 ? 2014 : 2015
+          }),
+          maxPlayers: 5,
+          minPlayers: bggId === 164153 ? 1 : 2,
+          publishers: []
+        },
+        rawXml: '<items />'
+      }),
+      search: async () => {
+        throw new Error('regular BGG search should not run when the query cache is populated');
+      },
+      searchFresh: async (query) => {
+        refreshedQueries.push(query);
+        return [
+          {
+            bggId: 177086,
+            name: 'Star Wars: Imperial Assault – Wookiee Warriors Ally Pack',
+            type: 'boardgameexpansion',
+            yearPublished: 2015
+          },
+          { bggId: 164153, name: 'Star Wars: Imperial Assault', type: 'boardgame', yearPublished: 2014 }
+        ];
+      }
+    };
+    const bggItemImporter: BggItemImporter = {
+      importBggId: async (bggId) => {
+        importedBggIds.push(bggId);
+        return 3200;
+      }
+    };
+
+    await createItemMatchingService(database, bggClient, undefined, bggItemImporter).confirmBoardgameAndMatch?.(14966);
+
+    expect(refreshedQueries).toEqual(['Star Wars: Imperial Assault']);
+    expect(importedBggIds).toEqual([164153]);
+    const linkedUpdate = updates.find((update) => normalizeSql(update.sql).includes('set item_id = $1'));
+    expect(linkedUpdate?.params?.slice(0, 5)).toEqual([3200, 'BGG', 164153, 'Star Wars: Imperial Assault', 0.92]);
+  });
+
   it('matches direct BGG cache entries before calling the BGG API', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database = matchOnlyDatabase(

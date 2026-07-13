@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from ludora.cancellation import CancellationToken, raise_if_cancelled
 from ludora.item_classification import apply_item_classification
-from ludora.listing_extraction import _collapse_text, _extract_availability, _extract_price
+from ludora.listing_extraction import _collapse_text, _extract_price
 from ludora.models import DiscoveryItemCandidateRecord, ItemCandidateType
 from ludora.product_crawler import ItemCandidateProcessor, ItemCandidateRepository, ItemClassifier
 from ludora.trace import NullTraceLogger, TraceLogger
@@ -347,6 +347,8 @@ class _AmazonProductParser(HTMLParser):
         self.bullets: list[str] = []
         self.product_details: dict[str, str] = {}
         self.image_url = ""
+        self.has_add_to_cart = False
+        self.has_buy_now = False
         self.text_nodes: list[str] = []
         self._ignored_depth = 0
         self._title_depth = 0
@@ -377,6 +379,12 @@ class _AmazonProductParser(HTMLParser):
         attr = {name.casefold(): value or "" for name, value in attrs}
         id_value = attr.get("id", "").casefold()
         class_tokens = _class_tokens(attr.get("class", ""))
+        is_disabled = any(name.casefold() == "disabled" for name, _value in attrs)
+
+        if id_value == "add-to-cart-button" and not is_disabled:
+            self.has_add_to_cart = True
+        if id_value == "buy-now-button" and not is_disabled:
+            self.has_buy_now = True
 
         self._extend_active_captures(normalized_tag)
         if id_value == "producttitle":
@@ -563,8 +571,10 @@ def _extract_amazon_detail_candidate(
     )
     description = _collapse_text(" ".join(parser.bullets))
     raw_price, price, price_source = _first_price(parser.price_texts)
-    availability_text = _availability_text(parser)
-    _, availability = _extract_availability(availability_text)
+    has_direct_buy_option = parser.has_add_to_cart or parser.has_buy_now
+    availability = "available" if has_direct_buy_option else "out_of_stock"
+    if not has_direct_buy_option:
+        raw_price, price, price_source = "", "", "none"
     language, language_source, language_evidence = _detect_language(
         title,
         canonical_url,
@@ -604,8 +614,11 @@ def _extract_amazon_detail_candidate(
     raw_payload: dict[str, object] = {
         "amazon": {
             "asin": asin,
+            "availability_text": _collapse_text(" ".join(parser.availability_parts)),
             "brand": brand,
             "bullets": parser.bullets,
+            "has_add_to_cart": parser.has_add_to_cart,
+            "has_buy_now": parser.has_buy_now,
             "product_title": title,
             "product_details": parser.product_details,
             "search_title": search_title,
@@ -720,13 +733,6 @@ def _first_price(values: list[str]) -> tuple[str, str, str]:
         if price:
             return re.sub(r"\$\s+", "$", raw_price), price, "amazon_detail"
     return "", "", "none"
-
-
-def _availability_text(parser: _AmazonProductParser) -> str:
-    value = _collapse_text(" ".join(parser.availability_parts))
-    if "{" in value:
-        value = value.split("{", 1)[0]
-    return _collapse_text(value)
 
 
 def _detail_value(product_details: dict[str, str], *labels: str) -> str:
