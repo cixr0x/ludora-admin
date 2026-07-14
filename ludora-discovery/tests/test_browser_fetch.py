@@ -27,6 +27,7 @@ class FakePage:
         self.waited_for_load = False
         self.waited_for_function = False
         self.wait_for_function_arg = None
+        self.wait_for_function_args = []
         self.closed = False
 
     def goto(self, url, wait_until, timeout):
@@ -38,6 +39,7 @@ class FakePage:
     def wait_for_function(self, expression, arg, timeout):
         self.waited_for_function = True
         self.wait_for_function_arg = arg
+        self.wait_for_function_args.append(arg)
 
     def content(self):
         return self.rendered_html
@@ -119,6 +121,98 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertIn("B0LAST0001", result.text)
         self.assertEqual(page.evaluate_calls, 5)
         self.assertEqual(page.wait_timeouts, [750, 750, 750, 750])
+
+    def test_fetch_clicks_amazon_store_load_more_until_button_disappears(self):
+        response = FakeResponse(
+            "https://www.amazon.com.mx/stores/page/STORE-PAGE-ID/search?terms=jue",
+            "<html></html>",
+            "text/html;charset=utf-8",
+        )
+        page = FakeInfiniteScrollPage(
+            response,
+            "<html><body><a href='/dp/B0LAST0001'>Last product</a></body></html>",
+            [
+                {
+                    "loadMoreButtonClicked": True,
+                    "loadMoreButtonPresent": True,
+                    "productCount": 25,
+                    "scrollHeight": 2_000,
+                },
+                {
+                    "loadMoreButtonClicked": True,
+                    "loadMoreButtonPresent": True,
+                    "productCount": 50,
+                    "scrollHeight": 4_000,
+                },
+                {
+                    "loadMoreButtonClicked": False,
+                    "loadMoreButtonPresent": False,
+                    "productCount": 75,
+                    "scrollHeight": 6_000,
+                },
+                {
+                    "loadMoreButtonClicked": False,
+                    "loadMoreButtonPresent": False,
+                    "productCount": 75,
+                    "scrollHeight": 6_000,
+                },
+                {
+                    "loadMoreButtonClicked": False,
+                    "loadMoreButtonPresent": False,
+                    "productCount": 75,
+                    "scrollHeight": 6_000,
+                },
+                {
+                    "loadMoreButtonClicked": False,
+                    "loadMoreButtonPresent": False,
+                    "productCount": 75,
+                    "scrollHeight": 6_000,
+                },
+            ],
+        )
+        fetcher = BrowserTextFetcher()
+        fetcher._page = page
+
+        result = fetcher.fetch(response.url)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(page.evaluate_calls, 6)
+        self.assertEqual(page.wait_for_function_args[-2:], [25, 50])
+        self.assertEqual(page.wait_timeouts, [750, 750, 750])
+
+    def test_fetch_fails_when_amazon_store_load_more_stops_advancing(self):
+        class StalledLoadMorePage(FakeInfiniteScrollPage):
+            def wait_for_function(self, expression, arg, timeout):
+                if isinstance(arg, int):
+                    raise TimeoutError("Amazon batch did not load")
+                return super().wait_for_function(expression, arg, timeout)
+
+        response = FakeResponse(
+            "https://www.amazon.com.mx/stores/page/STORE-PAGE-ID/search?terms=jue",
+            "<html></html>",
+            "text/html;charset=utf-8",
+        )
+        stalled_snapshot = {
+            "loadMoreButtonClicked": True,
+            "loadMoreButtonPresent": True,
+            "productCount": 25,
+            "scrollHeight": 2_000,
+        }
+        page = StalledLoadMorePage(
+            response,
+            "<html><body><a href='/dp/B0FIRST001'>First product</a></body></html>",
+            [stalled_snapshot],
+        )
+        trace_logger = Mock()
+        fetcher = BrowserTextFetcher(trace_logger=trace_logger)
+        fetcher._page = page
+        fetcher._playwright_timeout_error = TimeoutError
+
+        result = fetcher.fetch(response.url)
+
+        self.assertIsNone(result)
+        self.assertEqual(page.evaluate_calls, 3)
+        self.assertIn("load-more button remained visible", trace_logger.log.call_args.kwargs["error"])
 
     def test_wait_tokens_ignore_short_common_slug_words(self):
         self.assertEqual(

@@ -14,8 +14,14 @@ class BrowserFetchUnavailable(RuntimeError):
     pass
 
 
+class AmazonStoreSearchIncomplete(RuntimeError):
+    pass
+
+
 AMAZON_STORE_SCROLL_WAIT_MS = 750
 AMAZON_STORE_STABLE_SCROLL_ROUNDS = 3
+AMAZON_STORE_LOAD_MORE_TIMEOUT_MS = 10_000
+AMAZON_STORE_MAX_STALLED_LOAD_MORE_CLICKS = 3
 
 
 def fetch_sitemap_text_with_browser(url: str, timeout_ms: int = 30_000) -> FetchResult | None:
@@ -94,13 +100,23 @@ class BrowserTextFetcher:
                 timeout_error=self._playwright_timeout_error,
             )
             if _is_amazon_store_search_url(page.url or url):
-                _scroll_amazon_store_search_to_end(page, timeout_ms=self.timeout_ms)
+                _load_all_amazon_store_search_results(
+                    page,
+                    timeout_ms=self.timeout_ms,
+                    timeout_error=self._playwright_timeout_error,
+                )
             return FetchResult(
                 url=page.url,
                 text=page.content(),
                 status_code=int(getattr(response, "status", 200)),
             )
-        except (self._playwright_error, self._playwright_timeout_error, OSError, ValueError) as exc:
+        except (
+            AmazonStoreSearchIncomplete,
+            self._playwright_error,
+            self._playwright_timeout_error,
+            OSError,
+            ValueError,
+        ) as exc:
             if self.trace_logger is not None:
                 self.trace_logger.log(
                     "browser_fetch.failed",
@@ -157,11 +173,14 @@ def _is_amazon_store_search_url(url: str) -> bool:
     return is_amazon_host and bool(re.fullmatch(r"/stores/page/[^/]+/search", path))
 
 
-def _scroll_amazon_store_search_to_end(page, *, timeout_ms: int) -> None:
+def _load_all_amazon_store_search_results(page, *, timeout_ms: int, timeout_error) -> None:
     max_rounds = max(1, min(50, timeout_ms // AMAZON_STORE_SCROLL_WAIT_MS))
     previous_product_count = -1
     previous_scroll_height = -1
     stable_rounds = 0
+    stalled_load_more_clicks = 0
+    last_product_count = 0
+    last_load_more_button_present = False
 
     for _ in range(max_rounds):
         snapshot = page.evaluate(
@@ -173,26 +192,90 @@ def _scroll_amazon_store_search_to_end(page, *, timeout_ms: int) -> None:
                 const match = link.href.match(asinPattern);
                 if (match) asins.add(match[1].toUpperCase());
               }
+
+              const normalize = value => (value || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .trim()
+                .toLowerCase();
+              const loadMoreButton = Array.from(document.querySelectorAll('button')).find(button => {
+                const label = normalize(button.innerText || button.getAttribute('aria-label'));
+                return label === 'mostrar mas' || label === 'show more';
+              });
+              const loadMoreButtonPresent = Boolean(
+                loadMoreButton && loadMoreButton.getClientRects().length > 0
+              );
+              const loadMoreButtonEnabled = Boolean(
+                loadMoreButtonPresent
+                && !loadMoreButton.disabled
+                && loadMoreButton.getAttribute('aria-disabled') !== 'true'
+              );
               const scrollHeight = document.documentElement.scrollHeight;
-              window.scrollTo(0, scrollHeight);
-              return { productCount: asins.size, scrollHeight };
+              if (loadMoreButtonEnabled) {
+                loadMoreButton.scrollIntoView({ block: 'center' });
+                loadMoreButton.click();
+              } else {
+                window.scrollTo(0, scrollHeight);
+              }
+              return {
+                loadMoreButtonClicked: loadMoreButtonEnabled,
+                loadMoreButtonPresent,
+                productCount: asins.size,
+                scrollHeight,
+              };
             }
             """
         )
         product_count = int(snapshot.get("productCount", 0))
         scroll_height = int(snapshot.get("scrollHeight", 0))
+        load_more_button_clicked = bool(snapshot.get("loadMoreButtonClicked", False))
+        load_more_button_present = bool(snapshot.get("loadMoreButtonPresent", False))
+        last_product_count = product_count
+        last_load_more_button_present = load_more_button_present
 
         if product_count == previous_product_count and scroll_height == previous_scroll_height:
             stable_rounds += 1
         else:
             stable_rounds = 0
 
-        if stable_rounds >= AMAZON_STORE_STABLE_SCROLL_ROUNDS:
+        if not load_more_button_present and stable_rounds >= AMAZON_STORE_STABLE_SCROLL_ROUNDS:
             break
 
         previous_product_count = product_count
         previous_scroll_height = scroll_height
-        page.wait_for_timeout(AMAZON_STORE_SCROLL_WAIT_MS)
+        if load_more_button_clicked:
+            try:
+                page.wait_for_function(
+                    r"""
+                    previousProductCount => {
+                      const asinPattern = /\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:[/?#]|$)/i;
+                      const asins = new Set();
+                      for (const link of document.querySelectorAll('a[href]')) {
+                        const match = link.href.match(asinPattern);
+                        if (match) asins.add(match[1].toUpperCase());
+                      }
+                      return asins.size > previousProductCount;
+                    }
+                    """,
+                    arg=product_count,
+                    timeout=min(timeout_ms, AMAZON_STORE_LOAD_MORE_TIMEOUT_MS),
+                )
+                stalled_load_more_clicks = 0
+            except timeout_error:
+                stalled_load_more_clicks += 1
+                if stalled_load_more_clicks >= AMAZON_STORE_MAX_STALLED_LOAD_MORE_CLICKS:
+                    raise AmazonStoreSearchIncomplete(
+                        "Amazon storefront search stopped advancing while the load-more button remained visible "
+                        f"(loaded {product_count} unique products)"
+                    )
+        else:
+            page.wait_for_timeout(AMAZON_STORE_SCROLL_WAIT_MS)
+    else:
+        reason = "load-more button remained visible" if last_load_more_button_present else "results never stabilized"
+        raise AmazonStoreSearchIncomplete(
+            f"Amazon storefront search did not finish loading all products: {reason} "
+            f"(loaded {last_product_count} unique products)"
+        )
 
 
 def _wait_for_rendered_html(page, url: str, *, timeout_ms: int, timeout_error) -> None:
