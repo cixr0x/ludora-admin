@@ -30,6 +30,14 @@ class FakeRepository:
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="PENDING", item_id=None, should_process=True)
 
 
+class FakeTraceLogger:
+    def __init__(self):
+        self.entries = []
+
+    def log(self, event, **fields):
+        self.entries.append((event, fields))
+
+
 class AmazonDiscoveryTests(unittest.TestCase):
     def test_builds_storefront_search_url_from_named_store_page(self):
         url = build_amazon_store_search_url(
@@ -247,6 +255,103 @@ class AmazonDiscoveryTests(unittest.TestCase):
             )
 
         self.assertEqual(repository.item_records, [])
+
+    def test_retries_generic_amazon_detail_page_before_title_extraction(self):
+        product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
+        search_html = f'<html><body><a href="{product_url}"></a></body></html>'
+        generic_html = "<html><head><title>Amazon.com.mx</title></head><body>Inicio</body></html>"
+        product_html = """
+        <html><head><title>Disney Juego de Mesa : Amazon.com.mx</title></head><body>
+          <span id="productTitle">Disney Juego de Mesa Infantil ¿Sabes Quién Es?</span>
+          <input id="add-to-cart-button" type="submit" value="Agregar al carrito">
+          <table><tr><th>ASIN</th><td>B0B7QXY8ZS</td></tr></table>
+        </body></html>
+        """
+        detail_fetches = []
+
+        def fetcher(url):
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            detail_fetches.append(url)
+            html = generic_html if len(detail_fetches) == 1 else product_html
+            return FetchResult(url=url, text=html)
+
+        extractor_inputs = []
+
+        def title_extractor(record):
+            extractor_inputs.append(record.title)
+            return "¿Sabes Quién Es?"
+
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11,
+            repository,
+            browser_fetcher=fetcher,
+            item_title_extractor=title_extractor,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(detail_fetches, [product_url, product_url])
+        self.assertEqual(extractor_inputs, ["Disney Juego de Mesa Infantil ¿Sabes Quién Es?"])
+        self.assertEqual(records[0].title, "¿Sabes Quién Es?")
+        invalid_entries = [fields for event, fields in trace.entries if event == "amazon_inventory.candidate.detail_fetch.invalid"]
+        self.assertEqual(len(invalid_entries), 1)
+        self.assertEqual(
+            invalid_entries[0],
+            {
+                "attempt": 1,
+                "expected_asin": "B0B7QXY8ZS",
+                "expected_asin_present": False,
+                "final_url": product_url,
+                "max_attempts": 3,
+                "page_title": "Amazon.com.mx",
+                "product_title_present": False,
+                "reason": "missing_product_title",
+                "source_url": product_url,
+                "status_code": 200,
+                "store_id": 11,
+                "will_retry": True,
+            },
+        )
+
+    def test_raises_after_invalid_amazon_detail_page_retries(self):
+        product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
+        search_html = f'<html><body><a href="{product_url}"></a></body></html>'
+        generic_html = "<html><head><title>Amazon.com.mx</title></head><body>Inicio</body></html>"
+        detail_fetches = []
+
+        def fetcher(url):
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            detail_fetches.append(url)
+            return FetchResult(url=url, text=generic_html)
+
+        extractor_inputs = []
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+
+        with self.assertRaisesRegex(RuntimeError, "Failed to fetch valid Amazon product detail page"):
+            crawl_amazon_store_inventory(
+                "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+                11,
+                repository,
+                browser_fetcher=fetcher,
+                item_title_extractor=lambda record: extractor_inputs.append(record.title) or record.title,
+                trace_logger=trace,
+                delay_seconds=0,
+            )
+
+        self.assertEqual(detail_fetches, [product_url, product_url, product_url])
+        self.assertEqual(extractor_inputs, [])
+        self.assertEqual(repository.item_records, [])
+        invalid_entries = [fields for event, fields in trace.entries if event == "amazon_inventory.candidate.detail_fetch.invalid"]
+        self.assertEqual(len(invalid_entries), 3)
+        self.assertEqual([entry["attempt"] for entry in invalid_entries], [1, 2, 3])
+        self.assertEqual(invalid_entries[-1]["page_title"], "Amazon.com.mx")
+        self.assertFalse(invalid_entries[-1]["will_retry"])
 
     def test_crawls_brand_search_and_stores_only_matching_brand_products(self):
         brand_search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"

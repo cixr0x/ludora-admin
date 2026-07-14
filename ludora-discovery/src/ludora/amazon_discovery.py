@@ -18,6 +18,7 @@ from ludora.webfetch import FetchResult
 
 DEFAULT_AMAZON_STORE_SEARCH_TERMS = ("jue",)
 DEFAULT_AMAZON_BRAND_MAX_PAGES = 5
+DEFAULT_AMAZON_DETAIL_FETCH_ATTEMPTS = 3
 ItemTitleExtractor = Callable[[DiscoveryItemCandidateRecord], str]
 ASIN_RE = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?#]|$)", re.IGNORECASE)
 GENERIC_LINK_TEXT = {
@@ -216,17 +217,21 @@ def _crawl_amazon_search_inventory(
                         store_id=listing_candidate.store_id,
                         title=listing_candidate.title,
                     )
-                    fetched_detail = browser_fetcher(listing_candidate.source_url)
-                    if fetched_detail is None:
-                        raise RuntimeError(f"Failed to fetch Amazon product detail page: {listing_candidate.source_url}")
-                    else:
-                        detail_candidate = _extract_amazon_detail_candidate(
-                            html=fetched_detail.text,
-                            product_url=listing_candidate.source_url,
-                            store_id=store_id,
-                            source_listing_url=listing_url,
-                            search_title=listing_candidate.title,
-                        )
+                    fetched_detail = _fetch_valid_amazon_detail_page(
+                        listing_candidate.source_url,
+                        browser_fetcher,
+                        trace=trace,
+                        store_id=store_id,
+                        cancellation_token=cancellation_token,
+                        retry_delay_seconds=max(0.0, delay_seconds),
+                    )
+                    detail_candidate = _extract_amazon_detail_candidate(
+                        html=fetched_detail.text,
+                        product_url=listing_candidate.source_url,
+                        store_id=store_id,
+                        source_listing_url=listing_url,
+                        search_title=listing_candidate.title,
+                    )
                     trace.log(
                         "amazon_inventory.candidate.detail_fetch.completed",
                         source_url=detail_candidate.source_url,
@@ -295,6 +300,100 @@ def _crawl_amazon_search_inventory(
     finally:
         if browser_session is not None:
             browser_session.__exit__(None, None, None)
+
+
+def _fetch_valid_amazon_detail_page(
+    source_url: str,
+    browser_fetcher: Callable[[str], FetchResult | None],
+    *,
+    trace: TraceLogger,
+    store_id: int | None,
+    cancellation_token: CancellationToken | None,
+    retry_delay_seconds: float,
+    max_attempts: int = DEFAULT_AMAZON_DETAIL_FETCH_ATTEMPTS,
+) -> FetchResult:
+    attempts = max(1, max_attempts)
+    expected_asin = _asin_from_url(source_url)
+    saw_response = False
+
+    for attempt in range(1, attempts + 1):
+        raise_if_cancelled(cancellation_token)
+        fetched_detail = browser_fetcher(source_url)
+        if fetched_detail is None:
+            diagnostics: dict[str, object] = {
+                "expected_asin": expected_asin,
+                "expected_asin_present": False,
+                "final_url": "",
+                "page_title": "",
+                "product_title_present": False,
+                "reason": "fetch_failed",
+                "status_code": None,
+            }
+        else:
+            saw_response = True
+            diagnostics = _amazon_detail_page_diagnostics(fetched_detail, expected_asin=expected_asin)
+            if diagnostics["valid"]:
+                return fetched_detail
+
+        will_retry = attempt < attempts
+        trace.log(
+            "amazon_inventory.candidate.detail_fetch.invalid",
+            attempt=attempt,
+            max_attempts=attempts,
+            source_url=source_url,
+            store_id=store_id,
+            will_retry=will_retry,
+            **{key: value for key, value in diagnostics.items() if key != "valid"},
+        )
+        if will_retry and retry_delay_seconds > 0:
+            time.sleep(retry_delay_seconds * attempt)
+
+    if saw_response:
+        raise RuntimeError(f"Failed to fetch valid Amazon product detail page: {source_url}")
+    raise RuntimeError(f"Failed to fetch Amazon product detail page: {source_url}")
+
+
+def _amazon_detail_page_diagnostics(fetched: FetchResult, *, expected_asin: str) -> dict[str, object]:
+    html = fetched.text or ""
+    product_title_present = bool(re.search(r"\bid\s*=\s*['\"]productTitle['\"]", html, re.IGNORECASE))
+    expected_asin_present = bool(
+        expected_asin
+        and re.search(
+            rf"(?<![A-Z0-9]){re.escape(expected_asin)}(?![A-Z0-9])",
+            html,
+            re.IGNORECASE,
+        )
+    )
+    final_url_asin = _asin_from_url(fetched.url)
+    final_url_matches = not final_url_asin or final_url_asin.casefold() == expected_asin.casefold()
+    status_ok = 200 <= fetched.status_code < 400
+
+    if not status_ok:
+        reason = "http_status"
+    elif not product_title_present:
+        reason = "missing_product_title"
+    elif not expected_asin_present:
+        reason = "missing_expected_asin"
+    elif not final_url_matches:
+        reason = "redirected_asin"
+    else:
+        reason = ""
+
+    return {
+        "expected_asin": expected_asin,
+        "expected_asin_present": expected_asin_present,
+        "final_url": fetched.url,
+        "page_title": _html_page_title(html),
+        "product_title_present": product_title_present,
+        "reason": reason,
+        "status_code": fetched.status_code,
+        "valid": not reason,
+    }
+
+
+def _html_page_title(html: str) -> str:
+    match = re.search(r"<title(?:\s[^>]*)?>(.*?)</title\s*>", html, re.IGNORECASE | re.DOTALL)
+    return _collapse_text(match.group(1))[:300] if match else ""
 
 
 class _AmazonSearchParser(HTMLParser):
