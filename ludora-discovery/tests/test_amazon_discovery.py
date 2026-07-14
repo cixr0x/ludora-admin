@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ludora.amazon_discovery import (
+    _amazon_retry_delay_seconds,
     _extract_amazon_detail_candidate,
     build_amazon_store_search_url,
     crawl_amazon_brand_inventory,
@@ -229,6 +230,100 @@ class AmazonDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(repository.item_records, [])
 
+    def test_retries_throttled_amazon_store_search_in_a_clean_context(self):
+        product_url = "https://www.amazon.com.mx/dp/B0TEST1234"
+        search_html = f'<html><body><a href="{product_url}">Juego recuperado</a></body></html>'
+        product_html = """
+        <html><head><title>Juego recuperado</title></head><body>
+          <span id="productTitle">Juego recuperado</span>
+          <div>ASIN: B0TEST1234</div>
+        </body></html>
+        """
+
+        class RecoveringFetcher:
+            def __init__(self):
+                self.context_resets = 0
+                self.search_fetches = 0
+
+            def fetch(self, url):
+                if "/search?" not in url:
+                    return FetchResult(url=url, text=product_html)
+                self.search_fetches += 1
+                if self.context_resets == 0:
+                    return FetchResult(
+                        url=url,
+                        text="<html><head><title>Documento no encontrado</title></head></html>",
+                        status_code=429,
+                    )
+                return FetchResult(url=url, text=search_html)
+
+            def reset_context(self):
+                self.context_resets += 1
+
+        fetcher = RecoveringFetcher()
+        trace = FakeTraceLogger()
+
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2",
+            12,
+            FakeRepository(),
+            browser_fetcher=fetcher.fetch,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(fetcher.search_fetches, 2)
+        self.assertEqual(fetcher.context_resets, 1)
+        self.assertEqual([record.title for record in records], ["Juego recuperado"])
+        invalid_entries = [fields for event, fields in trace.entries if event == "amazon_inventory.search_fetch.invalid"]
+        self.assertEqual(len(invalid_entries), 1)
+        self.assertEqual(invalid_entries[0]["status_code"], 429)
+        self.assertEqual(invalid_entries[0]["reason"], "http_status")
+
+    def test_rejects_empty_amazon_storefront_shell_after_retries(self):
+        search_url = "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2/search?terms=jue"
+        shell_html = "<html><head><title>Amazon.com.mx</title></head><body>Inicio</body></html>"
+        fetched_urls = []
+
+        def fetcher(url):
+            fetched_urls.append(url)
+            return FetchResult(url=url, text=shell_html)
+
+        trace = FakeTraceLogger()
+        with self.assertRaisesRegex(RuntimeError, "Failed to fetch valid Amazon search page"):
+            crawl_amazon_store_inventory(
+                "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2",
+                12,
+                FakeRepository(),
+                browser_fetcher=fetcher,
+                trace_logger=trace,
+                delay_seconds=0,
+            )
+
+        self.assertEqual(fetched_urls, [search_url, search_url, search_url])
+        invalid_entries = [fields for event, fields in trace.entries if event == "amazon_inventory.search_fetch.invalid"]
+        self.assertEqual(len(invalid_entries), 3)
+        self.assertTrue(all(entry["reason"] == "missing_listing_candidates" for entry in invalid_entries))
+        self.assertFalse(invalid_entries[-1]["will_retry"])
+
+    def test_uses_long_backoff_for_amazon_throttling(self):
+        self.assertEqual(
+            _amazon_retry_delay_seconds(
+                {"reason": "http_status", "status_code": 429, "page_title": "Documento no encontrado"},
+                attempt=1,
+                base_delay_seconds=1,
+            ),
+            60,
+        )
+        self.assertEqual(
+            _amazon_retry_delay_seconds(
+                {"reason": "http_status", "status_code": 503, "page_title": "Service unavailable"},
+                attempt=2,
+                base_delay_seconds=1,
+            ),
+            180,
+        )
+
     def test_raises_when_amazon_detail_fetch_fails(self):
         search_html = """
         <html><body>
@@ -310,6 +405,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
                 "page_title": "Amazon.com.mx",
                 "product_title_present": False,
                 "reason": "missing_product_title",
+                "retry_in_seconds": 0.0,
                 "source_url": product_url,
                 "status_code": 200,
                 "store_id": 11,

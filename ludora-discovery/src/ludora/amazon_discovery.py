@@ -18,7 +18,9 @@ from ludora.webfetch import FetchResult
 
 DEFAULT_AMAZON_STORE_SEARCH_TERMS = ("jue",)
 DEFAULT_AMAZON_BRAND_MAX_PAGES = 5
+DEFAULT_AMAZON_SEARCH_FETCH_ATTEMPTS = 3
 DEFAULT_AMAZON_DETAIL_FETCH_ATTEMPTS = 3
+DEFAULT_AMAZON_THROTTLE_BACKOFF_SECONDS = 60.0
 ItemTitleExtractor = Callable[[DiscoveryItemCandidateRecord], str]
 ASIN_RE = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?#]|$)", re.IGNORECASE)
 GENERIC_LINK_TEXT = {
@@ -98,6 +100,7 @@ def crawl_amazon_store_inventory(
         cancellation_token=cancellation_token,
         delay_seconds=delay_seconds,
         limit=limit,
+        require_nonempty_first_search_page=True,
     )
 
 
@@ -151,6 +154,7 @@ def _crawl_amazon_search_inventory(
     limit: int | None = None,
     expected_brand_name: str = "",
     max_search_pages: int = 1,
+    require_nonempty_first_search_page: bool = False,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
@@ -178,20 +182,22 @@ def _crawl_amazon_search_inventory(
                 raise_if_cancelled(cancellation_token)
                 search_url = first_search_url if page_number == 1 else _amazon_search_page_url(first_search_url, page_number)
                 trace.log("amazon_inventory.search_fetch.start", page_number=page_number, search_url=search_url, store_id=store_id)
-                fetched_listing = browser_fetcher(search_url)
-                if fetched_listing is None:
-                    raise RuntimeError(f"Failed to fetch Amazon search page: {search_url}")
-                listing_url = fetched_listing.url or search_url
-                listing_candidates = _extract_amazon_listing_candidates(
-                    html=fetched_listing.text,
-                    page_url=listing_url,
+                fetched_listing, listing_candidates = _fetch_valid_amazon_listing_page(
+                    search_url,
+                    browser_fetcher,
+                    trace=trace,
                     store_id=store_id,
+                    cancellation_token=cancellation_token,
+                    retry_delay_seconds=max(0.0, delay_seconds),
+                    require_candidates=require_nonempty_first_search_page and page_number == 1,
                 )
+                listing_url = fetched_listing.url or search_url
                 trace.log(
                     "amazon_inventory.search_extract.completed",
                     listing_count=len(listing_candidates),
                     page_number=page_number,
                     search_url=listing_url,
+                    status_code=fetched_listing.status_code,
                     store_id=store_id,
                 )
                 if not listing_candidates:
@@ -302,6 +308,113 @@ def _crawl_amazon_search_inventory(
             browser_session.__exit__(None, None, None)
 
 
+def _fetch_valid_amazon_listing_page(
+    search_url: str,
+    browser_fetcher: Callable[[str], FetchResult | None],
+    *,
+    trace: TraceLogger,
+    store_id: int | None,
+    cancellation_token: CancellationToken | None,
+    retry_delay_seconds: float,
+    require_candidates: bool,
+    max_attempts: int = DEFAULT_AMAZON_SEARCH_FETCH_ATTEMPTS,
+) -> tuple[FetchResult, list[DiscoveryItemCandidateRecord]]:
+    attempts = max(1, max_attempts)
+    saw_response = False
+
+    for attempt in range(1, attempts + 1):
+        raise_if_cancelled(cancellation_token)
+        fetched_listing = browser_fetcher(search_url)
+        listing_candidates: list[DiscoveryItemCandidateRecord] = []
+        if fetched_listing is None:
+            diagnostics: dict[str, object] = {
+                "final_url": "",
+                "listing_count": 0,
+                "page_title": "",
+                "reason": "fetch_failed",
+                "status_code": None,
+            }
+        else:
+            saw_response = True
+            listing_url = fetched_listing.url or search_url
+            listing_candidates = _extract_amazon_listing_candidates(
+                html=fetched_listing.text,
+                page_url=listing_url,
+                store_id=store_id,
+            )
+            diagnostics = _amazon_listing_page_diagnostics(
+                fetched_listing,
+                listing_count=len(listing_candidates),
+                require_candidates=require_candidates,
+            )
+            if diagnostics["valid"]:
+                return fetched_listing, listing_candidates
+
+        will_retry = attempt < attempts
+        retry_in_seconds = (
+            _amazon_retry_delay_seconds(
+                diagnostics,
+                attempt=attempt,
+                base_delay_seconds=retry_delay_seconds,
+            )
+            if will_retry
+            else 0.0
+        )
+        trace.log(
+            "amazon_inventory.search_fetch.invalid",
+            attempt=attempt,
+            max_attempts=attempts,
+            retry_in_seconds=retry_in_seconds,
+            search_url=search_url,
+            store_id=store_id,
+            will_retry=will_retry,
+            **{key: value for key, value in diagnostics.items() if key != "valid"},
+        )
+        if will_retry:
+            _reset_amazon_browser_context(
+                browser_fetcher,
+                attempt=attempt,
+                source_url=search_url,
+                store_id=store_id,
+                trace=trace,
+                trace_event_prefix="amazon_inventory.search_fetch",
+            )
+        if retry_in_seconds > 0:
+            _wait_for_amazon_retry(retry_in_seconds, cancellation_token)
+
+    if saw_response:
+        raise RuntimeError(f"Failed to fetch valid Amazon search page: {search_url}")
+    raise RuntimeError(f"Failed to fetch Amazon search page: {search_url}")
+
+
+def _amazon_listing_page_diagnostics(
+    fetched: FetchResult,
+    *,
+    listing_count: int,
+    require_candidates: bool,
+) -> dict[str, object]:
+    html = fetched.text or ""
+    title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+    page_title = _collapse_text(title_match.group(1)) if title_match else ""
+    status_ok = 200 <= fetched.status_code < 400
+
+    if not status_ok:
+        reason = "http_status"
+    elif require_candidates and listing_count == 0:
+        reason = "missing_listing_candidates"
+    else:
+        reason = ""
+
+    return {
+        "final_url": fetched.url,
+        "listing_count": listing_count,
+        "page_title": page_title,
+        "reason": reason,
+        "status_code": fetched.status_code,
+        "valid": not reason,
+    }
+
+
 def _fetch_valid_amazon_detail_page(
     source_url: str,
     browser_fetcher: Callable[[str], FetchResult | None],
@@ -336,10 +449,20 @@ def _fetch_valid_amazon_detail_page(
                 return fetched_detail
 
         will_retry = attempt < attempts
+        retry_in_seconds = (
+            _amazon_retry_delay_seconds(
+                diagnostics,
+                attempt=attempt,
+                base_delay_seconds=retry_delay_seconds,
+            )
+            if will_retry
+            else 0.0
+        )
         trace.log(
             "amazon_inventory.candidate.detail_fetch.invalid",
             attempt=attempt,
             max_attempts=attempts,
+            retry_in_seconds=retry_in_seconds,
             source_url=source_url,
             store_id=store_id,
             will_retry=will_retry,
@@ -352,9 +475,10 @@ def _fetch_valid_amazon_detail_page(
                 source_url=source_url,
                 store_id=store_id,
                 trace=trace,
+                trace_event_prefix="amazon_inventory.candidate.detail_fetch",
             )
-        if will_retry and retry_delay_seconds > 0:
-            time.sleep(retry_delay_seconds * attempt)
+        if retry_in_seconds > 0:
+            _wait_for_amazon_retry(retry_in_seconds, cancellation_token)
 
     if saw_response:
         raise RuntimeError(f"Failed to fetch valid Amazon product detail page: {source_url}")
@@ -368,6 +492,7 @@ def _reset_amazon_browser_context(
     source_url: str,
     store_id: int | None,
     trace: TraceLogger,
+    trace_event_prefix: str,
 ) -> bool:
     fetcher_owner = getattr(browser_fetcher, "__self__", browser_fetcher)
     reset_context = getattr(fetcher_owner, "reset_context", None)
@@ -378,7 +503,7 @@ def _reset_amazon_browser_context(
         reset_context()
     except Exception as exc:
         trace.log(
-            "amazon_inventory.candidate.detail_fetch.context_reset.failed",
+            f"{trace_event_prefix}.context_reset.failed",
             attempt=attempt,
             error=str(exc),
             error_type=type(exc).__name__,
@@ -388,12 +513,47 @@ def _reset_amazon_browser_context(
         return False
 
     trace.log(
-        "amazon_inventory.candidate.detail_fetch.context_reset.completed",
+        f"{trace_event_prefix}.context_reset.completed",
         attempt=attempt,
         source_url=source_url,
         store_id=store_id,
     )
     return True
+
+
+def _amazon_retry_delay_seconds(
+    diagnostics: dict[str, object],
+    *,
+    attempt: int,
+    base_delay_seconds: float,
+) -> float:
+    base_delay = max(0.0, base_delay_seconds)
+    if base_delay == 0:
+        return 0.0
+
+    status_code = diagnostics.get("status_code")
+    reason = str(diagnostics.get("reason") or "")
+    page_title = str(diagnostics.get("page_title") or "").casefold()
+    throttled_status = isinstance(status_code, int) and (status_code == 429 or 500 <= status_code < 600)
+    throttle_like_shell = reason in {"missing_listing_candidates", "missing_product_title"} and (
+        not page_title or page_title in {"amazon.com.mx", "documento no encontrado"}
+    )
+    if throttled_status or throttle_like_shell:
+        return max(base_delay * attempt, DEFAULT_AMAZON_THROTTLE_BACKOFF_SECONDS * (3 ** (attempt - 1)))
+    return base_delay * attempt
+
+
+def _wait_for_amazon_retry(
+    delay_seconds: float,
+    cancellation_token: CancellationToken | None,
+) -> None:
+    deadline = time.monotonic() + max(0.0, delay_seconds)
+    while True:
+        raise_if_cancelled(cancellation_token)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(1.0, remaining))
 
 
 def _amazon_detail_page_diagnostics(fetched: FetchResult, *, expected_asin: str) -> dict[str, object]:

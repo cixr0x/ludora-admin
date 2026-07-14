@@ -1,12 +1,12 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.browser_fetch import BrowserTextFetcher, _significant_url_tokens
+from ludora.browser_fetch import BrowserTextFetcher, _browser_user_agent, _significant_url_tokens
 
 
 class FakeResponse:
@@ -76,6 +76,14 @@ class FakeContext:
 
 
 class BrowserFetchTests(unittest.TestCase):
+    def test_browser_user_agent_matches_linux_browser_version(self):
+        with patch("ludora.browser_fetch.os.name", "posix"):
+            user_agent = _browser_user_agent(None, browser_version="140.0.7339.41")
+
+        self.assertIn("X11; Linux x86_64", user_agent)
+        self.assertIn("Chrome/140.0.7339.41", user_agent)
+        self.assertNotIn("Windows NT", user_agent)
+
     def test_reset_context_replaces_the_amazon_cookie_session(self):
         previous_context = Mock()
         next_context = Mock()

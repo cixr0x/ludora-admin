@@ -41,6 +41,7 @@ class BrowserTextFetcher:
         self._context = None
         self._page = None
         self._chrome_path = None
+        self._browser_version = None
         self._playwright_error = Exception
         self._playwright_timeout_error = Exception
 
@@ -67,6 +68,7 @@ class BrowserTextFetcher:
                 "--no-default-browser-check",
             ],
         )
+        self._browser_version = str(getattr(self._browser, "version", "") or "")
         self._context = self._create_context()
         self._page = self._context.new_page()
         return self
@@ -76,7 +78,7 @@ class BrowserTextFetcher:
             raise BrowserFetchUnavailable("Browser fetcher has not been started.")
         context = self._browser.new_context(
             locale="es-MX",
-            user_agent=_browser_user_agent(self._chrome_path),
+            user_agent=_browser_user_agent(self._chrome_path, browser_version=self._browser_version),
             viewport={"width": 1365, "height": 900},
             extra_http_headers={"Accept-Language": "es-MX,es;q=0.9,en;q=0.8"},
         )
@@ -435,14 +437,17 @@ def _chrome_executable_path() -> str | None:
     return None
 
 
-def _browser_user_agent(chrome_path: str | None) -> str:
+def _browser_user_agent(chrome_path: str | None, *, browser_version: str | None = None) -> str | None:
     configured_user_agent = os.environ.get("LUDORA_BROWSER_USER_AGENT", "").strip()
     if configured_user_agent:
         return configured_user_agent
 
-    version = _chrome_version_from_installation(chrome_path) or "125.0.0.0"
+    version = (browser_version or "").strip() or _chrome_version_from_installation(chrome_path)
+    if not version:
+        return None
+    platform_token = "Windows NT 10.0; Win64; x64" if os.name == "nt" else "X11; Linux x86_64"
     return (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        f"Mozilla/5.0 ({platform_token}) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         f"Chrome/{version} Safari/537.36"
     )
