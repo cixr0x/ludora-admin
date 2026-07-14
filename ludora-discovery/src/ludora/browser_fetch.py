@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import unicodedata
+from html import unescape
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -101,15 +103,19 @@ class BrowserTextFetcher:
                 timeout_ms=self.timeout_ms,
                 timeout_error=self._playwright_timeout_error,
             )
+            rendered_html = page.content()
             if _is_amazon_store_search_url(page.url or url):
-                _load_all_amazon_store_search_results(
-                    page,
-                    timeout_ms=self.timeout_ms,
-                    timeout_error=self._playwright_timeout_error,
-                )
+                rendered_html, embedded_asin_count = _append_embedded_amazon_store_asin_links(rendered_html)
+                if embedded_asin_count == 0:
+                    _load_all_amazon_store_search_results(
+                        page,
+                        timeout_ms=self.timeout_ms,
+                        timeout_error=self._playwright_timeout_error,
+                    )
+                    rendered_html = page.content()
             return FetchResult(
                 url=page.url,
-                text=page.content(),
+                text=rendered_html,
                 status_code=int(getattr(response, "status", 200)),
             )
         except (
@@ -173,6 +179,42 @@ def _is_amazon_store_search_url(url: str) -> bool:
     path = parsed.path.rstrip("/").casefold()
     is_amazon_host = bool(re.search(r"(^|\.)amazon\.", hostname))
     return is_amazon_host and bool(re.fullmatch(r"/stores/page/[^/]+/search", path))
+
+
+def _append_embedded_amazon_store_asin_links(html: str) -> tuple[str, int]:
+    decoded_html = unescape(html)
+    asin_lists: list[list[str]] = []
+    for match in re.finditer(r'"ASINList"\s*:\s*(\[[^\]]*\])', decoded_html):
+        try:
+            raw_asins = json.loads(match.group(1))
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if not isinstance(raw_asins, list):
+            continue
+        unique_asins: list[str] = []
+        seen_asins: set[str] = set()
+        for raw_asin in raw_asins:
+            asin = str(raw_asin).strip().upper()
+            if not re.fullmatch(r"[A-Z0-9]{10}", asin) or asin in seen_asins:
+                continue
+            seen_asins.add(asin)
+            unique_asins.append(asin)
+        if unique_asins:
+            asin_lists.append(unique_asins)
+
+    if not asin_lists:
+        return html, 0
+
+    asins = max(asin_lists, key=len)
+    links = "".join(
+        f'<a data-ludora-amazon-store-asin="{asin}" href="/dp/{asin}"></a>'
+        for asin in asins
+    )
+    container = f'<div data-ludora-amazon-store-asins="true" hidden>{links}</div>'
+    body_end_index = html.casefold().rfind("</body>")
+    if body_end_index < 0:
+        return html + container, len(asins)
+    return html[:body_end_index] + container + html[body_end_index:], len(asins)
 
 
 def _load_all_amazon_store_search_results(page, *, timeout_ms: int, timeout_error) -> None:

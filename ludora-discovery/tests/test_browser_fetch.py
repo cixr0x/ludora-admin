@@ -94,6 +94,36 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertTrue(page.waited_for_load)
         self.assertTrue(page.waited_for_function)
 
+    def test_fetch_expands_embedded_amazon_store_asin_list_without_clicking_load_more(self):
+        response = FakeResponse(
+            "https://www.amazon.com.mx/stores/page/STORE-PAGE-ID/search?terms=jue",
+            "<html></html>",
+            "text/html;charset=utf-8",
+        )
+        page = FakePage(
+            response,
+            """
+            <html><body>
+              <a href="/First-Game/dp/B0FIRST001">First Game</a>
+              <script>
+                window.storeState = {
+                  "ASINList": ["B0FIRST001", "B0SECOND02", "B0THIRD003"]
+                };
+              </script>
+            </body></html>
+            """,
+        )
+        fetcher = BrowserTextFetcher()
+        fetcher._page = page
+
+        result = fetcher.fetch(response.url)
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.text.count('data-ludora-amazon-store-asin="'), 3)
+        self.assertIn('href="/dp/B0SECOND02"', result.text)
+        self.assertIn('href="/dp/B0THIRD003"', result.text)
+
     def test_fetch_scrolls_amazon_store_search_until_products_stop_growing(self):
         response = FakeResponse(
             "https://www.amazon.com.mx/stores/page/STORE-PAGE-ID/search?terms=jue",
