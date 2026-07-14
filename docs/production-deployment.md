@@ -1,6 +1,6 @@
 # Ludora Admin Production Deployment Runbook
 
-Last verified: 2026-07-11
+Last verified: 2026-07-14
 
 Use this runbook to deploy or recover the Ludora admin application and its private Codex-compatible API on the dedicated Google Cloud VM.
 
@@ -9,8 +9,11 @@ Use this runbook to deploy or recover the Ludora admin application and its priva
 | Setting | Value |
 | --- | --- |
 | GCP project | `ludora-501213` |
-| Instance | `ludora-admin` |
-| Zone | `us-central1-c` |
+| Instance | `ludora-admin-img-20260714-105613` |
+| Zone | `us-central1-a` |
+| Machine type | `e2-small` |
+| Boot disk | 30 GB |
+| Source machine image | `ludora-admin-img` |
 | SSH user | `robertorojas87` |
 | External IP | `34.55.19.20` |
 | Public URL | `https://admin.ludora.bobbycrimson.com` |
@@ -23,13 +26,23 @@ Use this runbook to deploy or recover the Ludora admin application and its priva
 Connect from a workstation with:
 
 ```powershell
-gcloud compute ssh robertorojas87@ludora-admin --project ludora-501213 --zone us-central1-c
+gcloud compute ssh robertorojas87@ludora-admin-img-20260714-105613 --project ludora-501213 --zone us-central1-a
 ```
+
+The active instance was restored on 2026-07-14 from machine image `ludora-admin-img`, whose source was the previous `ludora-admin` instance in `us-central1-c`. The previous instance is terminated and must not be used as a deployment target.
+
+The public IP was reused by the replacement VM, so SSH clients may report a changed host key. The ED25519 fingerprint verified for the active instance on 2026-07-14 is:
+
+```text
+SHA256:sXB+umktCqke3Zb2t45KZbGONE2YbTi+Rhm+KQuMy8o
+```
+
+Confirm that exact fingerprint before accepting or refreshing a cached host key. Re-check it from a trusted Google Cloud path after any future VM replacement.
 
 The external IP is not currently reserved as a static Compute Engine address. After any VM stop/start, verify the live IP and DNS before deploying or troubleshooting HTTPS:
 
 ```powershell
-gcloud compute instances describe ludora-admin --project ludora-501213 --zone us-central1-c --format="value(networkInterfaces[0].accessConfigs[0].natIP)"
+gcloud compute instances describe ludora-admin-img-20260714-105613 --project ludora-501213 --zone us-central1-a --format="value(networkInterfaces[0].accessConfigs[0].natIP)"
 Resolve-DnsName admin.ludora.bobbycrimson.com -Type A
 ```
 
@@ -379,6 +392,14 @@ Use `--email <address>` instead of `--register-unsafely-without-email` when a re
 ## Verification Checklist
 
 Run after every deployment, adjusting checks to the changed component.
+
+Confirm the command is targeting the active replacement VM before checking the application:
+
+```powershell
+gcloud compute instances describe ludora-admin-img-20260714-105613 --project ludora-501213 --zone us-central1-a --format="table(name,zone.basename(),status,machineType.basename(),networkInterfaces[0].accessConfigs[0].natIP)"
+```
+
+Expected identity: instance `ludora-admin-img-20260714-105613`, zone `us-central1-a`, status `RUNNING`, machine type `e2-small`, and an external IP matching DNS.
 
 ### Services and ports on the VM
 

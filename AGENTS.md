@@ -15,11 +15,13 @@ Do not choose another port automatically. If one of these ports is busy, report 
 ## Production VM
 
 - Follow `docs/production-deployment.md` for provisioning, routine deployment, rollback, and verification.
-- Instance: `ludora-admin`
+- Instance: `ludora-admin-img-20260714-105613`
 - GCP project: `ludora-501213`
-- Zone: `us-central1-c`
+- Zone: `us-central1-a`
 - SSH user: `robertorojas87`
-- Connect with `gcloud compute ssh robertorojas87@ludora-admin --project ludora-501213 --zone us-central1-c`
+- Connect with `gcloud compute ssh robertorojas87@ludora-admin-img-20260714-105613 --project ludora-501213 --zone us-central1-a`
+- The previous `ludora-admin` instance in `us-central1-c` is terminated. Do not deploy to it.
+- The active VM was restored from machine image `ludora-admin-img`, uses machine type `e2-small`, and currently owns the ephemeral external IP `34.55.19.20`.
 - Admin checkout: `/opt/ludora/ludora-admin`
 - Codex API checkout: `/opt/ludora/codexapi`
 - Public admin URL: `https://admin.ludora.bobbycrimson.com`
