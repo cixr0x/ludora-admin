@@ -8,7 +8,7 @@ import type { CoverPoint } from '../api/client';
 import { ManualCoverPointSelector } from './ManualCoverPointSelector';
 
 describe('ManualCoverPointSelector', () => {
-  it('maps four image-bound clicks to normalized points and supports undo and reset', () => {
+  it('uses an 8x confirmation zoom for each corner and supports undo and reset', () => {
     const onPointsChange = vi.fn();
 
     function Harness() {
@@ -29,14 +29,19 @@ describe('ManualCoverPointSelector', () => {
     render(<Harness />);
 
     expect(screen.getByAltText('Source box image for Coffee Rush')).toHaveAttribute('src', 'blob:source-cover');
-    expect(screen.getByText('Select corner 1 of 4: top-left.')).toBeInTheDocument();
+    expect(screen.getByText('Select corner 1 of 4: top-left. Click once to magnify its area.')).toBeInTheDocument();
 
-    const surface = screen.getByTestId('manual-cover-point-surface');
-    vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue(rectangle(10, 20, 200, 100));
-    fireEvent.click(surface, { clientX: 30, clientY: 40 });
-    fireEvent.click(surface, { clientX: 190, clientY: 40 });
-    fireEvent.click(surface, { clientX: 190, clientY: 100 });
-    fireEvent.click(surface, { clientX: 30, clientY: 100 });
+    selectPoint(30, 40);
+    expect(onPointsChange).not.toHaveBeenCalled();
+    expect(screen.getByText('8× zoom')).toBeInTheDocument();
+    confirmZoomAt(110, 70);
+
+    selectPoint(190, 40);
+    confirmZoomAt(110, 70);
+    selectPoint(190, 100);
+    confirmZoomAt(110, 70);
+    selectPoint(30, 100);
+    confirmZoomAt(110, 70);
 
     expect(onPointsChange).toHaveBeenLastCalledWith([
       { x: 0.1, y: 0.2 },
@@ -53,17 +58,18 @@ describe('ManualCoverPointSelector', () => {
     );
 
     const callsAfterFourPoints = onPointsChange.mock.calls.length;
-    fireEvent.click(surface, { clientX: 110, clientY: 70 });
+    fireEvent.click(screen.getByTestId('manual-cover-point-surface'), { clientX: 110, clientY: 70 });
     expect(onPointsChange).toHaveBeenCalledTimes(callsAfterFourPoints);
+    expect(screen.queryByTestId('manual-cover-zoom-surface')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Undo last point' }));
     expect(screen.queryByTestId('manual-cover-point-4')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Reset points' }));
     expect(screen.queryByTestId('manual-cover-point-1')).not.toBeInTheDocument();
-    expect(screen.getByText('Select corner 1 of 4: top-left.')).toBeInTheDocument();
+    expect(screen.getByText('Select corner 1 of 4: top-left. Click once to magnify its area.')).toBeInTheDocument();
   });
 
-  it('clamps pointer positions to the image bounds', () => {
+  it('maps fine adjustments in the zoomed view back to the original image', () => {
     const onChange = vi.fn();
     render(
       <ManualCoverPointSelector
@@ -73,14 +79,80 @@ describe('ManualCoverPointSelector', () => {
         onChange={onChange}
       />
     );
-    const surface = screen.getByTestId('manual-cover-point-surface');
-    vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue(rectangle(10, 20, 200, 100));
 
-    fireEvent.click(surface, { clientX: 0, clientY: 200 });
+    const overview = screen.getByTestId('manual-cover-point-surface');
+    vi.spyOn(overview, 'getBoundingClientRect').mockReturnValue(rectangle(0, 0, 400, 200));
+    fireEvent.click(overview, { clientX: 100, clientY: 80 });
+    expect(onChange).not.toHaveBeenCalled();
 
-    expect(onChange).toHaveBeenCalledWith([{ x: 0, y: 1 }]);
+    const zoom = screen.getByTestId('manual-cover-zoom-surface');
+    vi.spyOn(zoom, 'getBoundingClientRect').mockReturnValue(rectangle(0, 0, 400, 200));
+    fireEvent.click(zoom, { clientX: 360, clientY: 20 });
+
+    const selectedPoint = onChange.mock.calls[0]?.[0]?.[0] as CoverPoint;
+    expect(selectedPoint.x).toBeCloseTo(0.3);
+    expect(selectedPoint.y).toBeCloseTo(0.35);
+  });
+
+  it('keeps an edge anchor centered and ignores clicks in the out-of-image zoom area', () => {
+    const onChange = vi.fn();
+    render(
+      <ManualCoverPointSelector
+        imageTitle="Edge box"
+        imageUrl="blob:edge"
+        points={[]}
+        onChange={onChange}
+      />
+    );
+
+    const overview = screen.getByTestId('manual-cover-point-surface');
+    vi.spyOn(overview, 'getBoundingClientRect').mockReturnValue(rectangle(10, 20, 200, 100));
+    fireEvent.click(overview, { clientX: 10, clientY: 20 });
+
+    const zoom = screen.getByTestId('manual-cover-zoom-surface');
+    vi.spyOn(zoom, 'getBoundingClientRect').mockReturnValue(rectangle(10, 20, 200, 100));
+    fireEvent.click(zoom, { clientX: 10, clientY: 20 });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId('manual-cover-zoom-surface')).toBeInTheDocument();
+
+    fireEvent.click(zoom, { clientX: 110, clientY: 70 });
+    expect(onChange).toHaveBeenCalledWith([{ x: 0, y: 0 }]);
+  });
+
+  it('backs out of a pending zoom with the button or Escape without adding a point', () => {
+    const onChange = vi.fn();
+    render(
+      <ManualCoverPointSelector
+        imageTitle="Back test"
+        imageUrl="blob:back"
+        points={[]}
+        onChange={onChange}
+      />
+    );
+
+    selectPoint(110, 70);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to full image' }));
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId('manual-cover-point-surface')).toBeInTheDocument();
+
+    selectPoint(110, 70);
+    fireEvent.keyDown(screen.getByTestId('manual-cover-zoom-surface'), { key: 'Escape' });
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByTestId('manual-cover-point-surface')).toBeInTheDocument();
   });
 });
+
+function selectPoint(clientX: number, clientY: number): void {
+  const surface = screen.getByTestId('manual-cover-point-surface');
+  vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue(rectangle(10, 20, 200, 100));
+  fireEvent.click(surface, { clientX, clientY });
+}
+
+function confirmZoomAt(clientX: number, clientY: number): void {
+  const surface = screen.getByTestId('manual-cover-zoom-surface');
+  vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue(rectangle(10, 20, 200, 100));
+  fireEvent.click(surface, { clientX, clientY });
+}
 
 function rectangle(left: number, top: number, width: number, height: number): DOMRect {
   return {

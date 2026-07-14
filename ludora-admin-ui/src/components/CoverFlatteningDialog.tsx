@@ -238,12 +238,14 @@ export function CoverFlatteningDialog({
 
   function handleStartManualSelection() {
     setManualPoints([]);
+    setManualSourceUrl('');
     setError('');
     setMode('manual');
   }
 
   function handleCancelManualSelection() {
     setManualPoints([]);
+    setManualSourceUrl('');
     setError('');
     setMode('candidates');
   }

@@ -179,9 +179,14 @@ describe('CoverFlatteningDialog', () => {
 
     expect(await screen.findByText('Two-face perspective detected. One cover candidate was generated.')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Select points manually' }));
-    const firstSurface = await manualPointSurface();
-    fireEvent.click(firstSurface, { clientX: 30, clientY: 40 });
-    fireEvent.click(firstSurface, { clientX: 190, clientY: 40 });
+    await selectManualCorner(30, 40);
+    const escapedZoom = await beginManualZoom(190, 40);
+    fireEvent.keyDown(escapedZoom, { key: 'Escape' });
+    expect(screen.getByTestId('manual-cover-point-surface')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url, init]) =>
+      String(url).endsWith('/flatten-manual-77') && init?.method === 'DELETE'
+    )).toBe(false);
+    await beginManualZoom(190, 40);
     fireEvent.click(screen.getByRole('button', { name: 'Cancel manual selection' }));
 
     expect(screen.getByText('Two-face perspective detected. One cover candidate was generated.')).toBeInTheDocument();
@@ -190,13 +195,12 @@ describe('CoverFlatteningDialog', () => {
     )).toBe(false);
 
     fireEvent.click(screen.getByRole('button', { name: 'Select points manually' }));
-    const secondSurface = await manualPointSurface();
     const generateButton = screen.getByRole('button', { name: 'Generate manual candidate' });
     expect(generateButton).toBeDisabled();
-    fireEvent.click(secondSurface, { clientX: 30, clientY: 40 });
-    fireEvent.click(secondSurface, { clientX: 190, clientY: 40 });
-    fireEvent.click(secondSurface, { clientX: 190, clientY: 100 });
-    fireEvent.click(secondSurface, { clientX: 30, clientY: 100 });
+    await selectManualCorner(30, 40);
+    await selectManualCorner(190, 40);
+    await selectManualCorner(190, 100);
+    await selectManualCorner(30, 100);
     expect(generateButton).toBeEnabled();
     fireEvent.click(generateButton);
 
@@ -219,7 +223,25 @@ describe('CoverFlatteningDialog', () => {
 async function manualPointSurface(): Promise<HTMLElement> {
   await screen.findByAltText('Source box image for Coffee Rush');
   const surface = screen.getByTestId('manual-cover-point-surface');
-  vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({
+  vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue(manualSurfaceRectangle());
+  return surface;
+}
+
+async function beginManualZoom(clientX: number, clientY: number): Promise<HTMLElement> {
+  const surface = await manualPointSurface();
+  fireEvent.click(surface, { clientX, clientY });
+  const zoomSurface = screen.getByTestId('manual-cover-zoom-surface');
+  vi.spyOn(zoomSurface, 'getBoundingClientRect').mockReturnValue(manualSurfaceRectangle());
+  return zoomSurface;
+}
+
+async function selectManualCorner(clientX: number, clientY: number): Promise<void> {
+  const zoomSurface = await beginManualZoom(clientX, clientY);
+  fireEvent.click(zoomSurface, { clientX: 110, clientY: 70 });
+}
+
+function manualSurfaceRectangle(): DOMRect {
+  return {
     bottom: 120,
     height: 100,
     left: 10,
@@ -229,8 +251,7 @@ async function manualPointSurface(): Promise<HTMLElement> {
     width: 200,
     x: 10,
     y: 20
-  });
-  return surface;
+  };
 }
 
 function jsonResponse(payload: unknown, status = 200): Response {
