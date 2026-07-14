@@ -26,6 +26,15 @@ AMAZON_STORE_LOAD_MORE_TIMEOUT_MS = 15_000
 AMAZON_STORE_MAX_STALLED_LOAD_MORE_CLICKS = 4
 AMAZON_STORE_BATCH_COOLDOWN_MS = 5_000
 AMAZON_STORE_STALLED_LOAD_MORE_BACKOFF_MS = 10_000
+AMAZON_DETAIL_READY_TIMEOUT_MS = 8_000
+AMAZON_BLOCKED_RESOURCE_TYPES = frozenset({"font", "image", "media"})
+AMAZON_TRACKING_HOSTS = (
+    "amazon-adsystem.com",
+    "doubleclick.net",
+    "google-analytics.com",
+    "googletagmanager.com",
+    "scorecardresearch.com",
+)
 
 
 def fetch_sitemap_text_with_browser(url: str, timeout_ms: int = 30_000) -> FetchResult | None:
@@ -114,6 +123,8 @@ class BrowserTextFetcher:
         if page is None:
             raise BrowserFetchUnavailable("Browser fetcher has not been started.")
 
+        amazon_resource_counts = _configure_lightweight_amazon_page(page, url)
+        amazon_detail_request = _is_amazon_product_detail_url(url)
         try:
             response = _navigate_past_reload_challenge(page, url, timeout_ms=self.timeout_ms)
             if response is None:
@@ -124,12 +135,21 @@ class BrowserTextFetcher:
                     text=response.text(),
                     status_code=int(getattr(response, "status", 200)),
                 )
-            _wait_for_rendered_html(
-                page,
-                url,
-                timeout_ms=self.timeout_ms,
-                timeout_error=self._playwright_timeout_error,
-            )
+            status_code = int(getattr(response, "status", 200))
+            if amazon_detail_request:
+                if 200 <= status_code < 400:
+                    _wait_for_amazon_detail_html(
+                        page,
+                        timeout_ms=self.timeout_ms,
+                        timeout_error=self._playwright_timeout_error,
+                    )
+            else:
+                _wait_for_rendered_html(
+                    page,
+                    url,
+                    timeout_ms=self.timeout_ms,
+                    timeout_error=self._playwright_timeout_error,
+                )
             rendered_html = page.content()
             if _is_amazon_store_search_url(page.url or url):
                 rendered_html, embedded_asin_count = _append_embedded_amazon_store_asin_links(rendered_html)
@@ -143,7 +163,7 @@ class BrowserTextFetcher:
             return FetchResult(
                 url=page.url,
                 text=rendered_html,
-                status_code=int(getattr(response, "status", 200)),
+                status_code=status_code,
             )
         except (
             AmazonStoreSearchIncomplete,
@@ -165,6 +185,13 @@ class BrowserTextFetcher:
         finally:
             if close_page_after_fetch:
                 page.close()
+            if amazon_resource_counts and self.trace_logger is not None:
+                self.trace_logger.log(
+                    "browser_fetch.amazon_resources.blocked",
+                    blocked_by_type=dict(sorted(amazon_resource_counts.items())),
+                    blocked_requests=sum(amazon_resource_counts.values()),
+                    url=url,
+                )
 
 
 def fetch_text_with_browser(url: str, timeout_ms: int = 30_000) -> FetchResult | None:
@@ -206,6 +233,50 @@ def _is_amazon_store_search_url(url: str) -> bool:
     path = parsed.path.rstrip("/").casefold()
     is_amazon_host = bool(re.search(r"(^|\.)amazon\.", hostname))
     return is_amazon_host and bool(re.fullmatch(r"/stores/page/[^/]+/search", path))
+
+
+def _is_amazon_url(url: str) -> bool:
+    hostname = (urlparse(url).hostname or "").casefold()
+    return bool(re.search(r"(^|\.)amazon\.", hostname))
+
+
+def _is_amazon_product_detail_url(url: str) -> bool:
+    if not _is_amazon_url(url):
+        return False
+    return bool(re.search(r"/(?:dp|gp/product)/[a-z0-9]{10}(?:[/?#]|$)", url, re.IGNORECASE))
+
+
+def _configure_lightweight_amazon_page(page, url: str) -> dict[str, int] | None:
+    if not _is_amazon_url(url):
+        return None
+
+    blocked_counts: dict[str, int] = {}
+
+    def handle_route(route) -> None:
+        request = route.request
+        resource_type = str(getattr(request, "resource_type", "") or "").casefold()
+        request_url = str(getattr(request, "url", "") or "")
+        block_reason = _amazon_request_block_reason(resource_type, request_url)
+        if block_reason:
+            blocked_counts[block_reason] = blocked_counts.get(block_reason, 0) + 1
+            route.abort()
+            return
+        route.continue_()
+
+    page.route("**/*", handle_route)
+    return blocked_counts
+
+
+def _amazon_request_block_reason(resource_type: str, request_url: str) -> str:
+    if resource_type in AMAZON_BLOCKED_RESOURCE_TYPES:
+        return resource_type
+
+    hostname = (urlparse(request_url).hostname or "").casefold()
+    if any(hostname == host or hostname.endswith(f".{host}") for host in AMAZON_TRACKING_HOSTS):
+        return "tracking"
+    if hostname.startswith(("aax.", "fls-na.amazon.", "unagi-na.amazon.")):
+        return "tracking"
+    return ""
 
 
 def _append_embedded_amazon_store_asin_links(html: str) -> tuple[str, int]:
@@ -351,6 +422,30 @@ def _load_all_amazon_store_search_results(page, *, timeout_ms: int, timeout_erro
             f"Amazon storefront search did not finish loading all products: {reason} "
             f"(loaded {last_product_count} unique products)"
         )
+
+
+def _wait_for_amazon_detail_html(page, *, timeout_ms: int, timeout_error) -> None:
+    try:
+        page.wait_for_function(
+            """
+            () => {
+              const productTitle = document.querySelector('#productTitle');
+              if (productTitle && productTitle.textContent && productTitle.textContent.trim()) {
+                return true;
+              }
+              const rawText = `${document.title || ''}\n${document.body && document.body.innerText || ''}`;
+              const normalizedText = rawText
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase();
+              return /robot check|captcha|service unavailable|servicio no disponible|documento no encontrado|sorry, we just need to make sure/.test(normalizedText);
+            }
+            """,
+            arg=None,
+            timeout=min(timeout_ms, AMAZON_DETAIL_READY_TIMEOUT_MS),
+        )
+    except timeout_error:
+        pass
 
 
 def _wait_for_rendered_html(page, url: str, *, timeout_ms: int, timeout_error) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import re
 import time
 import unicodedata
@@ -21,6 +22,8 @@ DEFAULT_AMAZON_BRAND_MAX_PAGES = 5
 DEFAULT_AMAZON_SEARCH_FETCH_ATTEMPTS = 3
 DEFAULT_AMAZON_DETAIL_FETCH_ATTEMPTS = 3
 DEFAULT_AMAZON_THROTTLE_BACKOFF_SECONDS = 60.0
+DEFAULT_AMAZON_THROTTLE_JITTER_FRACTION = 0.2
+DEFAULT_AMAZON_EXHAUSTED_COOLDOWN_SECONDS = 300.0
 ItemTitleExtractor = Callable[[DiscoveryItemCandidateRecord], str]
 ASIN_RE = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?#]|$)", re.IGNORECASE)
 GENERIC_LINK_TEXT = {
@@ -50,6 +53,14 @@ VOID_LIKE_TAGS = {
     "track",
     "wbr",
 }
+
+
+class AmazonDetailFetchError(RuntimeError):
+    def __init__(self, source_url: str, *, saw_response: bool) -> None:
+        self.source_url = source_url
+        self.saw_response = saw_response
+        qualifier = "valid " if saw_response else ""
+        super().__init__(f"Failed to fetch {qualifier}Amazon product detail page: {source_url}")
 
 
 def build_amazon_store_search_url(store_url: str, term: str) -> str:
@@ -171,6 +182,7 @@ def _crawl_amazon_search_inventory(
         browser_fetcher = browser_session.__enter__().fetch
 
     records: list[DiscoveryItemCandidateRecord] = []
+    detail_failures: list[AmazonDetailFetchError] = []
     seen_asins: set[str] = set()
     try:
         for raw_search_url in search_urls:
@@ -223,14 +235,37 @@ def _crawl_amazon_search_inventory(
                         store_id=listing_candidate.store_id,
                         title=listing_candidate.title,
                     )
-                    fetched_detail = _fetch_valid_amazon_detail_page(
-                        listing_candidate.source_url,
-                        browser_fetcher,
-                        trace=trace,
-                        store_id=store_id,
-                        cancellation_token=cancellation_token,
-                        retry_delay_seconds=max(0.0, delay_seconds),
-                    )
+                    try:
+                        fetched_detail = _fetch_valid_amazon_detail_page(
+                            listing_candidate.source_url,
+                            browser_fetcher,
+                            trace=trace,
+                            store_id=store_id,
+                            cancellation_token=cancellation_token,
+                            retry_delay_seconds=max(0.0, delay_seconds),
+                        )
+                    except AmazonDetailFetchError as exc:
+                        detail_failures.append(exc)
+                        resume_in_seconds = (
+                            _jittered_delay_seconds(
+                                DEFAULT_AMAZON_EXHAUSTED_COOLDOWN_SECONDS,
+                                DEFAULT_AMAZON_THROTTLE_JITTER_FRACTION,
+                            )
+                            if delay_seconds > 0
+                            else 0.0
+                        )
+                        trace.log(
+                            "amazon_inventory.candidate.detail_fetch.exhausted",
+                            attempts=DEFAULT_AMAZON_DETAIL_FETCH_ATTEMPTS,
+                            error=str(exc),
+                            resume_in_seconds=resume_in_seconds,
+                            source_url=listing_candidate.source_url,
+                            store_id=listing_candidate.store_id,
+                            title=listing_candidate.title,
+                        )
+                        if resume_in_seconds > 0:
+                            _wait_for_amazon_retry(resume_in_seconds, cancellation_token)
+                        continue
                     detail_candidate = _extract_amazon_detail_candidate(
                         html=fetched_detail.text,
                         product_url=listing_candidate.source_url,
@@ -297,11 +332,14 @@ def _crawl_amazon_search_inventory(
                         )
                     records.append(detail_candidate)
                     if limit is not None and len(records) >= limit:
+                        _raise_amazon_detail_failures(detail_failures, records=records, store_id=store_id, trace=trace)
                         return records
                     if delay_seconds > 0:
-                        time.sleep(delay_seconds)
+                        _wait_for_amazon_retry(delay_seconds, cancellation_token)
                 if limit is not None and len(records) >= limit:
+                    _raise_amazon_detail_failures(detail_failures, records=records, store_id=store_id, trace=trace)
                     return records
+        _raise_amazon_detail_failures(detail_failures, records=records, store_id=store_id, trace=trace)
         return records
     finally:
         if browser_session is not None:
@@ -480,9 +518,7 @@ def _fetch_valid_amazon_detail_page(
         if retry_in_seconds > 0:
             _wait_for_amazon_retry(retry_in_seconds, cancellation_token)
 
-    if saw_response:
-        raise RuntimeError(f"Failed to fetch valid Amazon product detail page: {source_url}")
-    raise RuntimeError(f"Failed to fetch Amazon product detail page: {source_url}")
+    raise AmazonDetailFetchError(source_url, saw_response=saw_response)
 
 
 def _reset_amazon_browser_context(
@@ -526,6 +562,7 @@ def _amazon_retry_delay_seconds(
     *,
     attempt: int,
     base_delay_seconds: float,
+    jitter_fraction: float = DEFAULT_AMAZON_THROTTLE_JITTER_FRACTION,
 ) -> float:
     base_delay = max(0.0, base_delay_seconds)
     if base_delay == 0:
@@ -539,8 +576,43 @@ def _amazon_retry_delay_seconds(
         not page_title or page_title in {"amazon.com.mx", "documento no encontrado"}
     )
     if throttled_status or throttle_like_shell:
-        return max(base_delay * attempt, DEFAULT_AMAZON_THROTTLE_BACKOFF_SECONDS * (3 ** (attempt - 1)))
+        backoff = max(base_delay * attempt, DEFAULT_AMAZON_THROTTLE_BACKOFF_SECONDS * (3 ** (attempt - 1)))
+        return _jittered_delay_seconds(backoff, jitter_fraction)
     return base_delay * attempt
+
+
+def _jittered_delay_seconds(delay_seconds: float, jitter_fraction: float) -> float:
+    bounded_delay = max(0.0, delay_seconds)
+    bounded_jitter = min(1.0, max(0.0, jitter_fraction))
+    return round(
+        random.uniform(bounded_delay * (1.0 - bounded_jitter), bounded_delay * (1.0 + bounded_jitter)),
+        3,
+    )
+
+
+def _raise_amazon_detail_failures(
+    failures: list[AmazonDetailFetchError],
+    *,
+    records: list[DiscoveryItemCandidateRecord],
+    store_id: int | None,
+    trace: TraceLogger,
+) -> None:
+    if not failures:
+        return
+
+    failed_urls = [failure.source_url for failure in failures]
+    trace.log(
+        "amazon_inventory.crawl.partial_failure",
+        failed_detail_pages=len(failed_urls),
+        failed_source_urls=failed_urls,
+        processed_items=len(records),
+        store_id=store_id,
+    )
+    first_failure = failures[0]
+    raise RuntimeError(
+        f"{first_failure}. Retries were exhausted for {len(failed_urls)} product(s). "
+        "Valid products were preserved and the failed products remain pending."
+    )
 
 
 def _wait_for_amazon_retry(

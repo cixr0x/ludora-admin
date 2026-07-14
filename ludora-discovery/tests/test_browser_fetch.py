@@ -6,7 +6,12 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.browser_fetch import BrowserTextFetcher, _browser_user_agent, _significant_url_tokens
+from ludora.browser_fetch import (
+    BrowserTextFetcher,
+    _amazon_request_block_reason,
+    _browser_user_agent,
+    _significant_url_tokens,
+)
 
 
 class FakeResponse:
@@ -28,6 +33,7 @@ class FakePage:
         self.waited_for_function = False
         self.wait_for_function_arg = None
         self.wait_for_function_args = []
+        self.routes = []
         self.closed = False
 
     def goto(self, url, wait_until, timeout):
@@ -40,6 +46,9 @@ class FakePage:
         self.waited_for_function = True
         self.wait_for_function_arg = arg
         self.wait_for_function_args.append(arg)
+
+    def route(self, pattern, handler):
+        self.routes.append((pattern, handler))
 
     def content(self):
         return self.rendered_html
@@ -121,6 +130,41 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertEqual(result.text, "<html><body><h1>Catan</h1></body></html>")
         self.assertTrue(page.waited_for_load)
         self.assertTrue(page.waited_for_function)
+
+    def test_amazon_detail_waits_for_product_readiness_without_waiting_for_full_load(self):
+        response = FakeResponse(
+            "https://www.amazon.com.mx/dp/B0TEST1234",
+            "<html></html>",
+            "text/html;charset=utf-8",
+        )
+        page = FakePage(
+            response,
+            '<html><body><span id="productTitle">Juego listo</span><div>B0TEST1234</div></body></html>',
+        )
+        fetcher = BrowserTextFetcher()
+        fetcher._page = page
+
+        result = fetcher.fetch(response.url)
+
+        self.assertIsNotNone(result)
+        self.assertFalse(page.waited_for_load)
+        self.assertTrue(page.waited_for_function)
+        self.assertEqual(page.wait_for_function_arg, None)
+        self.assertEqual([pattern for pattern, _handler in page.routes], ["**/*"])
+
+    def test_lightweight_amazon_fetch_blocks_nonessential_resources_and_tracking(self):
+        self.assertEqual(_amazon_request_block_reason("image", "https://m.media-amazon.com/game.jpg"), "image")
+        self.assertEqual(_amazon_request_block_reason("font", "https://m.media-amazon.com/font.woff2"), "font")
+        self.assertEqual(
+            _amazon_request_block_reason("script", "https://fls-na.amazon.com/analytics.js"),
+            "tracking",
+        )
+        self.assertEqual(
+            _amazon_request_block_reason("xhr", "https://stats.doubleclick.net/collect"),
+            "tracking",
+        )
+        self.assertEqual(_amazon_request_block_reason("script", "https://www.amazon.com.mx/app.js"), "")
+        self.assertEqual(_amazon_request_block_reason("xhr", "https://www.amazon.com.mx/api/storefront"), "")
 
     def test_fetch_expands_embedded_amazon_store_asin_list_without_clicking_load_more(self):
         response = FakeResponse(

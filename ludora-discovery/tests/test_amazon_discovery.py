@@ -312,6 +312,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
                 {"reason": "http_status", "status_code": 429, "page_title": "Documento no encontrado"},
                 attempt=1,
                 base_delay_seconds=1,
+                jitter_fraction=0,
             ),
             60,
         )
@@ -320,9 +321,18 @@ class AmazonDiscoveryTests(unittest.TestCase):
                 {"reason": "http_status", "status_code": 503, "page_title": "Service unavailable"},
                 attempt=2,
                 base_delay_seconds=1,
+                jitter_fraction=0,
             ),
             180,
         )
+
+        jittered_delay = _amazon_retry_delay_seconds(
+            {"reason": "missing_product_title", "status_code": 200, "page_title": "Amazon.com.mx"},
+            attempt=1,
+            base_delay_seconds=1,
+        )
+        self.assertGreaterEqual(jittered_delay, 48)
+        self.assertLessEqual(jittered_delay, 72)
 
     def test_raises_when_amazon_detail_fetch_fails(self):
         search_html = """
@@ -448,6 +458,78 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual([entry["attempt"] for entry in invalid_entries], [1, 2, 3])
         self.assertEqual(invalid_entries[-1]["page_title"], "Amazon.com.mx")
         self.assertFalse(invalid_entries[-1]["will_retry"])
+
+    def test_preserves_valid_products_after_an_exhausted_detail_page_and_reports_partial_failure(self):
+        failed_url = "https://www.amazon.com.mx/dp/B0BAD00001"
+        valid_url = "https://www.amazon.com.mx/dp/B0GOOD0001"
+        search_html = f"""
+        <html><body>
+          <a href="{failed_url}">Producto bloqueado</a>
+          <a href="{valid_url}">Producto valido</a>
+        </body></html>
+        """
+        shell_html = "<html><head><title>Amazon.com.mx</title></head><body>Inicio</body></html>"
+        valid_html = """
+        <html><head><title>Producto valido</title></head><body>
+          <span id="productTitle">Novelty Producto Valido</span>
+          <div>ASIN: B0GOOD0001</div>
+        </body></html>
+        """
+        detail_fetches = []
+
+        def fetcher(url):
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            detail_fetches.append(url)
+            return FetchResult(url=url, text=shell_html if url == failed_url else valid_html)
+
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+
+        with self.assertRaisesRegex(RuntimeError, "Valid products were preserved"):
+            crawl_amazon_store_inventory(
+                "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+                11,
+                repository,
+                browser_fetcher=fetcher,
+                trace_logger=trace,
+                delay_seconds=0,
+            )
+
+        self.assertEqual(detail_fetches, [failed_url, failed_url, failed_url, valid_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
+        exhausted_entries = [
+            fields
+            for event, fields in trace.entries
+            if event == "amazon_inventory.candidate.detail_fetch.exhausted"
+        ]
+        self.assertEqual(
+            exhausted_entries,
+            [
+                {
+                    "attempts": 3,
+                    "error": f"Failed to fetch valid Amazon product detail page: {failed_url}",
+                    "resume_in_seconds": 0.0,
+                    "source_url": failed_url,
+                    "store_id": 11,
+                    "title": "Producto bloqueado",
+                }
+            ],
+        )
+        partial_entries = [
+            fields for event, fields in trace.entries if event == "amazon_inventory.crawl.partial_failure"
+        ]
+        self.assertEqual(
+            partial_entries,
+            [
+                {
+                    "failed_detail_pages": 1,
+                    "failed_source_urls": [failed_url],
+                    "processed_items": 1,
+                    "store_id": 11,
+                }
+            ],
+        )
 
     def test_resets_browser_context_before_retrying_invalid_amazon_detail_page(self):
         product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
