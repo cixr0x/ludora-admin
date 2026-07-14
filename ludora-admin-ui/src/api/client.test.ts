@@ -1304,6 +1304,7 @@ describe('fetchRows', () => {
 
   it('loads the cover-flattening source and creates a normalized manual candidate', async () => {
     const workflow = {
+      automatic_error: null,
       candidates: [
         {
           aspect_ratio: 0.8,

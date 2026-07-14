@@ -338,13 +338,29 @@ export function CoverFlatteningDialog({
 
           {workflow && mode === 'candidates' ? (
             <>
-              <Typography color="text.secondary" variant="body2">
-                {workflow.candidates.some((candidate) => candidate.index === 3)
-                  ? 'Manual cover candidate generated. Select the candidate to save.'
-                  : workflow.perspective === 'two_faces'
-                  ? 'Two-face perspective detected. One cover candidate was generated.'
-                  : 'Three-face perspective detected. Select the correct cover candidate.'}
-              </Typography>
+              {workflow.candidates.length === 0 ? (
+                <Alert severity="warning">
+                  <Typography variant="body2">
+                    Automatic point selection could not find a usable cover. Select the four cover corners manually to
+                    continue.
+                  </Typography>
+                  {workflow.automatic_error ? (
+                    <Typography color="text.secondary" sx={{ display: 'block', mt: 0.5 }} variant="caption">
+                      Detection detail: {workflow.automatic_error}
+                    </Typography>
+                  ) : null}
+                </Alert>
+              ) : (
+                <Typography color="text.secondary" variant="body2">
+                  {workflow.candidates.some((candidate) => candidate.index === 3)
+                    ? 'Manual cover candidate generated. Select the candidate to save.'
+                    : workflow.perspective === 'two_faces'
+                    ? 'Two-face perspective detected. One cover candidate was generated.'
+                    : 'Three-face perspective detected. Select the correct cover candidate.'}
+                </Typography>
+              )}
+              {workflow.candidates.length > 0 ? (
+                <>
               <Box
                 sx={{
                   display: 'grid',
@@ -471,6 +487,8 @@ export function CoverFlatteningDialog({
                   <FormControlLabel control={<Radio />} label="Spanish image" value="image_url_es" />
                 </RadioGroup>
               </FormControl>
+                </>
+              ) : null}
             </>
           ) : null}
           {workflow && mode === 'manual' ? (
@@ -516,26 +534,27 @@ export function CoverFlatteningDialog({
             <Button disabled={!workflow || isAccepting} variant="outlined" onClick={handleStartManualSelection}>
               Select points manually
             </Button>
-            <Button
-              disabled={
-                !workflow ||
-                selectedCandidate === null ||
-                !candidateUrls[selectedCandidate] ||
-                !targetField ||
-                selectedAspectRatio(
-                  aspectRatioChoice,
-                  customAspectRatio,
-                  aspectRatioOrientation,
-                  workflow?.candidates.find((candidate) => candidate.index === selectedCandidate)?.aspect_ratio ?? 1
-                ) === undefined ||
-                isAccepting
-              }
-              startIcon={isAccepting ? <CircularProgress size={18} /> : undefined}
-              variant="contained"
-              onClick={handleAccept}
-            >
-              {isAccepting ? 'Saving…' : 'Accept candidate'}
-            </Button>
+            {workflow && workflow.candidates.length > 0 ? (
+              <Button
+                disabled={
+                  selectedCandidate === null ||
+                  !candidateUrls[selectedCandidate] ||
+                  !targetField ||
+                  selectedAspectRatio(
+                    aspectRatioChoice,
+                    customAspectRatio,
+                    aspectRatioOrientation,
+                    workflow.candidates.find((candidate) => candidate.index === selectedCandidate)?.aspect_ratio ?? 1
+                  ) === undefined ||
+                  isAccepting
+                }
+                startIcon={isAccepting ? <CircularProgress size={18} /> : undefined}
+                variant="contained"
+                onClick={handleAccept}
+              >
+                {isAccepting ? 'Saving…' : 'Accept candidate'}
+              </Button>
+            ) : null}
           </>
         )}
       </DialogActions>

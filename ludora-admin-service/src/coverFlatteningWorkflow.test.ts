@@ -53,6 +53,7 @@ describe('cover flattening workflow', () => {
     const workflow = await manager.startFromStoreItem(3365);
 
     expect(workflow).toMatchObject({
+      automatic_error: null,
       item_id: 77,
       perspective: 'three_faces',
       source_field: 'store_item_image',
@@ -212,6 +213,170 @@ describe('cover flattening workflow', () => {
 
     expect(accepted).toMatchObject({ item_id: 91, output_aspect_ratio: 1.25, target_field: 'image_url' });
     expect(optimizedInputs).toEqual(['manual-2']);
+  });
+
+  it('preserves the source in a manual-only workflow when automatic flattening returns no candidates', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const removedDirectories: string[] = [];
+    const database: Database = {
+      query: async (sql) => ({
+        rows: sql.includes('from items i')
+          ? [{ canonical_name: 'Manual Fallback', image_url: 'https://example.com/box.jpg', item_id: 92 }]
+          : []
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(
+      database,
+      fakeDependencies(root, {
+        removeDirectory: async (directory) => {
+          removedDirectories.push(directory);
+          await rm(directory, { force: true, recursive: true });
+        },
+        runFlattening: async () => ({
+          detection: { perspective: { kind: 'two_faces' } },
+          flattened_covers: []
+        })
+      })
+    );
+
+    const workflow = await manager.startFromItem(92, 'image_url');
+
+    expect(workflow).toMatchObject({
+      automatic_error: 'Flattening must return one or two cover candidates.',
+      candidates: [],
+      item_id: 92,
+      perspective: null,
+      workflow_id: 'workflow-test'
+    });
+    expect(removedDirectories).toEqual([]);
+    expect(await readFile(await manager.getSourceFile(workflow.workflow_id), 'utf8')).toBe('source');
+    await expect(manager.getCandidateFile(workflow.workflow_id, 1)).rejects.toMatchObject({ status: 404 });
+
+    const manualWorkflow = await manager.createManualCandidate(workflow.workflow_id, [
+      { x: 0.1, y: 0.1 },
+      { x: 0.9, y: 0.1 },
+      { x: 0.9, y: 0.9 },
+      { x: 0.1, y: 0.9 }
+    ]);
+
+    expect(manualWorkflow.automatic_error).toBe('Flattening must return one or two cover candidates.');
+    expect(manualWorkflow.candidates.map((candidate) => candidate.index)).toEqual([3]);
+    await manager.cancel(workflow.workflow_id);
+    expect(removedDirectories).toEqual([path.join(root, 'workflow-test')]);
+  });
+
+  it('does not expose partially parsed candidates when automatic perspective metadata is invalid', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const database: Database = {
+      query: async () => ({
+        rows: [{ canonical_name: 'Unknown Perspective', image_url: 'https://example.com/box.jpg', item_id: 95 }]
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(
+      database,
+      fakeDependencies(root, {
+        runFlattening: async (_sourcePath, outputDir) => {
+          const candidate = path.join(outputDir, 'flattened-cover-1.png');
+          await writeFile(candidate, 'candidate-1');
+          return {
+            detection: { perspective: { kind: 'unknown' } },
+            flattened_covers: [
+              {
+                candidate_index: 1,
+                construction: 'candidate one',
+                geometry: { aspect_ratio: 1, height: 500, square_snapped: true, width: 500 },
+                output_path: candidate
+              }
+            ]
+          };
+        }
+      })
+    );
+
+    const workflow = await manager.startFromItem(95, 'image_url');
+
+    expect(workflow).toMatchObject({
+      automatic_error: 'Flattening returned an unknown perspective.',
+      candidates: [],
+      perspective: null
+    });
+    expect(await readFile(await manager.getSourceFile(workflow.workflow_id), 'utf8')).toBe('source');
+    await expect(manager.getCandidateFile(workflow.workflow_id, 1)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('cleans up and fails when the source download fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const removedDirectories: string[] = [];
+    let automaticCalls = 0;
+    const database: Database = {
+      query: async () => ({
+        rows: [{ canonical_name: 'Download Failure', image_url: 'https://example.com/box.jpg', item_id: 93 }]
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(
+      database,
+      fakeDependencies(root, {
+        downloadImage: async () => {
+          throw new Error('Source download failed.');
+        },
+        removeDirectory: async (directory) => {
+          removedDirectories.push(directory);
+          await rm(directory, { force: true, recursive: true });
+        },
+        runFlattening: async () => {
+          automaticCalls += 1;
+          throw new Error('should not run');
+        }
+      })
+    );
+
+    await expect(manager.startFromItem(93, 'image_url')).rejects.toMatchObject({
+      message: 'Source download failed.',
+      status: 422
+    });
+    expect(automaticCalls).toBe(0);
+    expect(removedDirectories).toEqual([path.join(root, 'workflow-test')]);
+  });
+
+  it('cleans up and fails when storing the source fails', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const removedDirectories: string[] = [];
+    let automaticCalls = 0;
+    const database: Database = {
+      query: async () => ({
+        rows: [{ canonical_name: 'Write Failure', image_url: 'https://example.com/box.jpg', item_id: 94 }]
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(
+      database,
+      fakeDependencies(root, {
+        removeDirectory: async (directory) => {
+          removedDirectories.push(directory);
+          await rm(directory, { force: true, recursive: true });
+        },
+        runFlattening: async () => {
+          automaticCalls += 1;
+          throw new Error('should not run');
+        },
+        writeSource: async (destination, image) => {
+          await mkdir(path.dirname(destination), { recursive: true });
+          await writeFile(destination, image);
+          throw new Error('Source write failed.');
+        }
+      })
+    );
+
+    await expect(manager.startFromItem(94, 'image_url')).rejects.toMatchObject({
+      message: 'Source write failed.',
+      status: 422
+    });
+    expect(automaticCalls).toBe(0);
+    expect(removedDirectories).toEqual([path.join(root, 'workflow-test')]);
+    await expect(readFile(path.join(root, 'workflow-test', 'source.jpg'))).rejects.toBeDefined();
   });
 
   it('rejects malformed normalized points before manual flattening and preserves the workflow', async () => {

@@ -4107,6 +4107,7 @@ describe('ludora admin service', () => {
     fs.writeFileSync(candidatePath, Buffer.from('candidate-image'));
     fs.writeFileSync(sourcePath, Buffer.from('source-image'));
     const workflow: CoverFlatteningWorkflow = {
+      automatic_error: null,
       candidates: [
         {
           aspect_ratio: 1,
@@ -4126,6 +4127,15 @@ describe('ludora admin service', () => {
       source_field: 'image_url_es',
       store_item_id: null,
       workflow_id: 'flatten-77'
+    };
+    const manualOnlyWorkflow: CoverFlatteningWorkflow = {
+      ...workflow,
+      automatic_error: 'Flattening must return one or two cover candidates.',
+      candidates: [],
+      perspective: null,
+      source_field: 'store_item_image',
+      store_item_id: 3365,
+      workflow_id: 'flatten-manual-only'
     };
     const calls: unknown[] = [];
     const manager: CoverFlatteningWorkflowManager = {
@@ -4176,7 +4186,7 @@ describe('ludora admin service', () => {
       },
       startFromStoreItem: async (storeItemId) => {
         calls.push(['store-item', storeItemId]);
-        return workflow;
+        return manualOnlyWorkflow;
       }
     };
     const app = createApp({ coverFlatteningWorkflowManager: manager, database: idleDatabase() });
@@ -4185,6 +4195,9 @@ describe('ludora admin service', () => {
       const start = await request(app)
         .post('/admin/cover-flattening-workflows/items')
         .send({ item_id: 77, source_field: 'image_url_es' });
+      const manualOnlyStart = await request(app)
+        .post('/admin/cover-flattening-workflows/store-items')
+        .send({ store_item_id: 3365 });
       const source = await request(app).get('/admin/cover-flattening-workflows/flatten-77/source');
       const invalidManual = await request(app)
         .post('/admin/cover-flattening-workflows/flatten-77/manual-candidate')
@@ -4206,6 +4219,13 @@ describe('ludora admin service', () => {
 
       expect(start.status).toBe(201);
       expect(start.body).toEqual({ data: workflow });
+      expect(manualOnlyStart.status).toBe(201);
+      expect(manualOnlyStart.body).toEqual({ data: manualOnlyWorkflow });
+      expect(manualOnlyStart.body.data).toMatchObject({
+        automatic_error: 'Flattening must return one or two cover candidates.',
+        candidates: [],
+        perspective: null
+      });
       expect(source.status).toBe(200);
       expect(source.headers['cache-control']).toBe('no-store');
       expect(invalidManual.status).toBe(400);
@@ -4218,6 +4238,7 @@ describe('ludora admin service', () => {
       expect(cancelled.body).toEqual({ data: { cancelled: true } });
       expect(calls).toEqual([
         ['item', 77, 'image_url_es'],
+        ['store-item', 3365],
         ['source', 'flatten-77'],
         ['manual', 'flatten-77', manualPoints],
         ['candidate', 'flatten-77', 1],

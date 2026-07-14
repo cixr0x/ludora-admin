@@ -97,11 +97,12 @@ export type CoverFlatteningCandidate = {
 };
 
 export type CoverFlatteningWorkflow = {
+  automatic_error: string | null;
   candidates: CoverFlatteningCandidate[];
   created_at: string;
   expires_at: string;
   item_id: number;
-  perspective: 'two_faces' | 'three_faces';
+  perspective: 'two_faces' | 'three_faces' | null;
   source_field: CoverImageField | 'store_item_image';
   store_item_id: number | null;
   workflow_id: string;

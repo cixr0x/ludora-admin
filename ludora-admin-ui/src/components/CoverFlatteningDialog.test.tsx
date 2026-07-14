@@ -29,6 +29,7 @@ describe('CoverFlatteningDialog', () => {
       if (url.endsWith('/admin/cover-flattening-workflows/items')) {
         return jsonResponse({
           data: {
+            automatic_error: null,
             candidates: [
               {
                 aspect_ratio: 0.75,
@@ -138,6 +139,7 @@ describe('CoverFlatteningDialog', () => {
       width: 400
     };
     const workflow = {
+      automatic_error: null,
       candidates: [automaticCandidate],
       created_at: '2026-07-11T12:00:00.000Z',
       expires_at: '2026-07-11T12:30:00.000Z',
@@ -218,25 +220,99 @@ describe('CoverFlatteningDialog', () => {
       ]
     });
   });
+
+  it('offers manual point selection when automatic detection returns no candidates', async () => {
+    const manualCandidate = {
+      aspect_ratio: 0.8,
+      aspect_ratio_method: 'edge_average',
+      construction: 'manual corner selection',
+      height: 500,
+      index: 3,
+      square_snapped: false,
+      vanishing_confidence: 0,
+      width: 400
+    };
+    const failedWorkflow = {
+      automatic_error: 'Flattening must return one or two cover candidates.',
+      candidates: [],
+      created_at: '2026-07-11T12:00:00.000Z',
+      expires_at: '2026-07-11T12:30:00.000Z',
+      item_id: 77,
+      perspective: null,
+      source_field: 'image_url',
+      store_item_id: null,
+      workflow_id: 'flatten-fallback-77'
+    };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/admin/cover-flattening-workflows/items')) {
+        return jsonResponse({ data: failedWorkflow }, 201);
+      }
+      if (url.endsWith('/admin/cover-flattening-workflows/flatten-fallback-77/source')) {
+        return new Response(new Blob(['source'], { type: 'image/png' }), { status: 200 });
+      }
+      if (url.endsWith('/admin/cover-flattening-workflows/flatten-fallback-77/manual-candidate')) {
+        return jsonResponse({ data: { ...failedWorkflow, candidates: [manualCandidate] } });
+      }
+      if (url.endsWith('/admin/cover-flattening-workflows/flatten-fallback-77/candidates/3')) {
+        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(
+      <CoverFlatteningDialog
+        request={{
+          id: '77',
+          kind: 'item',
+          sources: [{ field: 'image_url', url: 'https://example.com/box.jpg' }],
+          title: 'Fallback Box'
+        }}
+        onAccepted={() => undefined}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(await screen.findByText(/Automatic point selection could not find a usable cover/)).toBeInTheDocument();
+    expect(screen.getByText(/Flattening must return one or two cover candidates/)).toBeInTheDocument();
+    expect(screen.queryByText('Output aspect ratio')).not.toBeInTheDocument();
+    expect(screen.queryByText('Save selected candidate as')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Accept candidate' })).not.toBeInTheDocument();
+
+    const selectManuallyButton = screen.getByRole('button', { name: 'Select points manually' });
+    expect(selectManuallyButton).toBeEnabled();
+    fireEvent.click(selectManuallyButton);
+    await selectManualCorner(30, 40, 'Fallback Box');
+    await selectManualCorner(190, 40, 'Fallback Box');
+    await selectManualCorner(190, 100, 'Fallback Box');
+    await selectManualCorner(30, 100, 'Fallback Box');
+    fireEvent.click(screen.getByRole('button', { name: 'Generate manual candidate' }));
+
+    expect(await screen.findByText('Manual cover candidate generated. Select the candidate to save.')).toBeInTheDocument();
+    expect(await screen.findByAltText('Flattened cover candidate 3')).toBeInTheDocument();
+    expect(screen.getByText('Output aspect ratio')).toBeInTheDocument();
+    expect(screen.getByText('Save selected candidate as')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Accept candidate' })).toBeInTheDocument();
+  });
 });
 
-async function manualPointSurface(): Promise<HTMLElement> {
-  await screen.findByAltText('Source box image for Coffee Rush');
+async function manualPointSurface(imageTitle = 'Coffee Rush'): Promise<HTMLElement> {
+  await screen.findByAltText(`Source box image for ${imageTitle}`);
   const surface = screen.getByTestId('manual-cover-point-surface');
   vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue(manualSurfaceRectangle());
   return surface;
 }
 
-async function beginManualZoom(clientX: number, clientY: number): Promise<HTMLElement> {
-  const surface = await manualPointSurface();
+async function beginManualZoom(clientX: number, clientY: number, imageTitle = 'Coffee Rush'): Promise<HTMLElement> {
+  const surface = await manualPointSurface(imageTitle);
   fireEvent.click(surface, { clientX, clientY });
   const zoomSurface = screen.getByTestId('manual-cover-zoom-surface');
   vi.spyOn(zoomSurface, 'getBoundingClientRect').mockReturnValue(manualSurfaceRectangle());
   return zoomSurface;
 }
 
-async function selectManualCorner(clientX: number, clientY: number): Promise<void> {
-  const zoomSurface = await beginManualZoom(clientX, clientY);
+async function selectManualCorner(clientX: number, clientY: number, imageTitle = 'Coffee Rush'): Promise<void> {
+  const zoomSurface = await beginManualZoom(clientX, clientY, imageTitle);
   fireEvent.click(zoomSurface, { clientX: 110, clientY: 70 });
 }
 

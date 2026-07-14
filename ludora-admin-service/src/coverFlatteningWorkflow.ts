@@ -40,11 +40,12 @@ export type CoverFlatteningCandidate = {
 };
 
 export type CoverFlatteningWorkflow = {
+  automatic_error: string | null;
   candidates: CoverFlatteningCandidate[];
   created_at: string;
   expires_at: string;
   item_id: number;
-  perspective: 'two_faces' | 'three_faces';
+  perspective: 'two_faces' | 'three_faces' | null;
   source_field: CoverFlatteningSourceField | 'store_item_image';
   store_item_id: number | null;
   workflow_id: string;
@@ -230,35 +231,47 @@ export function createCoverFlatteningWorkflowManager(
     try {
       const sourceImage = await dependencies.downloadImage(sourceUrl);
       await dependencies.writeSource(sourcePath, sourceImage);
-      const metadata = await dependencies.runFlattening(sourcePath, outputDir);
-      const candidates = parseCandidates(metadata);
-      const perspective = parsePerspective(metadata);
-      const createdAt = now();
-      const workflow: ManagedCoverFlatteningWorkflow = {
-        candidates,
-        created_at: createdAt.toISOString(),
-        expires_at: new Date(createdAt.getTime() + ttlMs).toISOString(),
-        item_id: itemId,
-        itemNames,
-        outputDir,
-        perspective,
-        source_field: sourceField,
-        sourcePath,
-        store_item_id: storeItemId,
-        workflow_id: workflowId
-      };
-      workflows.set(workflowId, workflow);
-      return publicWorkflow(workflow);
     } catch (error) {
       await dependencies.removeDirectory(outputDir);
       if (error instanceof CoverFlatteningWorkflowError) {
         throw error;
       }
       throw new CoverFlatteningWorkflowError(
-        error instanceof Error ? error.message : 'Cover flattening failed.',
+        error instanceof Error ? error.message : 'Cover source image could not be stored.',
         422
       );
     }
+
+    let automaticError: string | null = null;
+    let candidates: FlatteningCandidateFile[] = [];
+    let perspective: CoverFlatteningWorkflow['perspective'] = null;
+    try {
+      const metadata = await dependencies.runFlattening(sourcePath, outputDir);
+      const parsedCandidates = parseCandidates(metadata);
+      const parsedPerspective = parsePerspective(metadata);
+      candidates = parsedCandidates;
+      perspective = parsedPerspective;
+    } catch (error) {
+      automaticError = automaticFailureMessage(error);
+    }
+
+    const createdAt = now();
+    const workflow: ManagedCoverFlatteningWorkflow = {
+      automatic_error: automaticError,
+      candidates,
+      created_at: createdAt.toISOString(),
+      expires_at: new Date(createdAt.getTime() + ttlMs).toISOString(),
+      item_id: itemId,
+      itemNames,
+      outputDir,
+      perspective,
+      source_field: sourceField,
+      sourcePath,
+      store_item_id: storeItemId,
+      workflow_id: workflowId
+    };
+    workflows.set(workflowId, workflow);
+    return publicWorkflow(workflow);
   }
 
   async function getCandidateFile(workflowId: string, candidateIndex: number): Promise<string> {
@@ -549,8 +562,16 @@ function parsePerspective(metadata: FlatteningMetadata): CoverFlatteningWorkflow
   throw new CoverFlatteningWorkflowError('Flattening returned an unknown perspective.', 422);
 }
 
+function automaticFailureMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message;
+  }
+  return 'Automatic cover flattening failed.';
+}
+
 function publicWorkflow(workflow: ManagedCoverFlatteningWorkflow): CoverFlatteningWorkflow {
   return {
+    automatic_error: workflow.automatic_error,
     candidates: workflow.candidates.map(({ path: _path, ...candidate }) => candidate),
     created_at: workflow.created_at,
     expires_at: workflow.expires_at,
