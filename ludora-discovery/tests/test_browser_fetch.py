@@ -178,7 +178,7 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(page.evaluate_calls, 6)
         self.assertEqual(page.wait_for_function_args[-2:], [25, 50])
-        self.assertEqual(page.wait_timeouts, [750, 750, 750])
+        self.assertEqual(page.wait_timeouts, [2_000, 2_000, 750, 750, 750])
 
     def test_fetch_fails_when_amazon_store_load_more_stops_advancing(self):
         class StalledLoadMorePage(FakeInfiniteScrollPage):

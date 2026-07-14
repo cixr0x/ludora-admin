@@ -22,6 +22,7 @@ AMAZON_STORE_SCROLL_WAIT_MS = 750
 AMAZON_STORE_STABLE_SCROLL_ROUNDS = 3
 AMAZON_STORE_LOAD_MORE_TIMEOUT_MS = 10_000
 AMAZON_STORE_MAX_STALLED_LOAD_MORE_CLICKS = 3
+AMAZON_STORE_BATCH_COOLDOWN_MS = 2_000
 
 
 def fetch_sitemap_text_with_browser(url: str, timeout_ms: int = 30_000) -> FetchResult | None:
@@ -261,6 +262,7 @@ def _load_all_amazon_store_search_results(page, *, timeout_ms: int, timeout_erro
                     timeout=min(timeout_ms, AMAZON_STORE_LOAD_MORE_TIMEOUT_MS),
                 )
                 stalled_load_more_clicks = 0
+                page.wait_for_timeout(AMAZON_STORE_BATCH_COOLDOWN_MS)
             except timeout_error:
                 stalled_load_more_clicks += 1
                 if stalled_load_more_clicks >= AMAZON_STORE_MAX_STALLED_LOAD_MORE_CLICKS:
