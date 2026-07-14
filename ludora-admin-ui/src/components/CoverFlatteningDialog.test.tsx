@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CoverFlatteningDialog } from './CoverFlatteningDialog';
@@ -18,6 +18,7 @@ describe('CoverFlatteningDialog', () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
   });
@@ -114,7 +115,123 @@ describe('CoverFlatteningDialog', () => {
     const acceptRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/flatten-77/accept'));
     expect(JSON.parse(String(acceptRequest?.[1]?.body))).toMatchObject({ aspect_ratio: 1.25 });
   });
+
+  it('selects four source points, cancels back without deleting, and generates manual candidate 3', async () => {
+    const automaticCandidate = {
+      aspect_ratio: 0.75,
+      aspect_ratio_method: 'edge_average',
+      construction: 'two-face cover',
+      height: 500,
+      index: 1,
+      square_snapped: false,
+      vanishing_confidence: 0,
+      width: 375
+    };
+    const manualCandidate = {
+      aspect_ratio: 0.8,
+      aspect_ratio_method: 'edge_average',
+      construction: 'manual corner selection',
+      height: 500,
+      index: 3,
+      square_snapped: false,
+      vanishing_confidence: 0,
+      width: 400
+    };
+    const workflow = {
+      candidates: [automaticCandidate],
+      created_at: '2026-07-11T12:00:00.000Z',
+      expires_at: '2026-07-11T12:30:00.000Z',
+      item_id: 77,
+      perspective: 'two_faces',
+      source_field: 'image_url',
+      store_item_id: null,
+      workflow_id: 'flatten-manual-77'
+    };
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/admin/cover-flattening-workflows/items')) {
+        return jsonResponse({ data: workflow }, 201);
+      }
+      if (url.endsWith('/admin/cover-flattening-workflows/flatten-manual-77/source')) {
+        return new Response(new Blob(['source'], { type: 'image/png' }), { status: 200 });
+      }
+      if (url.endsWith('/admin/cover-flattening-workflows/flatten-manual-77/manual-candidate')) {
+        return jsonResponse({ data: { ...workflow, candidates: [automaticCandidate, manualCandidate] } });
+      }
+      if (url.includes('/admin/cover-flattening-workflows/flatten-manual-77/candidates/')) {
+        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url} ${init?.method ?? 'GET'}`);
+    });
+
+    render(
+      <CoverFlatteningDialog
+        request={{
+          id: '77',
+          kind: 'item',
+          sources: [{ field: 'image_url', url: 'https://example.com/box.jpg' }],
+          title: 'Coffee Rush'
+        }}
+        onAccepted={() => undefined}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(await screen.findByText('Two-face perspective detected. One cover candidate was generated.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Select points manually' }));
+    const firstSurface = await manualPointSurface();
+    fireEvent.click(firstSurface, { clientX: 30, clientY: 40 });
+    fireEvent.click(firstSurface, { clientX: 190, clientY: 40 });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel manual selection' }));
+
+    expect(screen.getByText('Two-face perspective detected. One cover candidate was generated.')).toBeInTheDocument();
+    expect(fetchMock.mock.calls.some(([url, init]) =>
+      String(url).endsWith('/flatten-manual-77') && init?.method === 'DELETE'
+    )).toBe(false);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select points manually' }));
+    const secondSurface = await manualPointSurface();
+    const generateButton = screen.getByRole('button', { name: 'Generate manual candidate' });
+    expect(generateButton).toBeDisabled();
+    fireEvent.click(secondSurface, { clientX: 30, clientY: 40 });
+    fireEvent.click(secondSurface, { clientX: 190, clientY: 40 });
+    fireEvent.click(secondSurface, { clientX: 190, clientY: 100 });
+    fireEvent.click(secondSurface, { clientX: 30, clientY: 100 });
+    expect(generateButton).toBeEnabled();
+    fireEvent.click(generateButton);
+
+    expect(await screen.findByText('Manual cover candidate generated. Select the candidate to save.')).toBeInTheDocument();
+    expect(await screen.findByAltText('Flattened cover candidate 3')).toBeInTheDocument();
+    expect(screen.getByLabelText('Candidate 3', { selector: 'input' })).toBeChecked();
+    const manualRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/manual-candidate'));
+    expect(manualRequest?.[1]?.method).toBe('POST');
+    expect(JSON.parse(String(manualRequest?.[1]?.body))).toEqual({
+      points: [
+        { x: 0.1, y: 0.2 },
+        { x: 0.9, y: 0.2 },
+        { x: 0.9, y: 0.8 },
+        { x: 0.1, y: 0.8 }
+      ]
+    });
+  });
 });
+
+async function manualPointSurface(): Promise<HTMLElement> {
+  await screen.findByAltText('Source box image for Coffee Rush');
+  const surface = screen.getByTestId('manual-cover-point-surface');
+  vi.spyOn(surface, 'getBoundingClientRect').mockReturnValue({
+    bottom: 120,
+    height: 100,
+    left: 10,
+    right: 210,
+    toJSON: () => ({}),
+    top: 20,
+    width: 200,
+    x: 10,
+    y: 20
+  });
+  return surface;
+}
 
 function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {

@@ -154,6 +154,10 @@ class SilhouetteResult:
     detection: SilhouetteDetection
 
 
+MANUAL_CANDIDATE_INDEX = 3
+MANUAL_CANDIDATE_CONSTRUCTION = "manual corner selection"
+
+
 def _border_pixels(image: np.ndarray) -> np.ndarray:
     height, width = image.shape[:2]
     border_width = max(2, int(round(min(height, width) * 0.02)))
@@ -1194,6 +1198,82 @@ def flatten_cover_quadrilateral(
     return flattened, geometry
 
 
+def manual_cover_polygon(
+    normalized_points: object,
+    image_shape: tuple[int, int],
+) -> np.ndarray:
+    """Validate normalized clicks and convert them to ordered source pixels."""
+
+    try:
+        points = np.asarray(normalized_points, dtype=np.float64)
+    except (TypeError, ValueError) as error:
+        raise ValueError("manual cover points must contain numeric x and y coordinates") from error
+    if points.shape != (4, 2):
+        raise ValueError("manual cover selection requires exactly four points")
+    if not np.all(np.isfinite(points)):
+        raise ValueError("manual cover points must be finite")
+    if np.any(points < 0.0) or np.any(points > 1.0):
+        raise ValueError("manual cover points must be normalized between zero and one")
+
+    height, width = image_shape
+    if height <= 1 or width <= 1:
+        raise ValueError("source image dimensions must be greater than one pixel")
+    pixel_points = points * np.array([width - 1, height - 1], dtype=np.float64)
+    hull = cv2.convexHull(pixel_points.astype(np.float32), returnPoints=True)
+    if hull.reshape(-1, 2).shape[0] != 4:
+        raise ValueError("manual cover points must form four distinct convex corners")
+
+    ordered = order_quadrilateral(pixel_points).astype(np.float32)
+    if not cv2.isContourConvex(ordered):
+        raise ValueError("manual cover points must form a convex quadrilateral")
+    edges = np.roll(ordered, -1, axis=0) - ordered
+    if float(np.min(np.linalg.norm(edges, axis=1))) <= 1.0:
+        raise ValueError("manual cover corners must be more than one pixel apart")
+    if abs(float(cv2.contourArea(ordered))) <= 1.0:
+        raise ValueError("manual cover points must enclose a visible area")
+    return ordered
+
+
+def process_manual_cover(
+    source_path: str | Path,
+    output_dir: str | Path,
+    normalized_points: object,
+) -> FlattenedCoverResult:
+    source = Path(source_path)
+    image = cv2.imread(str(source), cv2.IMREAD_COLOR)
+    if image is None:
+        raise ValueError(f"could not read image: {source}")
+
+    polygon = manual_cover_polygon(normalized_points, image.shape[:2])
+    flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+    output = Path(output_dir)
+    output.mkdir(parents=True, exist_ok=True)
+    output_path = output / "flattened-cover-manual.png"
+    metadata_path = output / "manual-cover.json"
+    if not cv2.imwrite(str(output_path), flattened):
+        raise ValueError(f"could not write flattened cover: {output_path}")
+
+    result = FlattenedCoverResult(
+        candidate_type="manual",
+        candidate_index=MANUAL_CANDIDATE_INDEX,
+        construction=MANUAL_CANDIDATE_CONSTRUCTION,
+        output_path=str(output_path.resolve()),
+        geometry=geometry,
+    )
+    metadata_path.write_text(
+        json.dumps(
+            {
+                "source_path": str(source.resolve()),
+                "metadata_path": str(metadata_path.resolve()),
+                "flattened_covers": [asdict(result)],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return result
+
+
 def detect_silhouette(
     image: np.ndarray,
     *,
@@ -1531,11 +1611,23 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         help="Optional BGR color-distance threshold. By default it is estimated from the image border.",
     )
+    parser.add_argument(
+        "--manual-points-json",
+        help="Optional JSON array of four normalized [x, y] cover corners; bypasses silhouette detection.",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.manual_points_json is not None:
+        try:
+            points = json.loads(args.manual_points_json)
+        except json.JSONDecodeError as error:
+            raise ValueError("manual cover points must be valid JSON") from error
+        process_manual_cover(args.source, args.output_dir, points)
+        print((Path(args.output_dir) / "manual-cover.json").resolve())
+        return 0
     result = process_image(
         args.source,
         args.output_dir,

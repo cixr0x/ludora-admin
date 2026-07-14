@@ -29,12 +29,33 @@ export function createCoverFlatteningWorkflowRouter(manager: CoverFlatteningWork
     }
   });
 
+  router.get('/admin/cover-flattening-workflows/:workflowId/source', async (request, response, next) => {
+    try {
+      const sourcePath = await manager.getSourceFile(request.params.workflowId);
+      response.setHeader('Cache-Control', 'no-store');
+      response.sendFile(sourcePath);
+    } catch (error) {
+      next(asHttpError(error));
+    }
+  });
+
   router.get('/admin/cover-flattening-workflows/:workflowId/candidates/:candidateIndex', async (request, response, next) => {
     try {
       const candidateIndex = positiveInteger(request.params, 'candidateIndex');
       const candidatePath = await manager.getCandidateFile(request.params.workflowId, candidateIndex);
       response.setHeader('Cache-Control', 'no-store');
       response.type('png').sendFile(candidatePath);
+    } catch (error) {
+      next(asHttpError(error));
+    }
+  });
+
+  router.post('/admin/cover-flattening-workflows/:workflowId/manual-candidate', async (request, response, next) => {
+    try {
+      const points = normalizedCoverPoints(request.body, 'points');
+      response.status(201).json({
+        data: await manager.createManualCandidate(request.params.workflowId, points)
+      });
     } catch (error) {
       next(asHttpError(error));
     }
@@ -92,6 +113,32 @@ function optionalAspectRatio(source: unknown, key: string): number | null {
     throw httpError(400, `${key} must be between 0.2 and 5`);
   }
   return parsed;
+}
+
+function normalizedCoverPoints(source: unknown, key: string): Array<{ x: number; y: number }> {
+  const value = (source ?? {}) as Record<string, unknown>;
+  if (!Array.isArray(value[key]) || value[key].length !== 4) {
+    throw httpError(400, `${key} must contain exactly four normalized points`);
+  }
+  return value[key].map((point) => {
+    if (!point || typeof point !== 'object' || Array.isArray(point)) {
+      throw httpError(400, `${key} must contain points with x and y coordinates between 0 and 1`);
+    }
+    const { x, y } = point as Record<string, unknown>;
+    if (
+      typeof x !== 'number'
+      || typeof y !== 'number'
+      || !Number.isFinite(x)
+      || !Number.isFinite(y)
+      || x < 0
+      || x > 1
+      || y < 0
+      || y > 1
+    ) {
+      throw httpError(400, `${key} must contain points with x and y coordinates between 0 and 1`);
+    }
+    return { x, y };
+  });
 }
 
 function asHttpError(error: unknown): unknown {

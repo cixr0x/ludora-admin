@@ -80,6 +80,11 @@ export type LocalCoverWorkflow = {
 
 export type CoverImageField = 'image_url' | 'image_url_es';
 
+export type CoverPoint = {
+  x: number;
+  y: number;
+};
+
 export type CoverFlatteningCandidate = {
   aspect_ratio: number;
   aspect_ratio_method: 'edge_average' | 'near_square' | 'vanishing_points';
@@ -585,6 +590,14 @@ export const adminApi = {
   getCoverFlatteningCandidate: (workflowId: string, candidateIndex: number) =>
     fetchBlob(
       `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/candidates/${encodeURIComponent(candidateIndex)}`
+    ),
+  getCoverFlatteningSource: (workflowId: string) =>
+    fetchBlob(`/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/source`),
+  createManualCoverFlatteningCandidate: (workflowId: string, points: CoverPoint[]) =>
+    sendJson<CoverFlatteningWorkflow>(
+      `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/manual-candidate`,
+      'POST',
+      { points }
     ),
   acceptCoverFlattening: (
     workflowId: string,

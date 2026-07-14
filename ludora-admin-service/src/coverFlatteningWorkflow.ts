@@ -18,9 +18,15 @@ const MAX_OUTPUT_BYTES = 100 * 1024;
 const MAX_OUTPUT_DIMENSION = 800;
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const CACHE_CONTROL = 'public, max-age=31536000, immutable';
+const MANUAL_CANDIDATE_INDEX = 3;
 
 export type CoverFlatteningSourceField = CoverImageField;
 export type CoverFlatteningTargetField = CoverImageField;
+
+export type NormalizedCoverPoint = {
+  x: number;
+  y: number;
+};
 
 export type CoverFlatteningCandidate = {
   aspect_ratio: number;
@@ -61,6 +67,7 @@ type ManagedCoverFlatteningWorkflow = Omit<CoverFlatteningWorkflow, 'candidates'
   candidates: FlatteningCandidateFile[];
   itemNames: CoverItemNames;
   outputDir: string;
+  sourcePath: string;
 };
 
 type CoverItemNames = {
@@ -112,6 +119,11 @@ export type CoverFlatteningWorkflowDependencies = {
   optimizeImage(image: Buffer, options: { maxBytes: number; maxDimension: number }): Promise<Buffer>;
   resizeImage(image: Buffer, dimensions: { height: number; width: number }): Promise<Buffer>;
   removeDirectory(directory: string): Promise<void>;
+  runManualFlattening(
+    sourcePath: string,
+    outputDir: string,
+    points: NormalizedCoverPoint[]
+  ): Promise<FlatteningMetadata>;
   runFlattening(sourcePath: string, outputDir: string): Promise<FlatteningMetadata>;
   uploadImage(image: Buffer, upload: CoverImageOptimizationUpload): Promise<void>;
   writeSource(path: string, image: Buffer): Promise<void>;
@@ -126,7 +138,9 @@ export type CoverFlatteningWorkflowManager = {
     aspectRatio?: number | null
   ): Promise<AcceptedCoverFlattening>;
   cancel(workflowId: string): Promise<void>;
+  createManualCandidate(workflowId: string, points: NormalizedCoverPoint[]): Promise<CoverFlatteningWorkflow>;
   getCandidateFile(workflowId: string, candidateIndex: number): Promise<string>;
+  getSourceFile(workflowId: string): Promise<string>;
   startFromItem(itemId: number, sourceField: CoverFlatteningSourceField): Promise<CoverFlatteningWorkflow>;
   startFromStoreItem(storeItemId: number): Promise<CoverFlatteningWorkflow>;
 };
@@ -229,6 +243,7 @@ export function createCoverFlatteningWorkflowManager(
         outputDir,
         perspective,
         source_field: sourceField,
+        sourcePath,
         store_item_id: storeItemId,
         workflow_id: workflowId
       };
@@ -249,6 +264,44 @@ export function createCoverFlatteningWorkflowManager(
   async function getCandidateFile(workflowId: string, candidateIndex: number): Promise<string> {
     await cleanupExpired();
     return candidateFor(workflowId, candidateIndex).path;
+  }
+
+  async function getSourceFile(workflowId: string): Promise<string> {
+    await cleanupExpired();
+    return workflowFor(workflowId).sourcePath;
+  }
+
+  async function createManualCandidate(
+    workflowId: string,
+    points: NormalizedCoverPoint[]
+  ): Promise<CoverFlatteningWorkflow> {
+    await cleanupExpired();
+    const workflow = workflowFor(workflowId);
+    const validatedPoints = validateNormalizedCoverPoints(points);
+    try {
+      const metadata = await dependencies.runManualFlattening(
+        workflow.sourcePath,
+        workflow.outputDir,
+        validatedPoints
+      );
+      const candidates = parseCandidates(metadata);
+      if (candidates.length !== 1 || candidates[0]?.index !== MANUAL_CANDIDATE_INDEX) {
+        throw new CoverFlatteningWorkflowError('Manual flattening returned malformed candidate metadata.', 422);
+      }
+      workflow.candidates = [
+        ...workflow.candidates.filter((candidate) => candidate.index !== MANUAL_CANDIDATE_INDEX),
+        candidates[0]
+      ].sort((first, second) => first.index - second.index);
+      return publicWorkflow(workflow);
+    } catch (error) {
+      if (error instanceof CoverFlatteningWorkflowError) {
+        throw error;
+      }
+      throw new CoverFlatteningWorkflowError(
+        error instanceof Error ? error.message : 'Manual cover flattening failed.',
+        422
+      );
+    }
   }
 
   async function accept(
@@ -327,7 +380,9 @@ export function createCoverFlatteningWorkflowManager(
   return {
     accept,
     cancel,
+    createManualCandidate,
     getCandidateFile,
+    getSourceFile,
     startFromItem,
     startFromStoreItem
   };
@@ -372,6 +427,30 @@ export function createNodeCoverFlatteningWorkflowDependencies({
     ),
     removeDirectory: async (directory) => {
       await rm(directory, { force: true, recursive: true });
+    },
+    runManualFlattening: async (sourcePath, outputDir, points) => {
+      const packagePath = configuredPathApi(packageDir);
+      await execFileAsync(
+        pythonExecutable,
+        [
+          '-m',
+          'ludora.box_silhouette',
+          sourcePath,
+          '--output-dir',
+          outputDir,
+          '--manual-points-json',
+          JSON.stringify(points.map(({ x, y }) => [x, y]))
+        ],
+        {
+          cwd: packageDir,
+          env: {
+            ...process.env,
+            PYTHONPATH: packagePath.join(packageDir, 'src')
+          },
+          maxBuffer: 1024 * 1024
+        }
+      );
+      return JSON.parse(await readFile(packagePath.join(outputDir, 'manual-cover.json'), 'utf8')) as FlatteningMetadata;
     },
     runFlattening: async (sourcePath, outputDir) => {
       const packagePath = configuredPathApi(packageDir);
@@ -424,6 +503,30 @@ function parseCandidates(metadata: FlatteningMetadata): FlatteningCandidateFile[
     throw new CoverFlatteningWorkflowError('Flattening must return one or two cover candidates.', 422);
   }
   return candidates;
+}
+
+function validateNormalizedCoverPoints(points: NormalizedCoverPoint[]): NormalizedCoverPoint[] {
+  if (!Array.isArray(points) || points.length !== 4) {
+    throw new CoverFlatteningWorkflowError('Manual cover selection requires exactly four points.', 400);
+  }
+  return points.map((point) => {
+    if (
+      !point
+      || typeof point !== 'object'
+      || !Number.isFinite(point.x)
+      || !Number.isFinite(point.y)
+      || point.x < 0
+      || point.x > 1
+      || point.y < 0
+      || point.y > 1
+    ) {
+      throw new CoverFlatteningWorkflowError(
+        'Manual cover points must have finite x and y coordinates between 0 and 1.',
+        400
+      );
+    }
+    return { x: point.x, y: point.y };
+  });
 }
 
 function parseAspectRatioMethod(value: unknown): CoverFlatteningCandidate['aspect_ratio_method'] {

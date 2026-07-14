@@ -4103,7 +4103,9 @@ describe('ludora admin service', () => {
   it('serves the automatic cover flattening workflow through the injected manager', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-flattening-route-'));
     const candidatePath = path.join(directory, 'candidate.png');
+    const sourcePath = path.join(directory, 'source.jpg');
     fs.writeFileSync(candidatePath, Buffer.from('candidate-image'));
+    fs.writeFileSync(sourcePath, Buffer.from('source-image'));
     const workflow: CoverFlatteningWorkflow = {
       candidates: [
         {
@@ -4141,9 +4143,32 @@ describe('ludora admin service', () => {
       cancel: async (workflowId) => {
         calls.push(['cancel', workflowId]);
       },
+      createManualCandidate: async (workflowId, points) => {
+        calls.push(['manual', workflowId, points]);
+        return {
+          ...workflow,
+          candidates: [
+            ...workflow.candidates,
+            {
+              aspect_ratio: 1.25,
+              aspect_ratio_method: 'edge_average',
+              construction: 'manual corner selection',
+              height: 400,
+              index: 3,
+              square_snapped: false,
+              vanishing_confidence: 0,
+              width: 500
+            }
+          ]
+        };
+      },
       getCandidateFile: async (workflowId, candidateIndex) => {
         calls.push(['candidate', workflowId, candidateIndex]);
         return candidatePath;
+      },
+      getSourceFile: async (workflowId) => {
+        calls.push(['source', workflowId]);
+        return sourcePath;
       },
       startFromItem: async (itemId, sourceField) => {
         calls.push(['item', itemId, sourceField]);
@@ -4160,6 +4185,19 @@ describe('ludora admin service', () => {
       const start = await request(app)
         .post('/admin/cover-flattening-workflows/items')
         .send({ item_id: 77, source_field: 'image_url_es' });
+      const source = await request(app).get('/admin/cover-flattening-workflows/flatten-77/source');
+      const invalidManual = await request(app)
+        .post('/admin/cover-flattening-workflows/flatten-77/manual-candidate')
+        .send({ points: [{ x: 0, y: 0 }] });
+      const manualPoints = [
+        { x: 0.1, y: 0.1 },
+        { x: 0.9, y: 0.1 },
+        { x: 0.9, y: 0.9 },
+        { x: 0.1, y: 0.9 }
+      ];
+      const manual = await request(app)
+        .post('/admin/cover-flattening-workflows/flatten-77/manual-candidate')
+        .send({ points: manualPoints });
       const candidate = await request(app).get('/admin/cover-flattening-workflows/flatten-77/candidates/1');
       const accepted = await request(app)
         .post('/admin/cover-flattening-workflows/flatten-77/accept')
@@ -4168,12 +4206,20 @@ describe('ludora admin service', () => {
 
       expect(start.status).toBe(201);
       expect(start.body).toEqual({ data: workflow });
+      expect(source.status).toBe(200);
+      expect(source.headers['cache-control']).toBe('no-store');
+      expect(invalidManual.status).toBe(400);
+      expect(manual.status).toBe(201);
+      expect(manual.body.data.candidates).toHaveLength(2);
+      expect(manual.body.data.candidates[1]).toMatchObject({ index: 3, construction: 'manual corner selection' });
       expect(candidate.status).toBe(200);
       expect(candidate.headers['cache-control']).toBe('no-store');
       expect(accepted.body.data).toMatchObject({ item_id: 77, target_field: 'image_url' });
       expect(cancelled.body).toEqual({ data: { cancelled: true } });
       expect(calls).toEqual([
         ['item', 77, 'image_url_es'],
+        ['source', 'flatten-77'],
+        ['manual', 'flatten-77', manualPoints],
         ['candidate', 'flatten-77', 1],
         ['accept', 'flatten-77', 1, 'image_url', 1],
         ['cancel', 'flatten-77']

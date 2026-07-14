@@ -145,6 +145,110 @@ describe('cover flattening workflow', () => {
     expect(accepted.output_aspect_ratio).toBe(1);
   });
 
+  it('creates, replaces, and accepts a manual candidate from normalized source points', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const manualCalls: Array<{ points: Array<{ x: number; y: number }>; sourcePath: string }> = [];
+    const optimizedInputs: string[] = [];
+    let manualVersion = 0;
+    const database: Database = {
+      query: async (sql) => ({
+        rows: sql.includes('from items i')
+          ? [{ canonical_name: 'Manual Game', image_url: 'https://example.com/box.jpg', item_id: 91 }]
+          : [{ id: 91 }]
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(
+      database,
+      fakeDependencies(root, {
+        optimizeImage: async (image) => {
+          optimizedInputs.push(image.toString('utf8'));
+          return Buffer.alloc(75_000);
+        },
+        runManualFlattening: async (sourcePath, outputDir, points) => {
+          manualCalls.push({ points, sourcePath });
+          manualVersion += 1;
+          const candidate = path.join(outputDir, 'flattened-cover-manual.png');
+          await writeFile(candidate, `manual-${manualVersion}`);
+          return {
+            flattened_covers: [
+              {
+                candidate_index: 3,
+                construction: 'manual corner selection',
+                geometry: { aspect_ratio: 1.25, height: 400, square_snapped: false, width: 500 },
+                output_path: candidate
+              }
+            ]
+          };
+        }
+      })
+    );
+    const workflow = await manager.startFromItem(91, 'image_url');
+    const points = [
+      { x: 0.1, y: 0.1 },
+      { x: 0.9, y: 0.1 },
+      { x: 0.9, y: 0.9 },
+      { x: 0.1, y: 0.9 }
+    ];
+
+    expect(await readFile(await manager.getSourceFile(workflow.workflow_id), 'utf8')).toBe('source');
+    const firstManual = await manager.createManualCandidate(workflow.workflow_id, points);
+    const secondManual = await manager.createManualCandidate(workflow.workflow_id, points);
+
+    expect(firstManual.candidates.map((candidate) => candidate.index)).toEqual([1, 2, 3]);
+    expect(secondManual.candidates.map((candidate) => candidate.index)).toEqual([1, 2, 3]);
+    expect(secondManual.candidates[2]).toMatchObject({
+      construction: 'manual corner selection',
+      height: 400,
+      index: 3,
+      width: 500
+    });
+    expect(manualCalls).toHaveLength(2);
+    expect(manualCalls[0]?.points).toEqual(points);
+    expect(manualCalls[0]?.sourcePath).toBe(await manager.getSourceFile(workflow.workflow_id));
+    expect(await readFile(await manager.getCandidateFile(workflow.workflow_id, 3), 'utf8')).toBe('manual-2');
+
+    const accepted = await manager.accept(workflow.workflow_id, 3, 'image_url');
+
+    expect(accepted).toMatchObject({ item_id: 91, output_aspect_ratio: 1.25, target_field: 'image_url' });
+    expect(optimizedInputs).toEqual(['manual-2']);
+  });
+
+  it('rejects malformed normalized points before manual flattening and preserves the workflow', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    let manualCalls = 0;
+    const database: Database = {
+      query: async (sql) => ({
+        rows: sql.includes('from items i')
+          ? [{ canonical_name: 'Manual Game', image_url: 'https://example.com/box.jpg', item_id: 91 }]
+          : []
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(
+      database,
+      fakeDependencies(root, {
+        runManualFlattening: async () => {
+          manualCalls += 1;
+          throw new Error('should not run');
+        }
+      })
+    );
+    const workflow = await manager.startFromItem(91, 'image_url');
+
+    await expect(
+      manager.createManualCandidate(workflow.workflow_id, [
+        { x: 0.1, y: 0.1 },
+        { x: 1.1, y: 0.1 },
+        { x: 0.9, y: 0.9 },
+        { x: 0.1, y: 0.9 }
+      ])
+    ).rejects.toMatchObject({ status: 400 });
+
+    expect(manualCalls).toBe(0);
+    expect(await readFile(await manager.getCandidateFile(workflow.workflow_id, 1), 'utf8')).toBe('candidate-1');
+  });
+
   it('rejects an unlinked store item before downloading', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
     temporaryDirectories.push(root);
@@ -200,6 +304,20 @@ function fakeDependencies(
     optimizeImage: async () => Buffer.alloc(80_000),
     removeDirectory: async (directory) => rm(directory, { force: true, recursive: true }),
     resizeImage: async (image) => image,
+    runManualFlattening: async (_sourcePath, outputDir) => {
+      const candidate = path.join(outputDir, 'flattened-cover-manual.png');
+      await writeFile(candidate, 'manual-candidate');
+      return {
+        flattened_covers: [
+          {
+            candidate_index: 3,
+            construction: 'manual corner selection',
+            geometry: { aspect_ratio: 1.2, height: 500, square_snapped: false, width: 600 },
+            output_path: candidate
+          }
+        ]
+      };
+    },
     runFlattening: async (_sourcePath, outputDir) => {
       const candidate1 = path.join(outputDir, 'flattened-cover-1.png');
       const candidate2 = path.join(outputDir, 'flattened-cover-2.png');

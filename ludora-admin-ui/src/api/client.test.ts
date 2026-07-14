@@ -1301,4 +1301,62 @@ describe('fetchRows', () => {
       method: 'POST'
     });
   });
+
+  it('loads the cover-flattening source and creates a normalized manual candidate', async () => {
+    const workflow = {
+      candidates: [
+        {
+          aspect_ratio: 0.8,
+          aspect_ratio_method: 'edge_average',
+          construction: 'manual corner selection',
+          height: 500,
+          index: 3,
+          square_snapped: false,
+          vanishing_confidence: 0,
+          width: 400
+        }
+      ],
+      created_at: '2026-07-14T12:00:00.000Z',
+      expires_at: '2026-07-14T12:30:00.000Z',
+      item_id: 77,
+      perspective: 'two_faces',
+      source_field: 'image_url',
+      store_item_id: null,
+      workflow_id: 'flatten-77'
+    };
+    const points = [
+      { x: 0.1, y: 0.2 },
+      { x: 0.9, y: 0.2 },
+      { x: 0.9, y: 0.8 },
+      { x: 0.1, y: 0.8 }
+    ];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(new Blob(['source'], { type: 'image/png' }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: workflow }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        })
+      );
+
+    await expect(adminApi.getCoverFlatteningSource('flatten-77')).resolves.toBeInstanceOf(Blob);
+    await expect(adminApi.createManualCoverFlatteningCandidate('flatten-77', points)).resolves.toEqual(workflow);
+
+    expectFetchNth(
+      fetchMock,
+      1,
+      'http://127.0.0.1:4001/admin/cover-flattening-workflows/flatten-77/source'
+    );
+    expectFetchNth(
+      fetchMock,
+      2,
+      'http://127.0.0.1:4001/admin/cover-flattening-workflows/flatten-77/manual-candidate',
+      {
+        body: JSON.stringify({ points }),
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST'
+      }
+    );
+  });
 });

@@ -1,3 +1,6 @@
+from contextlib import redirect_stdout
+import io
+import json
 import tempfile
 import unittest
 from dataclasses import replace
@@ -15,11 +18,87 @@ from ludora.box_silhouette import (
     flatten_cover_quadrilateral,
     identify_three_face_covers,
     identify_two_face_cover,
+    main as box_silhouette_main,
+    manual_cover_polygon,
+    process_manual_cover,
     process_image,
 )
 
 
 class BoxSilhouetteTests(unittest.TestCase):
+    def test_process_manual_cover_orders_normalized_clicks_and_writes_candidate(self):
+        image = np.zeros((120, 160, 3), dtype=np.uint8)
+        image[:, :, 0] = np.arange(160, dtype=np.uint8)[None, :]
+        image[:, :, 1] = np.arange(120, dtype=np.uint8)[:, None]
+        pixel_points = np.array(
+            [[20, 10], [140, 15], [135, 100], [25, 105]],
+            dtype=np.float64,
+        )
+        normalized = pixel_points / np.array([159, 119], dtype=np.float64)
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            output = Path(directory) / "output"
+            cv2.imwrite(str(source), image)
+
+            result = process_manual_cover(
+                source,
+                output,
+                normalized[[2, 0, 3, 1]].tolist(),
+            )
+
+            self.assertEqual(result.candidate_type, "manual")
+            self.assertEqual(result.candidate_index, 3)
+            self.assertEqual(result.construction, "manual corner selection")
+            self.assertEqual(result.geometry.trim_fraction, 0.025)
+            np.testing.assert_allclose(result.geometry.ordered_corners, pixel_points, atol=1e-4)
+            self.assertTrue(Path(result.output_path).is_file())
+            metadata = json.loads((output / "manual-cover.json").read_text(encoding="utf-8"))
+            self.assertEqual(metadata["flattened_covers"][0]["candidate_index"], 3)
+            self.assertEqual(
+                metadata["flattened_covers"][0]["construction"],
+                "manual corner selection",
+            )
+
+    def test_manual_cover_polygon_rejects_invalid_selections(self):
+        invalid_selections = [
+            [[0.1, 0.1], [1.1, 0.1], [0.9, 0.9], [0.1, 0.9]],
+            [[0.1, 0.1], [0.9, 0.1], [0.9, 0.1], [0.1, 0.9]],
+            [[0.1, 0.1], [0.9, 0.1], [0.5, 0.4], [0.1, 0.9]],
+            [[0.1, 0.1], [0.2, 0.2], [0.3, 0.3], [0.4, 0.4]],
+        ]
+
+        for points in invalid_selections:
+            with self.subTest(points=points), self.assertRaises(ValueError):
+                manual_cover_polygon(points, (200, 300))
+
+    def test_manual_cli_writes_metadata_without_running_silhouette_detection(self):
+        image = np.zeros((80, 100, 3), dtype=np.uint8)
+        image[:, :, 0] = np.arange(100, dtype=np.uint8)[None, :]
+        image[:, :, 1] = np.arange(80, dtype=np.uint8)[:, None]
+        points = [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]]
+
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.png"
+            output = Path(directory) / "output"
+            cv2.imwrite(str(source), image)
+            stdout = io.StringIO()
+
+            with redirect_stdout(stdout):
+                status = box_silhouette_main(
+                    [
+                        str(source),
+                        "--output-dir",
+                        str(output),
+                        "--manual-points-json",
+                        json.dumps(points),
+                    ]
+                )
+
+            self.assertEqual(status, 0)
+            self.assertEqual(Path(stdout.getvalue().strip()), (output / "manual-cover.json").resolve())
+            self.assertTrue((output / "flattened-cover-manual.png").is_file())
+
     def test_flatten_cover_averages_opposite_edge_lengths(self):
         image = np.zeros((180, 220, 3), dtype=np.uint8)
         image[:, :, 1] = np.arange(180, dtype=np.uint8)[:, None]
