@@ -108,6 +108,27 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertEqual(geometry.untrimmed_height, 94)
         self.assertNotEqual(flattened.shape[0], flattened.shape[1])
 
+    def test_flatten_cover_does_not_snap_near_square_when_projected_edges_disagree(self):
+        image = np.zeros((480, 480, 3), dtype=np.uint8)
+        polygon = np.array(
+            [
+                [76.4041, 23.5105],
+                [456.2405, 80.0238],
+                [456.2592, 402.1125],
+                [70.0467, 458.7128],
+            ],
+            dtype=np.float32,
+        )
+
+        flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+
+        self.assertLess(geometry.square_difference, geometry.square_threshold)
+        self.assertLess(geometry.width_disagreement, 0.02)
+        self.assertGreater(geometry.height_disagreement, 0.29)
+        self.assertFalse(geometry.square_snapped)
+        self.assertEqual(geometry.aspect_ratio_method, "edge_average")
+        self.assertNotEqual(flattened.shape[0], flattened.shape[1])
+
     def test_recovers_aspect_ratio_from_consistent_cuboid_vanishing_points(self):
         width = 2.0
         height = 1.5

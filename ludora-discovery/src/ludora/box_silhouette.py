@@ -1074,6 +1074,7 @@ def flatten_cover_quadrilateral(
     *,
     max_dimension: int = 1600,
     square_threshold: float = 0.05,
+    square_edge_disagreement_threshold: float = 0.10,
     target_aspect_ratio: float | None = None,
     vanishing_confidence: float = 0.0,
     vanishing_focal_spread: float | None = None,
@@ -1083,6 +1084,8 @@ def flatten_cover_quadrilateral(
         raise ValueError("maximum flattened cover dimension must be positive")
     if not 0.0 <= square_threshold < 1.0:
         raise ValueError("square threshold must be between zero and one")
+    if not 0.0 <= square_edge_disagreement_threshold < 1.0:
+        raise ValueError("square edge disagreement threshold must be between zero and one")
     if target_aspect_ratio is not None and not 0.20 <= target_aspect_ratio <= 5.0:
         raise ValueError("target aspect ratio must be between 0.2 and 5")
     if not 0.0 <= vanishing_confidence <= 1.0:
@@ -1099,6 +1102,8 @@ def flatten_cover_quadrilateral(
     if estimated_width <= 1.0 or estimated_height <= 1.0:
         raise ValueError("flattened cover dimensions must be greater than one pixel")
 
+    width_disagreement = abs(top_length - bottom_length) / estimated_width
+    height_disagreement = abs(left_length - right_length) / estimated_height
     square_difference = abs(estimated_width - estimated_height) / max(
         estimated_width,
         estimated_height,
@@ -1110,7 +1115,11 @@ def flatten_cover_quadrilateral(
         untrimmed_width = max(2, int(round(corrected_width * scale)))
         untrimmed_height = max(2, int(round(estimated_height * scale)))
         square_snapped = abs(target_aspect_ratio - 1.0) <= square_threshold
-    elif square_difference <= square_threshold:
+    elif (
+        square_difference <= square_threshold
+        and width_disagreement <= square_edge_disagreement_threshold
+        and height_disagreement <= square_edge_disagreement_threshold
+    ):
         aspect_ratio_method = "near_square"
         scale = min(1.0, max_dimension / max(estimated_width, estimated_height))
         square_snapped = True
@@ -1179,8 +1188,8 @@ def flatten_cover_quadrilateral(
         width=width,
         height=height,
         aspect_ratio=width / height,
-        width_disagreement=abs(top_length - bottom_length) / estimated_width,
-        height_disagreement=abs(left_length - right_length) / estimated_height,
+        width_disagreement=width_disagreement,
+        height_disagreement=height_disagreement,
     )
     return flattened, geometry
 

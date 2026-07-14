@@ -298,7 +298,7 @@ export function CoverFlatteningDialog({
                               maxHeight: 560,
                               mx: 'auto',
                               overflow: 'hidden',
-                              width: previewRatio <= 1 ? `min(100%, ${560 * previewRatio}px)` : '100%'
+                              width: `min(100%, ${560 * previewRatio}px)`
                             }}
                           >
                             <Box

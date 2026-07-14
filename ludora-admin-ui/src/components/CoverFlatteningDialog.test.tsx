@@ -94,7 +94,10 @@ describe('CoverFlatteningDialog', () => {
     fireEvent.click(screen.getByLabelText('4:5', { selector: 'input' }));
     fireEvent.click(screen.getByLabelText('Horizontal', { selector: 'input' }));
     expect(screen.getByText(/625 × 500 · ratio 1.250 · reviewer override/)).toBeInTheDocument();
-    expect(screen.getByTestId('aspect-ratio-preview-1')).toHaveStyle({ aspectRatio: '1.25' });
+    expect(screen.getByTestId('aspect-ratio-preview-1')).toHaveStyle({
+      aspectRatio: '1.25',
+      width: 'min(100%, 700px)'
+    });
     fireEvent.click(screen.getByLabelText('Square (1:1)', { selector: 'input' }));
     expect(screen.getByText(/500 × 500 · ratio 1.000 · reviewer override/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('4:5', { selector: 'input' }));
