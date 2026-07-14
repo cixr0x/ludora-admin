@@ -1078,7 +1078,7 @@ def flatten_cover_quadrilateral(
     target_aspect_ratio: float | None = None,
     vanishing_confidence: float = 0.0,
     vanishing_focal_spread: float | None = None,
-    trim_fraction: float = 0.01,
+    trim_fraction: float = 0.025,
 ) -> tuple[np.ndarray, FlattenedCoverGeometry]:
     if max_dimension <= 0:
         raise ValueError("maximum flattened cover dimension must be positive")

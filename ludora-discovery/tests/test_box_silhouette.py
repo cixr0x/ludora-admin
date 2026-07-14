@@ -46,7 +46,7 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertEqual(geometry.width, geometry.untrimmed_width - 2 * geometry.trim_x)
         self.assertEqual(geometry.height, geometry.untrimmed_height - 2 * geometry.trim_y)
 
-    def test_flatten_cover_trims_one_percent_from_every_side(self):
+    def test_flatten_cover_trims_two_and_a_half_percent_from_every_side(self):
         image = np.zeros((140, 220, 3), dtype=np.uint8)
         polygon = np.array(
             [[10, 10], [210, 10], [210, 110], [10, 110]],
@@ -55,10 +55,25 @@ class BoxSilhouetteTests(unittest.TestCase):
 
         flattened, geometry = flatten_cover_quadrilateral(image, polygon)
 
-        self.assertEqual(geometry.trim_fraction, 0.01)
-        self.assertEqual(geometry.trim_x, 2)
-        self.assertEqual(geometry.trim_y, 1)
-        self.assertEqual(flattened.shape[:2], (98, 196))
+        self.assertEqual(geometry.trim_fraction, 0.025)
+        self.assertEqual(geometry.trim_x, 5)
+        self.assertEqual(geometry.trim_y, 2)
+        self.assertEqual(flattened.shape[:2], (96, 190))
+
+    def test_flatten_cover_default_trim_removes_a_thin_outer_rendered_rim(self):
+        image = np.full((420, 420, 3), (80, 80, 80), dtype=np.uint8)
+        face_color = (210, 150, 40)
+        cv2.rectangle(image, (20, 20), (400, 400), face_color, -1)
+        polygon = np.array(
+            [[10, 10], [410, 10], [410, 410], [10, 410]],
+            dtype=np.float32,
+        )
+
+        flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+
+        self.assertEqual(geometry.trim_x, 10)
+        self.assertEqual(geometry.trim_y, 10)
+        self.assertTrue(np.allclose(flattened[2:-2, 2:-2], face_color, atol=2))
 
     def test_flatten_cover_trim_can_be_disabled(self):
         image = np.zeros((100, 120, 3), dtype=np.uint8)
