@@ -156,6 +156,7 @@ class SilhouetteResult:
 
 MANUAL_CANDIDATE_INDEX = 3
 MANUAL_CANDIDATE_CONSTRUCTION = "manual corner selection"
+MANUAL_COVER_TRIM_FRACTION = 0.01
 
 
 def _border_pixels(image: np.ndarray) -> np.ndarray:
@@ -1245,7 +1246,11 @@ def process_manual_cover(
         raise ValueError(f"could not read image: {source}")
 
     polygon = manual_cover_polygon(normalized_points, image.shape[:2])
-    flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+    flattened, geometry = flatten_cover_quadrilateral(
+        image,
+        polygon,
+        trim_fraction=MANUAL_COVER_TRIM_FRACTION,
+    )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)
     output_path = output / "flattened-cover-manual.png"
