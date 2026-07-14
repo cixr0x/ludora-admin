@@ -345,12 +345,55 @@ def _fetch_valid_amazon_detail_page(
             will_retry=will_retry,
             **{key: value for key, value in diagnostics.items() if key != "valid"},
         )
+        if will_retry:
+            _reset_amazon_browser_context(
+                browser_fetcher,
+                attempt=attempt,
+                source_url=source_url,
+                store_id=store_id,
+                trace=trace,
+            )
         if will_retry and retry_delay_seconds > 0:
             time.sleep(retry_delay_seconds * attempt)
 
     if saw_response:
         raise RuntimeError(f"Failed to fetch valid Amazon product detail page: {source_url}")
     raise RuntimeError(f"Failed to fetch Amazon product detail page: {source_url}")
+
+
+def _reset_amazon_browser_context(
+    browser_fetcher: Callable[[str], FetchResult | None],
+    *,
+    attempt: int,
+    source_url: str,
+    store_id: int | None,
+    trace: TraceLogger,
+) -> bool:
+    fetcher_owner = getattr(browser_fetcher, "__self__", browser_fetcher)
+    reset_context = getattr(fetcher_owner, "reset_context", None)
+    if not callable(reset_context):
+        return False
+
+    try:
+        reset_context()
+    except Exception as exc:
+        trace.log(
+            "amazon_inventory.candidate.detail_fetch.context_reset.failed",
+            attempt=attempt,
+            error=str(exc),
+            error_type=type(exc).__name__,
+            source_url=source_url,
+            store_id=store_id,
+        )
+        return False
+
+    trace.log(
+        "amazon_inventory.candidate.detail_fetch.context_reset.completed",
+        attempt=attempt,
+        source_url=source_url,
+        store_id=store_id,
+    )
+    return True
 
 
 def _amazon_detail_page_diagnostics(fetched: FetchResult, *, expected_asin: str) -> dict[str, object]:

@@ -76,6 +76,26 @@ class FakeContext:
 
 
 class BrowserFetchTests(unittest.TestCase):
+    def test_reset_context_replaces_the_amazon_cookie_session(self):
+        previous_context = Mock()
+        next_context = Mock()
+        next_page = Mock()
+        next_context.new_page.return_value = next_page
+        browser = Mock()
+        browser.new_context.return_value = next_context
+        fetcher = BrowserTextFetcher()
+        fetcher._browser = browser
+        fetcher._context = previous_context
+        fetcher._page = Mock()
+
+        fetcher.reset_context()
+
+        previous_context.close.assert_called_once_with()
+        next_context.add_init_script.assert_called_once()
+        next_context.new_page.assert_called_once_with()
+        self.assertIs(fetcher._context, next_context)
+        self.assertIs(fetcher._page, next_page)
+
     def test_fetch_returns_rendered_dom_for_html_pages(self):
         response = FakeResponse(
             "https://example.mx/products/catan",

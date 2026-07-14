@@ -40,6 +40,7 @@ class BrowserTextFetcher:
         self._browser = None
         self._context = None
         self._page = None
+        self._chrome_path = None
         self._playwright_error = Exception
         self._playwright_timeout_error = Exception
 
@@ -55,6 +56,7 @@ class BrowserTextFetcher:
         self._playwright_timeout_error = PlaywrightTimeoutError
         self._playwright = sync_playwright().start()
         chrome_path = _chrome_executable_path()
+        self._chrome_path = chrome_path
         self._browser = self._playwright.chromium.launch(
             executable_path=chrome_path,
             headless=True,
@@ -65,15 +67,38 @@ class BrowserTextFetcher:
                 "--no-default-browser-check",
             ],
         )
-        self._context = self._browser.new_context(
+        self._context = self._create_context()
+        self._page = self._context.new_page()
+        return self
+
+    def _create_context(self):
+        if self._browser is None:
+            raise BrowserFetchUnavailable("Browser fetcher has not been started.")
+        context = self._browser.new_context(
             locale="es-MX",
-            user_agent=_browser_user_agent(chrome_path),
+            user_agent=_browser_user_agent(self._chrome_path),
             viewport={"width": 1365, "height": 900},
             extra_http_headers={"Accept-Language": "es-MX,es;q=0.9,en;q=0.8"},
         )
-        self._context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+        context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
+        return context
+
+    def reset_context(self) -> None:
+        """Start a clean browser session while keeping the Chromium process alive."""
+        if self._browser is None:
+            raise BrowserFetchUnavailable("Browser fetcher has not been started.")
+
+        previous_context = self._context
+        self._context = None
+        self._page = None
+        if previous_context is not None:
+            try:
+                previous_context.close()
+            except self._playwright_error:
+                pass
+
+        self._context = self._create_context()
         self._page = self._context.new_page()
-        return self
 
     def __exit__(self, exc_type, exc, traceback) -> None:
         if self._browser is not None:

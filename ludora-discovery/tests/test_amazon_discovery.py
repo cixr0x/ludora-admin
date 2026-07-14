@@ -353,6 +353,58 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(invalid_entries[-1]["page_title"], "Amazon.com.mx")
         self.assertFalse(invalid_entries[-1]["will_retry"])
 
+    def test_resets_browser_context_before_retrying_invalid_amazon_detail_page(self):
+        product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
+        search_html = f'<html><body><a href="{product_url}"></a></body></html>'
+        generic_html = "<html><head><title>Amazon.com.mx</title></head><body>B0B7QXY8ZS</body></html>"
+        valid_html = """
+        <html><head><title>Valid product</title></head><body>
+          <span id="productTitle">Novelty Corp Juego Recuperado</span>
+          <div>ASIN: B0B7QXY8ZS</div>
+        </body></html>
+        """
+
+        class RecoveringFetcher:
+            def __init__(self):
+                self.context_resets = 0
+                self.detail_fetches = 0
+
+            def fetch(self, url):
+                if "/search?" in url:
+                    return FetchResult(url=url, text=search_html)
+                self.detail_fetches += 1
+                html = generic_html if self.context_resets == 0 else valid_html
+                return FetchResult(url=url, text=html)
+
+            def reset_context(self):
+                self.context_resets += 1
+
+        fetcher = RecoveringFetcher()
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11,
+            repository,
+            browser_fetcher=fetcher.fetch,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(fetcher.detail_fetches, 2)
+        self.assertEqual(fetcher.context_resets, 1)
+        self.assertEqual([record.title for record in records], ["Novelty Corp Juego Recuperado"])
+        reset_entries = [
+            fields
+            for event, fields in trace.entries
+            if event == "amazon_inventory.candidate.detail_fetch.context_reset.completed"
+        ]
+        self.assertEqual(
+            reset_entries,
+            [{"attempt": 1, "source_url": product_url, "store_id": 11}],
+        )
+
     def test_crawls_brand_search_and_stores_only_matching_brand_products(self):
         brand_search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"
         search_html = """
