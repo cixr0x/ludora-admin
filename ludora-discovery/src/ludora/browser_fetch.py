@@ -20,9 +20,10 @@ class AmazonStoreSearchIncomplete(RuntimeError):
 
 AMAZON_STORE_SCROLL_WAIT_MS = 750
 AMAZON_STORE_STABLE_SCROLL_ROUNDS = 3
-AMAZON_STORE_LOAD_MORE_TIMEOUT_MS = 10_000
-AMAZON_STORE_MAX_STALLED_LOAD_MORE_CLICKS = 3
-AMAZON_STORE_BATCH_COOLDOWN_MS = 2_000
+AMAZON_STORE_LOAD_MORE_TIMEOUT_MS = 15_000
+AMAZON_STORE_MAX_STALLED_LOAD_MORE_CLICKS = 4
+AMAZON_STORE_BATCH_COOLDOWN_MS = 5_000
+AMAZON_STORE_STALLED_LOAD_MORE_BACKOFF_MS = 10_000
 
 
 def fetch_sitemap_text_with_browser(url: str, timeout_ms: int = 30_000) -> FetchResult | None:
@@ -270,6 +271,9 @@ def _load_all_amazon_store_search_results(page, *, timeout_ms: int, timeout_erro
                         "Amazon storefront search stopped advancing while the load-more button remained visible "
                         f"(loaded {product_count} unique products)"
                     )
+                page.wait_for_timeout(
+                    AMAZON_STORE_STALLED_LOAD_MORE_BACKOFF_MS * stalled_load_more_clicks
+                )
         else:
             page.wait_for_timeout(AMAZON_STORE_SCROLL_WAIT_MS)
     else:

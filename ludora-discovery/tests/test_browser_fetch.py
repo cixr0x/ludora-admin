@@ -178,7 +178,7 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(page.evaluate_calls, 6)
         self.assertEqual(page.wait_for_function_args[-2:], [25, 50])
-        self.assertEqual(page.wait_timeouts, [2_000, 2_000, 750, 750, 750])
+        self.assertEqual(page.wait_timeouts, [5_000, 5_000, 750, 750, 750])
 
     def test_fetch_fails_when_amazon_store_load_more_stops_advancing(self):
         class StalledLoadMorePage(FakeInfiniteScrollPage):
@@ -211,7 +211,8 @@ class BrowserFetchTests(unittest.TestCase):
         result = fetcher.fetch(response.url)
 
         self.assertIsNone(result)
-        self.assertEqual(page.evaluate_calls, 3)
+        self.assertEqual(page.evaluate_calls, 4)
+        self.assertEqual(page.wait_timeouts, [10_000, 20_000, 30_000])
         self.assertIn("load-more button remained visible", trace_logger.log.call_args.kwargs["error"])
 
     def test_wait_tokens_ignore_short_common_slug_words(self):
