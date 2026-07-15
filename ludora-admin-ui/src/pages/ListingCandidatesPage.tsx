@@ -3,6 +3,7 @@ import AddCircleIcon from '@mui/icons-material/AddCircle';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import CancelIcon from '@mui/icons-material/Cancel';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import DeleteIcon from '@mui/icons-material/Delete';
 import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import SaveIcon from '@mui/icons-material/Save';
 import {
@@ -468,6 +469,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
   const [isBatchModeEnabled, setIsBatchModeEnabled] = useState(false);
   const [isCreatingBggItem, setIsCreatingBggItem] = useState(false);
   const [isCreatingItem, setIsCreatingItem] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [localCoverWorkflow, setLocalCoverWorkflow] = useState<LocalCoverWorkflow | null>(null);
   const [localCoverWorkflowError, setLocalCoverWorkflowError] = useState('');
@@ -776,6 +778,36 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     }
   }
 
+  async function handleDeleteCandidate(): Promise<boolean> {
+    if (!selectedCandidate) {
+      return false;
+    }
+
+    const candidateId = field(selectedCandidate, ['id'], '');
+    setIsDeleting(true);
+    setSaveError('');
+    setSaveMessage('');
+
+    try {
+      await adminApi.deleteItemCandidate(candidateId);
+      setRows((currentRows) => currentRows.filter((row) => field(row, ['id'], '') !== candidateId));
+      setSelectedCandidate(null);
+      setDetailState('ready');
+      setLocalCoverWorkflow(null);
+      setLocalCoverWorkflowError('');
+      setViewMode('table');
+      setSaveMessage('Store item deleted.');
+      onClearSelectedCandidateId?.();
+      table.refresh();
+      return true;
+    } catch {
+      setSaveError('Store item could not be deleted.');
+      return false;
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   async function handleStartLocalCoverWorkflow(candidate: AdminRecord) {
     const candidateId = field(candidate, ['id'], '');
     if (!candidateId) {
@@ -934,6 +966,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
           candidate={selectedCandidate}
           isCreatingBggItem={isCreatingBggItem}
           isCreatingItem={isCreatingItem}
+          isDeleting={isDeleting}
           isSaving={isSaving}
           localCoverWorkflow={localCoverWorkflow}
           localCoverWorkflowError={localCoverWorkflowError}
@@ -948,6 +981,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
             onClearSelectedCandidateId?.();
           }}
           onCreateItemFromBggId={handleCreateItemFromBggId}
+          onDelete={handleDeleteCandidate}
           onSave={handleSaveCandidate}
           onCreateItem={handleCreateItemFromCandidate}
           onStartCoverFlattening={handleStartCoverFlattening}
@@ -994,12 +1028,14 @@ function ItemCandidateForm({
   candidate,
   isCreatingBggItem,
   isCreatingItem,
+  isDeleting,
   isSaving,
   localCoverWorkflow,
   localCoverWorkflowError,
   onBack,
   onCreateItemFromBggId,
   onCreateItem,
+  onDelete,
   onSave,
   onStartCoverFlattening,
   onStartLocalCoverWorkflow,
@@ -1009,12 +1045,14 @@ function ItemCandidateForm({
   candidate: AdminRecord;
   isCreatingBggItem: boolean;
   isCreatingItem: boolean;
+  isDeleting: boolean;
   isSaving: boolean;
   localCoverWorkflow: LocalCoverWorkflow | null;
   localCoverWorkflowError: string;
   onBack: () => void;
   onCreateItemFromBggId: (bggId: string) => void;
   onCreateItem: (input?: CreateItemFromCandidateInput) => Promise<void>;
+  onDelete: () => Promise<boolean>;
   onSave: (input: AdminRecord) => void;
   onStartCoverFlattening: (candidate: AdminRecord) => void;
   onStartLocalCoverWorkflow: (candidate: AdminRecord) => void;
@@ -1031,6 +1069,7 @@ function ItemCandidateForm({
   const [bggDialogBggId, setBggDialogBggId] = useState(matchedBggId);
   const [isBggDialogOpen, setIsBggDialogOpen] = useState(false);
   const [isCandidateDialogOpen, setIsCandidateDialogOpen] = useState(false);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const [candidateDialogBggId, setCandidateDialogBggId] = useState(matchedBggId);
   const [candidateExtends, setCandidateExtends] = useState(false);
   const [candidateExtendsItemId, setCandidateExtendsItemId] = useState('');
@@ -1043,18 +1082,23 @@ function ItemCandidateForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isDeleting) {
+      return;
+    }
     onSave(itemCandidateInputFromForm(new FormData(event.currentTarget)));
   }
 
-  const canConfirmBggDialog = Boolean(bggDialogBggId.trim()) && !isSaving && !isCreatingBggItem && !isCreatingItem;
+  const canConfirmBggDialog =
+    Boolean(bggDialogBggId.trim()) && !isSaving && !isCreatingBggItem && !isCreatingItem && !isDeleting;
   const canConfirmCandidateDialog =
     !isSaving &&
     !isCreatingBggItem &&
     !isCreatingItem &&
+    !isDeleting &&
     (!candidateImplements || Boolean(candidateDialogBggId.trim())) &&
     (!candidateExtends || Boolean(candidateExtendsItemId.trim()));
   const isStartingCoverWorkflow = Boolean(candidateIdValue && candidateIdValue === startingCoverWorkflowId);
-  const canStartCoverWorkflow = Boolean(candidateIdValue && imageUrl && itemId && !isStartingCoverWorkflow);
+  const canStartCoverWorkflow = Boolean(candidateIdValue && imageUrl && itemId && !isStartingCoverWorkflow && !isDeleting);
 
   async function handleConfirmBggDialog() {
     await onCreateItemFromBggId(bggDialogBggId);
@@ -1069,6 +1113,12 @@ function ItemCandidateForm({
       implements: candidateImplements
     });
     setIsCandidateDialogOpen(false);
+  }
+
+  async function handleConfirmDelete() {
+    if (await onDelete()) {
+      setIsDeleteDialogOpen(false);
+    }
   }
 
   return (
@@ -1114,18 +1164,28 @@ function ItemCandidateForm({
                 </Button>
               </span>
             </Tooltip>
-            <Button disabled={isSaving} startIcon={<SaveIcon />} type="submit" variant="contained">
+            <Button disabled={isSaving || isDeleting} startIcon={<SaveIcon />} type="submit" variant="contained">
               {isSaving ? 'Saving...' : 'Save Store Item'}
             </Button>
-            <Button startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
+            <Button disabled={isDeleting} startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
               Back to Store Items
+            </Button>
+            <Button
+              color="error"
+              disabled={isDeleting || isSaving || isCreatingBggItem || isCreatingItem}
+              startIcon={isDeleting ? <CircularProgress color="inherit" size={18} /> : <DeleteIcon />}
+              type="button"
+              variant="outlined"
+              onClick={() => setIsDeleteDialogOpen(true)}
+            >
+              {isDeleting ? 'Deleting...' : 'Delete Store Item'}
             </Button>
           </Stack>
         </Stack>
 
         <Stack alignItems={{ md: 'center', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={1}>
           <Button
-            disabled={isSaving || isCreatingBggItem || isCreatingItem}
+            disabled={isSaving || isCreatingBggItem || isCreatingItem || isDeleting}
             sx={{ minHeight: 40, minWidth: { md: 190 }, textTransform: 'none', whiteSpace: 'nowrap' }}
             type="button"
             variant="outlined"
@@ -1137,7 +1197,7 @@ function ItemCandidateForm({
             {isCreatingBggItem ? 'Creating BGG item...' : 'Create item from BGG ID'}
           </Button>
           <Button
-            disabled={isSaving || isCreatingItem || isCreatingBggItem}
+            disabled={isSaving || isCreatingItem || isCreatingBggItem || isDeleting}
             startIcon={<AddCircleIcon />}
             sx={{ minHeight: 40, minWidth: { md: 230 }, textTransform: 'none', whiteSpace: 'nowrap' }}
             type="button"
@@ -1264,6 +1324,23 @@ function ItemCandidateForm({
           </Button>
           <Button disabled={!canConfirmBggDialog} type="button" variant="contained" onClick={handleConfirmBggDialog}>
             Create BGG Item
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog fullWidth maxWidth="xs" open={isDeleteDialogOpen} onClose={() => !isDeleting && setIsDeleteDialogOpen(false)}>
+        <DialogTitle>Delete Store Item</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Delete “{title}”? This permanently removes the store item and its review data. A linked catalog item will not be deleted.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={isDeleting} type="button" onClick={() => setIsDeleteDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button color="error" disabled={isDeleting} type="button" variant="contained" onClick={handleConfirmDelete}>
+            {isDeleting ? 'Deleting...' : 'Delete Store Item'}
           </Button>
         </DialogActions>
       </Dialog>

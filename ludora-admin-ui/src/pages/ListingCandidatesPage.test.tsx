@@ -790,6 +790,50 @@ describe('ListingCandidatesPage', () => {
     expect(await screen.findByText('Kitchen Rush Updated')).toBeInTheDocument();
   }, 10000);
 
+  it('deletes a store item from its details page after confirmation', async () => {
+    const user = userEvent.setup();
+    const candidate = {
+      id: '3365',
+      item_id: 77,
+      listing_status: 'LISTED',
+      source_url: 'https://store.mx/products/kitchen-rush',
+      title: 'Kitchen Rush'
+    };
+    let deleted = false;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse(deleted ? [] : [candidate], 200, {
+          page: 0,
+          page_size: 100,
+          total: deleted ? 0 : 1
+        });
+      }
+      if (path === '/discovery/listings/3365' && init?.method === 'DELETE') {
+        deleted = true;
+        return jsonResponse(candidate);
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    await user.dblClick(await screen.findByText('Kitchen Rush'));
+    await user.click(screen.getByRole('button', { name: 'Delete Store Item' }));
+
+    const confirmation = screen.getByRole('dialog', { name: 'Delete Store Item' });
+    expect(within(confirmation).getByText(/A linked catalog item will not be deleted/)).toBeInTheDocument();
+    await user.click(within(confirmation).getByRole('button', { name: 'Delete Store Item' }));
+
+    expect(await screen.findByText('Store item deleted.')).toBeInTheDocument();
+    expect(screen.getByRole('table', { name: 'Store items' })).toBeInTheDocument();
+    expect(screen.queryByText('Kitchen Rush')).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/listings/3365', {
+      credentials: 'include',
+      method: 'DELETE'
+    });
+  });
+
   it('creates a curated item from the item candidate form', async () => {
     const user = userEvent.setup();
     const originalCandidate = {

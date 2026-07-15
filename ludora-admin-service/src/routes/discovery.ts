@@ -1555,6 +1555,36 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.delete('/discovery/listings/:id', async (request, response, next) => {
+    try {
+      const candidateId = integerPathParam(request.params.id);
+      const result = await database.query(
+        `
+        with deleted_store_item as (
+          delete from store_items
+          where id = $1
+          returning *
+        ),
+        deleted_click_stats as (
+          delete from store_item_click_stats
+          where store_item_id in (select id from deleted_store_item)
+        )
+        select ${itemCandidateSelect}
+        from deleted_store_item
+        `,
+        [candidateId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Store item not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/discovery/listings/:id/create-item', async (request, response, next) => {
     try {
       const createOptions = parseCreateItemFromCandidateOptions(request.body);

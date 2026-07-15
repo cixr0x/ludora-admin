@@ -508,6 +508,10 @@ export const adminApi = {
   getItemCandidates: () => fetchRows('/discovery/listings'),
   getItemCandidate: (id: string) => fetchData<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`),
   getItemCandidatesPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/discovery/listings', query), query),
+  deleteItemCandidate: (id: string) =>
+    fetchData<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    }),
   createItemFromCandidate: (id: string, input: CreateItemFromCandidateInput = {}) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/create-item`, 'POST', {
       bgg_id: input.bgg_id ?? '',

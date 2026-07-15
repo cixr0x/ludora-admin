@@ -955,6 +955,23 @@ describe('fetchRows', () => {
     });
   });
 
+  it('deletes store items with a DELETE request', async () => {
+    const itemCandidate = { id: '3365', item_id: 77, title: 'Kitchen Rush' };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: itemCandidate }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.deleteItemCandidate('3365')).resolves.toEqual(itemCandidate);
+
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365', {
+      method: 'DELETE'
+    });
+  });
+
   it('confirms store items as boardgames with a POST request', async () => {
     const itemCandidate = { id: '3365', item_id: 77, listing_status: 'PENDING', title: 'Kitchen Rush' };
     const { adminApi } = await importClient();

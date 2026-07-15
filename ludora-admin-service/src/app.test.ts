@@ -1816,6 +1816,40 @@ describe('ludora admin service', () => {
     expect(query.params).toEqual(['920']);
   });
 
+  it('deletes a store item and its click stats without deleting the linked catalog item', async () => {
+    const row = { id: 920, item_id: 77, title: 'Cafe Barista' };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).delete('/discovery/listings/920');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    const query = queries[0];
+    const sql = normalizeSql(query.sql);
+    expect(sql).toContain('delete from store_items');
+    expect(sql).toContain('delete from store_item_click_stats');
+    expect(sql).toContain('where id = $1');
+    expect(sql).not.toContain('delete from items');
+    expect(query.params).toEqual([920]);
+  });
+
+  it('returns 404 when deleting an unknown store item', async () => {
+    const database: Database = {
+      query: async () => ({ rows: [] })
+    };
+
+    const response = await request(createApp({ database })).delete('/discovery/listings/920');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: { message: 'Store item not found' } });
+  });
+
   it('updates a discovery item candidate listing status only', async () => {
     const row = { id: '920', listing_status: 'LISTED', title: 'Cafe Barista' };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
