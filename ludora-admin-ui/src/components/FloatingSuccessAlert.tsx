@@ -1,5 +1,7 @@
 import { Alert, Box } from '@mui/material';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
+
+const DEFAULT_AUTO_HIDE_DURATION_MS = 3000;
 
 type FloatingSuccessAlertProps = {
   autoHideDuration?: number;
@@ -7,15 +9,25 @@ type FloatingSuccessAlertProps = {
   onClose: () => void;
 };
 
-export function FloatingSuccessAlert({ autoHideDuration, message, onClose }: FloatingSuccessAlertProps) {
+export function FloatingSuccessAlert({
+  autoHideDuration = DEFAULT_AUTO_HIDE_DURATION_MS,
+  message,
+  onClose
+}: FloatingSuccessAlertProps) {
+  const onCloseRef = useRef(onClose);
+
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!message || !autoHideDuration) {
       return undefined;
     }
 
-    const timeoutId = window.setTimeout(onClose, autoHideDuration);
+    const timeoutId = window.setTimeout(() => onCloseRef.current(), autoHideDuration);
     return () => window.clearTimeout(timeoutId);
-  }, [autoHideDuration, message, onClose]);
+  }, [autoHideDuration, message]);
 
   if (!message) {
     return null;
