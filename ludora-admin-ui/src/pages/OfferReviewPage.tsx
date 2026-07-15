@@ -1,8 +1,29 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import CancelIcon from '@mui/icons-material/Cancel';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import { Alert, Box, Button, CircularProgress, IconButton, Link, Stack, Tooltip, Typography } from '@mui/material';
+import LinkIcon from '@mui/icons-material/Link';
+import {
+  Alert,
+  Avatar,
+  Box,
+  Button,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Link,
+  List,
+  ListItemAvatar,
+  ListItemButton,
+  ListItemText,
+  Stack,
+  TextField,
+  Tooltip,
+  Typography
+} from '@mui/material';
 import { adminApi, type AdminRecord, type StoreItemListingStatus } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
@@ -124,10 +145,25 @@ function itemDisplayName(record: AdminRecord) {
   return `${itemName} (${spanishName})`;
 }
 
-function candidateNameLink(record: AdminRecord) {
+function candidateNameLink(record: AdminRecord, onOpenItemSearch: (row: AdminRecord) => void) {
   const candidateName = field(record, ['candidate_name']);
   const candidateId = field(record, ['candidate_id'], '');
-  return internalLink(candidateName, candidateId ? `#listings?id=${encodeURIComponent(candidateId)}` : '');
+  return (
+    <Stack alignItems="center" direction="row" spacing={0.5}>
+      {internalLink(candidateName, candidateId ? `#listings?id=${encodeURIComponent(candidateId)}` : '')}
+      <Tooltip title="Associate with an existing item">
+        <IconButton
+          aria-label={`Associate ${candidateName} with an existing item`}
+          color="primary"
+          disabled={!candidateId}
+          size="small"
+          onClick={() => onOpenItemSearch(record)}
+        >
+          <LinkIcon fontSize="small" />
+        </IconButton>
+      </Tooltip>
+    </Stack>
+  );
 }
 
 function itemNameLink(record: AdminRecord) {
@@ -281,6 +317,7 @@ function bggLink(record: AdminRecord) {
 }
 
 function buildOfferReviewColumns(
+  onOpenItemSearch: (row: AdminRecord) => void,
   onSetSpanishName: (row: AdminRecord) => void,
   savingCandidateId: string,
   onGenerateSpanishDescription: (row: AdminRecord) => void,
@@ -295,7 +332,7 @@ function buildOfferReviewColumns(
     label: 'Store item name',
     mobilePreview: true,
     minWidth: 220,
-    render: (row) => candidateNameLink(row),
+    render: (row) => candidateNameLink(row, onOpenItemSearch),
     sortValue: (row) => field(row, ['candidate_name'])
   },
   {
@@ -426,6 +463,9 @@ function buildOfferReviewColumns(
 
 export function OfferReviewPage() {
   const table = useServerTableState('candidate_name', 'asc', { store_item_listing_status: 'PENDING' });
+  const [associationReview, setAssociationReview] = useState<AdminRecord | null>(null);
+  const [associationError, setAssociationError] = useState('');
+  const [isAssociatingItem, setIsAssociatingItem] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
   const [generatingDescriptionCandidateId, setGeneratingDescriptionCandidateId] = useState('');
@@ -434,6 +474,61 @@ export function OfferReviewPage() {
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
     table,
     adminApi.getOfferReviewsPage
+  );
+  const handleOpenItemSearch = useCallback((row: AdminRecord) => {
+    setAssociationReview(row);
+    setAssociationError('');
+    setSaveError('');
+    setSaveMessage('');
+  }, []);
+  const handleAssociateItem = useCallback(
+    async (item: AdminRecord) => {
+      if (!associationReview) {
+        return;
+      }
+
+      const candidateId = field(associationReview, ['candidate_id', 'store_item_id'], '');
+      const itemId = field(item, ['id'], '');
+      if (!candidateId || !itemId) {
+        setAssociationError('The store item or catalog item is missing an ID.');
+        return;
+      }
+
+      setIsAssociatingItem(true);
+      setAssociationError('');
+      setSaveError('');
+      setSaveMessage('');
+
+      try {
+        await adminApi.associateItemCandidate(candidateId, itemId);
+        setRows((currentRows) =>
+          currentRows.map((currentRow, index) =>
+            field(currentRow, ['candidate_id', 'store_item_id'], String(index)) === candidateId
+              ? {
+                  ...currentRow,
+                  item_bgg_id: item.bgg_id ?? null,
+                  item_id: item.id,
+                  item_image_url: item.image_url ?? '',
+                  item_image_url_es: item.image_url_es ?? '',
+                  item_name: item.canonical_name ?? '',
+                  item_name_es: item.canonical_name_es ?? '',
+                  item_type: item.item_type ?? '',
+                  match_score: 1,
+                  match_source: 'MANUAL'
+                }
+              : currentRow
+          )
+        );
+        setAssociationReview(null);
+        setSaveMessage(`Store item associated with ${field(item, ['canonical_name_es', 'canonical_name'], 'catalog item')}.`);
+        table.refresh();
+      } catch {
+        setAssociationError('The store item could not be associated with this catalog item.');
+      } finally {
+        setIsAssociatingItem(false);
+      }
+    },
+    [associationReview, setRows, table]
   );
   const handleSetSpanishName = useCallback(
     async (row: AdminRecord) => {
@@ -559,6 +654,7 @@ export function OfferReviewPage() {
   const columns = useMemo(
     () =>
       buildOfferReviewColumns(
+        handleOpenItemSearch,
         handleSetSpanishName,
         savingSpanishNameCandidateId,
         handleGenerateSpanishDescription,
@@ -569,6 +665,7 @@ export function OfferReviewPage() {
     [
       generatingDescriptionCandidateId,
       handleGenerateSpanishDescription,
+      handleOpenItemSearch,
       handleSetListingStatus,
       handleSetSpanishName,
       savingSpanishNameCandidateId,
@@ -596,6 +693,18 @@ export function OfferReviewPage() {
 
       {state === 'error' ? <Alert severity="error">Store item reviews could not be loaded.</Alert> : null}
       <FloatingSuccessAlert message={saveMessage} onClose={() => setSaveMessage('')} />
+      <ItemAssociationDialog
+        review={associationReview}
+        error={associationError}
+        isAssociating={isAssociatingItem}
+        onAssociate={handleAssociateItem}
+        onClose={() => {
+          if (!isAssociatingItem) {
+            setAssociationReview(null);
+            setAssociationError('');
+          }
+        }}
+      />
       {saveError ? <Alert severity="error">{saveError}</Alert> : null}
 
       {state === 'ready' ? (
@@ -619,5 +728,165 @@ export function OfferReviewPage() {
         />
       ) : null}
     </Stack>
+  );
+}
+
+function ItemAssociationDialog({
+  error,
+  isAssociating,
+  onAssociate,
+  onClose,
+  review
+}: {
+  error: string;
+  isAssociating: boolean;
+  onAssociate: (item: AdminRecord) => Promise<void>;
+  onClose: () => void;
+  review: AdminRecord | null;
+}) {
+  const [isSearching, setIsSearching] = useState(false);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<AdminRecord[]>([]);
+  const [searchError, setSearchError] = useState('');
+
+  useEffect(() => {
+    if (!review) {
+      setQuery('');
+      setResults([]);
+      setSearchError('');
+      setIsSearching(false);
+      return;
+    }
+
+    setQuery(field(review, ['candidate_name'], ''));
+    setResults([]);
+    setSearchError('');
+  }, [review]);
+
+  useEffect(() => {
+    if (!review) {
+      return;
+    }
+
+    const searchQuery = query.trim();
+    if (searchQuery.length < 2) {
+      setResults([]);
+      setSearchError('');
+      setIsSearching(false);
+      return;
+    }
+
+    let ignore = false;
+    setIsSearching(true);
+    setSearchError('');
+    const timeoutId = window.setTimeout(() => {
+      adminApi
+        .getItemsPage({
+          filters: { name: searchQuery },
+          page: 0,
+          pageSize: 8,
+          sortColumnId: 'canonical_name',
+          sortDirection: 'asc'
+        })
+        .then((page) => {
+          if (!ignore) {
+            setResults(page.rows);
+          }
+        })
+        .catch(() => {
+          if (!ignore) {
+            setResults([]);
+            setSearchError('Catalog items could not be searched.');
+          }
+        })
+        .finally(() => {
+          if (!ignore) {
+            setIsSearching(false);
+          }
+        });
+    }, 200);
+
+    return () => {
+      ignore = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [query, review]);
+
+  const currentItemId = review ? field(review, ['item_id'], '') : '';
+
+  return (
+    <Dialog fullWidth maxWidth="sm" open={Boolean(review)} onClose={isAssociating ? undefined : onClose}>
+      <DialogTitle>Associate Store Item</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 0.5 }}>
+          <Box>
+            <Typography fontWeight={600} variant="body2">
+              {review ? field(review, ['candidate_name'], 'Store item') : 'Store item'}
+            </Typography>
+            {currentItemId ? (
+              <Typography color="text.secondary" variant="caption">
+                Currently associated with item {currentItemId}
+              </Typography>
+            ) : null}
+          </Box>
+          <TextField
+            autoFocus
+            disabled={isAssociating}
+            fullWidth
+            label="Search catalog items"
+            placeholder="Type at least 2 characters"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {error ? <Alert severity="error">{error}</Alert> : null}
+          {searchError ? <Alert severity="error">{searchError}</Alert> : null}
+          {isSearching ? (
+            <Stack alignItems="center" direction="row" spacing={1.5} sx={{ py: 2 }}>
+              <CircularProgress size={18} />
+              <Typography color="text.secondary" variant="body2">
+                Searching catalog items
+              </Typography>
+            </Stack>
+          ) : null}
+          {!isSearching && query.trim().length >= 2 && results.length === 0 && !searchError ? (
+            <Typography color="text.secondary" sx={{ py: 2 }} textAlign="center" variant="body2">
+              No matching catalog items.
+            </Typography>
+          ) : null}
+          {!isSearching && results.length > 0 ? (
+            <List aria-label="Catalog item matches" disablePadding sx={{ border: 1, borderColor: 'divider', borderRadius: 1 }}>
+              {results.map((item) => {
+                const itemId = field(item, ['id'], '');
+                const primaryName = field(item, ['canonical_name_es', 'canonical_name'], 'Untitled item');
+                const canonicalName = field(item, ['canonical_name'], '');
+                const secondaryName = canonicalName && canonicalName !== primaryName ? canonicalName : '';
+                const imageUrl = field(item, ['image_url_es', 'image_url'], '');
+                return (
+                  <ListItemButton
+                    aria-label={`Associate with ${primaryName}`}
+                    disabled={isAssociating || !itemId}
+                    key={itemId}
+                    onClick={() => void onAssociate(item)}
+                  >
+                    <ListItemAvatar>
+                      <Avatar alt={`${primaryName} cover`} src={imageUrl} sx={{ bgcolor: 'grey.100' }} variant="rounded" />
+                    </ListItemAvatar>
+                    <ListItemText
+                      primary={primaryName}
+                      secondary={[secondaryName, itemId ? `Item ${itemId}` : ''].filter(Boolean).join(' · ')}
+                    />
+                  </ListItemButton>
+                );
+              })}
+            </List>
+          ) : null}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button disabled={isAssociating} onClick={onClose}>
+          Close
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }

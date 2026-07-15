@@ -82,6 +82,96 @@ describe('OfferReviewPage', () => {
     );
   });
 
+  it('searches and associates an existing item from the store item review table', async () => {
+    const user = userEvent.setup();
+    const catalogItem = {
+      bgg_id: 377061,
+      canonical_name: 'Eternal',
+      canonical_name_es: 'Aeterna: Edicion en Espanol',
+      id: 77,
+      image_url: 'https://images.example/eternal.jpg',
+      image_url_es: 'https://images.example/aeterna-es.jpg',
+      item_type: 'base_game'
+    };
+    let currentReview: Record<string, unknown> = {
+      candidate_id: 3365,
+      candidate_image_url: 'https://www.amigocalavera.mx/aeterna.jpg',
+      candidate_name: 'Aeterna',
+      candidate_url: 'https://www.amigocalavera.mx/productos/aeterna/',
+      item_id: 11,
+      item_name: 'Incorrect Item',
+      store_item_listing_status: 'PENDING'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/admin/discovery/offer-reviews') && !init?.method) {
+        return new Response(
+          JSON.stringify({ data: [currentReview], meta: { page: 0, page_size: 100, total: 1 } }),
+          { headers: { 'Content-Type': 'application/json' }, status: 200 }
+        );
+      }
+      if (url.pathname.endsWith('/items') && !init?.method) {
+        return new Response(JSON.stringify({ data: [catalogItem], meta: { page: 0, page_size: 8, total: 1 } }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        });
+      }
+      if (url.pathname.endsWith('/discovery/listings/3365/associate-item') && init?.method === 'POST') {
+        currentReview = {
+          ...currentReview,
+          item_bgg_id: catalogItem.bgg_id,
+          item_id: catalogItem.id,
+          item_image_url: catalogItem.image_url,
+          item_image_url_es: catalogItem.image_url_es,
+          item_name: catalogItem.canonical_name,
+          item_name_es: catalogItem.canonical_name_es,
+          item_type: catalogItem.item_type,
+          match_score: 1,
+          match_source: 'MANUAL'
+        };
+        return new Response(JSON.stringify({ data: { id: 3365, item_id: catalogItem.id, match_source: 'MANUAL' } }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<OfferReviewPage />);
+
+    const reviewTable = await screen.findByRole('table', { name: 'Store item review' });
+    await user.click(within(reviewTable).getByRole('button', { name: 'Associate Aeterna with an existing item' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Associate Store Item' });
+    expect(within(dialog).getByLabelText('Search catalog items')).toHaveValue('Aeterna');
+    expect(within(dialog).getByText('Currently associated with item 11')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Aeterna: Edicion en Espanol')).toBeInTheDocument();
+    expect(within(dialog).getByText('Eternal · Item 77')).toBeInTheDocument();
+    expect(within(dialog).getByRole('img', { name: 'Aeterna: Edicion en Espanol cover' })).toHaveAttribute(
+      'src',
+      'https://images.example/aeterna-es.jpg'
+    );
+
+    const itemSearchRequest = fetchMock.mock.calls.find(([input]) => new URL(String(input)).pathname.endsWith('/items'));
+    expect(String(itemSearchRequest?.[0])).toContain('filter_name=Aeterna');
+    expect(String(itemSearchRequest?.[0])).toContain('page_size=8');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Associate with Aeterna: Edicion en Espanol' }));
+
+    expect(await screen.findByText('Store item associated with Aeterna: Edicion en Espanol.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/listings/3365/associate-item', {
+      body: JSON.stringify({ item_id: '77' }),
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+    expect(await screen.findByRole('link', { name: 'Eternal (Aeterna: Edicion en Espanol)' })).toHaveAttribute(
+      'href',
+      '#items?id=77'
+    );
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Associate Store Item' })).not.toBeInTheDocument());
+  });
+
   it('shows both review images side by side in the default mobile card', async () => {
     const originalMatchMedia = window.matchMedia;
     Object.defineProperty(window, 'matchMedia', {
