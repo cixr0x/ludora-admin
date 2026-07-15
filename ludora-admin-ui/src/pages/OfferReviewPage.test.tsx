@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { OfferReviewPage } from './OfferReviewPage';
@@ -56,11 +56,15 @@ describe('OfferReviewPage', () => {
     expect(screen.queryByRole('link', { name: 'Item form' })).not.toBeInTheDocument();
     expect(screen.getByText('0.9400')).toBeInTheDocument();
     expect(screen.getAllByText('BGG').length).toBeGreaterThan(0);
-    expect(screen.getByRole('img', { name: 'Store item image for Cafe Barista' })).toHaveAttribute(
+    const imageComparison = screen.getByRole('group', {
+      name: 'Image comparison for Cafe Barista and Coffee Rush'
+    });
+    expect(imageComparison).toHaveStyle({ flexDirection: 'row' });
+    expect(within(imageComparison).getByRole('img', { name: 'Store item image for Cafe Barista' })).toHaveAttribute(
       'src',
       'https://store.mx/cafe-barista.jpg'
     );
-    expect(screen.getByRole('img', { name: 'Item image for Coffee Rush' })).toHaveAttribute(
+    expect(within(imageComparison).getByRole('img', { name: 'Item image for Coffee Rush' })).toHaveAttribute(
       'src',
       'https://bgg.example/cafe-barista.jpg'
     );
@@ -76,6 +80,62 @@ describe('OfferReviewPage', () => {
       'href',
       'https://store.mx/products/cafe-barista'
     );
+  });
+
+  it('shows both review images side by side in the default mobile card', async () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        addEventListener: vi.fn(),
+        addListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        matches: query.includes('max-width'),
+        media: query,
+        onchange: null,
+        removeEventListener: vi.fn(),
+        removeListener: vi.fn()
+      })),
+      writable: true
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              candidate_id: 920,
+              candidate_image_url: 'https://store.mx/cafe-barista.jpg',
+              candidate_name: 'Cafe Barista',
+              candidate_url: 'https://store.mx/products/cafe-barista',
+              item_bgg_id: 377061,
+              item_id: 77,
+              item_image_url_es: 'https://bgg.example/cafe-barista.jpg',
+              item_name: 'Coffee Rush',
+              store_item_listing_status: 'PENDING'
+            }
+          ]
+        }),
+        { headers: { 'Content-Type': 'application/json' }, status: 200 }
+      )
+    );
+
+    try {
+      render(<OfferReviewPage />);
+
+      const cards = await screen.findByRole('list', { name: 'Store item review cards' });
+      const imageComparison = within(cards).getByRole('group', {
+        name: 'Image comparison for Cafe Barista and Coffee Rush'
+      });
+      expect(imageComparison).toHaveStyle({ flexDirection: 'row' });
+      expect(within(imageComparison).getByRole('img', { name: 'Store item image for Cafe Barista' })).toBeVisible();
+      expect(within(imageComparison).getByRole('img', { name: 'Item image for Coffee Rush' })).toBeVisible();
+    } finally {
+      Object.defineProperty(window, 'matchMedia', {
+        configurable: true,
+        value: originalMatchMedia,
+        writable: true
+      });
+    }
   });
 
   it('falls back to the original item image when no Spanish image exists', async () => {

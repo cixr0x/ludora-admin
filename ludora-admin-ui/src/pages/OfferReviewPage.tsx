@@ -39,9 +39,9 @@ function imageCell(record: AdminRecord, urlKeys: string | string[], nameKey: str
           color: 'text.secondary',
           display: 'flex',
           fontSize: 12,
-          height: 88,
+          height: { sm: 88, xs: 72 },
           justifyContent: 'center',
-          width: 88
+          width: { sm: 88, xs: 72 }
         }}
       >
         No image
@@ -60,9 +60,9 @@ function imageCell(record: AdminRecord, urlKeys: string | string[], nameKey: str
         borderColor: 'divider',
         borderRadius: 1,
         display: 'block',
-        height: 88,
+        height: { sm: 88, xs: 72 },
         objectFit: 'contain',
-        width: 88
+        width: { sm: 88, xs: 72 }
       }}
     />
   );
@@ -75,6 +75,34 @@ function imageCell(record: AdminRecord, urlKeys: string | string[], nameKey: str
     <Link href={linkUrl} rel="noreferrer" target="_blank">
       {image}
     </Link>
+  );
+}
+
+function imageComparisonCell(record: AdminRecord) {
+  const candidateName = field(record, ['candidate_name'], 'store item');
+  const itemName = field(record, ['item_name'], 'item');
+
+  return (
+    <Stack
+      aria-label={`Image comparison for ${candidateName} and ${itemName}`}
+      direction="row"
+      role="group"
+      spacing={{ sm: 1.5, xs: 1 }}
+      sx={{ alignItems: 'flex-start' }}
+    >
+      <Stack alignItems="center" spacing={0.5}>
+        <Typography color="text.secondary" variant="caption">
+          Store item
+        </Typography>
+        {imageCell(record, 'candidate_image_url', 'candidate_name', 'Store item', field(record, ['candidate_url'], ''))}
+      </Stack>
+      <Stack alignItems="center" spacing={0.5}>
+        <Typography color="text.secondary" variant="caption">
+          Catalog item
+        </Typography>
+        {imageCell(record, ['item_image_url_es', 'item_image_url'], 'item_name', 'Item', bggUrl(record))}
+      </Stack>
+    </Stack>
   );
 }
 
@@ -265,6 +293,7 @@ function buildOfferReviewColumns(
     filterValue: (row) => field(row, ['candidate_name']),
     id: 'candidate_name',
     label: 'Store item name',
+    mobilePreview: true,
     minWidth: 220,
     render: (row) => candidateNameLink(row),
     sortValue: (row) => field(row, ['candidate_name'])
@@ -294,19 +323,12 @@ function buildOfferReviewColumns(
     sortValue: (row) => itemDisplayName(row)
   },
   {
-    filterValue: (row) => field(row, ['candidate_image_url']),
-    id: 'candidate_image',
-    label: 'Store item picture',
-    minWidth: 128,
-    render: (row) => imageCell(row, 'candidate_image_url', 'candidate_name', 'Store item', field(row, ['candidate_url'], '')),
-    sortable: false
-  },
-  {
-    filterValue: (row) => field(row, ['item_image_url_es', 'item_image_url']),
-    id: 'item_image',
-    label: 'Item picture',
-    minWidth: 128,
-    render: (row) => imageCell(row, ['item_image_url_es', 'item_image_url'], 'item_name', 'Item', bggUrl(row)),
+    filterable: false,
+    id: 'image_comparison',
+    label: 'Pictures',
+    mobilePreview: true,
+    minWidth: 224,
+    render: (row) => imageComparisonCell(row),
     sortable: false
   },
   {
