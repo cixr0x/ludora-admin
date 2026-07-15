@@ -485,6 +485,10 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     table,
     adminApi.getItemCandidatesPage
   );
+  const selectableBatchCandidateIds = useMemo(
+    () => rows.filter((row) => !isBoardgameConfirmed(row)).map(candidateId).filter(Boolean),
+    [rows]
+  );
 
   const handleSetBoardgameState = useCallback(
     async (candidate: AdminRecord, isBoardgame: boolean) => {
@@ -809,7 +813,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
   return (
     <Stack spacing={2}>
       <Box>
-        <Stack alignItems={{ sm: 'center', xs: 'flex-start' }} direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
+        <Stack alignItems={{ md: 'center', xs: 'flex-start' }} direction={{ md: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
           <Box>
             <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
               Store Items
@@ -819,7 +823,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
             </Typography>
           </Box>
           {viewMode === 'table' ? (
-            <Stack alignItems={{ sm: 'center', xs: 'stretch' }} direction={{ sm: 'row', xs: 'column' }} spacing={1}>
+            <Stack alignItems={{ md: 'center', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={1}>
               <Button
                 disabled={isBatchConfirming}
                 type="button"
@@ -841,6 +845,25 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
               </Button>
               {isBatchModeEnabled ? (
                 <>
+                  <Button
+                    disabled={selectableBatchCandidateIds.length === 0 || isBatchConfirming}
+                    type="button"
+                    variant="outlined"
+                    onClick={() => setSelectedBatchCandidateIds(new Set(selectableBatchCandidateIds))}
+                  >
+                    Select all loaded ({selectableBatchCandidateIds.length})
+                  </Button>
+                  <Button
+                    disabled={selectedBatchCandidateIds.size === 0 || isBatchConfirming}
+                    type="button"
+                    variant="text"
+                    onClick={() => {
+                      batchSelectionAnchorId.current = null;
+                      setSelectedBatchCandidateIds(new Set());
+                    }}
+                  >
+                    Clear selection
+                  </Button>
                   <Button
                     disabled={selectedBatchCandidateIds.size === 0 || isBatchConfirming}
                     type="button"
@@ -869,7 +892,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
                   </Typography>
                   {!batchProgress ? (
                     <Typography color="text.secondary" variant="caption">
-                      Shift-click to select a row range
+                      Use the checkboxes or select all loaded. Shift-click selects a range on desktop.
                     </Typography>
                   ) : null}
                 </>
@@ -939,6 +962,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
           ariaLabel="Store items"
           columns={itemCandidateColumns}
           getRowKey={(row, index) => field(row, ['id'], String(index))}
+          mobileActionLabel={(row) => `Open ${field(row, ['title', 'name'], 'store item')}`}
           minWidth={isBatchModeEnabled ? 3466 : 3394}
           onRowDoubleClick={(row) => {
             setDetailState('ready');

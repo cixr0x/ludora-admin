@@ -406,6 +406,7 @@ export function FrontPageCategoriesPage() {
             columns={frontPageCategoryColumns()}
             defaultSortColumnId="order"
             getRowKey={(row, index) => valueFor(row, ['id'], String(index))}
+            mobileActionLabel={(row) => `Edit ${valueFor(row, ['title'], 'category')}`}
             minWidth={990}
             onRowDoubleClick={openEditForm}
             serverSide

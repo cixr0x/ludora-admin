@@ -575,6 +575,7 @@ export function StoresPage() {
           columns={storeColumns()}
           defaultSortColumnId="canonical_domain"
           getRowKey={(row, index) => valueFor(row, ['id'], String(index))}
+          mobileActionLabel={(row) => `Edit ${valueFor(row, ['name'], 'store')}`}
           minWidth={1580}
           onRowDoubleClick={handleEditStore}
           serverSide

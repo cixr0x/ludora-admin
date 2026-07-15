@@ -116,16 +116,26 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
 
   return (
     <Stack spacing={2.5}>
-      <Stack alignItems={{ sm: 'center' }} direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2}>
+      <Stack
+        alignItems={{ sm: 'center', xs: 'stretch' }}
+        direction={{ xs: 'column', sm: 'row' }}
+        justifyContent="space-between"
+        spacing={2}
+      >
         <Stack spacing={0.5}>
-          <Typography component="h1" variant="h4">
+          <Typography component="h1" variant="h4" sx={{ fontSize: { sm: '2.125rem', xs: '1.5rem' } }}>
             Store Item Update History
           </Typography>
           <Typography color="text.secondary" variant="body2">
             {storeName} · Run {runId}
           </Typography>
         </Stack>
-        <Stack direction="row" spacing={1}>
+        <Stack
+          alignItems={{ sm: 'center', xs: 'stretch' }}
+          direction={{ sm: 'row', xs: 'column' }}
+          spacing={1}
+          sx={{ width: { sm: 'auto', xs: '100%' } }}
+        >
           <Button startIcon={<ArrowBackIcon />} variant="outlined" onClick={onBack}>
             Back to update jobs
           </Button>

@@ -203,6 +203,7 @@ export function FrontPageCategoryOptionsPage({ onOpenProducts }: FrontPageCatego
           columns={taxonomyOptionColumns(addingKey, handleAdd)}
           defaultSortColumnId="category_type"
           getRowKey={(row) => optionKey(row)}
+          mobileActionLabel={(row) => `Open products for ${row.name_es || row.name || row.category_type}`}
           minWidth={690}
           onRowClick={onOpenProducts}
           rows={rows}

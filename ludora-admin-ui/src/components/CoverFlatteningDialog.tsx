@@ -15,7 +15,9 @@ import {
   Radio,
   RadioGroup,
   Stack,
-  Typography
+  Typography,
+  useMediaQuery,
+  useTheme
 } from '@mui/material';
 import { useEffect, useRef, useState } from 'react';
 
@@ -50,6 +52,8 @@ export function CoverFlatteningDialog({
   onClose: () => void;
   request: CoverFlatteningRequest | null;
 }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [workflow, setWorkflow] = useState<CoverFlatteningWorkflow | null>(null);
   const [mode, setMode] = useState<CoverFlatteningMode>('candidates');
   const [candidateUrls, setCandidateUrls] = useState<Record<number, string>>({});
@@ -294,6 +298,7 @@ export function CoverFlatteningDialog({
 
   return (
     <Dialog
+      fullScreen={isMobile}
       fullWidth
       maxWidth="lg"
       open={Boolean(request)}
@@ -438,7 +443,7 @@ export function CoverFlatteningDialog({
               <FormControl>
                 <FormLabel>Output aspect ratio</FormLabel>
                 <RadioGroup
-                  row
+                  row={!isMobile}
                   value={aspectRatioChoice}
                   onChange={(event) => setAspectRatioChoice(event.target.value as AspectRatioChoice)}
                 >
@@ -467,7 +472,7 @@ export function CoverFlatteningDialog({
               <FormControl>
                 <FormLabel>Rectangle orientation</FormLabel>
                 <RadioGroup
-                  row
+                  row={!isMobile}
                   value={aspectRatioOrientation}
                   onChange={(event) => setAspectRatioOrientation(event.target.value as AspectRatioOrientation)}
                 >
@@ -479,7 +484,7 @@ export function CoverFlatteningDialog({
               <FormControl>
                 <FormLabel>Save selected candidate as</FormLabel>
                 <RadioGroup
-                  row
+                  row={!isMobile}
                   value={targetField}
                   onChange={(event) => setTargetField(event.target.value as CoverImageField)}
                 >
@@ -513,7 +518,22 @@ export function CoverFlatteningDialog({
           ) : null}
         </Stack>
       </DialogContent>
-      <DialogActions>
+      <DialogActions
+        sx={{
+          alignItems: isMobile ? 'stretch' : 'center',
+          flexDirection: isMobile ? 'column' : 'row',
+          px: isMobile ? 2 : 1,
+          py: isMobile ? 1.5 : 1,
+          '& .MuiButton-root': {
+            minHeight: isMobile ? 44 : undefined,
+            width: isMobile ? '100%' : 'auto'
+          },
+          '& > :not(style) ~ :not(style)': {
+            marginLeft: isMobile ? 0 : 1,
+            marginTop: isMobile ? 1 : 0
+          }
+        }}
+      >
         <Button disabled={isAccepting || isCreatingManualCandidate} onClick={handleClose}>Cancel</Button>
         {workflow && mode === 'manual' ? (
           <>

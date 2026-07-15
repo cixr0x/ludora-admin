@@ -330,6 +330,7 @@ function storeCandidateColumns(
     filterValue: (row) => statusFor(row),
     id: 'status',
     label: 'Status',
+    mobilePreview: true,
     minWidth: 120,
     render: (row) => {
       const status = statusFor(row);
@@ -341,6 +342,7 @@ function storeCandidateColumns(
     filterable: false,
     id: 'actions',
     label: 'Actions',
+    mobilePreview: true,
     minWidth: 190,
     render: (row) => (
       <StoreCandidateActions
@@ -704,6 +706,7 @@ export function StoreCandidatesPage() {
           columns={columns}
           defaultSortColumnId="canonical_domain"
           getRowKey={(row, index) => valueFor(row, ['id'], String(index))}
+          mobileActionLabel={(row) => `Edit ${valueFor(row, ['store_name', 'name'], 'store candidate')}`}
           minWidth={1770}
           onRowDoubleClick={handleEditCandidate}
           serverSide

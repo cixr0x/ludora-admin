@@ -333,6 +333,37 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByText('3 selected')).toBeInTheDocument();
   });
 
+  it('selects and clears all loaded unconfirmed store items without shift-click', async () => {
+    const user = userEvent.setup();
+    const candidates = [
+      { id: '121', is_boardgame_confirmed: false, title: 'First Touch Item' },
+      { id: '122', is_boardgame_confirmed: true, title: 'Confirmed Touch Item' },
+      { id: '123', is_boardgame_confirmed: false, title: 'Second Touch Item' }
+    ];
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (pathOf(url) === '/discovery/listings' && !init?.method) {
+        return jsonResponse(candidates, 200, { page: 0, page_size: 100, total: candidates.length });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    expect(await screen.findByText('First Touch Item')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Batch confirmation' }));
+    await user.click(screen.getByRole('button', { name: 'Select all loaded (2)' }));
+
+    expect(screen.getByRole('checkbox', { name: 'Select First Touch Item' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Confirmed Touch Item' })).toBeDisabled();
+    expect(screen.getByRole('checkbox', { name: 'Select Second Touch Item' })).toBeChecked();
+    expect(screen.getByText('2 selected')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(screen.getByRole('checkbox', { name: 'Select First Touch Item' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Select Second Touch Item' })).not.toBeChecked();
+  });
+
   it('batch marks selected store items as not boardgames sequentially', async () => {
     const user = userEvent.setup();
     const originalCandidates = [

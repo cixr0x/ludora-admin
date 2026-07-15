@@ -23,6 +23,71 @@ describe('CoverFlatteningDialog', () => {
     vi.clearAllMocks();
   });
 
+  it('uses a fullscreen, stacked workflow layout below the md breakpoint', async () => {
+    useMobileViewport();
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/admin/cover-flattening-workflows/items')) {
+        return jsonResponse({
+          data: {
+            automatic_error: null,
+            candidates: [
+              {
+                aspect_ratio: 0.75,
+                aspect_ratio_method: 'edge_average',
+                construction: 'two-face cover',
+                height: 500,
+                index: 1,
+                square_snapped: false,
+                vanishing_confidence: 0,
+                width: 375
+              }
+            ],
+            created_at: '2026-07-11T12:00:00.000Z',
+            expires_at: '2026-07-11T12:30:00.000Z',
+            item_id: 77,
+            perspective: 'two_faces',
+            source_field: 'image_url',
+            store_item_id: null,
+            workflow_id: 'flatten-mobile-77'
+          }
+        }, 201);
+      }
+      if (url.endsWith('/admin/cover-flattening-workflows/flatten-mobile-77/candidates/1')) {
+        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(
+      <CoverFlatteningDialog
+        request={{
+          id: '77',
+          kind: 'item',
+          sources: [{ field: 'image_url', url: 'https://example.com/box.jpg' }],
+          title: 'Mobile Box'
+        }}
+        onAccepted={() => undefined}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(await screen.findByAltText('Flattened cover candidate 1')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveClass('MuiDialog-paperFullScreen');
+
+    const ratioGroup = screen.getByLabelText('Square (1:1)', { selector: 'input' }).closest('[role="radiogroup"]');
+    const orientationGroup = screen.getByLabelText('Horizontal', { selector: 'input' }).closest('[role="radiogroup"]');
+    const targetGroup = screen.getByLabelText('Spanish image', { selector: 'input' }).closest('[role="radiogroup"]');
+    expect(ratioGroup).not.toHaveClass('MuiFormGroup-row');
+    expect(orientationGroup).not.toHaveClass('MuiFormGroup-row');
+    expect(targetGroup).not.toHaveClass('MuiFormGroup-row');
+
+    const actions = dialog.querySelector('.MuiDialogActions-root');
+    expect(actions).toHaveStyle({ alignItems: 'stretch', flexDirection: 'column' });
+    expect(screen.getByRole('button', { name: 'Accept candidate' })).toHaveStyle({ minHeight: '44px', width: '100%' });
+  });
+
   it('chooses an item source, displays candidates, and accepts one for image_url_es', async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -335,4 +400,20 @@ function jsonResponse(payload: unknown, status = 200): Response {
     headers: { 'Content-Type': 'application/json' },
     status
   });
+}
+
+function useMobileViewport() {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((query: string) => ({
+      addEventListener: vi.fn(),
+      addListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      matches: query.includes('max-width:899.95px'),
+      media: query,
+      onchange: null,
+      removeEventListener: vi.fn(),
+      removeListener: vi.fn()
+    }))
+  );
 }

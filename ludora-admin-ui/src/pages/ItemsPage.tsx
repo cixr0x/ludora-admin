@@ -383,6 +383,7 @@ function linkedCandidateColumns({
       filterable: false,
       id: 'cover_workflow',
       label: 'Cover',
+      mobilePreview: true,
       minWidth: 90,
       render: (row) => (
         <Stack direction="row" justifyContent="center" spacing={0.5}>
@@ -477,6 +478,7 @@ function itemRelationshipColumns({
       filterable: false,
       id: 'actions',
       label: 'Actions',
+      mobilePreview: true,
       minWidth: 90,
       render: (row) => (
         <RelationshipDeleteAction
@@ -972,6 +974,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
           ariaLabel="Items"
           columns={itemColumns}
           getRowKey={(row, index) => field(row, ['id'], String(index))}
+          mobileActionLabel={(row) => `Open ${field(row, ['canonical_name'], 'item')}`}
           minWidth={1410}
           onRowDoubleClick={(row) => {
             setDetailState('ready');
@@ -1114,32 +1117,34 @@ function ItemForm({
             </Box>
             <Stack direction={{ sm: 'row', xs: 'column' }} spacing={1} sx={{ width: { sm: 'auto', xs: '100%' } }}>
               <Tooltip title={canStartItemCoverWorkflow ? 'Start cover workflow from item image' : 'Requires an item image'}>
-                <span>
+                <Box component="span" sx={{ display: 'block', width: { sm: 'auto', xs: '100%' } }}>
                   <Button
                     aria-label={`Start cover workflow from item image for ${title}`}
                     disabled={!canStartItemCoverWorkflow}
                     startIcon={isStartingItemCoverWorkflow ? <CircularProgress size={18} /> : <ImageSearchIcon />}
+                    sx={{ width: { sm: 'auto', xs: '100%' } }}
                     type="button"
                     variant="outlined"
                     onClick={() => onStartItemLocalCoverWorkflow(item)}
                   >
                     {isStartingItemCoverWorkflow ? 'Starting...' : 'Start cover workflow'}
                   </Button>
-                </span>
+                </Box>
               </Tooltip>
               <Tooltip title={canFlattenItemCover ? 'Flatten an item cover image' : 'Requires an item image'}>
-                <span>
+                <Box component="span" sx={{ display: 'block', width: { sm: 'auto', xs: '100%' } }}>
                   <Button
                     aria-label={`Flatten cover for ${title}`}
                     disabled={!canFlattenItemCover}
                     startIcon={<AutoFixHighIcon />}
+                    sx={{ width: { sm: 'auto', xs: '100%' } }}
                     type="button"
                     variant="outlined"
                     onClick={() => onStartItemCoverFlattening(item)}
                   >
                     Flatten cover
                   </Button>
-                </span>
+                </Box>
               </Tooltip>
               <Button disabled={isSaving} startIcon={<SaveIcon />} type="submit" variant="contained">
                 {isSaving ? 'Saving...' : 'Save Item'}

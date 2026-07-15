@@ -321,6 +321,7 @@ function buildOfferReviewColumns(
     filterable: false,
     id: 'listing_status_actions',
     label: 'List',
+    mobilePreview: true,
     minWidth: 104,
     render: (row) => listingStatusActions(row, onSetListingStatus, updatingListingStatusCandidateId),
     sortable: false
@@ -329,6 +330,7 @@ function buildOfferReviewColumns(
     filterValue: (row) => field(row, ['store_item_listing_status']),
     id: 'store_item_listing_status',
     label: 'Listing status',
+    mobilePreview: true,
     minWidth: 150,
     render: (row) => field(row, ['store_item_listing_status']),
     sortValue: (row) => field(row, ['store_item_listing_status'])

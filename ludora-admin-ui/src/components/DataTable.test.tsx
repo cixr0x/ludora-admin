@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DataTable, type DataTableColumn, type DataTableState } from './DataTable';
 
 type Row = {
@@ -37,6 +37,33 @@ const columns: DataTableColumn<Row>[] = [
     sortValue: (row) => row.confidence
   }
 ];
+
+const originalMatchMedia = window.matchMedia;
+
+afterEach(() => {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: originalMatchMedia,
+    writable: true
+  });
+});
+
+function useMobileViewport() {
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      addEventListener: vi.fn(),
+      addListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      matches: query.includes('max-width'),
+      media: query,
+      onchange: null,
+      removeEventListener: vi.fn(),
+      removeListener: vi.fn()
+    })),
+    writable: true
+  });
+}
 
 describe('DataTable', () => {
   it('sorts rows by column headers', async () => {
@@ -250,5 +277,37 @@ describe('DataTable', () => {
 
     expect(labelHeader).toHaveStyle({ position: 'sticky', top: '0px' });
     expect(filterHeader).toHaveStyle({ position: 'sticky', top: '42px' });
+  });
+
+  it('uses filterable cards with a touch-friendly open action on phones', async () => {
+    useMobileViewport();
+    const user = userEvent.setup();
+    const handleOpen = vi.fn();
+
+    render(
+      <DataTable
+        ariaLabel="Store items"
+        columns={columns}
+        getRowKey={(row) => row.id}
+        rows={rows}
+        onRowDoubleClick={handleOpen}
+      />
+    );
+
+    expect(screen.queryByRole('table', { name: 'Stores' })).not.toBeInTheDocument();
+    const cards = screen.getByRole('list', { name: 'Store items cards' });
+    expect(within(cards).getAllByRole('listitem')).toHaveLength(3);
+    expect(within(cards).getAllByRole('listitem')[0]).toHaveStyle({ flexShrink: 0 });
+
+    await user.click(screen.getByRole('button', { name: 'Filter and sort' }));
+    expect(screen.getByLabelText('Filter field')).toBeInTheDocument();
+    await user.type(screen.getByLabelText('Filter value'), 'alpha');
+
+    expect(within(cards).getByText('Alpha Mesa')).toBeInTheDocument();
+    expect(within(cards).queryByText('Beta Juegos')).not.toBeInTheDocument();
+    expect(within(cards).queryByText('Gamma Ludica')).not.toBeInTheDocument();
+
+    await user.click(within(cards).getByRole('button', { name: 'Open record' }));
+    expect(handleOpen).toHaveBeenCalledWith(rows[1]);
   });
 });

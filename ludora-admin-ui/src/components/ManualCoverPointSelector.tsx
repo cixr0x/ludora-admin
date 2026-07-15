@@ -1,4 +1,4 @@
-import { Box, Button, Stack, Typography } from '@mui/material';
+import { Box, Button, Stack, Typography, useMediaQuery, useTheme } from '@mui/material';
 import {
   useEffect,
   useId,
@@ -26,6 +26,8 @@ export function ManualCoverPointSelector({
   onChange: (points: CoverPoint[]) => void;
   points: CoverPoint[];
 }) {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const instructionId = useId();
   const zoomSurfaceRef = useRef<HTMLDivElement | null>(null);
   const [zoomAnchor, setZoomAnchor] = useState<CoverPoint | null>(null);
@@ -280,7 +282,19 @@ export function ManualCoverPointSelector({
         )}
       </Box>
 
-      <Stack direction="row" spacing={1}>
+      <Stack
+        aria-label="Manual point controls"
+        direction={isMobile ? 'column' : 'row'}
+        role="group"
+        spacing={1}
+        sx={{
+          alignItems: isMobile ? 'stretch' : undefined,
+          '& .MuiButton-root': {
+            minHeight: isMobile ? 44 : undefined,
+            width: isMobile ? '100%' : undefined
+          }
+        }}
+      >
         {zoomAnchor ? (
           <Button disabled={disabled} onClick={() => setZoomAnchor(null)}>
             Back to full image

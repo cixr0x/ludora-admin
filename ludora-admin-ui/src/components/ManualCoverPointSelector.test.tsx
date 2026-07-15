@@ -2,12 +2,36 @@ import '@testing-library/jest-dom/vitest';
 
 import { fireEvent, render, screen } from '@testing-library/react';
 import { useState } from 'react';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { CoverPoint } from '../api/client';
 import { ManualCoverPointSelector } from './ManualCoverPointSelector';
 
 describe('ManualCoverPointSelector', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('uses overflow-safe stacked controls at narrow widths', () => {
+    useMobileViewport();
+    render(
+      <ManualCoverPointSelector
+        imageTitle="Mobile box"
+        imageUrl="blob:mobile"
+        points={[]}
+        onChange={() => undefined}
+      />
+    );
+
+    selectPoint(110, 70);
+
+    const controls = screen.getByRole('group', { name: 'Manual point controls' });
+    expect(controls).toHaveStyle({ alignItems: 'stretch', flexDirection: 'column' });
+    for (const name of ['Back to full image', 'Undo last point', 'Reset points']) {
+      expect(screen.getByRole('button', { name })).toHaveStyle({ minHeight: '44px', width: '100%' });
+    }
+  });
+
   it('uses an 8x confirmation zoom for each corner and supports undo and reset', () => {
     const onPointsChange = vi.fn();
 
@@ -166,4 +190,20 @@ function rectangle(left: number, top: number, width: number, height: number): DO
     x: left,
     y: top
   };
+}
+
+function useMobileViewport() {
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn().mockImplementation((query: string) => ({
+      addEventListener: vi.fn(),
+      addListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+      matches: query.includes('max-width:899.95px'),
+      media: query,
+      onchange: null,
+      removeEventListener: vi.fn(),
+      removeListener: vi.fn()
+    }))
+  );
 }

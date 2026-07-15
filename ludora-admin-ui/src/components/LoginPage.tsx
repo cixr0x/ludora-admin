@@ -18,7 +18,19 @@ export function LoginPage({ error, isSubmitting, onSubmit }: LoginPageProps) {
   }
 
   return (
-    <Box sx={{ alignItems: 'center', bgcolor: 'grey.100', display: 'flex', minHeight: '100vh', px: 2 }}>
+    <Box
+      sx={{
+        alignItems: 'center',
+        bgcolor: 'grey.100',
+        display: 'flex',
+        minHeight: '100vh',
+        px: { sm: 2, xs: 1.5 },
+        py: { sm: 4, xs: 2 },
+        '@supports (min-height: 100dvh)': {
+          minHeight: '100dvh'
+        }
+      }}
+    >
       <Paper
         component="form"
         elevation={0}
@@ -28,7 +40,7 @@ export function LoginPage({ error, isSubmitting, onSubmit }: LoginPageProps) {
           borderRadius: 1,
           maxWidth: 420,
           mx: 'auto',
-          p: 4,
+          p: { sm: 4, xs: 2.5 },
           width: '100%'
         }}
         onSubmit={handleSubmit}

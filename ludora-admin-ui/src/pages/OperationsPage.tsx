@@ -232,7 +232,7 @@ function errorCell(value: string) {
 function websiteLink(record: AdminRecord) {
   const url = optionalRecordText(record, 'website_url');
   return url ? (
-    <Link href={url} rel="noreferrer" target="_blank">
+    <Link href={url} rel="noreferrer" target="_blank" sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
       {url}
     </Link>
   ) : (
@@ -577,7 +577,12 @@ function ImageOptimizationFailure({ failure }: { failure: FailedCoverImage }) {
           Item {failure.itemId} {failure.field}
         </Typography>
         <Typography variant="body2">{failure.error}</Typography>
-        <Link href={failure.sourceUrl} rel="noreferrer" target="_blank">
+        <Link
+          href={failure.sourceUrl}
+          rel="noreferrer"
+          target="_blank"
+          sx={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+        >
           {failure.sourceUrl}
         </Link>
       </Stack>
@@ -919,7 +924,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
                   const platform = optionalRecordText(store, 'platform');
                   const details = [domain, websiteUrl, platform].filter(Boolean).join(' | ');
                   return (
-                    <Paper key={storeId} variant="outlined" sx={{ p: 1.25 }}>
+                    <Paper key={storeId} variant="outlined" sx={{ minWidth: 0, p: 1.25 }}>
                       <FormControlLabel
                         control={
                           <Checkbox
@@ -928,17 +933,28 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
                           />
                         }
                         label={
-                          <Box>
-                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                          <Box sx={{ minWidth: 0, pt: 0.5 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>
                               {name}
                             </Typography>
                             {details ? (
-                              <Typography color="text.secondary" variant="caption">
+                              <Typography
+                                color="text.secondary"
+                                variant="caption"
+                                sx={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                              >
                                 {details}
                               </Typography>
                             ) : null}
                           </Box>
                         }
+                        sx={{
+                          alignItems: 'flex-start',
+                          m: 0,
+                          maxWidth: '100%',
+                          width: '100%',
+                          '& .MuiFormControlLabel-label': { flex: 1, minWidth: 0 }
+                        }}
                       />
                     </Paper>
                   );
@@ -1022,7 +1038,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
                   const platform = optionalRecordText(store, 'platform');
                   const details = [domain, websiteUrl, platform].filter(Boolean).join(' | ');
                   return (
-                    <Paper key={storeId} variant="outlined" sx={{ p: 1.25 }}>
+                    <Paper key={storeId} variant="outlined" sx={{ minWidth: 0, p: 1.25 }}>
                       <FormControlLabel
                         control={
                           <Checkbox
@@ -1031,17 +1047,28 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
                           />
                         }
                         label={
-                          <Box>
-                            <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                          <Box sx={{ minWidth: 0, pt: 0.5 }}>
+                            <Typography variant="body2" sx={{ fontWeight: 700, overflowWrap: 'anywhere' }}>
                               {name}
                             </Typography>
                             {details ? (
-                              <Typography color="text.secondary" variant="caption">
+                              <Typography
+                                color="text.secondary"
+                                variant="caption"
+                                sx={{ display: 'block', overflowWrap: 'anywhere', wordBreak: 'break-word' }}
+                              >
                                 {details}
                               </Typography>
                             ) : null}
                           </Box>
                         }
+                        sx={{
+                          alignItems: 'flex-start',
+                          m: 0,
+                          maxWidth: '100%',
+                          width: '100%',
+                          '& .MuiFormControlLabel-label': { flex: 1, minWidth: 0 }
+                        }}
                       />
                     </Paper>
                   );

@@ -81,16 +81,26 @@ export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; on
 
   return (
     <Stack spacing={2.5}>
-      <Stack alignItems={{ sm: 'center' }} direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" spacing={2}>
+      <Stack
+        alignItems={{ sm: 'center', xs: 'stretch' }}
+        direction={{ xs: 'column', sm: 'row' }}
+        justifyContent="space-between"
+        spacing={2}
+      >
         <Stack spacing={0.5}>
-          <Typography component="h1" variant="h4">
+          <Typography component="h1" variant="h4" sx={{ fontSize: { sm: '2.125rem', xs: '1.5rem' } }}>
             Store Item Discovery Log
           </Typography>
           <Typography color="text.secondary" variant="body2">
             Job #{jobId}{job ? ` · Run ${recordText(job, 'run_id', 'unknown')}` : ''}
           </Typography>
         </Stack>
-        <Stack direction="row" spacing={1}>
+        <Stack
+          alignItems={{ sm: 'center', xs: 'stretch' }}
+          direction={{ sm: 'row', xs: 'column' }}
+          spacing={1}
+          sx={{ width: { sm: 'auto', xs: '100%' } }}
+        >
           <Button startIcon={<ArrowBackIcon />} variant="outlined" onClick={onBack}>
             Back to discovery jobs
           </Button>
@@ -152,12 +162,15 @@ export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; on
             fontFamily: 'Consolas, Monaco, monospace',
             fontSize: 13,
             lineHeight: 1.6,
-            maxHeight: '65vh',
-            minHeight: 360,
+            maxHeight: { sm: '65vh', xs: '50vh' },
+            minHeight: { sm: 360, xs: 220 },
             overflow: 'auto',
             p: 2,
             whiteSpace: 'pre-wrap',
-            wordBreak: 'break-word'
+            wordBreak: 'break-word',
+            '@supports (height: 100dvh)': {
+              maxHeight: { sm: '65vh', xs: '50dvh' }
+            }
           }}
         >
           {formattedContent ||
