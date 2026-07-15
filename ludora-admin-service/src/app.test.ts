@@ -733,6 +733,32 @@ describe('ludora admin service', () => {
     expect(rowQuery?.params).toEqual(['%coffee%', 25, 0]);
   });
 
+  it('searches catalog items across canonical and Spanish names', async () => {
+    const rows = [{ canonical_name: 'Eternal', canonical_name_es: 'Aeterna', id: 77 }];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).includes('count(*)')) {
+          return { rows: [{ total: 1 }] };
+        }
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get(
+      '/items?page=0&page_size=8&sort=canonical_name&sort_direction=asc&filter_name=aeterna'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual(rows);
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, canonical_name'));
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain(
+      "where coalesce((concat_ws(' ', canonical_name, canonical_name_es))::text, '') ilike $1 escape '\\'"
+    );
+    expect(rowQuery?.params).toEqual(['%aeterna%', 8, 0]);
+  });
+
   it('filters and sorts catalog items by id in the database query', async () => {
     const rows = [{ canonical_name: 'Coffee Rush', id: 377061, item_type: 'base_game' }];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
@@ -2735,6 +2761,46 @@ describe('ludora admin service', () => {
     expect(response.status).toBe(201);
     expect(response.body).toEqual({ data: rows });
     expect(calls).toEqual([42]);
+  });
+
+  it('manually associates a store item with an existing catalog item', async () => {
+    const row = {
+      id: 42,
+      is_boardgame: true,
+      is_boardgame_confirmed: true,
+      item_id: 77,
+      match_source: 'MANUAL',
+      matched_bgg_id: 377061,
+      matched_name: 'Eternal',
+      title: 'Aeterna'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/discovery/listings/42/associate-item')
+      .send({ item_id: '77' });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('select id, bgg_id, canonical_name from items where id = $2');
+    expect(sql).toContain('update store_items set item_id = linked_item.id');
+    expect(sql).toContain('is_boardgame = true');
+    expect(sql).toContain("match_source = 'manual'");
+    expect(sql).toContain('matched_bgg_id = linked_item.bgg_id');
+    expect(sql).toContain('matched_name = linked_item.canonical_name');
+    expect(queries[0].params).toEqual([
+      42,
+      77,
+      JSON.stringify(['Manually associated with an existing catalog item from store item review']),
+      JSON.stringify({ item_id: 77, source: 'admin_store_item_review' })
+    ]);
   });
 
   it('confirms a store item as boardgame and runs item matching', async () => {

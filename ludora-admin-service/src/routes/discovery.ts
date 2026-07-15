@@ -673,6 +673,10 @@ const itemsTableConfig: TableQueryConfig = {
     image_url_es: columnSql('image_url_es'),
     id: columnSql('id'),
     item_type: columnSql('item_type'),
+    name: {
+      filterSql: textSql("concat_ws(' ', canonical_name, canonical_name_es)"),
+      sortSql: 'canonical_name'
+    },
     max_minutes: columnSql('max_minutes'),
     max_players: columnSql('max_players'),
     min_age: columnSql('min_age'),
@@ -1892,6 +1896,54 @@ export function createDiscoveryRouter(
 
       if (!result.rows[0]) {
         throw httpError(404, 'Item candidate not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/discovery/listings/:id/associate-item', async (request, response, next) => {
+    try {
+      const candidateId = integerPathParam(request.params.id);
+      const itemId = positiveIntegerBodyField(request.body, 'item_id');
+      const matchReasons = JSON.stringify(['Manually associated with an existing catalog item from store item review']);
+      const matchPayload = JSON.stringify({ item_id: itemId, source: 'admin_store_item_review' });
+      const result = await database.query(
+        `
+        with linked_item as (
+          select id, bgg_id, canonical_name
+          from items
+          where id = $2
+        ),
+        updated_candidate as (
+          update store_items
+          set item_id = linked_item.id,
+              is_boardgame = true,
+              is_boardgame_confirmed = true,
+              match_source = 'MANUAL',
+              matched_bgg_id = linked_item.bgg_id,
+              matched_name = linked_item.canonical_name,
+              match_score = 1.0,
+              match_reasons = $3::jsonb,
+              match_payload = $4::jsonb,
+              matched_at = now(),
+              processed_at = now(),
+              processing_error = '',
+              last_updated = now()
+          from linked_item
+          where store_items.id = $1
+          returning store_items.*
+        )
+        select ${itemCandidateSelect}
+        from updated_candidate
+        `,
+        [candidateId, itemId, matchReasons, matchPayload]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Store item or catalog item not found');
       }
 
       response.json({ data: result.rows[0] });

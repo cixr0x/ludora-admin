@@ -5,9 +5,11 @@ import CancelIcon from '@mui/icons-material/Cancel';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ImageSearchIcon from '@mui/icons-material/ImageSearch';
+import LinkIcon from '@mui/icons-material/Link';
 import SaveIcon from '@mui/icons-material/Save';
 import {
   Alert,
+  Avatar,
   Box,
   Button,
   Checkbox,
@@ -19,6 +21,10 @@ import {
   FormControlLabel,
   IconButton,
   Link,
+  List,
+  ListItemAvatar,
+  ListItemButton,
+  ListItemText,
   Paper,
   Stack,
   TextField,
@@ -245,6 +251,7 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
 
 function buildItemCandidateColumns(
   onSetBoardgameState: (record: AdminRecord, isBoardgame: boolean) => void,
+  onOpenItemSearch: (record: AdminRecord) => void,
   updatingBoardgameCandidateId: string,
   batchSelection?: BatchSelectionOptions
 ): DataTableColumn<AdminRecord>[] {
@@ -262,7 +269,30 @@ function buildItemCandidateColumns(
     id: 'title',
     label: 'Title',
     minWidth: 220,
-    render: (row) => field(row, ['title', 'name']),
+    render: (row) => {
+      const title = field(row, ['title', 'name']);
+      return (
+        <Stack alignItems="center" direction="row" spacing={0.5}>
+          <Typography component="span" variant="body2">
+            {title}
+          </Typography>
+          <Tooltip title="Associate with an existing item">
+            <IconButton
+              aria-label={`Associate ${title} with an existing item`}
+              color="primary"
+              size="small"
+              onClick={(event) => {
+                event.stopPropagation();
+                onOpenItemSearch(row);
+              }}
+              onDoubleClick={(event) => event.stopPropagation()}
+            >
+              <LinkIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+      );
+    },
     sortValue: (row) => field(row, ['title', 'name'])
   },
   {
@@ -464,12 +494,15 @@ type ListingCandidatesPageProps = {
 
 export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, selectedCandidateId }: ListingCandidatesPageProps = {}) {
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
+  const [associationCandidate, setAssociationCandidate] = useState<AdminRecord | null>(null);
+  const [associationError, setAssociationError] = useState('');
   const [detailState, setDetailState] = useState<LoadState>('ready');
   const [isBatchConfirming, setIsBatchConfirming] = useState(false);
   const [isBatchModeEnabled, setIsBatchModeEnabled] = useState(false);
   const [isCreatingBggItem, setIsCreatingBggItem] = useState(false);
   const [isCreatingItem, setIsCreatingItem] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isAssociatingItem, setIsAssociatingItem] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [localCoverWorkflow, setLocalCoverWorkflow] = useState<LocalCoverWorkflow | null>(null);
   const [localCoverWorkflowError, setLocalCoverWorkflowError] = useState('');
@@ -572,6 +605,51 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     [rows]
   );
 
+  const handleOpenItemSearch = useCallback((candidate: AdminRecord) => {
+    setAssociationCandidate(candidate);
+    setAssociationError('');
+    setSaveError('');
+    setSaveMessage('');
+  }, []);
+
+  const handleAssociateItem = useCallback(
+    async (item: AdminRecord) => {
+      if (!associationCandidate) {
+        return;
+      }
+
+      const candidateId = field(associationCandidate, ['id'], '');
+      const itemId = field(item, ['id'], '');
+      if (!candidateId || !itemId) {
+        setAssociationError('The store item or catalog item is missing an ID.');
+        return;
+      }
+
+      setIsAssociatingItem(true);
+      setAssociationError('');
+      setSaveError('');
+      setSaveMessage('');
+
+      try {
+        const savedCandidate = await adminApi.associateItemCandidate(candidateId, itemId);
+        setRows((currentRows) =>
+          currentRows.map((row, index) => (field(row, ['id'], String(index)) === candidateId ? savedCandidate : row))
+        );
+        setSelectedCandidate((currentCandidate) =>
+          currentCandidate && field(currentCandidate, ['id'], '') === candidateId ? savedCandidate : currentCandidate
+        );
+        setAssociationCandidate(null);
+        setSaveMessage(`Store item associated with ${field(item, ['canonical_name_es', 'canonical_name'], 'catalog item')}.`);
+        table.refresh();
+      } catch {
+        setAssociationError('The store item could not be associated with this catalog item.');
+      } finally {
+        setIsAssociatingItem(false);
+      }
+    },
+    [associationCandidate, setRows, table]
+  );
+
   async function handleBatchConfirmSelected(isBoardgame: boolean) {
     const candidatesById = new Map(rows.map((row) => [candidateId(row), row]));
     const candidatesToConfirm = [...selectedBatchCandidateIds]
@@ -638,6 +716,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     () =>
       buildItemCandidateColumns(
         handleSetBoardgameState,
+        handleOpenItemSearch,
         updatingBoardgameCandidateId,
         isBatchModeEnabled
           ? {
@@ -650,6 +729,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
       ),
     [
       handleSetBoardgameState,
+      handleOpenItemSearch,
       handleToggleBatchCandidate,
       isBatchConfirming,
       isBatchModeEnabled,
@@ -959,6 +1039,18 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
         }}
         onClose={() => setCoverFlatteningRequest(null)}
       />
+      <ItemAssociationDialog
+        candidate={associationCandidate}
+        error={associationError}
+        isAssociating={isAssociatingItem}
+        onAssociate={handleAssociateItem}
+        onClose={() => {
+          if (!isAssociatingItem) {
+            setAssociationCandidate(null);
+            setAssociationError('');
+          }
+        }}
+      />
       {viewMode === 'table' && saveError ? <Alert severity="error">{saveError}</Alert> : null}
 
       {detailState === 'ready' && viewMode === 'form' && selectedCandidate ? (
@@ -1021,6 +1113,166 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
         />
       ) : null}
     </Stack>
+  );
+}
+
+function ItemAssociationDialog({
+  candidate,
+  error,
+  isAssociating,
+  onAssociate,
+  onClose
+}: {
+  candidate: AdminRecord | null;
+  error: string;
+  isAssociating: boolean;
+  onAssociate: (item: AdminRecord) => Promise<void>;
+  onClose: () => void;
+}) {
+  const [isSearching, setIsSearching] = useState(false);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<AdminRecord[]>([]);
+  const [searchError, setSearchError] = useState('');
+
+  useEffect(() => {
+    if (!candidate) {
+      setQuery('');
+      setResults([]);
+      setSearchError('');
+      setIsSearching(false);
+      return;
+    }
+
+    setQuery(field(candidate, ['title', 'name'], ''));
+    setResults([]);
+    setSearchError('');
+  }, [candidate]);
+
+  useEffect(() => {
+    if (!candidate) {
+      return;
+    }
+
+    const searchQuery = query.trim();
+    if (searchQuery.length < 2) {
+      setResults([]);
+      setSearchError('');
+      setIsSearching(false);
+      return;
+    }
+
+    let ignore = false;
+    setIsSearching(true);
+    setSearchError('');
+    const timeoutId = window.setTimeout(() => {
+      adminApi
+        .getItemsPage({
+          filters: { name: searchQuery },
+          page: 0,
+          pageSize: 8,
+          sortColumnId: 'canonical_name',
+          sortDirection: 'asc'
+        })
+        .then((page) => {
+          if (!ignore) {
+            setResults(page.rows);
+          }
+        })
+        .catch(() => {
+          if (!ignore) {
+            setResults([]);
+            setSearchError('Catalog items could not be searched.');
+          }
+        })
+        .finally(() => {
+          if (!ignore) {
+            setIsSearching(false);
+          }
+        });
+    }, 200);
+
+    return () => {
+      ignore = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [candidate, query]);
+
+  const currentItemId = candidate ? field(candidate, ['item_id'], '') : '';
+
+  return (
+    <Dialog fullWidth maxWidth="sm" open={Boolean(candidate)} onClose={isAssociating ? undefined : onClose}>
+      <DialogTitle>Associate Store Item</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 0.5 }}>
+          <Box>
+            <Typography fontWeight={600} variant="body2">
+              {candidate ? field(candidate, ['title', 'name'], 'Store item') : 'Store item'}
+            </Typography>
+            {currentItemId ? (
+              <Typography color="text.secondary" variant="caption">
+                Currently associated with item {currentItemId}
+              </Typography>
+            ) : null}
+          </Box>
+          <TextField
+            autoFocus
+            disabled={isAssociating}
+            fullWidth
+            label="Search catalog items"
+            placeholder="Type at least 2 characters"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {error ? <Alert severity="error">{error}</Alert> : null}
+          {searchError ? <Alert severity="error">{searchError}</Alert> : null}
+          {isSearching ? (
+            <Stack alignItems="center" direction="row" spacing={1.5} sx={{ py: 2 }}>
+              <CircularProgress size={18} />
+              <Typography color="text.secondary" variant="body2">
+                Searching catalog items
+              </Typography>
+            </Stack>
+          ) : null}
+          {!isSearching && query.trim().length >= 2 && results.length === 0 && !searchError ? (
+            <Typography color="text.secondary" sx={{ py: 2 }} textAlign="center" variant="body2">
+              No matching catalog items.
+            </Typography>
+          ) : null}
+          {!isSearching && results.length > 0 ? (
+            <List aria-label="Catalog item matches" disablePadding sx={{ border: 1, borderColor: 'divider', borderRadius: 1 }}>
+              {results.map((item) => {
+                const itemId = field(item, ['id'], '');
+                const primaryName = field(item, ['canonical_name_es', 'canonical_name'], 'Untitled item');
+                const canonicalName = field(item, ['canonical_name'], '');
+                const secondaryName = canonicalName && canonicalName !== primaryName ? canonicalName : '';
+                const imageUrl = field(item, ['image_url_es', 'image_url'], '');
+                return (
+                  <ListItemButton
+                    aria-label={`Associate with ${primaryName}`}
+                    disabled={isAssociating || !itemId}
+                    key={itemId}
+                    onClick={() => void onAssociate(item)}
+                  >
+                    <ListItemAvatar>
+                      <Avatar alt={`${primaryName} cover`} src={imageUrl} sx={{ bgcolor: 'grey.100' }} variant="rounded" />
+                    </ListItemAvatar>
+                    <ListItemText
+                      primary={primaryName}
+                      secondary={[secondaryName, itemId ? `Item ${itemId}` : ''].filter(Boolean).join(' · ')}
+                    />
+                  </ListItemButton>
+                );
+              })}
+            </List>
+          ) : null}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button disabled={isAssociating} onClick={onClose}>
+          Close
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
 

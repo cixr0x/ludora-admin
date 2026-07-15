@@ -531,6 +531,10 @@ export const adminApi = {
     fetchData<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/confirm-boardgame`, {
       method: 'POST'
     }),
+  associateItemCandidate: (id: string, itemId: string) =>
+    sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/associate-item`, 'POST', {
+      item_id: itemId
+    }),
   updateItemCandidateListingStatus: (id: string, listingStatus: StoreItemListingStatus) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/listing-status`, 'PATCH', {
       listing_status: listingStatus
