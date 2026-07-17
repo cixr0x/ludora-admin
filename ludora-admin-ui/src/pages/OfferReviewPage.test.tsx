@@ -93,6 +93,16 @@ describe('OfferReviewPage', () => {
       image_url_es: 'https://images.example/aeterna-es.jpg',
       item_type: 'base_game'
     };
+    const catalogItems = [
+      catalogItem,
+      ...Array.from({ length: 19 }, (_, index) => ({
+        canonical_name: `Aeterna Match ${index + 2}`,
+        canonical_name_es: '',
+        id: 78 + index,
+        image_url: `https://images.example/aeterna-${index + 2}.jpg`,
+        image_url_es: ''
+      }))
+    ];
     let currentReview: Record<string, unknown> = {
       candidate_id: 3365,
       candidate_image_url: 'https://www.amigocalavera.mx/aeterna.jpg',
@@ -111,7 +121,7 @@ describe('OfferReviewPage', () => {
         );
       }
       if (url.pathname.endsWith('/items') && !init?.method) {
-        return new Response(JSON.stringify({ data: [catalogItem], meta: { page: 0, page_size: 8, total: 1 } }), {
+        return new Response(JSON.stringify({ data: catalogItems, meta: { page: 0, page_size: 20, total: 20 } }), {
           headers: { 'Content-Type': 'application/json' },
           status: 200
         });
@@ -146,6 +156,7 @@ describe('OfferReviewPage', () => {
     expect(within(dialog).getByLabelText('Search catalog items')).toHaveValue('Aeterna');
     expect(within(dialog).getByText('Currently associated with item 11')).toBeInTheDocument();
     expect(await within(dialog).findByText('Aeterna: Edicion en Espanol')).toBeInTheDocument();
+    expect(within(dialog).getAllByRole('button', { name: /^Associate with / })).toHaveLength(20);
     expect(within(dialog).getByText('Eternal · Item 77')).toBeInTheDocument();
     expect(within(dialog).getByRole('img', { name: 'Aeterna: Edicion en Espanol cover' })).toHaveAttribute(
       'src',
@@ -154,7 +165,7 @@ describe('OfferReviewPage', () => {
 
     const itemSearchRequest = fetchMock.mock.calls.find(([input]) => new URL(String(input)).pathname.endsWith('/items'));
     expect(String(itemSearchRequest?.[0])).toContain('filter_name=Aeterna');
-    expect(String(itemSearchRequest?.[0])).toContain('page_size=8');
+    expect(String(itemSearchRequest?.[0])).toContain('page_size=20');
 
     await user.click(within(dialog).getByRole('button', { name: 'Associate with Aeterna: Edicion en Espanol' }));
 

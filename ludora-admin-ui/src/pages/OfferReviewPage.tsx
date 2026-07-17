@@ -29,6 +29,8 @@ import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
+const ITEM_ASSOCIATION_SEARCH_LIMIT = 20;
+
 function field(record: AdminRecord, keys: string[], fallback = '-') {
   const value = keys.map((key) => record[key]).find((candidate) => candidate !== undefined && candidate !== null && candidate !== '');
   return value === undefined ? fallback : String(value);
@@ -784,7 +786,7 @@ function ItemAssociationDialog({
         .getItemsPage({
           filters: { name: searchQuery },
           page: 0,
-          pageSize: 8,
+          pageSize: ITEM_ASSOCIATION_SEARCH_LIMIT,
           sortColumnId: 'canonical_name',
           sortDirection: 'asc'
         })
@@ -854,7 +856,11 @@ function ItemAssociationDialog({
             </Typography>
           ) : null}
           {!isSearching && results.length > 0 ? (
-            <List aria-label="Catalog item matches" disablePadding sx={{ border: 1, borderColor: 'divider', borderRadius: 1 }}>
+            <List
+              aria-label="Catalog item matches"
+              disablePadding
+              sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 480, overflowY: 'auto' }}
+            >
               {results.map((item) => {
                 const itemId = field(item, ['id'], '');
                 const primaryName = field(item, ['canonical_name_es', 'canonical_name'], 'Untitled item');
