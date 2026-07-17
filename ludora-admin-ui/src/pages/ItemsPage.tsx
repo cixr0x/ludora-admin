@@ -171,6 +171,8 @@ const itemDetailFields: ItemDetailField[] = [
   { gridColumn: { md: 'span 2' }, key: 'normalized_name', label: 'Normalized Name' },
   { gridColumn: { md: 'span 2' }, key: 'canonical_name_es', label: 'Canonical Name ES' },
   { gridColumn: { md: 'span 2' }, key: 'normalized_name_es', label: 'Normalized Name ES' },
+  { gridColumn: { md: '1 / -1' }, key: 'description', label: 'Description', multiline: true },
+  { gridColumn: { md: '1 / -1' }, key: 'description_es', label: 'Description ES', multiline: true },
   { key: 'item_type', label: 'Item Type' },
   { key: 'parent_item_id', label: 'Parent Item ID' },
   { key: 'bgg_id', label: 'BGG ID' },
@@ -188,9 +190,7 @@ const itemDetailFields: ItemDetailField[] = [
   { gridColumn: { md: 'span 2' }, key: 'image_url_es', label: 'Image URL ES' },
   { key: 'status', label: 'Status' },
   { key: 'created_at', label: 'Created At', readOnly: true },
-  { key: 'updated_at', label: 'Updated At', readOnly: true },
-  { gridColumn: { md: '1 / -1' }, key: 'description', label: 'Description', multiline: true },
-  { gridColumn: { md: '1 / -1' }, key: 'description_es', label: 'Description ES', multiline: true }
+  { key: 'updated_at', label: 'Updated At', readOnly: true }
 ];
 
 const itemColumns: DataTableColumn<AdminRecord>[] = [

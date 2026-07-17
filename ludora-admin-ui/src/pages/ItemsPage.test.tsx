@@ -122,6 +122,16 @@ describe('ItemsPage', () => {
       'src',
       'https://cf.geekdo-images.com/coffee-es.jpg'
     );
+    const normalizedNameEs = screen.getByLabelText('Normalized Name ES');
+    const generateDescription = screen.getByRole('button', { name: 'Generate Spanish item description' });
+    const description = screen.getByLabelText('Description');
+    const descriptionEs = screen.getByLabelText('Description ES');
+    const itemType = screen.getByLabelText('Item Type');
+
+    expect(normalizedNameEs.compareDocumentPosition(generateDescription)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(generateDescription.compareDocumentPosition(description)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(description.compareDocumentPosition(descriptionEs)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(descriptionEs.compareDocumentPosition(itemType)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
     fireEvent.change(screen.getByLabelText('Canonical Name'), { target: { value: 'Coffee Rush Updated' } });
     fireEvent.change(screen.getByLabelText('Canonical Name ES'), { target: { value: 'Cafe Barista Actualizado' } });
