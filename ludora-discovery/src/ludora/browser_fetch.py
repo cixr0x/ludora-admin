@@ -430,7 +430,15 @@ def _wait_for_amazon_detail_html(page, *, timeout_ms: int, timeout_error) -> Non
             """
             () => {
               const productTitle = document.querySelector('#productTitle');
-              if (productTitle && productTitle.textContent && productTitle.textContent.trim()) {
+              const bylineInfo = document.querySelector('#bylineInfo');
+              if (
+                productTitle
+                && productTitle.textContent
+                && productTitle.textContent.trim()
+                && bylineInfo
+                && bylineInfo.textContent
+                && bylineInfo.textContent.trim()
+              ) {
                 return true;
               }
               const rawText = `${document.title || ''}\n${document.body && document.body.innerText || ''}`;

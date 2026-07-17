@@ -97,6 +97,7 @@ class StoreItemDiscoverySource:
 
 
 STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS = (
+    "title",
     "raw_price",
     "price",
     "price_source",
@@ -871,7 +872,8 @@ def _update_item_candidate_sql(*, refresh_from_source: bool = False) -> str:
 def _update_item_candidate_price_availability_sql() -> str:
     return """
     update store_items
-    set raw_price = %s,
+    set title = %s,
+        raw_price = %s,
         price = %s,
         price_source = %s,
         currency = %s,

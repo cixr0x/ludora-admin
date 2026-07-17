@@ -33,6 +33,7 @@ class FakePage:
         self.waited_for_function = False
         self.wait_for_function_arg = None
         self.wait_for_function_args = []
+        self.wait_for_function_expressions = []
         self.routes = []
         self.closed = False
 
@@ -46,6 +47,7 @@ class FakePage:
         self.waited_for_function = True
         self.wait_for_function_arg = arg
         self.wait_for_function_args.append(arg)
+        self.wait_for_function_expressions.append(expression)
 
     def route(self, pattern, handler):
         self.routes.append((pattern, handler))
@@ -150,6 +152,7 @@ class BrowserFetchTests(unittest.TestCase):
         self.assertFalse(page.waited_for_load)
         self.assertTrue(page.waited_for_function)
         self.assertEqual(page.wait_for_function_arg, None)
+        self.assertIn("bylineInfo", page.wait_for_function_expressions[0])
         self.assertEqual([pattern for pattern, _handler in page.routes], ["**/*"])
 
     def test_lightweight_amazon_fetch_blocks_nonessential_resources_and_tracking(self):

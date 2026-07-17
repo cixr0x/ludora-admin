@@ -594,6 +594,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
         hasbro_product_html = """
         <html><body>
           <span id="productTitle">Hasbro Gaming | Clue | Juego de misterio</span>
+          <a id="bylineInfo">Marca: Hasbro Gaming</a>
           <table>
             <tr><th>Marca</th><td>Hasbro Gaming</td></tr>
             <tr><th>ASIN</th><td>B0HASBRO01</td></tr>
@@ -603,6 +604,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
         mattel_product_html = """
         <html><body>
           <span id="productTitle">Mattel Games | UNO | Juego de cartas</span>
+          <a id="bylineInfo">Marca: Mattel Games</a>
           <table>
             <tr><th>Marca</th><td>Mattel Games</td></tr>
             <tr><th>ASIN</th><td>B0MATTEL01</td></tr>
@@ -628,6 +630,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
             return record
 
         repository = FakeRepository()
+        trace = FakeTraceLogger()
         records = crawl_amazon_brand_inventory(
             brand_search_url,
             12,
@@ -636,6 +639,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
             browser_fetcher=fetcher,
             item_classifier=classifier,
             item_title_extractor=lambda record: "Clue",
+            trace_logger=trace,
             delay_seconds=0,
         )
 
@@ -655,6 +659,106 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(records[0].raw_payload["amazon"]["extracted_game_title"], "Clue")
         self.assertEqual(classified, ["Clue"])
         self.assertEqual([record.source_url for record in repository.item_records], ["https://www.amazon.com.mx/dp/B0HASBRO01"])
+        mismatch_entries = [
+            fields
+            for event, fields in trace.entries
+            if event == "amazon_inventory.candidate.skipped_brand_mismatch"
+        ]
+        self.assertEqual(
+            mismatch_entries,
+            [
+                {
+                    "actual_brand": "Mattel Games",
+                    "expected_brand": "Hasbro Gaming",
+                    "source_url": "https://www.amazon.com.mx/dp/B0MATTEL01",
+                    "store_id": 12,
+                    "title": "Mattel Games | UNO | Juego de cartas",
+                }
+            ],
+        )
+
+    def test_brand_search_uses_rendered_byline_for_asmodee_validation(self):
+        brand_search_url = "https://www.amazon.com.mx/s?srs=13145563011&rh=p_89%3AAsmodee"
+        product_url = "https://www.amazon.com.mx/dp/B0BJJ9TNRM"
+
+        def fetcher(url):
+            if url == brand_search_url:
+                return FetchResult(url=url, text=f'<a href="{product_url}">Con toda tranquilidad</a>')
+            if "/s?" in url:
+                return FetchResult(url=url, text="<html><body>No more results</body></html>")
+            return FetchResult(
+                url=url,
+                text="""
+                <html><body>
+                  <span id="productTitle">Con toda tranquilidad</span>
+                  <a id="bylineInfo" href="/Asmodee/b/">Marca: Asmodee</a>
+                  <div>ASIN: B0BJJ9TNRM</div>
+                </body></html>
+                """,
+            )
+
+        repository = FakeRepository()
+        records = crawl_amazon_brand_inventory(
+            brand_search_url,
+            8,
+            repository,
+            brand_name="Asmodee",
+            browser_fetcher=fetcher,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].source_url, product_url)
+        self.assertEqual(records[0].raw_payload["amazon"]["brand"], "Asmodee")
+        self.assertEqual(records[0].raw_payload["amazon"]["brand_byline"], "Marca: Asmodee")
+        self.assertEqual([record.source_url for record in repository.item_records], [product_url])
+
+    def test_brand_search_retries_missing_byline_instead_of_logging_mismatch(self):
+        brand_search_url = "https://www.amazon.com.mx/s?srs=13145563011&rh=p_89%3AAsmodee"
+        product_url = "https://www.amazon.com.mx/dp/B0BJJ9TNRM"
+        detail_fetches = []
+
+        def fetcher(url):
+            if url == brand_search_url:
+                return FetchResult(url=url, text=f'<a href="{product_url}">Con toda tranquilidad</a>')
+            if "/s?" in url:
+                return FetchResult(url=url, text="<html><body>No more results</body></html>")
+            detail_fetches.append(url)
+            return FetchResult(
+                url=url,
+                text="""
+                <html><body>
+                  <span id="productTitle">Con toda tranquilidad</span>
+                  <div>ASIN: B0BJJ9TNRM</div>
+                </body></html>
+                """,
+            )
+
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+        with self.assertRaisesRegex(RuntimeError, "Failed to fetch valid Amazon product detail page"):
+            crawl_amazon_brand_inventory(
+                brand_search_url,
+                8,
+                repository,
+                brand_name="Asmodee",
+                browser_fetcher=fetcher,
+                trace_logger=trace,
+                delay_seconds=0,
+            )
+
+        self.assertEqual(detail_fetches, [product_url, product_url, product_url])
+        invalid_entries = [
+            fields
+            for event, fields in trace.entries
+            if event == "amazon_inventory.candidate.detail_fetch.invalid"
+        ]
+        self.assertEqual([entry["reason"] for entry in invalid_entries], ["missing_brand_byline"] * 3)
+        self.assertTrue(all(entry["brand_byline_present"] is False for entry in invalid_entries))
+        self.assertFalse(
+            any(event == "amazon_inventory.candidate.skipped_brand_mismatch" for event, _fields in trace.entries)
+        )
+        self.assertEqual(repository.item_records, [])
 
     def test_crawls_brand_search_up_to_five_pages(self):
         brand_search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"
@@ -674,6 +778,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
                 text=f"""
                 <html><body>
                   <span id="productTitle">Hasbro Gaming | Game {asin[-4:]}</span>
+                  <a id="bylineInfo">Marca: Hasbro Gaming</a>
                   <table>
                     <tr><th>Marca</th><td>Hasbro Gaming</td></tr>
                     <tr><th>ASIN</th><td>{asin}</td></tr>

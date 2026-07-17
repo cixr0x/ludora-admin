@@ -243,6 +243,7 @@ def _crawl_amazon_search_inventory(
                             store_id=store_id,
                             cancellation_token=cancellation_token,
                             retry_delay_seconds=max(0.0, delay_seconds),
+                            require_brand_byline=bool(expected_brand_name),
                         )
                     except AmazonDetailFetchError as exc:
                         detail_failures.append(exc)
@@ -283,6 +284,8 @@ def _crawl_amazon_search_inventory(
                     if expected_brand_name and not _amazon_brand_matches(detail_candidate, expected_brand_name):
                         trace.log(
                             "amazon_inventory.candidate.skipped_brand_mismatch",
+                            actual_brand=_amazon_brand(detail_candidate),
+                            expected_brand=expected_brand_name,
                             source_url=detail_candidate.source_url,
                             store_id=detail_candidate.store_id,
                             title=detail_candidate.title,
@@ -461,6 +464,7 @@ def _fetch_valid_amazon_detail_page(
     store_id: int | None,
     cancellation_token: CancellationToken | None,
     retry_delay_seconds: float,
+    require_brand_byline: bool = False,
     max_attempts: int = DEFAULT_AMAZON_DETAIL_FETCH_ATTEMPTS,
 ) -> FetchResult:
     attempts = max(1, max_attempts)
@@ -480,9 +484,18 @@ def _fetch_valid_amazon_detail_page(
                 "reason": "fetch_failed",
                 "status_code": None,
             }
+            if require_brand_byline:
+                diagnostics.update(
+                    brand_byline="",
+                    brand_byline_present=False,
+                )
         else:
             saw_response = True
-            diagnostics = _amazon_detail_page_diagnostics(fetched_detail, expected_asin=expected_asin)
+            diagnostics = _amazon_detail_page_diagnostics(
+                fetched_detail,
+                expected_asin=expected_asin,
+                require_brand_byline=require_brand_byline,
+            )
             if diagnostics["valid"]:
                 return fetched_detail
 
@@ -628,7 +641,12 @@ def _wait_for_amazon_retry(
         time.sleep(min(1.0, remaining))
 
 
-def _amazon_detail_page_diagnostics(fetched: FetchResult, *, expected_asin: str) -> dict[str, object]:
+def _amazon_detail_page_diagnostics(
+    fetched: FetchResult,
+    *,
+    expected_asin: str,
+    require_brand_byline: bool = False,
+) -> dict[str, object]:
     html = fetched.text or ""
     product_title_present = bool(re.search(r"\bid\s*=\s*['\"]productTitle['\"]", html, re.IGNORECASE))
     expected_asin_present = bool(
@@ -642,6 +660,13 @@ def _amazon_detail_page_diagnostics(fetched: FetchResult, *, expected_asin: str)
     final_url_asin = _asin_from_url(fetched.url)
     final_url_matches = not final_url_asin or final_url_asin.casefold() == expected_asin.casefold()
     status_ok = 200 <= fetched.status_code < 400
+    brand_byline = ""
+    brand_byline_value = ""
+    if require_brand_byline:
+        parser = _AmazonProductParser(fetched.url)
+        parser.feed(html)
+        brand_byline = _collapse_text(" ".join(parser.brand_byline_parts))
+        brand_byline_value = _amazon_brand_from_byline(brand_byline)
 
     if not status_ok:
         reason = "http_status"
@@ -651,10 +676,12 @@ def _amazon_detail_page_diagnostics(fetched: FetchResult, *, expected_asin: str)
         reason = "missing_expected_asin"
     elif not final_url_matches:
         reason = "redirected_asin"
+    elif require_brand_byline and not brand_byline_value:
+        reason = "missing_brand_byline"
     else:
         reason = ""
 
-    return {
+    diagnostics: dict[str, object] = {
         "expected_asin": expected_asin,
         "expected_asin_present": expected_asin_present,
         "final_url": fetched.url,
@@ -664,6 +691,12 @@ def _amazon_detail_page_diagnostics(fetched: FetchResult, *, expected_asin: str)
         "status_code": fetched.status_code,
         "valid": not reason,
     }
+    if require_brand_byline:
+        diagnostics.update(
+            brand_byline=brand_byline,
+            brand_byline_present=bool(brand_byline_value),
+        )
+    return diagnostics
 
 
 def _html_page_title(html: str) -> str:
@@ -714,6 +747,7 @@ class _AmazonProductParser(HTMLParser):
         super().__init__(convert_charrefs=True)
         self.base_url = base_url
         self.title_parts: list[str] = []
+        self.brand_byline_parts: list[str] = []
         self.h1_parts: list[str] = []
         self.html_title_parts: list[str] = []
         self.availability_parts: list[str] = []
@@ -726,6 +760,7 @@ class _AmazonProductParser(HTMLParser):
         self.text_nodes: list[str] = []
         self._ignored_depth = 0
         self._title_depth = 0
+        self._brand_byline_depth = 0
         self._h1_depth = 0
         self._html_title_depth = 0
         self._availability_depth = 0
@@ -763,6 +798,8 @@ class _AmazonProductParser(HTMLParser):
         self._extend_active_captures(normalized_tag)
         if id_value == "producttitle":
             self._title_depth = 1
+        if id_value == "bylineinfo":
+            self._brand_byline_depth = 1
         if normalized_tag == "h1":
             self._h1_depth = 1
         if normalized_tag == "title":
@@ -835,6 +872,8 @@ class _AmazonProductParser(HTMLParser):
         self.text_nodes.append(text)
         if self._title_depth:
             self.title_parts.append(text)
+        if self._brand_byline_depth:
+            self.brand_byline_parts.append(text)
         if self._h1_depth:
             self.h1_parts.append(text)
         if self._html_title_depth:
@@ -853,6 +892,8 @@ class _AmazonProductParser(HTMLParser):
             return
         if self._title_depth:
             self._title_depth += 1
+        if self._brand_byline_depth:
+            self._brand_byline_depth += 1
         if self._h1_depth:
             self._h1_depth += 1
         if self._html_title_depth:
@@ -873,6 +914,8 @@ class _AmazonProductParser(HTMLParser):
             return
         if self._title_depth:
             self._title_depth -= 1
+        if self._brand_byline_depth:
+            self._brand_byline_depth -= 1
         if self._h1_depth:
             self._h1_depth -= 1
         if self._html_title_depth:
@@ -983,14 +1026,18 @@ def _extract_amazon_detail_candidate(
             "Edad",
         )
     )
-    brand = _detail_value(parser.product_details, "Marca", "Nombre de la marca", "Brand")
+    brand_byline = _collapse_text(" ".join(parser.brand_byline_parts))
+    brand = _amazon_brand_from_byline(brand_byline)
+    details_brand = _detail_value(parser.product_details, "Marca", "Nombre de la marca", "Brand")
     manufacturer = _detail_value(parser.product_details, "Fabricante", "Manufacturer")
     raw_payload: dict[str, object] = {
         "amazon": {
             "asin": asin,
             "availability_text": _collapse_text(" ".join(parser.availability_parts)),
             "brand": brand,
+            "brand_byline": brand_byline,
             "bullets": parser.bullets,
+            "details_brand": details_brand,
             "has_add_to_cart": parser.has_add_to_cart,
             "has_buy_now": parser.has_buy_now,
             "product_title": title,
@@ -1004,7 +1051,7 @@ def _extract_amazon_detail_candidate(
         source_url=canonical_url,
         source_listing_url=source_listing_url,
         title=title,
-        publisher=_first_text(manufacturer, brand),
+        publisher=_first_text(manufacturer, brand, details_brand),
         description=description,
         item_type=_infer_item_type(title, canonical_url),
         min_players=min_players,
@@ -1059,15 +1106,26 @@ def _amazon_brand(record: DiscoveryItemCandidateRecord) -> str:
     brand = amazon_payload.get("brand")
     if isinstance(brand, str) and brand.strip():
         return brand
-    product_details = amazon_payload.get("product_details")
-    if isinstance(product_details, dict):
-        return _detail_value(
-            {str(label): str(value) for label, value in product_details.items()},
-            "Marca",
-            "Nombre de la marca",
-            "Brand",
-        )
+    brand_byline = amazon_payload.get("brand_byline")
+    if isinstance(brand_byline, str):
+        return _amazon_brand_from_byline(brand_byline)
     return ""
+
+
+def _amazon_brand_from_byline(value: str) -> str:
+    byline = _collapse_text(value)
+    if not byline:
+        return ""
+
+    for pattern in (
+        r"^(?:marca|brand)\s*:\s*(.+)$",
+        r"^visita\s+la\s+tienda\s+de\s+(.+)$",
+        r"^visit\s+the\s+(.+?)\s+store$",
+    ):
+        match = re.fullmatch(pattern, byline, re.IGNORECASE)
+        if match:
+            return _collapse_text(match.group(1))
+    return byline
 
 
 def _amazon_search_page_url(search_url: str, page_number: int) -> str:
