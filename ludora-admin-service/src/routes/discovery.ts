@@ -123,6 +123,7 @@ type SortDirection = 'asc' | 'desc';
 
 type TableColumnConfig = {
   filterSql: string;
+  normalizeFilterValue?: (value: string) => string;
   sortSql: string;
 };
 
@@ -674,7 +675,10 @@ const itemsTableConfig: TableQueryConfig = {
     id: columnSql('id'),
     item_type: columnSql('item_type'),
     name: {
-      filterSql: textSql("concat_ws(' ', canonical_name, canonical_name_es)"),
+      filterSql: textSql(
+        "concat_ws(' ', canonical_name, canonical_name_es, normalized_name, normalized_name_es)"
+      ),
+      normalizeFilterValue: normalizeItemName,
       sortSql: 'canonical_name'
     },
     max_minutes: columnSql('max_minutes'),
@@ -2172,7 +2176,8 @@ function parseTableQuery(query: Record<string, unknown>, config: TableQueryConfi
 function tableFilters(query: Record<string, unknown>, config: TableQueryConfig) {
   const filters: Array<{ column: TableColumnConfig; value: string }> = [];
   for (const [columnId, column] of Object.entries(config.columns)) {
-    const value = stringQueryField(query[`filter_${columnId}`]).trim();
+    const rawValue = stringQueryField(query[`filter_${columnId}`]).trim();
+    const value = column.normalizeFilterValue ? column.normalizeFilterValue(rawValue) : rawValue;
     if (value) {
       filters.push({ column, value });
     }

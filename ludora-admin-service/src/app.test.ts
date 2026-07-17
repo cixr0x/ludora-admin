@@ -754,9 +754,34 @@ describe('ludora admin service', () => {
     expect(response.body.data).toEqual(rows);
     const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, canonical_name'));
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain(
-      "where coalesce((concat_ws(' ', canonical_name, canonical_name_es))::text, '') ilike $1 escape '\\'"
+      "where coalesce((concat_ws(' ', canonical_name, canonical_name_es, normalized_name, normalized_name_es))::text, '') ilike $1 escape '\\'"
     );
     expect(rowQuery?.params).toEqual(['%aeterna%', 8, 0]);
+  });
+
+  it('normalizes accents when searching catalog item names', async () => {
+    const rows = [{ canonical_name: 'Domino Doble 6', id: 78 }];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).includes('count(*)')) {
+          return { rows: [{ total: 1 }] };
+        }
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get(
+      '/items?page=0&page_size=20&filter_name=Domin%C3%B3'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual(rows);
+    const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, canonical_name'));
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('normalized_name');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('normalized_name_es');
+    expect(rowQuery?.params).toEqual(['%domino%', 20, 0]);
   });
 
   it('filters and sorts catalog items by id in the database query', async () => {
