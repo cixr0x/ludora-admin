@@ -15,7 +15,7 @@ from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_detail_extraction import extract_product_detail_candidate
 from ludora.sitemap_discovery import _looks_like_site_protection_challenge, discover_product_urls_from_sitemaps
 from ludora.trace import NullTraceLogger, TraceLogger
-from ludora.webfetch import FetchResult
+from ludora.webfetch import TRANSIENT_FETCH_STATUS_CODES, FetchResult
 from ludora.webfetch import fetch_html, fetch_with_transient_retries
 
 
@@ -87,6 +87,10 @@ ItemClassifier = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidate
 
 
 class ProductPageRemovedError(RuntimeError):
+    pass
+
+
+class TransientProductFetchError(RuntimeError):
     pass
 
 
@@ -319,55 +323,64 @@ def update_confirmed_store_item_details(
         random.shuffle(newer_candidates)
         update_candidates = [*older_candidates, *newer_candidates]
 
-        for existing_record in update_candidates:
-            raise_if_cancelled(cancellation_token)
-            platform = store_platforms.get(existing_record.store_id, "").strip().casefold()
-            include_title = platform not in AMAZON_STORE_PLATFORMS
-            try:
-                refreshed_record = _fetch_detail_candidate(
-                    listing_candidate=existing_record,
-                    source_listing_url=existing_record.source_listing_url or existing_record.source_url,
-                    platform=platform,
-                    browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
-                    detect_removed=True,
-                    cancellation_token=cancellation_token,
-                )
-            except ProductPageRemovedError:
-                if run_id and job_id is None:
-                    raise ValueError("job id is required to log update changes")
-                update_result = repository.mark_item_candidate_inactive(
-                    existing_record,
-                    job_id=job_id,
-                    run_id=run_id,
-                )
-                if getattr(update_result, "changed", False):
-                    records.updated_items += 1
-                existing_record.store_active = False
-                records.append(existing_record)
-                continue
-            raise_if_cancelled(cancellation_token)
-            _preserve_confirmed_item_state(refreshed_record, existing_record)
-            if run_id:
-                if job_id is None:
-                    raise ValueError("job id is required to log update changes")
-                update_result = repository.update_item_candidate_with_change_log(
-                    existing_record,
-                    refreshed_record,
-                    job_id=job_id,
-                    run_id=run_id,
-                    include_title=include_title,
-                )
-                if getattr(update_result, "changed", False):
-                    records.updated_items += 1
-            else:
-                update_result = repository.update_item_candidate_price_availability(
-                    existing_record,
-                    refreshed_record,
-                    include_title=include_title,
-                )
-                if getattr(update_result, "changed", False):
-                    records.updated_items += 1
-            records.append(refreshed_record)
+        retry_candidates: list[DiscoveryItemCandidateRecord] = []
+        # The second tuple entry references the list populated during the first pass.
+        candidate_pools = ((update_candidates, True), (retry_candidates, False))
+        for candidate_pool, defer_transient_failures in candidate_pools:
+            for existing_record in candidate_pool:
+                raise_if_cancelled(cancellation_token)
+                platform = store_platforms.get(existing_record.store_id, "").strip().casefold()
+                include_title = platform not in AMAZON_STORE_PLATFORMS
+                try:
+                    refreshed_record = _fetch_detail_candidate(
+                        listing_candidate=existing_record,
+                        source_listing_url=existing_record.source_listing_url or existing_record.source_url,
+                        platform=platform,
+                        browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
+                        detect_removed=True,
+                        cancellation_token=cancellation_token,
+                    )
+                except TransientProductFetchError:
+                    if not defer_transient_failures:
+                        raise
+                    retry_candidates.append(existing_record)
+                    continue
+                except ProductPageRemovedError:
+                    if run_id and job_id is None:
+                        raise ValueError("job id is required to log update changes")
+                    update_result = repository.mark_item_candidate_inactive(
+                        existing_record,
+                        job_id=job_id,
+                        run_id=run_id,
+                    )
+                    if getattr(update_result, "changed", False):
+                        records.updated_items += 1
+                    existing_record.store_active = False
+                    records.append(existing_record)
+                    continue
+                raise_if_cancelled(cancellation_token)
+                _preserve_confirmed_item_state(refreshed_record, existing_record)
+                if run_id:
+                    if job_id is None:
+                        raise ValueError("job id is required to log update changes")
+                    update_result = repository.update_item_candidate_with_change_log(
+                        existing_record,
+                        refreshed_record,
+                        job_id=job_id,
+                        run_id=run_id,
+                        include_title=include_title,
+                    )
+                    if getattr(update_result, "changed", False):
+                        records.updated_items += 1
+                else:
+                    update_result = repository.update_item_candidate_price_availability(
+                        existing_record,
+                        refreshed_record,
+                        include_title=include_title,
+                    )
+                    if getattr(update_result, "changed", False):
+                        records.updated_items += 1
+                records.append(refreshed_record)
         return records
     finally:
         if browser_session is not None:
@@ -446,6 +459,10 @@ def _fetch_detail_candidate(
 
     if static_fetch_failed and fetched_detail is None:
         status_suffix = f" (HTTP {last_failure_status_code})" if last_failure_status_code is not None else ""
+        if last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES:
+            raise TransientProductFetchError(
+                f"Failed to fetch product detail page: {listing_candidate.source_url}{status_suffix}"
+            )
         raise RuntimeError(f"Failed to fetch product detail page: {listing_candidate.source_url}{status_suffix}")
 
     if detail_candidate is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate):

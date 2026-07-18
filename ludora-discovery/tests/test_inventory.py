@@ -882,6 +882,119 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records, [])
         self.assertEqual(repository.update_change_log_calls, [])
 
+    def test_update_confirmed_store_item_details_retries_transient_pool_after_normal_items(self):
+        candidates = [
+            DiscoveryItemCandidateRecord(
+                store_item_id=store_item_id,
+                store_id=12,
+                source_url=f"https://example.mx/products/{slug}",
+                title=title,
+                item_id=item_id,
+                listing_status="LISTED",
+                is_boardgame=True,
+                is_boardgame_confirmed=True,
+            )
+            for store_item_id, slug, title, item_id in (
+                (56, "catan", "Catan", 77),
+                (57, "azul", "Azul", 78),
+                (58, "splendor", "Splendor", 79),
+            )
+        ]
+        repository = FakeRepository(confirmed_items=candidates)
+        attempts_by_url = {candidate.source_url: 0 for candidate in candidates}
+        fetch_order = []
+
+        def fetch_detail(url, include_http_error_status=False):
+            self.assertTrue(include_http_error_status)
+            attempts_by_url[url] += 1
+            fetch_order.append(url)
+            if url != candidates[2].source_url and attempts_by_url[url] <= 3:
+                return FetchResult(url=url, text="", status_code=503, retry_after_seconds=0.0)
+            title = next(candidate.title for candidate in candidates if candidate.source_url == url)
+            return FetchResult(
+                url=url,
+                text=f'<script type="application/ld+json">{{"@type":"Product","name":"{title}"}}</script>',
+            )
+
+        with patch("ludora.product_crawler.random.shuffle"), patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=fetch_detail,
+        ) as fetch_html, patch("ludora.webfetch._wait_for_fetch_retry") as wait_for_retry:
+            records = update_confirmed_store_item_details(repository, job_id=99, run_id="run-123")
+
+        self.assertEqual(fetch_html.call_count, 9)
+        self.assertEqual(wait_for_retry.call_count, 4)
+        self.assertEqual(
+            fetch_order,
+            [
+                candidates[0].source_url,
+                candidates[0].source_url,
+                candidates[0].source_url,
+                candidates[1].source_url,
+                candidates[1].source_url,
+                candidates[1].source_url,
+                candidates[2].source_url,
+                candidates[0].source_url,
+                candidates[1].source_url,
+            ],
+        )
+        self.assertEqual([record.store_item_id for record in records], [58, 56, 57])
+        self.assertEqual([record.store_item_id for record in repository.item_records], [58, 56, 57])
+
+    def test_update_confirmed_store_item_details_fails_on_first_retry_pool_failure(self):
+        candidates = [
+            DiscoveryItemCandidateRecord(
+                store_item_id=store_item_id,
+                store_id=12,
+                source_url=f"https://example.mx/products/{slug}",
+                title=title,
+                item_id=item_id,
+                listing_status="LISTED",
+                is_boardgame=True,
+                is_boardgame_confirmed=True,
+            )
+            for store_item_id, slug, title, item_id in (
+                (56, "catan", "Catan", 77),
+                (57, "azul", "Azul", 78),
+                (58, "splendor", "Splendor", 79),
+            )
+        ]
+        repository = FakeRepository(confirmed_items=candidates)
+        fetch_order = []
+
+        def fetch_detail(url, include_http_error_status=False):
+            self.assertTrue(include_http_error_status)
+            fetch_order.append(url)
+            if url != candidates[2].source_url:
+                return FetchResult(url=url, text="", status_code=503, retry_after_seconds=0.0)
+            return FetchResult(
+                url=url,
+                text='<script type="application/ld+json">{"@type":"Product","name":"Splendor"}</script>',
+            )
+
+        with patch("ludora.product_crawler.random.shuffle"), patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=fetch_detail,
+        ) as fetch_html, patch("ludora.webfetch._wait_for_fetch_retry") as wait_for_retry:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"Failed to fetch product detail page: https://example.mx/products/catan \(HTTP 503\)",
+            ):
+                update_confirmed_store_item_details(repository, job_id=99, run_id="run-123")
+
+        self.assertEqual(fetch_html.call_count, 10)
+        self.assertEqual(wait_for_retry.call_count, 6)
+        self.assertEqual(
+            fetch_order,
+            [
+                *([candidates[0].source_url] * 3),
+                *([candidates[1].source_url] * 3),
+                candidates[2].source_url,
+                *([candidates[0].source_url] * 3),
+            ],
+        )
+        self.assertEqual([record.store_item_id for record in repository.item_records], [58])
+
     def test_update_confirmed_store_item_details_marks_http_404_as_inactive(self):
         existing_record = DiscoveryItemCandidateRecord(
             store_item_id=56,
