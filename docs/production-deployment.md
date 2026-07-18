@@ -123,6 +123,13 @@ The production UI file contains:
 VITE_ADMIN_API_URL=https://admin.ludora.bobbycrimson.com/api
 ```
 
+The discovery `.env` must enable the installed Playwright fallback so protected
+or incomplete product responses are retried with a rendered browser page:
+
+```dotenv
+LUDORA_BROWSER_FETCH_ENABLED=true
+```
+
 `codexapi` does not require a repository `.env` in production. Its non-secret runtime settings live in its systemd unit.
 
 ## Preflight

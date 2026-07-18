@@ -422,6 +422,8 @@ def _fetch_detail_candidate(
     cancellation_token: CancellationToken | None = None,
 ) -> DiscoveryItemCandidateRecord:
     trace = trace_logger or NullTraceLogger()
+    amazon_detail_request = platform.strip().casefold() in AMAZON_STORE_PLATFORMS
+    amazon_detail_validation_failed = False
     fetched_detail = _fetch_static_product_detail(
         listing_candidate.source_url,
         detect_removed=detect_removed,
@@ -438,6 +440,15 @@ def _fetch_detail_candidate(
     if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
         fetched_detail = None
         static_fetch_failed = True
+    if fetched_detail is not None and amazon_detail_request and not _validate_amazon_detail_fetch(
+        fetched_detail,
+        listing_candidate.source_url,
+        fetch_method="static",
+        trace=trace,
+    ):
+        fetched_detail = None
+        static_fetch_failed = True
+        amazon_detail_validation_failed = True
 
     detail_candidate = (
         _extract_refresh_detail_candidate(
@@ -471,6 +482,14 @@ def _fetch_detail_candidate(
             fetched_detail = None
         if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
             fetched_detail = None
+        if fetched_detail is not None and amazon_detail_request and not _validate_amazon_detail_fetch(
+            fetched_detail,
+            listing_candidate.source_url,
+            fetch_method="browser",
+            trace=trace,
+        ):
+            fetched_detail = None
+            amazon_detail_validation_failed = True
         if fetched_detail is not None:
             browser_detail_candidate = _extract_refresh_detail_candidate(
                 fetched_detail=fetched_detail,
@@ -484,7 +503,7 @@ def _fetch_detail_candidate(
 
     if static_fetch_failed and fetched_detail is None:
         status_suffix = f" (HTTP {last_failure_status_code})" if last_failure_status_code is not None else ""
-        if last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES:
+        if last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES or amazon_detail_validation_failed:
             raise TransientProductFetchError(
                 f"Failed to fetch product detail page: {listing_candidate.source_url}{status_suffix}"
             )
@@ -495,6 +514,33 @@ def _fetch_detail_candidate(
         return listing_candidate
 
     return _apply_listing_fallbacks(detail_candidate, listing_candidate)
+
+
+def _validate_amazon_detail_fetch(
+    fetched_detail: FetchResult,
+    source_url: str,
+    *,
+    fetch_method: str,
+    trace: TraceLogger,
+) -> bool:
+    # Imported lazily because amazon_discovery imports the repository and
+    # processor protocols defined in this module.
+    from ludora.amazon_discovery import _amazon_detail_page_diagnostics, _asin_from_url
+
+    diagnostics = _amazon_detail_page_diagnostics(
+        fetched_detail,
+        expected_asin=_asin_from_url(source_url),
+    )
+    if diagnostics["valid"]:
+        return True
+
+    trace.log(
+        "inventory.candidate.detail_fetch.invalid",
+        fetch_method=fetch_method,
+        source_url=source_url,
+        **{key: value for key, value in diagnostics.items() if key != "valid"},
+    )
+    return False
 
 
 def _extract_refresh_detail_candidate(

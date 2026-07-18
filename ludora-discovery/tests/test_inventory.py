@@ -10,7 +10,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ludora.database import ItemCandidateUpsertResult
 from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.models import DiscoveryItemCandidateRecord
-from ludora.product_crawler import crawl_store_product_details, update_confirmed_store_item_details
+from ludora.product_crawler import (
+    TransientProductFetchError,
+    crawl_store_product_details,
+    update_confirmed_store_item_details,
+)
 from ludora.webfetch import FetchResult
 
 
@@ -866,6 +870,115 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].price_source, "none")
         self.assertEqual(len(repository.update_change_log_calls), 1)
         self.assertFalse(repository.update_change_log_calls[0][4])
+
+    def test_update_confirmed_amazon_item_retries_generic_shell_with_browser(self):
+        source_url = "https://www.amazon.com.mx/dp/B0GZ4XV2KH"
+        generic_shell_html = """
+        <html><head><title>Amazon.com.mx</title></head><body>
+          B0GZ4XV2KH
+          Haz clic en el boton de abajo para continuar comprando
+        </body></html>
+        """
+        rendered_product_html = """
+        <html><body>
+          <span id="productTitle">Copa Casas Harry Potter + Alohomora</span>
+          <span class="a-offscreen">$380.39</span>
+          <div id="availability">Disponible</div>
+          <input id="add-to-cart-button" type="submit" value="Agregar al carrito">
+          <div>ASIN: B0GZ4XV2KH</div>
+        </body></html>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=15644,
+            store_id=12,
+            source_url=source_url,
+            title="Copa Casas Harry Potter + Alohomora",
+            raw_price="$380.39",
+            price="380.39",
+            price_source="amazon_detail",
+            availability="available",
+            availability_source="amazon_detail",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record], store_platforms={12: "amazon"})
+        browser_fetches = []
+
+        def browser_fetch(url):
+            browser_fetches.append(url)
+            return FetchResult(url=url, text=rendered_product_html)
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=source_url, text=generic_shell_html),
+        ):
+            records = update_confirmed_store_item_details(
+                repository,
+                browser_fetch_enabled=True,
+                browser_fetcher=browser_fetch,
+                job_id=101,
+                run_id="run-amazon-shell",
+            )
+
+        self.assertEqual(browser_fetches, [source_url])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].availability, "available")
+        self.assertEqual(records[0].price, "380.39")
+        self.assertEqual(records[0].price_source, "amazon_detail")
+        self.assertEqual(len(repository.update_change_log_calls), 1)
+        self.assertFalse(repository.update_change_log_calls[0][4])
+
+    def test_update_confirmed_amazon_item_defers_invalid_static_and_browser_shells(self):
+        source_url = "https://www.amazon.com.mx/dp/B0GZ4XV2KH"
+        generic_shell_html = """
+        <html><head><title>Amazon.com.mx</title></head><body>
+          B0GZ4XV2KH
+          Haz clic en el boton de abajo para continuar comprando
+        </body></html>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=15644,
+            store_id=12,
+            source_url=source_url,
+            title="Copa Casas Harry Potter + Alohomora",
+            raw_price="$380.39",
+            price="380.39",
+            price_source="amazon_detail",
+            availability="available",
+            availability_source="amazon_detail",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record], store_platforms={12: "amazon_brand"})
+        browser_fetches = []
+
+        def browser_fetch(url):
+            browser_fetches.append(url)
+            return FetchResult(url=url, text=generic_shell_html)
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=source_url, text=generic_shell_html),
+        ):
+            with self.assertRaisesRegex(
+                TransientProductFetchError,
+                "Failed to fetch product detail page",
+            ):
+                update_confirmed_store_item_details(
+                    repository,
+                    browser_fetch_enabled=True,
+                    browser_fetcher=browser_fetch,
+                    job_id=102,
+                    run_id="run-amazon-invalid-shell",
+                )
+
+        self.assertEqual(browser_fetches, [source_url, source_url])
+        self.assertEqual(repository.update_change_log_calls, [])
+        self.assertEqual(repository.price_availability_update_calls, [])
 
     def test_update_confirmed_store_item_details_raises_when_detail_fetch_fails(self):
         existing_record = DiscoveryItemCandidateRecord(
