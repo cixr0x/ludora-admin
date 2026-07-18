@@ -1012,7 +1012,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.confirmed_items_store_ids, [12, 34])
         self.assertEqual(repository.discovery_source_store_ids, [12, 34])
 
-    def test_update_confirmed_store_item_details_randomizes_candidates_across_multiple_stores(self):
+    def test_update_confirmed_store_item_details_randomizes_older_pool_before_newer_pool(self):
         first_record = DiscoveryItemCandidateRecord(
             store_item_id=56,
             store_id=12,
@@ -1043,15 +1043,39 @@ class InventoryTests(unittest.TestCase):
             is_boardgame=True,
             is_boardgame_confirmed=True,
         )
-        repository = FakeRepository(confirmed_items=[first_record, second_record, third_record])
+        fourth_record = DiscoveryItemCandidateRecord(
+            store_item_id=59,
+            store_id=34,
+            source_url="https://beta.example/products/splendor",
+            title="Splendor",
+            item_id=80,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        fifth_record = DiscoveryItemCandidateRecord(
+            store_item_id=60,
+            store_id=12,
+            source_url="https://alpha.example/products/patchwork",
+            title="Patchwork",
+            item_id=81,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(
+            confirmed_items=[first_record, second_record, third_record, fourth_record, fifth_record]
+        )
         fetched_store_item_ids = []
+        shuffled_pools = []
 
         def fake_fetch_detail_candidate(*, listing_candidate, **_kwargs):
             fetched_store_item_ids.append(listing_candidate.store_item_id)
             return listing_candidate
 
         def deterministic_shuffle(candidates):
-            candidates[:] = [candidates[2], candidates[0], candidates[1]]
+            shuffled_pools.append([candidate.store_item_id for candidate in candidates])
+            candidates.reverse()
 
         with patch(
             "ludora.product_crawler.random.shuffle",
@@ -1062,15 +1086,16 @@ class InventoryTests(unittest.TestCase):
         ):
             records = update_confirmed_store_item_details(repository)
 
-        shuffle.assert_called_once()
-        self.assertEqual(fetched_store_item_ids, [58, 56, 57])
-        self.assertEqual([record.store_item_id for record in records], [58, 56, 57])
+        self.assertEqual(shuffle.call_count, 2)
+        self.assertEqual(shuffled_pools, [[56, 57, 58], [59, 60]])
+        self.assertEqual(fetched_store_item_ids, [58, 57, 56, 60, 59])
+        self.assertEqual([record.store_item_id for record in records], [58, 57, 56, 60, 59])
         self.assertEqual(
             [record.store_item_id for record in repository.confirmed_items],
-            [56, 57, 58],
+            [56, 57, 58, 59, 60],
         )
 
-    def test_update_confirmed_store_item_details_preserves_order_for_one_store(self):
+    def test_update_confirmed_store_item_details_uses_age_pools_for_one_store(self):
         first_record = DiscoveryItemCandidateRecord(
             store_item_id=56,
             store_id=12,
@@ -1091,22 +1116,47 @@ class InventoryTests(unittest.TestCase):
             is_boardgame=True,
             is_boardgame_confirmed=True,
         )
-        repository = FakeRepository(confirmed_items=[first_record, second_record])
+        third_record = DiscoveryItemCandidateRecord(
+            store_item_id=58,
+            store_id=12,
+            source_url="https://alpha.example/products/carcassonne",
+            title="Carcassonne",
+            item_id=79,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        fourth_record = DiscoveryItemCandidateRecord(
+            store_item_id=59,
+            store_id=12,
+            source_url="https://alpha.example/products/splendor",
+            title="Splendor",
+            item_id=80,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(
+            confirmed_items=[first_record, second_record, third_record, fourth_record]
+        )
         fetched_store_item_ids = []
 
         def fake_fetch_detail_candidate(*, listing_candidate, **_kwargs):
             fetched_store_item_ids.append(listing_candidate.store_item_id)
             return listing_candidate
 
-        with patch("ludora.product_crawler.random.shuffle") as shuffle, patch(
+        with patch(
+            "ludora.product_crawler.random.shuffle",
+            side_effect=lambda candidates: candidates.reverse(),
+        ) as shuffle, patch(
             "ludora.product_crawler._fetch_detail_candidate",
             side_effect=fake_fetch_detail_candidate,
         ):
             records = update_confirmed_store_item_details(repository, store_ids=[12])
 
-        shuffle.assert_not_called()
-        self.assertEqual(fetched_store_item_ids, [56, 57])
-        self.assertEqual([record.store_item_id for record in records], [56, 57])
+        self.assertEqual(shuffle.call_count, 2)
+        self.assertEqual(fetched_store_item_ids, [57, 56, 59, 58])
+        self.assertEqual([record.store_item_id for record in records], [57, 56, 59, 58])
 
     def test_update_confirmed_store_item_details_logs_changes_when_job_id_is_available(self):
         detail_html = """

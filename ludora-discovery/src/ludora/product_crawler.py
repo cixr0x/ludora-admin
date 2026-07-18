@@ -310,8 +310,14 @@ def update_confirmed_store_item_details(
         update_candidates = list(
             repository.list_confirmed_boardgame_item_candidates(limit=limit, store_ids=store_ids)
         )
-        if len({candidate.store_id for candidate in update_candidates}) > 1:
-            random.shuffle(update_candidates)
+        # The repository returns candidates oldest-first by refreshed_date. Keep
+        # the older half ahead of the newer half while varying order within each.
+        older_pool_size = (len(update_candidates) + 1) // 2
+        older_candidates = update_candidates[:older_pool_size]
+        newer_candidates = update_candidates[older_pool_size:]
+        random.shuffle(older_candidates)
+        random.shuffle(newer_candidates)
+        update_candidates = [*older_candidates, *newer_candidates]
 
         for existing_record in update_candidates:
             raise_if_cancelled(cancellation_token)
