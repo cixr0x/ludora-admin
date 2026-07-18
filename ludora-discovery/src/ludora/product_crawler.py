@@ -20,6 +20,7 @@ from ludora.webfetch import fetch_html, fetch_with_transient_retries
 
 
 AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
+ASCII_LIGATURE_TRANSLATION = str.maketrans({"æ": "ae", "œ": "oe", "ß": "ss"})
 
 
 class StoreItemSource(Protocol):
@@ -100,6 +101,10 @@ class ProductPageRemovedError(RuntimeError):
 
 
 class TransientProductFetchError(RuntimeError):
+    pass
+
+
+class ProductDetailRejectedError(RuntimeError):
     pass
 
 
@@ -227,13 +232,16 @@ def crawl_store_product_details(
                 store_id=listing_candidate.store_id,
                 title=listing_candidate.title,
             )
-            detail_candidate = _fetch_detail_candidate(
-                listing_candidate=listing_candidate,
-                source_listing_url=source_listing_url,
-                browser_fetcher=browser_fetcher if use_browser_fetch else None,
-                trace_logger=trace,
-                cancellation_token=cancellation_token,
-            )
+            try:
+                detail_candidate = _fetch_detail_candidate(
+                    listing_candidate=listing_candidate,
+                    source_listing_url=source_listing_url,
+                    browser_fetcher=browser_fetcher if use_browser_fetch else None,
+                    trace_logger=trace,
+                    cancellation_token=cancellation_token,
+                )
+            except ProductDetailRejectedError:
+                continue
             trace.log(
                 "inventory.candidate.detail_fetch.completed",
                 source_url=detail_candidate.source_url,
@@ -509,9 +517,20 @@ def _fetch_detail_candidate(
             )
         raise RuntimeError(f"Failed to fetch product detail page: {listing_candidate.source_url}{status_suffix}")
 
-    if detail_candidate is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate):
+    if detail_candidate is None:
         listing_candidate.source_listing_url = source_listing_url
         return listing_candidate
+
+    if _should_retry_detail_with_browser(detail_candidate, listing_candidate):
+        trace.log(
+            "inventory.candidate.detail_fetch.rejected",
+            detail_title=detail_candidate.title,
+            listing_title=listing_candidate.title,
+            source_url=listing_candidate.source_url,
+        )
+        raise ProductDetailRejectedError(
+            f"Parsed product detail title does not match the listing: {listing_candidate.source_url}"
+        )
 
     return _apply_listing_fallbacks(detail_candidate, listing_candidate)
 
@@ -611,7 +630,7 @@ def _looks_like_removed_product_page(html: str) -> bool:
     normalized_headings = []
     for heading in headings:
         text = re.sub(r"<[^>]+>", " ", unescape(heading))
-        normalized = unicodedata.normalize("NFKD", text.casefold()).encode("ascii", "ignore").decode("ascii")
+        normalized = _normalize_ascii_text(text)
         normalized_headings.append(" ".join(normalized.split()))
 
     not_found_phrases = (
@@ -680,7 +699,7 @@ def _significant_listing_tokens(listing_candidate: DiscoveryItemCandidateRecord)
 
 
 def _significant_text_tokens(value: str) -> set[str]:
-    normalized = unicodedata.normalize("NFKD", value.casefold()).encode("ascii", "ignore").decode("ascii")
+    normalized = _normalize_ascii_text(value)
     ignored = {
         "product",
         "products",
@@ -697,6 +716,11 @@ def _significant_text_tokens(value: str) -> set[str]:
         "the",
     }
     return {token for token in re.findall(r"[a-z0-9]+", normalized) if len(token) >= 3 and token not in ignored}
+
+
+def _normalize_ascii_text(value: str) -> str:
+    casefolded = value.casefold().translate(ASCII_LIGATURE_TRANSLATION)
+    return unicodedata.normalize("NFKD", casefolded).encode("ascii", "ignore").decode("ascii")
 
 
 def _title_from_url(product_url: str) -> str:

@@ -12,6 +12,7 @@ from ludora.inventory import collect_store_inventory, update_confirmed_store_ite
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import (
     TransientProductFetchError,
+    _significant_text_tokens,
     crawl_store_product_details,
     update_confirmed_store_item_details,
 )
@@ -116,6 +117,12 @@ class FakeTraceLogger:
 
 
 class InventoryTests(unittest.TestCase):
+    def test_title_tokens_expand_common_ligatures_before_ascii_folding(self):
+        self.assertEqual(
+            _significant_text_tokens("Æterna Œuvre Straße"),
+            {"aeterna", "oeuvre", "strasse"},
+        )
+
     def test_collect_store_inventory_prefers_sitemap_product_urls(self):
         detail_html = """
         <script type="application/ld+json">
@@ -156,6 +163,37 @@ class InventoryTests(unittest.TestCase):
         self.assertTrue(records[0].is_boardgame)
         self.assertFalse(records[0].is_boardgame_confirmed)
         self.assertEqual(repository.item_records[0].source_listing_url, "https://example.mx/sitemap.xml")
+
+    def test_collect_store_inventory_matches_ligature_detail_title_to_sitemap_slug(self):
+        detail_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Æterna",
+          "description": "Juego de mesa de estrategia para dos jugadores.",
+          "image": "https://cdn.example.mx/aeterna.webp",
+          "offers": {"price": "1250.00", "priceCurrency": "MXN"}
+        }
+        </script>
+        """
+        product_url = "https://www.amigocalavera.mx/productos/aeterna/"
+        repository = FakeRepository()
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[product_url],
+        ), patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=product_url, text=detail_html),
+        ):
+            records = crawl_store_product_details("https://www.amigocalavera.mx/", 12, repository)
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].title, "Æterna")
+        self.assertEqual(records[0].price, "1250.00")
+        self.assertEqual(records[0].image_url, "https://cdn.example.mx/aeterna.webp")
+        self.assertTrue(records[0].raw_payload)
+        self.assertEqual(repository.item_records[0].title, "Æterna")
 
     def test_collect_store_inventory_falls_back_to_homepage_product_links(self):
         html = '<a href="/products/catan">Catan</a><span>$899 MXN</span>'
@@ -622,7 +660,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual([event["will_retry"] for event in http_error_events], [True, True, False])
         self.assertEqual(repository.item_records, [])
 
-    def test_crawl_store_product_details_keeps_listing_title_when_browser_detail_is_cookie_only(self):
+    def test_crawl_store_product_details_skips_sitemap_candidate_when_parsed_detail_is_rejected(self):
         cookie_html = """
         <html>
           <head>
@@ -636,6 +674,7 @@ class InventoryTests(unittest.TestCase):
         """
         product_url = "https://example.mx/tienda/ols/products/the-resistance-avalon"
         repository = FakeRepository()
+        trace = FakeTraceLogger()
 
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
@@ -650,12 +689,17 @@ class InventoryTests(unittest.TestCase):
                 repository,
                 browser_fetch_enabled=True,
                 browser_fetcher=lambda url: FetchResult(url=url, text=cookie_html),
+                trace_logger=trace,
             )
 
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0].title, "the resistance avalon")
-        self.assertNotEqual(records[0].title, "This website uses cookies.")
-        self.assertEqual(repository.item_records[0].title, "the resistance avalon")
+        self.assertEqual(records, [])
+        self.assertEqual(repository.item_records, [])
+        rejected_events = [
+            fields for event, fields in trace.events if event == "inventory.candidate.detail_fetch.rejected"
+        ]
+        self.assertEqual(len(rejected_events), 1)
+        self.assertEqual(rejected_events[0]["listing_title"], "the resistance avalon")
+        self.assertEqual(rejected_events[0]["source_url"], product_url)
 
     def test_crawl_store_product_details_processes_new_candidates_after_upsert(self):
         detail_html = """
