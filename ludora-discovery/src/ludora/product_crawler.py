@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-import time
 import unicodedata
 from collections.abc import Callable
 from html import unescape
@@ -16,14 +15,10 @@ from ludora.product_detail_extraction import extract_product_detail_candidate
 from ludora.sitemap_discovery import _looks_like_site_protection_challenge, discover_product_urls_from_sitemaps
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import FetchResult
-from ludora.webfetch import fetch_html
+from ludora.webfetch import fetch_html, fetch_with_transient_retries
 
 
 AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
-TRANSIENT_FETCH_STATUS_CODES = {429, 502, 503, 504}
-STATIC_FETCH_MAX_ATTEMPTS = 3
-STATIC_FETCH_RETRY_BASE_SECONDS = 1.0
-STATIC_FETCH_RETRY_MAX_SECONDS = 300.0
 
 
 class StoreItemSource(Protocol):
@@ -133,6 +128,8 @@ def crawl_store_product_details(
             browser_fetcher=browser_fetcher,
             browser_fallback_enabled=use_browser_fetch,
             limit=limit,
+            trace_logger=trace,
+            cancellation_token=cancellation_token,
         )
         trace.log(
             "inventory.sitemap_discovery.completed",
@@ -153,9 +150,26 @@ def crawl_store_product_details(
             ]
         else:
             trace.log("inventory.listing_fetch.start", source_url=store_url, store_id=store_id)
-            fetched_listing = fetch_html(store_url)
+            fetched_listing = fetch_with_transient_retries(
+                store_url,
+                lambda url: fetch_html(url, include_http_error_status=True),
+                trace_event="inventory.listing_fetch.http_error",
+                trace_logger=trace,
+                trace_fields={"fetch_method": "static", "store_id": store_id},
+                cancellation_token=cancellation_token,
+            )
+            listing_failure_status_code = (
+                fetched_listing.status_code
+                if fetched_listing is not None and fetched_listing.status_code >= 400
+                else None
+            )
+            if listing_failure_status_code is not None:
+                fetched_listing = None
             if fetched_listing is None:
-                raise RuntimeError(f"Failed to fetch store listing page: {store_url}")
+                status_suffix = (
+                    f" (HTTP {listing_failure_status_code})" if listing_failure_status_code is not None else ""
+                )
+                raise RuntimeError(f"Failed to fetch store listing page: {store_url}{status_suffix}")
             trace.log("inventory.listing_fetch.completed", fetched_url=fetched_listing.url, store_id=store_id)
 
             source_listing_url = fetched_listing.url
@@ -453,67 +467,15 @@ def _fetch_static_product_detail(
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> FetchResult | None:
-    trace = trace_logger or NullTraceLogger()
-    ambiguous_failure_attempts = 2 if detect_removed else 1
-    for attempt in range(1, STATIC_FETCH_MAX_ATTEMPTS + 1):
-        raise_if_cancelled(cancellation_token)
-        fetched_detail = fetch_html(source_url, include_http_error_status=True)
-        if fetched_detail is None:
-            if attempt < ambiguous_failure_attempts:
-                continue
-            return None
-        if fetched_detail.status_code not in TRANSIENT_FETCH_STATUS_CODES:
-            if fetched_detail.status_code >= 400:
-                trace.log(
-                    "inventory.candidate.detail_fetch.http_error",
-                    attempt=attempt,
-                    fetch_method="static",
-                    max_attempts=STATIC_FETCH_MAX_ATTEMPTS,
-                    retry_after_seconds=fetched_detail.retry_after_seconds,
-                    retry_in_seconds=0.0,
-                    source_url=source_url,
-                    status_code=fetched_detail.status_code,
-                    will_retry=False,
-                )
-            return fetched_detail
-
-        will_retry = attempt < STATIC_FETCH_MAX_ATTEMPTS
-        retry_in_seconds = _static_fetch_retry_delay_seconds(fetched_detail, attempt) if will_retry else 0.0
-        trace.log(
-            "inventory.candidate.detail_fetch.http_error",
-            attempt=attempt,
-            fetch_method="static",
-            max_attempts=STATIC_FETCH_MAX_ATTEMPTS,
-            retry_after_seconds=fetched_detail.retry_after_seconds,
-            retry_in_seconds=retry_in_seconds,
-            source_url=source_url,
-            status_code=fetched_detail.status_code,
-            will_retry=will_retry,
-        )
-        if not will_retry:
-            return fetched_detail
-        _wait_for_static_fetch_retry(retry_in_seconds, cancellation_token)
-
-    return None
-
-
-def _static_fetch_retry_delay_seconds(fetched: FetchResult, attempt: int) -> float:
-    if fetched.retry_after_seconds is not None:
-        return min(STATIC_FETCH_RETRY_MAX_SECONDS, max(0.0, fetched.retry_after_seconds))
-    return min(STATIC_FETCH_RETRY_MAX_SECONDS, STATIC_FETCH_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
-
-
-def _wait_for_static_fetch_retry(
-    delay_seconds: float,
-    cancellation_token: CancellationToken | None,
-) -> None:
-    deadline = time.monotonic() + max(0.0, delay_seconds)
-    while True:
-        raise_if_cancelled(cancellation_token)
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return
-        time.sleep(min(1.0, remaining))
+    return fetch_with_transient_retries(
+        source_url,
+        lambda url: fetch_html(url, include_http_error_status=True),
+        trace_event="inventory.candidate.detail_fetch.http_error",
+        trace_logger=trace_logger,
+        trace_fields={"fetch_method": "static"},
+        cancellation_token=cancellation_token,
+        ambiguous_failure_attempts=2 if detect_removed else 1,
+    )
 
 
 def _raise_if_product_page_removed(

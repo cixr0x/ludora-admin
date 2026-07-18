@@ -8,9 +8,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse, urlunparse
 from urllib.request import Request, urlopen
 
+from ludora.cancellation import CancellationToken
 from ludora.filtering import canonical_domain
 from ludora.listing_extraction import _looks_like_product_url
-from ludora.webfetch import FetchResult
+from ludora.trace import TraceLogger
+from ludora.webfetch import FetchResult, fetch_with_transient_retries, retry_after_seconds_from_headers
 
 
 LOC_RE = re.compile(r"<loc(?:\s[^>]*)?>\s*(.*?)\s*</loc>", re.IGNORECASE | re.DOTALL)
@@ -28,8 +30,10 @@ def discover_product_urls_from_sitemaps(
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
     browser_fallback_enabled: bool = False,
     limit: int | None = None,
+    trace_logger: TraceLogger | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> list[str]:
-    fetch = fetcher or fetch_sitemap_text
+    fetch = fetcher or (lambda url: fetch_sitemap_text(url, include_http_error_status=True))
     browser_fetch = browser_fetcher
     if browser_fallback_enabled and browser_fetch is None:
         from ludora.browser_fetch import fetch_sitemap_text_with_browser
@@ -47,6 +51,9 @@ def discover_product_urls_from_sitemaps(
         browser_fetcher=browser_fetch,
         browser_fallback_enabled=browser_fallback_enabled,
         blocked_urls=blocked_urls,
+        trace_logger=trace_logger,
+        cancellation_token=cancellation_token,
+        optional=False,
     )
     if fetched_root is not None:
         product_urls.extend(_product_urls_from_text(fetched_root.text, fetched_root.url, store_url))
@@ -64,6 +71,9 @@ def discover_product_urls_from_sitemaps(
             browser_fetcher=browser_fetch,
             browser_fallback_enabled=browser_fallback_enabled,
             blocked_urls=blocked_urls,
+            trace_logger=trace_logger,
+            cancellation_token=cancellation_token,
+            optional=sitemap_url in _direct_product_sitemap_urls(store_url),
         )
         if fetched_sitemap is None:
             continue
@@ -82,7 +92,12 @@ def discover_product_urls_from_sitemaps(
     return deduped_urls[:limit]
 
 
-def fetch_sitemap_text(url: str, timeout: int = 20) -> FetchResult | None:
+def fetch_sitemap_text(
+    url: str,
+    timeout: int = 20,
+    *,
+    include_http_error_status: bool = False,
+) -> FetchResult | None:
     request = Request(
         url,
         headers={
@@ -101,7 +116,16 @@ def fetch_sitemap_text(url: str, timeout: int = 20) -> FetchResult | None:
             charset = response.headers.get_content_charset() or "utf-8"
             body = response.read().decode(charset, errors="replace")
             return FetchResult(url=response.geturl(), text=body)
-    except (HTTPError, HTTPException, URLError, TimeoutError, ValueError):
+    except HTTPError as exc:
+        if include_http_error_status:
+            return FetchResult(
+                url=exc.geturl() or url,
+                text="",
+                status_code=int(exc.code),
+                retry_after_seconds=retry_after_seconds_from_headers(exc.headers),
+            )
+        return None
+    except (HTTPException, URLError, TimeoutError, ValueError):
         return None
 
 
@@ -112,8 +136,20 @@ def _fetch_sitemap(
     browser_fetcher: Callable[[str], FetchResult | None] | None,
     browser_fallback_enabled: bool,
     blocked_urls: list[str],
+    trace_logger: TraceLogger | None,
+    cancellation_token: CancellationToken | None,
+    optional: bool,
 ) -> FetchResult | None:
-    fetched = fetch(url)
+    fetched = fetch_with_transient_retries(
+        url,
+        fetch,
+        trace_event="inventory.sitemap_fetch.http_error",
+        trace_logger=trace_logger,
+        trace_fields={"fetch_method": "static", "optional": optional},
+        cancellation_token=cancellation_token,
+    )
+    if fetched is not None and fetched.status_code >= 400:
+        fetched = None
     if fetched is not None and not _looks_like_site_protection_challenge(fetched.text):
         return fetched
     if fetched is not None:
@@ -122,7 +158,16 @@ def _fetch_sitemap(
     if not browser_fallback_enabled or browser_fetcher is None:
         return None
 
-    browser_fetched = browser_fetcher(url)
+    browser_fetched = fetch_with_transient_retries(
+        url,
+        browser_fetcher,
+        trace_event="inventory.sitemap_fetch.http_error",
+        trace_logger=trace_logger,
+        trace_fields={"fetch_method": "browser", "optional": optional},
+        cancellation_token=cancellation_token,
+    )
+    if browser_fetched is not None and browser_fetched.status_code >= 400:
+        browser_fetched = None
     if browser_fetched is None:
         return None
     if _looks_like_site_protection_challenge(browser_fetched.text):

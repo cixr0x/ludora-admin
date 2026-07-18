@@ -1,12 +1,21 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ludora.sitemap_discovery import SiteProtectionBlocked, discover_product_urls_from_sitemaps
 from ludora.webfetch import FetchResult
+
+
+class FakeTraceLogger:
+    def __init__(self):
+        self.events = []
+
+    def log(self, event, **fields):
+        self.events.append((event, fields))
 
 
 class SitemapDiscoveryTests(unittest.TestCase):
@@ -142,6 +151,42 @@ class SitemapDiscoveryTests(unittest.TestCase):
                 "https://example.mx/product-sitemap.xml",
             ],
         )
+
+    def test_retries_transient_root_sitemap_status_and_honors_retry_after(self):
+        root_url = "https://example.mx/sitemap.xml"
+        fetched_urls = []
+        trace = FakeTraceLogger()
+
+        def fake_fetcher(url):
+            fetched_urls.append(url)
+            if url == root_url and fetched_urls.count(root_url) == 1:
+                return FetchResult(url=url, text="", status_code=503, retry_after_seconds=41.0)
+            if url == root_url:
+                return FetchResult(
+                    url=url,
+                    text="""
+                    <urlset>
+                      <url><loc>https://example.mx/products/catan</loc></url>
+                    </urlset>
+                    """,
+                )
+            return None
+
+        with patch("ludora.webfetch._wait_for_fetch_retry") as wait_for_retry:
+            urls = discover_product_urls_from_sitemaps(
+                "https://example.mx/",
+                fetcher=fake_fetcher,
+                trace_logger=trace,
+            )
+
+        self.assertEqual(urls, ["https://example.mx/products/catan"])
+        self.assertEqual(fetched_urls.count(root_url), 2)
+        wait_for_retry.assert_called_once_with(41.0, None)
+        http_error_events = [fields for event, fields in trace.events if event == "inventory.sitemap_fetch.http_error"]
+        self.assertEqual(len(http_error_events), 1)
+        self.assertEqual(http_error_events[0]["status_code"], 503)
+        self.assertEqual(http_error_events[0]["retry_in_seconds"], 41.0)
+        self.assertTrue(http_error_events[0]["will_retry"])
 
     def test_raises_blocked_when_sitemap_response_is_a_challenge_page(self):
         def fake_fetcher(url):
