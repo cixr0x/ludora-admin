@@ -1,5 +1,6 @@
 import sys
 import unittest
+from email.message import Message
 from http.client import HTTPException
 from pathlib import Path
 from urllib.error import HTTPError
@@ -37,7 +38,7 @@ class WebFetchTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.status_code, 404)
 
-    def test_fetch_html_still_collapses_other_http_errors(self):
+    def test_fetch_html_still_collapses_http_errors_by_default(self):
         error = HTTPError(
             "https://example.mx/products/catan",
             503,
@@ -47,12 +48,31 @@ class WebFetchTests(unittest.TestCase):
         )
 
         with patch("ludora.webfetch.urlopen", side_effect=error):
+            result = fetch_html("https://example.mx/products/catan")
+
+        self.assertIsNone(result)
+
+    def test_fetch_html_can_preserve_transient_status_and_retry_after(self):
+        headers = Message()
+        headers["Retry-After"] = "179"
+        error = HTTPError(
+            "https://example.mx/products/catan",
+            503,
+            "Service Unavailable",
+            hdrs=headers,
+            fp=None,
+        )
+
+        with patch("ludora.webfetch.urlopen", side_effect=error):
             result = fetch_html(
                 "https://example.mx/products/catan",
                 include_http_error_status=True,
             )
 
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status_code, 503)
+        self.assertEqual(result.retry_after_seconds, 179.0)
 
 
 if __name__ == "__main__":

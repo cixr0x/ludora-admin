@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 import unicodedata
 from collections.abc import Callable
 from html import unescape
@@ -19,6 +20,10 @@ from ludora.webfetch import fetch_html
 
 
 AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
+TRANSIENT_FETCH_STATUS_CODES = {429, 502, 503, 504}
+STATIC_FETCH_MAX_ATTEMPTS = 3
+STATIC_FETCH_RETRY_BASE_SECONDS = 1.0
+STATIC_FETCH_RETRY_MAX_SECONDS = 300.0
 
 
 class StoreItemSource(Protocol):
@@ -195,6 +200,8 @@ def crawl_store_product_details(
                 listing_candidate=listing_candidate,
                 source_listing_url=source_listing_url,
                 browser_fetcher=browser_fetcher if use_browser_fetch else None,
+                trace_logger=trace,
+                cancellation_token=cancellation_token,
             )
             trace.log(
                 "inventory.candidate.detail_fetch.completed",
@@ -291,6 +298,7 @@ def update_confirmed_store_item_details(
                     platform=store_platforms.get(existing_record.store_id, ""),
                     browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
                     detect_removed=True,
+                    cancellation_token=cancellation_token,
                 )
             except ProductPageRemovedError:
                 if run_id and job_id is None:
@@ -335,13 +343,23 @@ def _fetch_detail_candidate(
     platform: str = "",
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
     detect_removed: bool = False,
+    trace_logger: TraceLogger | None = None,
+    cancellation_token: CancellationToken | None = None,
 ) -> DiscoveryItemCandidateRecord:
+    trace = trace_logger or NullTraceLogger()
     fetched_detail = _fetch_static_product_detail(
         listing_candidate.source_url,
         detect_removed=detect_removed,
+        trace_logger=trace,
+        cancellation_token=cancellation_token,
     )
     _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
-    static_fetch_failed = fetched_detail is None
+    last_failure_status_code = (
+        fetched_detail.status_code if fetched_detail is not None and fetched_detail.status_code >= 400 else None
+    )
+    static_fetch_failed = fetched_detail is None or last_failure_status_code is not None
+    if last_failure_status_code is not None:
+        fetched_detail = None
     if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
         fetched_detail = None
         static_fetch_failed = True
@@ -363,6 +381,18 @@ def _fetch_detail_candidate(
         fetched_detail = browser_fetcher(listing_candidate.source_url)
         _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
         if fetched_detail is not None and fetched_detail.status_code >= 400:
+            last_failure_status_code = fetched_detail.status_code
+            trace.log(
+                "inventory.candidate.detail_fetch.http_error",
+                attempt=1,
+                fetch_method="browser",
+                max_attempts=1,
+                retry_after_seconds=fetched_detail.retry_after_seconds,
+                retry_in_seconds=0.0,
+                source_url=listing_candidate.source_url,
+                status_code=fetched_detail.status_code,
+                will_retry=False,
+            )
             fetched_detail = None
         if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
             fetched_detail = None
@@ -378,7 +408,8 @@ def _fetch_detail_candidate(
                 static_fetch_failed = False
 
     if static_fetch_failed and fetched_detail is None:
-        raise RuntimeError(f"Failed to fetch product detail page: {listing_candidate.source_url}")
+        status_suffix = f" (HTTP {last_failure_status_code})" if last_failure_status_code is not None else ""
+        raise RuntimeError(f"Failed to fetch product detail page: {listing_candidate.source_url}{status_suffix}")
 
     if detail_candidate is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate):
         listing_candidate.source_listing_url = source_listing_url
@@ -415,14 +446,74 @@ def _extract_refresh_detail_candidate(
     )
 
 
-def _fetch_static_product_detail(source_url: str, *, detect_removed: bool) -> FetchResult | None:
-    if not detect_removed:
-        return fetch_html(source_url)
-
-    fetched_detail = fetch_html(source_url, include_http_error_status=True)
-    if fetched_detail is None:
+def _fetch_static_product_detail(
+    source_url: str,
+    *,
+    detect_removed: bool,
+    trace_logger: TraceLogger | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> FetchResult | None:
+    trace = trace_logger or NullTraceLogger()
+    ambiguous_failure_attempts = 2 if detect_removed else 1
+    for attempt in range(1, STATIC_FETCH_MAX_ATTEMPTS + 1):
+        raise_if_cancelled(cancellation_token)
         fetched_detail = fetch_html(source_url, include_http_error_status=True)
-    return fetched_detail
+        if fetched_detail is None:
+            if attempt < ambiguous_failure_attempts:
+                continue
+            return None
+        if fetched_detail.status_code not in TRANSIENT_FETCH_STATUS_CODES:
+            if fetched_detail.status_code >= 400:
+                trace.log(
+                    "inventory.candidate.detail_fetch.http_error",
+                    attempt=attempt,
+                    fetch_method="static",
+                    max_attempts=STATIC_FETCH_MAX_ATTEMPTS,
+                    retry_after_seconds=fetched_detail.retry_after_seconds,
+                    retry_in_seconds=0.0,
+                    source_url=source_url,
+                    status_code=fetched_detail.status_code,
+                    will_retry=False,
+                )
+            return fetched_detail
+
+        will_retry = attempt < STATIC_FETCH_MAX_ATTEMPTS
+        retry_in_seconds = _static_fetch_retry_delay_seconds(fetched_detail, attempt) if will_retry else 0.0
+        trace.log(
+            "inventory.candidate.detail_fetch.http_error",
+            attempt=attempt,
+            fetch_method="static",
+            max_attempts=STATIC_FETCH_MAX_ATTEMPTS,
+            retry_after_seconds=fetched_detail.retry_after_seconds,
+            retry_in_seconds=retry_in_seconds,
+            source_url=source_url,
+            status_code=fetched_detail.status_code,
+            will_retry=will_retry,
+        )
+        if not will_retry:
+            return fetched_detail
+        _wait_for_static_fetch_retry(retry_in_seconds, cancellation_token)
+
+    return None
+
+
+def _static_fetch_retry_delay_seconds(fetched: FetchResult, attempt: int) -> float:
+    if fetched.retry_after_seconds is not None:
+        return min(STATIC_FETCH_RETRY_MAX_SECONDS, max(0.0, fetched.retry_after_seconds))
+    return min(STATIC_FETCH_RETRY_MAX_SECONDS, STATIC_FETCH_RETRY_BASE_SECONDS * (2 ** (attempt - 1)))
+
+
+def _wait_for_static_fetch_retry(
+    delay_seconds: float,
+    cancellation_token: CancellationToken | None,
+) -> None:
+    deadline = time.monotonic() + max(0.0, delay_seconds)
+    while True:
+        raise_if_cancelled(cancellation_token)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(1.0, remaining))
 
 
 def _raise_if_product_page_removed(

@@ -91,6 +91,14 @@ class FakeItemProcessor:
         self.processed.append((candidate_id, record))
 
 
+class FakeTraceLogger:
+    def __init__(self):
+        self.events = []
+
+    def log(self, event, **fields):
+        self.events.append((event, fields))
+
+
 class InventoryTests(unittest.TestCase):
     def test_collect_store_inventory_prefers_sitemap_product_urls(self):
         detail_html = """
@@ -121,7 +129,10 @@ class InventoryTests(unittest.TestCase):
             browser_fallback_enabled=False,
             limit=None,
         )
-        fetch_html.assert_called_once_with("https://example.mx/products/catan")
+        fetch_html.assert_called_once_with(
+            "https://example.mx/products/catan",
+            include_http_error_status=True,
+        )
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].title, "Catan")
         self.assertTrue(records[0].is_boardgame)
@@ -428,6 +439,93 @@ class InventoryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Failed to fetch product detail page: https://example.mx/products/catan"):
                 crawl_store_product_details("https://example.mx/", 12, repository)
 
+        self.assertEqual(repository.item_records, [])
+
+    def test_crawl_store_product_details_retries_transient_http_status_and_honors_retry_after(self):
+        detail_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Catan",
+          "offers": {"price": "899.00", "priceCurrency": "MXN"}
+        }
+        </script>
+        """
+        product_url = "https://example.mx/products/catan"
+        repository = FakeRepository()
+        trace = FakeTraceLogger()
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[product_url],
+        ), patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=[
+                FetchResult(
+                    url=product_url,
+                    text="",
+                    status_code=503,
+                    retry_after_seconds=179.0,
+                ),
+                FetchResult(url=product_url, text=detail_html),
+            ],
+        ) as fetch_html, patch("ludora.product_crawler._wait_for_static_fetch_retry") as wait_for_retry:
+            records = crawl_store_product_details(
+                "https://example.mx/",
+                12,
+                repository,
+                trace_logger=trace,
+            )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(fetch_html.call_count, 2)
+        wait_for_retry.assert_called_once_with(179.0, None)
+        http_error_events = [fields for event, fields in trace.events if event == "inventory.candidate.detail_fetch.http_error"]
+        self.assertEqual(
+            http_error_events,
+            [
+                {
+                    "attempt": 1,
+                    "fetch_method": "static",
+                    "max_attempts": 3,
+                    "retry_after_seconds": 179.0,
+                    "retry_in_seconds": 179.0,
+                    "source_url": product_url,
+                    "status_code": 503,
+                    "will_retry": True,
+                }
+            ],
+        )
+
+    def test_crawl_store_product_details_reports_transient_http_status_after_retries_exhausted(self):
+        product_url = "https://example.mx/products/catan"
+        repository = FakeRepository()
+        trace = FakeTraceLogger()
+        unavailable = FetchResult(url=product_url, text="", status_code=503, retry_after_seconds=0.0)
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[product_url],
+        ), patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=[unavailable, unavailable, unavailable],
+        ) as fetch_html, patch("ludora.product_crawler._wait_for_static_fetch_retry") as wait_for_retry:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"Failed to fetch product detail page: https://example.mx/products/catan \(HTTP 503\)",
+            ):
+                crawl_store_product_details(
+                    "https://example.mx/",
+                    12,
+                    repository,
+                    trace_logger=trace,
+                )
+
+        self.assertEqual(fetch_html.call_count, 3)
+        self.assertEqual(wait_for_retry.call_count, 2)
+        http_error_events = [fields for event, fields in trace.events if event == "inventory.candidate.detail_fetch.http_error"]
+        self.assertEqual([event["status_code"] for event in http_error_events], [503, 503, 503])
+        self.assertEqual([event["will_retry"] for event in http_error_events], [True, True, False])
         self.assertEqual(repository.item_records, [])
 
     def test_crawl_store_product_details_keeps_listing_title_when_browser_detail_is_cookie_only(self):
