@@ -270,23 +270,58 @@ class DiscoveryRepository:
         job_id: int,
         status: str,
         completed_at: datetime,
+        scanned_items: int | None = None,
+        updated_items: int | None = None,
+        error: str = "",
+    ) -> None:
+        if (scanned_items is None) != (updated_items is None):
+            raise ValueError("scanned_items and updated_items must both be provided or omitted")
+        with self.connection.cursor() as cursor:
+            if scanned_items is None:
+                cursor.execute(
+                    """
+                    update job_store_item_update_log
+                    set status = %s,
+                        error = %s,
+                        completed_at = %s,
+                        updated_at = now()
+                    where id = %s
+                    """,
+                    (status, error, completed_at, job_id),
+                )
+            else:
+                cursor.execute(
+                    """
+                    update job_store_item_update_log
+                    set status = %s,
+                        error = %s,
+                        completed_at = %s,
+                        scanned_items = %s,
+                        updated_items = %s,
+                        updated_at = now()
+                    where id = %s
+                    """,
+                    (status, error, completed_at, scanned_items, updated_items, job_id),
+                )
+        self.connection.commit()
+
+    def update_store_item_update_progress(
+        self,
+        *,
+        job_id: int,
         scanned_items: int,
         updated_items: int,
-        error: str = "",
     ) -> None:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
                 update job_store_item_update_log
-                set status = %s,
-                    error = %s,
-                    completed_at = %s,
-                    scanned_items = %s,
+                set scanned_items = %s,
                     updated_items = %s,
                     updated_at = now()
                 where id = %s
                 """,
-                (status, error, completed_at, scanned_items, updated_items, job_id),
+                (scanned_items, updated_items, job_id),
             )
         self.connection.commit()
 

@@ -324,6 +324,45 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("completed", "", completed_at, 5, 3, 99))
         self.assertEqual(connection.commits, 2)
 
+    def test_updates_store_item_update_progress(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+
+        repository.update_store_item_update_progress(
+            job_id=99,
+            scanned_items=5,
+            updated_items=3,
+        )
+
+        update_sql, update_params = connection.cursor_instance.executions[0]
+        normalized_sql = " ".join(update_sql.casefold().split())
+        self.assertIn("update job_store_item_update_log", normalized_sql)
+        self.assertIn("scanned_items = %s", normalized_sql)
+        self.assertIn("updated_items = %s", normalized_sql)
+        self.assertIn("updated_at = now()", normalized_sql)
+        self.assertEqual(update_params, (5, 3, 99))
+        self.assertEqual(connection.commits, 1)
+
+    def test_failed_store_item_update_completion_preserves_persisted_progress(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        completed_at = datetime(2026, 7, 5, 10, 5, tzinfo=timezone.utc)
+
+        repository.complete_store_item_update_log(
+            job_id=99,
+            status="failed",
+            completed_at=completed_at,
+            error="update failed",
+        )
+
+        update_sql, update_params = connection.cursor_instance.executions[0]
+        normalized_sql = " ".join(update_sql.casefold().split())
+        self.assertIn("update job_store_item_update_log", normalized_sql)
+        self.assertNotIn("scanned_items =", normalized_sql)
+        self.assertNotIn("updated_items =", normalized_sql)
+        self.assertEqual(update_params, ("failed", "update failed", completed_at, 99))
+        self.assertEqual(connection.commits, 1)
+
     def test_updates_item_candidate_and_logs_title_and_price_availability_refresh_fields(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)

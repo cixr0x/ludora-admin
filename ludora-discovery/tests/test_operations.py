@@ -452,8 +452,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         repository.complete_store_item_update_log.assert_called_once()
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["job_id"], 99)
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["status"], "failed")
-        self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["scanned_items"], 0)
-        self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["updated_items"], 0)
+        self.assertNotIn("scanned_items", repository.complete_store_item_update_log.call_args.kwargs)
+        self.assertNotIn("updated_items", repository.complete_store_item_update_log.call_args.kwargs)
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["error"], "update failed")
         connection.close.assert_called_once_with()
 

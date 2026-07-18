@@ -34,6 +34,7 @@ class FakeRepository:
         self.update_change_log_results = list(update_change_log_results or [])
         self.price_availability_update_calls = []
         self.inactive_update_calls = []
+        self.progress_updates = []
         self.store_platforms = dict(store_platforms or {})
         self.discovery_source_store_ids = None
 
@@ -89,6 +90,9 @@ class FakeRepository:
             should_process=False,
             changed=True,
         )
+
+    def update_store_item_update_progress(self, *, job_id, scanned_items, updated_items):
+        self.progress_updates.append((job_id, scanned_items, updated_items))
 
 
 class FakeItemProcessor:
@@ -940,6 +944,7 @@ class InventoryTests(unittest.TestCase):
         )
         self.assertEqual([record.store_item_id for record in records], [58, 56, 57])
         self.assertEqual([record.store_item_id for record in repository.item_records], [58, 56, 57])
+        self.assertEqual(repository.progress_updates, [(99, 1, 0), (99, 2, 0), (99, 3, 0)])
 
     def test_update_confirmed_store_item_details_fails_on_first_retry_pool_failure(self):
         candidates = [
@@ -994,6 +999,7 @@ class InventoryTests(unittest.TestCase):
             ],
         )
         self.assertEqual([record.store_item_id for record in repository.item_records], [58])
+        self.assertEqual(repository.progress_updates, [(99, 1, 0)])
 
     def test_update_confirmed_store_item_details_marks_http_404_as_inactive(self):
         existing_record = DiscoveryItemCandidateRecord(
@@ -1367,6 +1373,7 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(len(records), 2)
         self.assertEqual(getattr(records, "updated_items", None), 1)
+        self.assertEqual(repository.progress_updates, [(99, 1, 1), (99, 2, 1)])
 
 
 if __name__ == "__main__":

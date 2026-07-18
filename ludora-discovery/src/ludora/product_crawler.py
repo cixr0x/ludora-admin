@@ -77,6 +77,15 @@ class ItemCandidateRepository(Protocol):
     ) -> object | None:
         ...
 
+    def update_store_item_update_progress(
+        self,
+        *,
+        job_id: int,
+        scanned_items: int,
+        updated_items: int,
+    ) -> None:
+        ...
+
 
 class ItemCandidateProcessor(Protocol):
     def process_candidate(self, candidate_id: int, record: DiscoveryItemCandidateRecord) -> None:
@@ -357,6 +366,7 @@ def update_confirmed_store_item_details(
                         records.updated_items += 1
                     existing_record.store_active = False
                     records.append(existing_record)
+                    _persist_store_item_update_progress(repository, job_id, records)
                     continue
                 raise_if_cancelled(cancellation_token)
                 _preserve_confirmed_item_state(refreshed_record, existing_record)
@@ -381,10 +391,25 @@ def update_confirmed_store_item_details(
                     if getattr(update_result, "changed", False):
                         records.updated_items += 1
                 records.append(refreshed_record)
+                _persist_store_item_update_progress(repository, job_id, records)
         return records
     finally:
         if browser_session is not None:
             browser_session.__exit__(None, None, None)
+
+
+def _persist_store_item_update_progress(
+    repository: ItemCandidateRepository,
+    job_id: int | None,
+    records: StoreItemUpdateRecords,
+) -> None:
+    if job_id is None:
+        return
+    repository.update_store_item_update_progress(
+        job_id=job_id,
+        scanned_items=len(records),
+        updated_items=records.updated_items,
+    )
 
 
 def _fetch_detail_candidate(

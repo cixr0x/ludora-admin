@@ -433,8 +433,6 @@ def run_item_update(
                 job_id=job_id,
                 status="cancelled",
                 completed_at=_utc_now(),
-                scanned_items=0,
-                updated_items=0,
                 error="",
             )
             raise
@@ -443,8 +441,6 @@ def run_item_update(
                 job_id=job_id,
                 status="failed",
                 completed_at=_utc_now(),
-                scanned_items=0,
-                updated_items=0,
                 error=str(exc),
             )
             raise
