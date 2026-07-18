@@ -66,8 +66,9 @@ export function createCoverFlatteningWorkflowRouter(manager: CoverFlatteningWork
       const candidateIndex = positiveInteger(request.body, 'candidate_index');
       const targetField = imageField(request.body, 'target_field') as CoverFlatteningTargetField;
       const aspectRatio = optionalAspectRatio(request.body, 'aspect_ratio');
+      const trimFraction = optionalTrimFraction(request.body, 'trim_fraction');
       response.json({
-        data: await manager.accept(request.params.workflowId, candidateIndex, targetField, aspectRatio)
+        data: await manager.accept(request.params.workflowId, candidateIndex, targetField, aspectRatio, trimFraction)
       });
     } catch (error) {
       next(asHttpError(error));
@@ -111,6 +112,18 @@ function optionalAspectRatio(source: unknown, key: string): number | null {
   const parsed = Number(value[key]);
   if (!Number.isFinite(parsed) || parsed < 0.2 || parsed > 5) {
     throw httpError(400, `${key} must be between 0.2 and 5`);
+  }
+  return parsed;
+}
+
+function optionalTrimFraction(source: unknown, key: string): number {
+  const value = (source ?? {}) as Record<string, unknown>;
+  if (value[key] === undefined || value[key] === null || value[key] === '') {
+    return 0;
+  }
+  const parsed = Number(value[key]);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed >= 0.5) {
+    throw httpError(400, `${key} must be between 0 and less than 0.5`);
   }
   return parsed;
 }

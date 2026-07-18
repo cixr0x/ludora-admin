@@ -1,4 +1,6 @@
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
+import AddIcon from '@mui/icons-material/Add';
+import RemoveIcon from '@mui/icons-material/Remove';
 import {
   Alert,
   Box,
@@ -11,6 +13,7 @@ import {
   FormControl,
   FormControlLabel,
   FormLabel,
+  IconButton,
   Paper,
   Radio,
   RadioGroup,
@@ -63,6 +66,7 @@ export function CoverFlatteningDialog({
   const [aspectRatioChoice, setAspectRatioChoice] = useState<AspectRatioChoice>('auto');
   const [customAspectRatio, setCustomAspectRatio] = useState('1');
   const [aspectRatioOrientation, setAspectRatioOrientation] = useState<AspectRatioOrientation>('vertical');
+  const [trimSteps, setTrimSteps] = useState(0);
   const [sourceField, setSourceField] = useState<CoverImageField>('image_url');
   const [targetField, setTargetField] = useState<CoverImageField | ''>('');
   const [isStarting, setIsStarting] = useState(false);
@@ -76,9 +80,14 @@ export function CoverFlatteningDialog({
   const requestKey = request ? `${request.kind}:${request.id}` : '';
   const itemSources = request?.kind === 'item' ? request.sources : [];
   const needsSourceChoice = itemSources.length > 1 && !workflow;
+  const trimFraction = trimSteps / 1000;
 
   useEffect(() => {
-    if (!request || requestKeyRef.current === requestKey) {
+    if (!request) {
+      requestKeyRef.current = '';
+      return;
+    }
+    if (requestKeyRef.current === requestKey) {
       return;
     }
     requestKeyRef.current = requestKey;
@@ -92,6 +101,7 @@ export function CoverFlatteningDialog({
     setAspectRatioChoice('auto');
     setCustomAspectRatio('1');
     setAspectRatioOrientation('vertical');
+    setTrimSteps(0);
     setTargetField('');
     setError('');
     const preferredSource = request.kind === 'item' && request.sources.some((source) => source.field === 'image_url')
@@ -222,14 +232,13 @@ export function CoverFlatteningDialog({
         setError('Custom aspect ratio must be between 0.2 and 5.');
         return;
       }
-      const aspectRatioOverride = Math.abs(aspectRatio - candidate.aspect_ratio) < 0.0005
-        ? null
-        : aspectRatio;
+      const aspectRatioOverride = aspectRatioChoice === 'auto' ? null : aspectRatio;
       const result = await adminApi.acceptCoverFlattening(
         workflow.workflow_id,
         selectedCandidate,
         targetField,
-        aspectRatioOverride
+        aspectRatioOverride,
+        trimFraction
       );
       setWorkflow(null);
       onAccepted(result);
@@ -374,13 +383,24 @@ export function CoverFlatteningDialog({
                 }}
               >
                 {workflow.candidates.map((candidate) => {
-                  const previewRatio = selectedAspectRatio(
+                  const selectedRatio = selectedAspectRatio(
                     aspectRatioChoice,
                     customAspectRatio,
                     aspectRatioOrientation,
                     candidate.aspect_ratio
-                  ) ?? candidate.aspect_ratio;
-                  const previewWidth = Math.max(2, Math.round(candidate.height * previewRatio));
+                  );
+                  const ratioOverride = aspectRatioChoice === 'auto' || selectedRatio === undefined
+                    ? null
+                    : selectedRatio;
+                  const trimmedWidth = trimmedDimension(candidate.width, trimFraction);
+                  const previewHeight = trimmedDimension(candidate.height, trimFraction);
+                  const previewRatio = ratioOverride ?? (trimmedWidth / previewHeight);
+                  const previewWidth = ratioOverride === null
+                    ? trimmedWidth
+                    : Math.max(2, Math.round(previewHeight * ratioOverride));
+                  const trimTransform = trimFraction === 0
+                    ? 'scale(1)'
+                    : `scale(${candidate.width / trimmedWidth}, ${candidate.height / previewHeight})`;
                   return (
                     <Paper
                       key={candidate.index}
@@ -421,8 +441,17 @@ export function CoverFlatteningDialog({
                             <Box
                               alt={`Flattened cover candidate ${candidate.index}`}
                               component="img"
+                              data-testid={`trim-preview-image-${candidate.index}`}
                               src={candidateUrls[candidate.index]}
-                              sx={{ display: 'block', height: '100%', objectFit: 'fill', width: '100%' }}
+                              sx={{
+                                display: 'block',
+                                height: '100%',
+                                objectFit: 'fill',
+                                transform: trimTransform,
+                                transformOrigin: 'center center',
+                                transition: 'transform 120ms ease-out',
+                                width: '100%'
+                              }}
                             />
                           </Box>
                         ) : (
@@ -431,7 +460,7 @@ export function CoverFlatteningDialog({
                           </Stack>
                         )}
                         <Typography color="text.secondary" variant="caption">
-                          {previewWidth} × {candidate.height} · ratio {previewRatio.toFixed(3)} ·{' '}
+                          {previewWidth} × {previewHeight} · ratio {previewRatio.toFixed(3)} ·{' '}
                           {aspectRatioChoice === 'auto' ? automaticSizingLabel(candidate) : 'reviewer override'}
                         </Typography>
                       </Stack>
@@ -479,6 +508,29 @@ export function CoverFlatteningDialog({
                   <FormControlLabel control={<Radio />} label="Vertical" value="vertical" />
                   <FormControlLabel control={<Radio />} label="Horizontal" value="horizontal" />
                 </RadioGroup>
+              </FormControl>
+
+              <FormControl>
+                <FormLabel>Trim all borders</FormLabel>
+                <Stack alignItems="center" direction="row" spacing={1}>
+                  <IconButton
+                    aria-label="Decrease trim by 0.1%"
+                    disabled={trimSteps === 0 || isAccepting}
+                    onClick={() => setTrimSteps((current) => Math.max(0, current - 1))}
+                  >
+                    <RemoveIcon />
+                  </IconButton>
+                  <Typography aria-live="polite" sx={{ minWidth: 56, textAlign: 'center' }}>
+                    {(trimSteps / 10).toFixed(1)}%
+                  </Typography>
+                  <IconButton
+                    aria-label="Increase trim by 0.1%"
+                    disabled={trimSteps >= MAX_TRIM_STEPS || isAccepting}
+                    onClick={() => setTrimSteps((current) => Math.min(MAX_TRIM_STEPS, current + 1))}
+                  >
+                    <AddIcon />
+                  </IconButton>
+                </Stack>
               </FormControl>
 
               <FormControl>
@@ -585,6 +637,7 @@ export function CoverFlatteningDialog({
 type AspectRatioChoice = 'auto' | 'square' | '4:5' | '3:4' | '2:3' | 'custom';
 type AspectRatioOrientation = 'vertical' | 'horizontal';
 type CoverFlatteningMode = 'candidates' | 'manual';
+const MAX_TRIM_STEPS = 100;
 
 function selectedAspectRatio(
   choice: AspectRatioChoice,
@@ -614,6 +667,17 @@ function selectedAspectRatio(
 
 function orientationForRatio(ratio: number): AspectRatioOrientation {
   return ratio > 1 ? 'horizontal' : 'vertical';
+}
+
+function trimmedDimension(dimension: number, trimFraction: number): number {
+  if (trimFraction === 0) {
+    return dimension;
+  }
+  const trim = Math.min(
+    Math.max(1, Math.round(dimension * trimFraction)),
+    Math.max(0, Math.floor((dimension - 2) / 2))
+  );
+  return dimension - (2 * trim);
 }
 
 function automaticSizingLabel(candidate: CoverFlatteningWorkflow['candidates'][number]): string {

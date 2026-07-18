@@ -58,6 +58,7 @@ export type AcceptedCoverFlattening = {
   public_url: string;
   s3_key: string;
   target_field: CoverFlatteningTargetField;
+  trim_fraction: number;
 };
 
 type FlatteningCandidateFile = CoverFlatteningCandidate & {
@@ -114,6 +115,10 @@ type FlatteningMetadata = {
 
 export type CoverFlatteningWorkflowDependencies = {
   config: LocalCoverWorkflowConfig;
+  cropImage(
+    image: Buffer,
+    dimensions: { height: number; left: number; top: number; width: number }
+  ): Promise<Buffer>;
   createId?(): string;
   downloadImage(url: string): Promise<Buffer>;
   now?(): Date;
@@ -136,7 +141,8 @@ export type CoverFlatteningWorkflowManager = {
     workflowId: string,
     candidateIndex: number,
     targetField: CoverFlatteningTargetField,
-    aspectRatio?: number | null
+    aspectRatio?: number | null,
+    trimFraction?: number
   ): Promise<AcceptedCoverFlattening>;
   cancel(workflowId: string): Promise<void>;
   createManualCandidate(workflowId: string, points: NormalizedCoverPoint[]): Promise<CoverFlatteningWorkflow>;
@@ -321,7 +327,8 @@ export function createCoverFlatteningWorkflowManager(
     workflowId: string,
     candidateIndex: number,
     targetField: CoverFlatteningTargetField,
-    aspectRatio: number | null = null
+    aspectRatio: number | null = null,
+    trimFraction = 0
   ): Promise<AcceptedCoverFlattening> {
     await cleanupExpired();
     const workflow = workflowFor(workflowId);
@@ -329,13 +336,28 @@ export function createCoverFlatteningWorkflowManager(
     if (aspectRatio !== null && (!Number.isFinite(aspectRatio) || aspectRatio < 0.2 || aspectRatio > 5)) {
       throw new CoverFlatteningWorkflowError('Output aspect ratio must be between 0.2 and 5.', 400);
     }
+    if (!Number.isFinite(trimFraction) || trimFraction < 0 || trimFraction >= 0.5) {
+      throw new CoverFlatteningWorkflowError('Cover trim fraction must be between 0 and less than 0.5.', 400);
+    }
     const candidateImage = await readFile(candidate.path);
-    const outputAspectRatio = aspectRatio ?? candidate.aspect_ratio;
+    const trimX = trimPixels(candidate.width, trimFraction);
+    const trimY = trimPixels(candidate.height, trimFraction);
+    const trimmedWidth = candidate.width - (2 * trimX);
+    const trimmedHeight = candidate.height - (2 * trimY);
+    const trimmedImage = trimX || trimY
+      ? await dependencies.cropImage(candidateImage, {
+          height: trimmedHeight,
+          left: trimX,
+          top: trimY,
+          width: trimmedWidth
+        })
+      : candidateImage;
+    const outputAspectRatio = aspectRatio ?? (trimmedWidth / trimmedHeight);
     const sizedImage = aspectRatio === null
-      ? candidateImage
-      : await dependencies.resizeImage(candidateImage, {
-          height: candidate.height,
-          width: Math.max(2, Math.round(candidate.height * aspectRatio))
+      ? trimmedImage
+      : await dependencies.resizeImage(trimmedImage, {
+          height: trimmedHeight,
+          width: Math.max(2, Math.round(trimmedHeight * aspectRatio))
         });
     const optimized = await dependencies.optimizeImage(sizedImage, {
       maxBytes: MAX_OUTPUT_BYTES,
@@ -368,7 +390,8 @@ export function createCoverFlatteningWorkflowManager(
       output_aspect_ratio: outputAspectRatio,
       public_url: publicUrl,
       s3_key: s3Key,
-      target_field: targetField
+      target_field: targetField,
+      trim_fraction: trimFraction
     };
   }
 
@@ -430,6 +453,12 @@ export function createNodeCoverFlatteningWorkflowDependencies({
   const imageDependencies = createNodeExternalCoverImageOptimizerDependencies(config);
   return {
     config,
+    cropImage: async (image, dimensions) => Buffer.from(
+      await sharp(image, { failOn: 'none' })
+        .extract(dimensions)
+        .png()
+        .toBuffer()
+    ),
     downloadImage: imageDependencies.downloadImage,
     optimizeImage: imageDependencies.optimizeImage,
     resizeImage: async (image, dimensions) => Buffer.from(
@@ -497,7 +526,16 @@ function parseCandidates(metadata: FlatteningMetadata): FlatteningCandidateFile[
     const width = Number(geometry?.width);
     const height = Number(geometry?.height);
     const aspectRatio = Number(geometry?.aspect_ratio);
-    if (!Number.isInteger(index) || index <= 0 || !candidatePath || width <= 0 || height <= 0 || aspectRatio <= 0) {
+    if (
+      !Number.isInteger(index)
+      || index <= 0
+      || !candidatePath
+      || !Number.isInteger(width)
+      || width < 2
+      || !Number.isInteger(height)
+      || height < 2
+      || aspectRatio <= 0
+    ) {
       throw new CoverFlatteningWorkflowError('Flattening returned malformed candidate metadata.', 422);
     }
     return {
@@ -552,6 +590,16 @@ function parseAspectRatioMethod(value: unknown): CoverFlatteningCandidate['aspec
 function finiteNumber(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function trimPixels(dimension: number, trimFraction: number): number {
+  if (trimFraction === 0) {
+    return 0;
+  }
+  return Math.min(
+    Math.max(1, Math.round(dimension * trimFraction)),
+    Math.max(0, Math.floor((dimension - 2) / 2))
+  );
 }
 
 function parsePerspective(metadata: FlatteningMetadata): CoverFlatteningWorkflow['perspective'] {

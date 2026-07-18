@@ -60,7 +60,7 @@ Two-face and three-face paths use different methods to find cover quadrilaterals
 4. Estimate height from the average of the left and right lengths.
 5. If width and height differ by 5% or less, snap both dimensions to their average so a near-square physical box produces an exact square cover.
 6. Map the quadrilateral to an axis-aligned rectangle with `cv2.getPerspectiveTransform` and `cv2.warpPerspective`.
-7. Trim 1% from every side of the flattened rectangle to remove shiny, worn, or slightly inaccurate physical box edges.
+7. Preserve the complete warped rectangle. Candidate generation does not trim any border automatically; optional symmetric trimming is chosen later by the administrator during cover review.
 
 The default near-square threshold is 5% and can be overridden with the `square_threshold` argument to `flatten_cover_quadrilateral`. The JSON records the sizing method, vanishing-point confidence and focal spread, measured width/height difference, threshold, whether square snapping was applied, four source lengths, estimated dimensions, untrimmed and final output sizes, trim amount, aspect ratio, and opposite-edge disagreement. Individual results are written as `flattened-cover.png` or numbered `flattened-cover-N.png` files, with a combined `flattened-cover-previews.png` for candidate comparison. Rotation is implicit in the perspective transform; rotating a line does not change its measured Euclidean length.
 

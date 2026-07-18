@@ -156,7 +156,6 @@ class SilhouetteResult:
 
 MANUAL_CANDIDATE_INDEX = 3
 MANUAL_CANDIDATE_CONSTRUCTION = "manual corner selection"
-MANUAL_COVER_TRIM_FRACTION = 0.01
 
 
 def _border_pixels(image: np.ndarray) -> np.ndarray:
@@ -1083,7 +1082,7 @@ def flatten_cover_quadrilateral(
     target_aspect_ratio: float | None = None,
     vanishing_confidence: float = 0.0,
     vanishing_focal_spread: float | None = None,
-    trim_fraction: float = 0.025,
+    trim_fraction: float = 0.0,
 ) -> tuple[np.ndarray, FlattenedCoverGeometry]:
     if max_dimension <= 0:
         raise ValueError("maximum flattened cover dimension must be positive")
@@ -1249,7 +1248,6 @@ def process_manual_cover(
     flattened, geometry = flatten_cover_quadrilateral(
         image,
         polygon,
-        trim_fraction=MANUAL_COVER_TRIM_FRACTION,
     )
     output = Path(output_dir)
     output.mkdir(parents=True, exist_ok=True)

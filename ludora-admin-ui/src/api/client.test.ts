@@ -1377,4 +1377,38 @@ describe('fetchRows', () => {
       }
     );
   });
+
+  it('sends the reviewer-selected trim when accepting a cover candidate', async () => {
+    const accepted = {
+      item_id: 77,
+      optimized_size_bytes: 88_000,
+      output_aspect_ratio: 1.25,
+      public_url: 'https://cdn.example/boardgame/cover.webp',
+      s3_key: 'boardgame/cover.webp',
+      target_field: 'image_url_es',
+      trim_fraction: 0.001
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: accepted }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(
+      adminApi.acceptCoverFlattening('flatten-77', 1, 'image_url_es', 1.25, 0.001)
+    ).resolves.toEqual(accepted);
+
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/cover-flattening-workflows/flatten-77/accept', {
+      body: JSON.stringify({
+        candidate_index: 1,
+        aspect_ratio: 1.25,
+        target_field: 'image_url_es',
+        trim_fraction: 0.001
+      }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
 });

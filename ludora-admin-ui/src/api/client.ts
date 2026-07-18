@@ -115,6 +115,7 @@ export type AcceptedCoverFlattening = {
   public_url: string;
   s3_key: string;
   target_field: CoverImageField;
+  trim_fraction: number;
 };
 
 export type OptimizedCoverImage = {
@@ -612,7 +613,8 @@ export const adminApi = {
     workflowId: string,
     candidateIndex: number,
     targetField: CoverImageField,
-    aspectRatio: number | null
+    aspectRatio: number | null,
+    trimFraction = 0
   ) =>
     sendJson<AcceptedCoverFlattening>(
       `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/accept`,
@@ -620,7 +622,8 @@ export const adminApi = {
       {
         candidate_index: candidateIndex,
         aspect_ratio: aspectRatio,
-        target_field: targetField
+        target_field: targetField,
+        trim_fraction: trimFraction
       }
     ),
   cancelCoverFlattening: (workflowId: string) =>

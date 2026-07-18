@@ -146,6 +146,67 @@ describe('cover flattening workflow', () => {
     expect(accepted.output_aspect_ratio).toBe(1);
   });
 
+  it('applies the reviewer-selected symmetric trim before aspect ratio resizing and optimization', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const cropCalls: Array<{ height: number; left: number; top: number; width: number }> = [];
+    const resizeCalls: Array<{ height: number; image: string; width: number }> = [];
+    const optimizedInputs: string[] = [];
+    const database: Database = {
+      query: async (sql) => ({
+        rows: sql.includes('from items i')
+          ? [{ canonical_name: 'Coffee Rush', image_url: 'https://example.com/box.jpg', item_id: 77 }]
+          : [{ id: 77 }]
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(
+      database,
+      fakeDependencies(root, {
+        cropImage: async (_image, dimensions) => {
+          cropCalls.push(dimensions);
+          return Buffer.from('cropped');
+        },
+        optimizeImage: async (image) => {
+          optimizedInputs.push(image.toString('utf8'));
+          return Buffer.alloc(80_000);
+        },
+        resizeImage: async (image, dimensions) => {
+          resizeCalls.push({ ...dimensions, image: image.toString('utf8') });
+          return Buffer.from('cropped-and-resized');
+        }
+      })
+    );
+    const workflow = await manager.startFromItem(77, 'image_url');
+
+    const accepted = await manager.accept(workflow.workflow_id, 2, 'image_url', 1.25, 0.01);
+
+    expect(cropCalls).toEqual([{ height: 686, left: 5, top: 7, width: 480 }]);
+    expect(resizeCalls).toEqual([{ height: 686, image: 'cropped', width: 858 }]);
+    expect(optimizedInputs).toEqual(['cropped-and-resized']);
+    expect(accepted).toMatchObject({ output_aspect_ratio: 1.25, trim_fraction: 0.01 });
+  });
+
+  it('rejects invalid reviewer trim fractions', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const database: Database = {
+      query: async (sql) => ({
+        rows: sql.includes('from items i')
+          ? [{ canonical_name: 'Coffee Rush', image_url: 'https://example.com/box.jpg', item_id: 77 }]
+          : []
+      })
+    };
+    const manager = createCoverFlatteningWorkflowManager(database, fakeDependencies(root));
+    const workflow = await manager.startFromItem(77, 'image_url');
+
+    await expect(manager.accept(workflow.workflow_id, 1, 'image_url', null, -0.001)).rejects.toMatchObject({
+      status: 400
+    });
+    await expect(manager.accept(workflow.workflow_id, 1, 'image_url', null, 0.5)).rejects.toMatchObject({
+      status: 400
+    });
+  });
+
   it('creates, replaces, and accepts a manual candidate from normalized source points', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
     temporaryDirectories.push(root);
@@ -463,6 +524,7 @@ function fakeDependencies(
   };
   return {
     config,
+    cropImage: async (image) => image,
     createId: () => 'workflow-test',
     downloadImage: async () => Buffer.from('source'),
     now: () => new Date('2026-07-11T12:00:00.000Z'),

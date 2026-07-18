@@ -11,9 +11,9 @@ The admin application provides an automatic **Flatten cover** action alongside t
 
 1. The admin service downloads the source image into an ephemeral workflow directory.
 2. It runs `python -m ludora.box_silhouette`, using the configured discovery Python and package directory.
-3. The authenticated dialog displays the one candidate produced for a two-face perspective or both candidates produced for a three-face perspective.
-4. The administrator selects a candidate and chooses `image_url` or `image_url_es` as the destination.
-5. The service converts the selected candidate to WebP and progressively reduces quality and dimensions until it is strictly smaller than 100 KB.
+3. The authenticated dialog displays the one candidate produced for a two-face perspective or both candidates produced for a three-face perspective. If automatic detection fails, the source remains available for manual four-corner selection.
+4. Candidate generation preserves the complete warped cover with no automatic border trim. The administrator can trim all four borders symmetrically in 0.1% steps, starting at 0%, and chooses `image_url` or `image_url_es` as the destination.
+5. The service applies the selected trim and aspect ratio, then converts the candidate to WebP and progressively reduces quality and dimensions until it is strictly smaller than 100 KB.
 6. It uploads the file with an immutable, content-hashed S3 key, updates the selected item image field, and removes the temporary workflow directory.
 7. Cancel removes the temporary workflow. Unfinished workflows expire after 30 minutes and are cleaned up when the next workflow request is processed.
 
@@ -38,6 +38,8 @@ It also uses:
 
 - `POST /admin/cover-flattening-workflows/store-items`
 - `POST /admin/cover-flattening-workflows/items`
+- `GET /admin/cover-flattening-workflows/:workflowId/source`
 - `GET /admin/cover-flattening-workflows/:workflowId/candidates/:candidateIndex`
+- `POST /admin/cover-flattening-workflows/:workflowId/manual-candidate`
 - `POST /admin/cover-flattening-workflows/:workflowId/accept`
 - `DELETE /admin/cover-flattening-workflows/:workflowId`

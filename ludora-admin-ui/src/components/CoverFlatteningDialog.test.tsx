@@ -88,6 +88,67 @@ describe('CoverFlatteningDialog', () => {
     expect(screen.getByRole('button', { name: 'Accept candidate' })).toHaveStyle({ minHeight: '44px', width: '100%' });
   });
 
+  it('resets manual trim when the same cover workflow is reopened', async () => {
+    let workflowNumber = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/admin/cover-flattening-workflows/items')) {
+        workflowNumber += 1;
+        return jsonResponse({
+          data: {
+            automatic_error: null,
+            candidates: [
+              {
+                aspect_ratio: 1,
+                aspect_ratio_method: 'edge_average',
+                construction: 'two-face cover',
+                height: 500,
+                index: 1,
+                square_snapped: true,
+                vanishing_confidence: 0,
+                width: 500
+              }
+            ],
+            created_at: '2026-07-11T12:00:00.000Z',
+            expires_at: '2026-07-11T12:30:00.000Z',
+            item_id: 77,
+            perspective: 'two_faces',
+            source_field: 'image_url',
+            store_item_id: null,
+            workflow_id: `flatten-reset-${workflowNumber}`
+          }
+        }, 201);
+      }
+      if (url.includes('/admin/cover-flattening-workflows/flatten-reset-') && url.endsWith('/candidates/1')) {
+        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const request = {
+      id: '77',
+      kind: 'item' as const,
+      sources: [{ field: 'image_url' as const, url: 'https://example.com/box.jpg' }],
+      title: 'Reset Box'
+    };
+    const { rerender } = render(
+      <CoverFlatteningDialog request={request} onAccepted={() => undefined} onClose={() => undefined} />
+    );
+
+    expect(await screen.findByText('0.0%')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Increase trim by 0.1%' }));
+    expect(screen.getByText('0.1%')).toBeInTheDocument();
+
+    rerender(<CoverFlatteningDialog request={null} onAccepted={() => undefined} onClose={() => undefined} />);
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    rerender(<CoverFlatteningDialog request={request} onAccepted={() => undefined} onClose={() => undefined} />);
+
+    await waitFor(() => {
+      const starts = fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/admin/cover-flattening-workflows/items'));
+      expect(starts).toHaveLength(2);
+    });
+    expect(await screen.findByText('0.0%')).toBeInTheDocument();
+  });
+
   it('chooses an item source, displays candidates, and accepts one for image_url_es', async () => {
     fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -158,16 +219,27 @@ describe('CoverFlatteningDialog', () => {
     expect(await screen.findByAltText('Flattened cover candidate 1')).toHaveAttribute('src', 'blob:cover-candidate');
     expect(screen.getByText(/375 × 500 · ratio 0.750 · edge estimate/)).toBeInTheDocument();
     expect(screen.getByTestId('aspect-ratio-preview-1')).toHaveStyle({ aspectRatio: '0.75' });
+    expect(screen.getByText('0.0%')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Decrease trim by 0.1%' })).toBeDisabled();
+    expect(screen.getByTestId('trim-preview-image-1')).toHaveStyle({ transform: 'scale(1)' });
+    fireEvent.click(screen.getByRole('button', { name: 'Increase trim by 0.1%' }));
+    expect(screen.getByText('0.1%')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Decrease trim by 0.1%' })).toBeEnabled();
+    expect(screen.getByTestId('trim-preview-image-1')).toHaveStyle({
+      transform: `scale(${375 / 373}, ${500 / 498})`
+    });
     fireEvent.click(screen.getByLabelText('4:5', { selector: 'input' }));
     fireEvent.click(screen.getByLabelText('Horizontal', { selector: 'input' }));
-    expect(screen.getByText(/625 × 500 · ratio 1.250 · reviewer override/)).toBeInTheDocument();
+    expect(screen.getByText(/623 × 498 · ratio 1.250 · reviewer override/)).toBeInTheDocument();
     expect(screen.getByTestId('aspect-ratio-preview-1')).toHaveStyle({
       aspectRatio: '1.25',
       width: 'min(100%, 700px)'
     });
     fireEvent.click(screen.getByLabelText('Square (1:1)', { selector: 'input' }));
-    expect(screen.getByText(/500 × 500 · ratio 1.000 · reviewer override/)).toBeInTheDocument();
-    fireEvent.click(screen.getByLabelText('4:5', { selector: 'input' }));
+    expect(screen.getByText(/498 × 498 · ratio 1.000 · reviewer override/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('3:4', { selector: 'input' }));
+    fireEvent.click(screen.getByLabelText('Vertical', { selector: 'input' }));
+    expect(screen.getByText(/374 × 498 · ratio 0.750 · reviewer override/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Spanish image', { selector: 'input' }));
     fireEvent.click(screen.getByRole('button', { name: 'Accept candidate' }));
 
@@ -179,7 +251,10 @@ describe('CoverFlatteningDialog', () => {
     const startRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/admin/cover-flattening-workflows/items'));
     expect(JSON.parse(String(startRequest?.[1]?.body))).toEqual({ item_id: '77', source_field: 'image_url_es' });
     const acceptRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/flatten-77/accept'));
-    expect(JSON.parse(String(acceptRequest?.[1]?.body))).toMatchObject({ aspect_ratio: 1.25 });
+    expect(JSON.parse(String(acceptRequest?.[1]?.body))).toMatchObject({
+      aspect_ratio: 0.75,
+      trim_fraction: 0.001
+    });
   });
 
   it('selects four source points, cancels back without deleting, and generates manual candidate 3', async () => {

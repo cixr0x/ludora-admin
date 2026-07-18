@@ -4264,15 +4264,16 @@ describe('ludora admin service', () => {
     };
     const calls: unknown[] = [];
     const manager: CoverFlatteningWorkflowManager = {
-      accept: async (workflowId, candidateIndex, targetField, aspectRatio) => {
-        calls.push(['accept', workflowId, candidateIndex, targetField, aspectRatio]);
+      accept: async (workflowId, candidateIndex, targetField, aspectRatio, trimFraction) => {
+        calls.push(['accept', workflowId, candidateIndex, targetField, aspectRatio, trimFraction]);
         return {
           item_id: 77,
           optimized_size_bytes: 88_000,
           output_aspect_ratio: aspectRatio ?? 1,
           public_url: 'https://cdn.example/boardgame/cover.webp',
           s3_key: 'boardgame/cover.webp',
-          target_field: targetField
+          target_field: targetField,
+          trim_fraction: trimFraction ?? 0
         };
       },
       cancel: async (workflowId) => {
@@ -4337,9 +4338,12 @@ describe('ludora admin service', () => {
         .post('/admin/cover-flattening-workflows/flatten-77/manual-candidate')
         .send({ points: manualPoints });
       const candidate = await request(app).get('/admin/cover-flattening-workflows/flatten-77/candidates/1');
+      const invalidTrim = await request(app)
+        .post('/admin/cover-flattening-workflows/flatten-77/accept')
+        .send({ candidate_index: 1, target_field: 'image_url', trim_fraction: 0.5 });
       const accepted = await request(app)
         .post('/admin/cover-flattening-workflows/flatten-77/accept')
-        .send({ aspect_ratio: 1, candidate_index: 1, target_field: 'image_url' });
+        .send({ aspect_ratio: 1, candidate_index: 1, target_field: 'image_url', trim_fraction: 0.001 });
       const cancelled = await request(app).delete('/admin/cover-flattening-workflows/flatten-77');
 
       expect(start.status).toBe(201);
@@ -4359,7 +4363,8 @@ describe('ludora admin service', () => {
       expect(manual.body.data.candidates[1]).toMatchObject({ index: 3, construction: 'manual corner selection' });
       expect(candidate.status).toBe(200);
       expect(candidate.headers['cache-control']).toBe('no-store');
-      expect(accepted.body.data).toMatchObject({ item_id: 77, target_field: 'image_url' });
+      expect(invalidTrim.status).toBe(400);
+      expect(accepted.body.data).toMatchObject({ item_id: 77, target_field: 'image_url', trim_fraction: 0.001 });
       expect(cancelled.body).toEqual({ data: { cancelled: true } });
       expect(calls).toEqual([
         ['item', 77, 'image_url_es'],
@@ -4367,7 +4372,7 @@ describe('ludora admin service', () => {
         ['source', 'flatten-77'],
         ['manual', 'flatten-77', manualPoints],
         ['candidate', 'flatten-77', 1],
-        ['accept', 'flatten-77', 1, 'image_url', 1],
+        ['accept', 'flatten-77', 1, 'image_url', 1, 0.001],
         ['cancel', 'flatten-77']
       ]);
     } finally {

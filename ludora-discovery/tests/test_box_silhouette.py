@@ -50,12 +50,12 @@ class BoxSilhouetteTests(unittest.TestCase):
             self.assertEqual(result.candidate_type, "manual")
             self.assertEqual(result.candidate_index, 3)
             self.assertEqual(result.construction, "manual corner selection")
-            self.assertEqual(result.geometry.trim_fraction, 0.01)
+            self.assertEqual(result.geometry.trim_fraction, 0.0)
             self.assertEqual(result.geometry.untrimmed_width, 115)
             self.assertEqual(result.geometry.untrimmed_height, 90)
-            self.assertEqual(result.geometry.trim_x, 1)
-            self.assertEqual(result.geometry.trim_y, 1)
-            self.assertEqual((result.geometry.width, result.geometry.height), (113, 88))
+            self.assertEqual(result.geometry.trim_x, 0)
+            self.assertEqual(result.geometry.trim_y, 0)
+            self.assertEqual((result.geometry.width, result.geometry.height), (115, 90))
             np.testing.assert_allclose(result.geometry.ordered_corners, pixel_points, atol=1e-4)
             self.assertTrue(Path(result.output_path).is_file())
             metadata = json.loads((output / "manual-cover.json").read_text(encoding="utf-8"))
@@ -130,21 +130,25 @@ class BoxSilhouetteTests(unittest.TestCase):
         self.assertEqual(geometry.width, geometry.untrimmed_width - 2 * geometry.trim_x)
         self.assertEqual(geometry.height, geometry.untrimmed_height - 2 * geometry.trim_y)
 
-    def test_flatten_cover_trims_two_and_a_half_percent_from_every_side(self):
+    def test_flatten_cover_can_apply_an_explicit_trim_to_every_side(self):
         image = np.zeros((140, 220, 3), dtype=np.uint8)
         polygon = np.array(
             [[10, 10], [210, 10], [210, 110], [10, 110]],
             dtype=np.float32,
         )
 
-        flattened, geometry = flatten_cover_quadrilateral(image, polygon)
+        flattened, geometry = flatten_cover_quadrilateral(
+            image,
+            polygon,
+            trim_fraction=0.025,
+        )
 
         self.assertEqual(geometry.trim_fraction, 0.025)
         self.assertEqual(geometry.trim_x, 5)
         self.assertEqual(geometry.trim_y, 2)
         self.assertEqual(flattened.shape[:2], (96, 190))
 
-    def test_flatten_cover_default_trim_removes_a_thin_outer_rendered_rim(self):
+    def test_flatten_cover_default_preserves_the_entire_warped_face(self):
         image = np.full((420, 420, 3), (80, 80, 80), dtype=np.uint8)
         face_color = (210, 150, 40)
         cv2.rectangle(image, (20, 20), (400, 400), face_color, -1)
@@ -155,9 +159,10 @@ class BoxSilhouetteTests(unittest.TestCase):
 
         flattened, geometry = flatten_cover_quadrilateral(image, polygon)
 
-        self.assertEqual(geometry.trim_x, 10)
-        self.assertEqual(geometry.trim_y, 10)
-        self.assertTrue(np.allclose(flattened[2:-2, 2:-2], face_color, atol=2))
+        self.assertEqual(geometry.trim_fraction, 0.0)
+        self.assertEqual(geometry.trim_x, 0)
+        self.assertEqual(geometry.trim_y, 0)
+        self.assertEqual(flattened.shape[:2], (400, 400))
 
     def test_flatten_cover_trim_can_be_disabled(self):
         image = np.zeros((100, 120, 3), dtype=np.uint8)
