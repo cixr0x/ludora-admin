@@ -11,7 +11,9 @@ from ludora.database import ItemCandidateUpsertResult
 from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import (
+    ProductDetailRejectedError,
     TransientProductFetchError,
+    _should_retry_detail_with_browser,
     _significant_text_tokens,
     crawl_store_product_details,
     update_confirmed_store_item_details,
@@ -122,6 +124,20 @@ class InventoryTests(unittest.TestCase):
             _significant_text_tokens("Æterna Œuvre Straße"),
             {"aeterna", "oeuvre", "strasse"},
         )
+
+    def test_title_validation_rejects_a_lone_generic_pack_overlap(self):
+        listing = DiscoveryItemCandidateRecord(
+            store_id=10,
+            source_url="https://www.amigocalavera.mx/productos/arcs-en-espanol-combo/",
+            title="(PREVENTA) ARCS en Español COMBO (Base+expansión Líderes+Pack Minaturas)",
+        )
+        detail = DiscoveryItemCandidateRecord(
+            store_id=10,
+            source_url=listing.source_url,
+            title="SKS8810 Sleeve Kings Card Game (63.5x88mm) - 110 Pack - Standard 60micrones",
+        )
+
+        self.assertTrue(_should_retry_detail_with_browser(detail, listing))
 
     def test_collect_store_inventory_prefers_sitemap_product_urls(self):
         detail_html = """
@@ -830,6 +846,41 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records[0].category_confidence, 0.91)
         self.assertEqual(repository.item_records[0].classification_reasons, ["previously confirmed"])
         self.assertEqual(repository.update_change_log_calls, [])
+
+    def test_update_confirmed_store_item_details_rejects_conflicting_store_sku(self):
+        detail_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Catan",
+          "sku": "WRONG-SKU",
+          "offers": {"price": "799.00", "priceCurrency": "MXN"}
+        }
+        </script>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_id=12,
+            source_url="https://example.mx/products/catan",
+            source_listing_url="https://example.mx/sitemap.xml",
+            title="Catan",
+            store_sku="CATAN-ES",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record])
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=existing_record.source_url, text=detail_html),
+        ):
+            with self.assertRaisesRegex(ProductDetailRejectedError, "store_sku_mismatch"):
+                update_confirmed_store_item_details(repository)
+
+        self.assertEqual(repository.price_availability_update_calls, [])
+        self.assertEqual(repository.update_change_log_calls, [])
+        self.assertEqual(repository.item_records, [])
 
     def test_update_confirmed_amazon_item_uses_amazon_detail_parser(self):
         product_html = """

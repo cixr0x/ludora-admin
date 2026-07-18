@@ -21,6 +21,20 @@ from ludora.webfetch import fetch_html, fetch_with_transient_retries
 
 AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
 ASCII_LIGATURE_TRANSLATION = str.maketrans({"æ": "ae", "œ": "oe", "ß": "ss"})
+GENERIC_TITLE_MATCH_TOKENS = {
+    "base",
+    "board",
+    "card",
+    "cards",
+    "combo",
+    "edicion",
+    "edition",
+    "expansion",
+    "game",
+    "juego",
+    "pack",
+    "standard",
+}
 
 
 class StoreItemSource(Protocol):
@@ -521,15 +535,19 @@ def _fetch_detail_candidate(
         listing_candidate.source_listing_url = source_listing_url
         return listing_candidate
 
-    if _should_retry_detail_with_browser(detail_candidate, listing_candidate):
+    rejection_reason = _detail_rejection_reason(detail_candidate, listing_candidate)
+    if rejection_reason:
         trace.log(
             "inventory.candidate.detail_fetch.rejected",
+            detail_sku=detail_candidate.store_sku,
             detail_title=detail_candidate.title,
+            listing_sku=listing_candidate.store_sku,
             listing_title=listing_candidate.title,
+            reason=rejection_reason,
             source_url=listing_candidate.source_url,
         )
         raise ProductDetailRejectedError(
-            f"Parsed product detail title does not match the listing: {listing_candidate.source_url}"
+            f"Parsed product detail rejected ({rejection_reason}): {listing_candidate.source_url}"
         )
 
     return _apply_listing_fallbacks(detail_candidate, listing_candidate)
@@ -679,18 +697,33 @@ def _should_retry_detail_with_browser(
     detail_candidate: DiscoveryItemCandidateRecord | None,
     listing_candidate: DiscoveryItemCandidateRecord,
 ) -> bool:
+    return bool(_detail_rejection_reason(detail_candidate, listing_candidate))
+
+
+def _detail_rejection_reason(
+    detail_candidate: DiscoveryItemCandidateRecord | None,
+    listing_candidate: DiscoveryItemCandidateRecord,
+) -> str:
     if detail_candidate is None:
-        return True
+        return "missing_detail_candidate"
 
     title = detail_candidate.title.strip()
     if not title:
-        return True
+        return "missing_detail_title"
     if "website uses cookies" in title.casefold():
-        return True
+        return "cookie_consent_title"
+
+    listing_sku = listing_candidate.store_sku.strip().casefold()
+    detail_sku = detail_candidate.store_sku.strip().casefold()
+    if listing_sku and detail_sku and listing_sku != detail_sku:
+        return "store_sku_mismatch"
 
     listing_tokens = _significant_listing_tokens(listing_candidate)
     detail_tokens = _significant_text_tokens(title)
-    return bool(listing_tokens and detail_tokens and listing_tokens.isdisjoint(detail_tokens))
+    if not listing_tokens or not detail_tokens:
+        return ""
+    meaningful_overlap = (listing_tokens & detail_tokens) - GENERIC_TITLE_MATCH_TOKENS
+    return "title_mismatch" if not meaningful_overlap else ""
 
 
 def _significant_listing_tokens(listing_candidate: DiscoveryItemCandidateRecord) -> set[str]:

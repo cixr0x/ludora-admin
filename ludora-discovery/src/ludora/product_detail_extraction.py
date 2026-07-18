@@ -6,7 +6,7 @@ import unicodedata
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import unquote, urljoin, urlparse
 
 from ludora.listing_extraction import _collapse_text, _extract_availability, _extract_price
 from ludora.models import DiscoveryItemCandidateRecord, ItemCandidateType
@@ -282,16 +282,24 @@ def extract_product_detail_candidate(
     parser = ProductDetailParser(product_url)
     parser.feed(html)
 
-    json_ld_product = _extract_json_ld_product(parser.json_ld_scripts)
-    text = " ".join(parser.text_nodes)
-    title = _first_text(
-        _json_text(json_ld_product, "name"),
-        _visible_product_heading(parser.heading_parts),
+    visible_heading = _visible_product_heading(parser.heading_parts)
+    page_titles = [
+        visible_heading,
         " ".join(parser.h1_parts),
         _strip_title_suffix(parser.meta.get("og:title", "")),
         parser.meta.get("og:title", ""),
         _strip_title_suffix(" ".join(parser.title_parts)),
         " ".join(parser.title_parts),
+    ]
+    json_ld_product = _extract_json_ld_product(
+        parser.json_ld_scripts,
+        product_url=product_url,
+        page_titles=page_titles,
+    )
+    text = " ".join(parser.text_nodes)
+    title = _first_text(
+        _json_text(json_ld_product, "name"),
+        *page_titles,
     )
     if not title:
         return None
@@ -380,15 +388,38 @@ def extract_product_detail_candidate(
     )
 
 
-def _extract_json_ld_product(scripts: list[str]) -> dict[str, Any]:
+def _extract_json_ld_product(
+    scripts: list[str],
+    *,
+    product_url: str = "",
+    page_titles: list[str] | None = None,
+) -> dict[str, Any]:
+    candidates: list[dict[str, Any]] = []
     for script in scripts:
         parsed = _parse_json_ld(script)
         if parsed is None:
             continue
-        product = _find_product(parsed)
-        if product:
-            return product
-    return {}
+        candidates.extend(_find_products(parsed))
+
+    if not candidates:
+        return {}
+
+    requested_url_key = _product_url_key(product_url, product_url)
+    if requested_url_key:
+        url_matches = [
+            candidate
+            for candidate in candidates
+            if requested_url_key in {_product_url_key(value, product_url) for value in _product_urls(candidate)}
+        ]
+        if url_matches:
+            return max(url_matches, key=lambda candidate: _product_title_match_score(candidate, page_titles or []))
+
+    scored_candidates = [
+        (_product_title_match_score(candidate, page_titles or []), -index, candidate)
+        for index, candidate in enumerate(candidates)
+    ]
+    best_score, _negative_index, best_candidate = max(scored_candidates, key=lambda item: (item[0], item[1]))
+    return best_candidate if best_score > 0 else candidates[0]
 
 
 def _parse_json_ld(script: str) -> Any | None:
@@ -405,27 +436,96 @@ def _parse_json_ld(script: str) -> Any | None:
 
 
 def _find_product(value: Any) -> dict[str, Any]:
+    products = _find_products(value)
+    return products[0] if products else {}
+
+
+def _find_products(value: Any) -> list[dict[str, Any]]:
     if isinstance(value, list):
+        products: list[dict[str, Any]] = []
         for item in value:
-            product = _find_product(item)
-            if product:
-                return product
-        return {}
+            products.extend(_find_products(item))
+        return products
     if not isinstance(value, dict):
-        return {}
+        return []
+
     type_value = value.get("@type")
     types = [type_value] if isinstance(type_value, str) else type_value if isinstance(type_value, list) else []
-    if any(str(item).casefold() == "product" for item in types):
-        return value
+    normalized_types = {str(item).casefold() for item in types}
+    if "product" in normalized_types:
+        return [value]
+    if "productgroup" in normalized_types:
+        variants = _find_products(value.get("hasVariant"))
+        if variants:
+            return [_merge_product_group_variant(value, variant) for variant in variants]
+
+    products: list[dict[str, Any]] = []
     main_entity = value.get("mainEntity")
     if main_entity:
-        product = _find_product(main_entity)
-        if product:
-            return product
+        products.extend(_find_products(main_entity))
     graph = value.get("@graph")
     if graph:
-        return _find_product(graph)
-    return {}
+        products.extend(_find_products(graph))
+    return products
+
+
+def _merge_product_group_variant(group: dict[str, Any], variant: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(variant)
+    for key, value in group.items():
+        if key == "hasVariant" or value in (None, "", [], {}):
+            continue
+        merged[key] = value
+    merged["@type"] = "Product"
+    return merged
+
+
+def _product_urls(product: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for key in ("url", "@id"):
+        value = product.get(key)
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+    offers = product.get("offers")
+    offer_values = offers if isinstance(offers, list) else [offers]
+    for offer in offer_values:
+        if not isinstance(offer, dict):
+            continue
+        value = offer.get("url")
+        if isinstance(value, str) and value.strip():
+            values.append(value.strip())
+    return values
+
+
+def _product_url_key(value: str, base_url: str) -> tuple[str, str] | None:
+    if not value.strip():
+        return None
+    parsed = urlparse(urljoin(base_url, value.strip()))
+    host = (parsed.hostname or "").casefold()
+    if host.startswith("www."):
+        host = host[4:]
+    path = unquote(parsed.path).rstrip("/").casefold() or "/"
+    return host, path
+
+
+def _product_title_match_score(product: dict[str, Any], page_titles: list[str]) -> int:
+    product_title = _normalize_match_text(_json_text(product, "name"))
+    if not product_title:
+        return 0
+    product_tokens = set(product_title.split())
+    best_score = 0
+    for page_title in page_titles:
+        normalized_page_title = _normalize_match_text(page_title)
+        if not normalized_page_title:
+            continue
+        if product_title == normalized_page_title:
+            best_score = max(best_score, 1000 + len(product_tokens))
+            continue
+        if product_title in normalized_page_title or normalized_page_title in product_title:
+            best_score = max(best_score, 500 + len(product_tokens & set(normalized_page_title.split())))
+            continue
+        overlap = product_tokens & set(normalized_page_title.split())
+        best_score = max(best_score, len(overlap))
+    return best_score
 
 
 def _first_offer(value: Any) -> dict[str, Any]:
