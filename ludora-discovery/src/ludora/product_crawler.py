@@ -55,6 +55,7 @@ class ItemCandidateRepository(Protocol):
         *,
         job_id: int,
         run_id: str,
+        include_title: bool = True,
     ) -> object | None:
         ...
 
@@ -62,6 +63,8 @@ class ItemCandidateRepository(Protocol):
         self,
         existing_record: DiscoveryItemCandidateRecord,
         refreshed_record: DiscoveryItemCandidateRecord,
+        *,
+        include_title: bool = True,
     ) -> object | None:
         ...
 
@@ -312,11 +315,13 @@ def update_confirmed_store_item_details(
 
         for existing_record in update_candidates:
             raise_if_cancelled(cancellation_token)
+            platform = store_platforms.get(existing_record.store_id, "").strip().casefold()
+            include_title = platform not in AMAZON_STORE_PLATFORMS
             try:
                 refreshed_record = _fetch_detail_candidate(
                     listing_candidate=existing_record,
                     source_listing_url=existing_record.source_listing_url or existing_record.source_url,
-                    platform=store_platforms.get(existing_record.store_id, ""),
+                    platform=platform,
                     browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
                     detect_removed=True,
                     cancellation_token=cancellation_token,
@@ -344,11 +349,16 @@ def update_confirmed_store_item_details(
                     refreshed_record,
                     job_id=job_id,
                     run_id=run_id,
+                    include_title=include_title,
                 )
                 if getattr(update_result, "changed", False):
                     records.updated_items += 1
             else:
-                update_result = repository.update_item_candidate_price_availability(existing_record, refreshed_record)
+                update_result = repository.update_item_candidate_price_availability(
+                    existing_record,
+                    refreshed_record,
+                    include_title=include_title,
+                )
                 if getattr(update_result, "changed", False):
                     records.updated_items += 1
             records.append(refreshed_record)

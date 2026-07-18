@@ -436,6 +436,50 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params[-1], 56)
         self.assertEqual(connection.commits, 1)
 
+    def test_update_item_candidate_excludes_title_when_disabled(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://www.amazon.com.mx/dp/B0TEST1234",
+            title="Stored game title",
+            raw_price="$899",
+            price="899.00",
+            availability="available",
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        refreshed_record = replace(
+            existing_record,
+            title="Amazon merchandising title",
+            raw_price="$799",
+            price="799.00",
+            price_source="amazon_detail",
+        )
+
+        result = repository.update_item_candidate_with_change_log(
+            existing_record,
+            refreshed_record,
+            job_id=99,
+            run_id="run-amazon",
+            include_title=False,
+        )
+
+        update_sql, update_params = connection.cursor_instance.executions[0]
+        change_entries = connection.cursor_instance.executions[1:]
+        self.assertNotIn("title = %s", update_sql.casefold())
+        self.assertNotIn("Amazon merchandising title", update_params)
+        self.assertEqual(update_params[0], "$799")
+        self.assertEqual(update_params[-1], 56)
+        self.assertEqual(
+            [params[3] for _sql, params in change_entries],
+            ["raw_price", "price", "price_source"],
+        )
+        self.assertTrue(result.changed)
+        self.assertEqual(connection.commits, 1)
+
     def test_update_item_candidate_change_log_requires_store_item_id(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)

@@ -58,15 +58,23 @@ class FakeRepository:
             for store_id in selected_store_ids
         ]
 
-    def update_item_candidate_with_change_log(self, existing_record, refreshed_record, *, job_id, run_id):
-        self.update_change_log_calls.append((existing_record, refreshed_record, job_id, run_id))
+    def update_item_candidate_with_change_log(
+        self,
+        existing_record,
+        refreshed_record,
+        *,
+        job_id,
+        run_id,
+        include_title=True,
+    ):
+        self.update_change_log_calls.append((existing_record, refreshed_record, job_id, run_id, include_title))
         self.item_records.append(refreshed_record)
         if self.update_change_log_results:
             return self.update_change_log_results.pop(0)
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="LISTED", item_id=refreshed_record.item_id, should_process=False)
 
-    def update_item_candidate_price_availability(self, existing_record, refreshed_record):
-        self.price_availability_update_calls.append((existing_record, refreshed_record))
+    def update_item_candidate_price_availability(self, existing_record, refreshed_record, *, include_title=True):
+        self.price_availability_update_calls.append((existing_record, refreshed_record, include_title))
         self.item_records.append(refreshed_record)
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="LISTED", item_id=refreshed_record.item_id, should_process=False)
 
@@ -762,6 +770,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].price, "799.00")
         self.assertEqual(len(repository.price_availability_update_calls), 1)
         self.assertEqual(repository.price_availability_update_calls[0][0], existing_record)
+        self.assertTrue(repository.price_availability_update_calls[0][2])
         self.assertEqual(repository.item_records[0].item_id, 77)
         self.assertEqual(repository.item_records[0].listing_status, "LISTED")
         self.assertTrue(repository.item_records[0].is_boardgame)
@@ -810,6 +819,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].availability, "available")
         self.assertEqual(records[0].availability_source, "amazon_detail")
         self.assertEqual(len(repository.update_change_log_calls), 1)
+        self.assertFalse(repository.update_change_log_calls[0][4])
 
     def test_update_confirmed_amazon_item_marks_missing_direct_buy_option_out_of_stock(self):
         product_html = """
@@ -836,7 +846,7 @@ class InventoryTests(unittest.TestCase):
             is_boardgame=True,
             is_boardgame_confirmed=True,
         )
-        repository = FakeRepository(confirmed_items=[existing_record], store_platforms={12: "amazon"})
+        repository = FakeRepository(confirmed_items=[existing_record], store_platforms={12: "amazon_brand"})
 
         with patch(
             "ludora.product_crawler.fetch_html",
@@ -851,6 +861,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].price, "")
         self.assertEqual(records[0].price_source, "none")
         self.assertEqual(len(repository.update_change_log_calls), 1)
+        self.assertFalse(repository.update_change_log_calls[0][4])
 
     def test_update_confirmed_store_item_details_raises_when_detail_fetch_fails(self):
         existing_record = DiscoveryItemCandidateRecord(
@@ -1128,7 +1139,9 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(len(records), 1)
         self.assertEqual(len(repository.update_change_log_calls), 1)
-        logged_existing, logged_refreshed, logged_job_id, logged_run_id = repository.update_change_log_calls[0]
+        logged_existing, logged_refreshed, logged_job_id, logged_run_id, include_title = (
+            repository.update_change_log_calls[0]
+        )
         self.assertIs(logged_existing, existing_record)
         self.assertEqual(logged_refreshed.title, "Catan Nueva Edicion")
         self.assertEqual(logged_refreshed.store_item_id, 56)
@@ -1136,6 +1149,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(logged_refreshed.listing_status, "LISTED")
         self.assertEqual(logged_job_id, 99)
         self.assertEqual(logged_run_id, "run-123")
+        self.assertTrue(include_title)
 
     def test_update_confirmed_store_item_details_counts_only_changed_items_as_updated(self):
         first_detail_html = """

@@ -42,6 +42,7 @@ class ItemCandidateRepository(Protocol):
         *,
         job_id: int,
         run_id: str,
+        include_title: bool = True,
     ) -> object | None:
         ...
 

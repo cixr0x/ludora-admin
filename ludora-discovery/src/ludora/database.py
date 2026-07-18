@@ -332,6 +332,7 @@ class DiscoveryRepository:
         *,
         job_id: int,
         run_id: str,
+        include_title: bool = True,
     ) -> ItemCandidateUpsertResult:
         store_item_id = existing_record.store_item_id or refreshed_record.store_item_id
         if store_item_id is None:
@@ -339,13 +340,13 @@ class DiscoveryRepository:
 
         refreshed_record.store_item_id = store_item_id
         data = refreshed_record.to_db_dict()
-        changes = _item_update_changes(existing_record, refreshed_record)
+        changes = _item_update_changes(existing_record, refreshed_record, include_title=include_title)
 
         with self.connection.cursor() as cursor:
             cursor.execute(
-                _update_item_candidate_price_availability_sql(),
+                _update_item_candidate_price_availability_sql(include_title=include_title),
                 (
-                    *self._item_candidate_price_availability_params(data),
+                    *self._item_candidate_price_availability_params(data, include_title=include_title),
                     store_item_id,
                 ),
             )
@@ -385,6 +386,8 @@ class DiscoveryRepository:
         self,
         existing_record: DiscoveryItemCandidateRecord,
         refreshed_record: DiscoveryItemCandidateRecord,
+        *,
+        include_title: bool = True,
     ) -> ItemCandidateUpsertResult:
         store_item_id = existing_record.store_item_id or refreshed_record.store_item_id
         if store_item_id is None:
@@ -392,13 +395,13 @@ class DiscoveryRepository:
 
         refreshed_record.store_item_id = store_item_id
         data = refreshed_record.to_db_dict()
-        changes = _item_update_changes(existing_record, refreshed_record)
+        changes = _item_update_changes(existing_record, refreshed_record, include_title=include_title)
 
         with self.connection.cursor() as cursor:
             cursor.execute(
-                _update_item_candidate_price_availability_sql(),
+                _update_item_candidate_price_availability_sql(include_title=include_title),
                 (
-                    *self._item_candidate_price_availability_params(data),
+                    *self._item_candidate_price_availability_params(data, include_title=include_title),
                     store_item_id,
                 ),
             )
@@ -737,8 +740,13 @@ class DiscoveryRepository:
             json.dumps(data["classification_reasons"], ensure_ascii=False),
         )
 
-    def _item_candidate_price_availability_params(self, data: dict[str, object]) -> tuple[object, ...]:
-        return tuple(data[field_name] for field_name in STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS)
+    def _item_candidate_price_availability_params(
+        self,
+        data: dict[str, object],
+        *,
+        include_title: bool = True,
+    ) -> tuple[object, ...]:
+        return tuple(data[field_name] for field_name in _store_item_refresh_fields(include_title=include_title))
 
     def mark_item_candidate_not_boardgame(self, candidate_id: int, reasons: list[str]) -> None:
         self._mark_item_candidate_no_match(candidate_id, reasons)
@@ -869,11 +877,11 @@ def _update_item_candidate_sql(*, refresh_from_source: bool = False) -> str:
     """
 
 
-def _update_item_candidate_price_availability_sql() -> str:
-    return """
+def _update_item_candidate_price_availability_sql(*, include_title: bool = True) -> str:
+    title_assignment = "title = %s,\n        " if include_title else ""
+    return f"""
     update store_items
-    set title = %s,
-        raw_price = %s,
+    set {title_assignment}raw_price = %s,
         price = %s,
         price_source = %s,
         currency = %s,
@@ -980,16 +988,24 @@ def _item_candidate_from_row(row: Any) -> DiscoveryItemCandidateRecord:
 def _item_update_changes(
     existing_record: DiscoveryItemCandidateRecord,
     refreshed_record: DiscoveryItemCandidateRecord,
+    *,
+    include_title: bool = True,
 ) -> list[tuple[str, object, object]]:
     existing_data = existing_record.to_db_dict()
     refreshed_data = refreshed_record.to_db_dict()
     changes: list[tuple[str, object, object]] = []
-    for field_name in STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS:
+    for field_name in _store_item_refresh_fields(include_title=include_title):
         old_value = existing_data[field_name]
         new_value = refreshed_data[field_name]
         if not _item_update_values_equal(field_name, old_value, new_value):
             changes.append((field_name, old_value, new_value))
     return changes
+
+
+def _store_item_refresh_fields(*, include_title: bool) -> tuple[str, ...]:
+    if include_title:
+        return STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS
+    return tuple(field_name for field_name in STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS if field_name != "title")
 
 
 def _item_update_values_equal(field_name: str, old_value: object, new_value: object) -> bool:
