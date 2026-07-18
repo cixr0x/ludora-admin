@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import re
 import unicodedata
 from collections.abc import Callable
@@ -303,7 +304,13 @@ def update_confirmed_store_item_details(
 
     try:
         records = StoreItemUpdateRecords()
-        for existing_record in repository.list_confirmed_boardgame_item_candidates(limit=limit, store_ids=store_ids):
+        update_candidates = list(
+            repository.list_confirmed_boardgame_item_candidates(limit=limit, store_ids=store_ids)
+        )
+        if len({candidate.store_id for candidate in update_candidates}) > 1:
+            random.shuffle(update_candidates)
+
+        for existing_record in update_candidates:
             raise_if_cancelled(cancellation_token)
             try:
                 refreshed_record = _fetch_detail_candidate(

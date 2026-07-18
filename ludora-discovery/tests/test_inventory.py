@@ -1001,6 +1001,102 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.confirmed_items_store_ids, [12, 34])
         self.assertEqual(repository.discovery_source_store_ids, [12, 34])
 
+    def test_update_confirmed_store_item_details_randomizes_candidates_across_multiple_stores(self):
+        first_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://alpha.example/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        second_record = DiscoveryItemCandidateRecord(
+            store_item_id=57,
+            store_id=34,
+            source_url="https://beta.example/products/azul",
+            title="Azul",
+            item_id=78,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        third_record = DiscoveryItemCandidateRecord(
+            store_item_id=58,
+            store_id=12,
+            source_url="https://alpha.example/products/carcassonne",
+            title="Carcassonne",
+            item_id=79,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[first_record, second_record, third_record])
+        fetched_store_item_ids = []
+
+        def fake_fetch_detail_candidate(*, listing_candidate, **_kwargs):
+            fetched_store_item_ids.append(listing_candidate.store_item_id)
+            return listing_candidate
+
+        def deterministic_shuffle(candidates):
+            candidates[:] = [candidates[2], candidates[0], candidates[1]]
+
+        with patch(
+            "ludora.product_crawler.random.shuffle",
+            side_effect=deterministic_shuffle,
+        ) as shuffle, patch(
+            "ludora.product_crawler._fetch_detail_candidate",
+            side_effect=fake_fetch_detail_candidate,
+        ):
+            records = update_confirmed_store_item_details(repository)
+
+        shuffle.assert_called_once()
+        self.assertEqual(fetched_store_item_ids, [58, 56, 57])
+        self.assertEqual([record.store_item_id for record in records], [58, 56, 57])
+        self.assertEqual(
+            [record.store_item_id for record in repository.confirmed_items],
+            [56, 57, 58],
+        )
+
+    def test_update_confirmed_store_item_details_preserves_order_for_one_store(self):
+        first_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://alpha.example/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        second_record = DiscoveryItemCandidateRecord(
+            store_item_id=57,
+            store_id=12,
+            source_url="https://alpha.example/products/azul",
+            title="Azul",
+            item_id=78,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[first_record, second_record])
+        fetched_store_item_ids = []
+
+        def fake_fetch_detail_candidate(*, listing_candidate, **_kwargs):
+            fetched_store_item_ids.append(listing_candidate.store_item_id)
+            return listing_candidate
+
+        with patch("ludora.product_crawler.random.shuffle") as shuffle, patch(
+            "ludora.product_crawler._fetch_detail_candidate",
+            side_effect=fake_fetch_detail_candidate,
+        ):
+            records = update_confirmed_store_item_details(repository, store_ids=[12])
+
+        shuffle.assert_not_called()
+        self.assertEqual(fetched_store_item_ids, [56, 57])
+        self.assertEqual([record.store_item_id for record in records], [56, 57])
+
     def test_update_confirmed_store_item_details_logs_changes_when_job_id_is_available(self):
         detail_html = """
         <script type="application/ld+json">
