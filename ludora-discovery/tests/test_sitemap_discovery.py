@@ -70,6 +70,36 @@ class SitemapDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(urls, ["https://example.mx/products/catan"])
 
+    def test_ignores_product_collection_roots_without_a_product_path_segment(self):
+        def fake_fetcher(url):
+            return FetchResult(
+                url=url,
+                text="""
+                <urlset>
+                  <url><loc>https://example.mx/product/</loc></url>
+                  <url><loc>https://example.mx/products/</loc></url>
+                  <url><loc>https://example.mx/producto/</loc></url>
+                  <url><loc>https://example.mx/productos/</loc></url>
+                  <url><loc>https://example.mx/juego/</loc></url>
+                  <url><loc>https://example.mx/juegos/</loc></url>
+                  <url><loc>https://example.mx/product/catan</loc></url>
+                  <url><loc>https://example.mx/productos/69/</loc></url>
+                  <url><loc>https://example.mx/productos/thats-not-a-hat/</loc></url>
+                </urlset>
+                """,
+            )
+
+        urls = discover_product_urls_from_sitemaps("https://example.mx/", fetcher=fake_fetcher)
+
+        self.assertEqual(
+            urls,
+            [
+                "https://example.mx/product/catan",
+                "https://example.mx/productos/69/",
+                "https://example.mx/productos/thats-not-a-hat/",
+            ],
+        )
+
     def test_follows_non_product_named_sitemaps_when_root_has_no_product_sitemap(self):
         responses = {
             "https://example.mx/sitemap.xml": """

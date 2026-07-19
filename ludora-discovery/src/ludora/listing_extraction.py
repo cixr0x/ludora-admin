@@ -123,7 +123,11 @@ def _nearby_text(events: list[tuple[str, str, str]], link_index: int) -> str:
 
 def _looks_like_product_url(url: str) -> bool:
     path = urlparse(url).path.casefold()
-    return any(marker in path for marker in PRODUCT_PATH_MARKERS)
+    for marker in PRODUCT_PATH_MARKERS:
+        _prefix, separator, remainder = path.partition(marker)
+        if separator and remainder.strip("/"):
+            return True
+    return False
 
 
 def _clean_url(url: str) -> str:
