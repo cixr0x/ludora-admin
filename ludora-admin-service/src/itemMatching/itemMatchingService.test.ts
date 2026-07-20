@@ -751,7 +751,7 @@ describe('item matching service', () => {
     ]);
   });
 
-  it('links but does not confirm an automatic local match without a BGG id', async () => {
+  it('links and confirms an automatic local match without a BGG id', async () => {
     const updates: Array<{ params?: unknown[]; sql: string }> = [];
     const database = confirmMatchDatabase(
       {
@@ -788,7 +788,7 @@ describe('item matching service', () => {
     await createItemMatchingService(database, bggClient).confirmBoardgameAndMatch?.(54);
 
     const linkedUpdate = updates.find((update) => normalizeSql(update.sql).includes('set item_id = $1'));
-    expect(normalizeSql(linkedUpdate?.sql ?? '')).toContain('is_boardgame_confirmed = false');
+    expect(normalizeSql(linkedUpdate?.sql ?? '')).toContain('is_boardgame_confirmed = true');
     expect(linkedUpdate?.params?.slice(0, 4)).toEqual([91, 'LOCAL', null, 'Local Manual Game']);
   });
 

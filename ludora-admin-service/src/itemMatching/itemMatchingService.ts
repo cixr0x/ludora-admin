@@ -315,7 +315,7 @@ function bestMatchAboveThreshold(matches: GeneratedMatchCandidate[]): GeneratedM
 }
 
 function shouldConfirmBoardgameMatch(match: GeneratedMatchCandidate, isAdminConfirmation: boolean): boolean {
-  return isAdminConfirmation || match.bggId !== null;
+  return isAdminConfirmation || match.source === 'LOCAL' || match.bggId !== null;
 }
 
 async function confirmStoreItemAsBoardgame(
