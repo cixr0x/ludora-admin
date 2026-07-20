@@ -5,10 +5,53 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.product_detail_extraction import extract_product_detail_candidate
+from ludora.product_detail_extraction import _extract_min_age, extract_product_detail_candidate
 
 
 class ProductDetailExtractionTests(unittest.TestCase):
+    def test_extracts_only_strict_plausible_min_age_formats(self):
+        cases = {
+            "Edad: 10+": 10,
+            "Edad mínima recomendada: 14+": 14,
+            "A partir de 8 años": 8,
+            "De 10 a 14 años": 10,
+            "10+ anos": 10,
+            "Contáctanos 525561649658": None,
+            "Edad: 525561649658": None,
+            "Edad: 0+": None,
+            "Edad: 100+": None,
+            "Edad: 1944": None,
+        }
+
+        for text, expected_age in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(_extract_min_age(text), expected_age)
+
+    def test_rejects_implausible_structured_min_age(self):
+        html = """
+        <html lang="es">
+          <head><title>Al Chile: Expansión Roja</title></head>
+          <body>
+            <h1>Al Chile: Expansión Roja</h1>
+            <p class="product__text inline-richtext caption-with-letter-spacing">
+              Edad mínima: <strong>525561649658</strong>
+            </p>
+            <footer>Contacto Contáctanos 525561649658</footer>
+          </body>
+        </html>
+        """
+
+        record = extract_product_detail_candidate(
+            html,
+            "https://www.cabalagames.com/productos/al-chile-expansion-roja/",
+            13,
+            "https://www.cabalagames.com/sitemap.xml",
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertIsNone(record.min_age)
+
     def test_extracts_json_ld_product_offer(self):
         html = """
         <html>

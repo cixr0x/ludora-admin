@@ -19,7 +19,16 @@ PLAYER_RANGE_RE = re.compile(
 PLAYER_LABEL_RE = re.compile(r"jugadores?\s*:?\s*(\d+)\s*(?:-|–|a)\s*(\d+)", re.IGNORECASE)
 MINUTES_RANGE_RE = re.compile(r"(\d+)\s*(?:-|–|a)\s*(\d+)\s*min", re.IGNORECASE)
 MINUTES_SINGLE_RE = re.compile(r"(\d+)\s*min", re.IGNORECASE)
-AGE_RE = re.compile(r"(?:edad|años|anos)\D{0,12}(\d+)\s*\+?", re.IGNORECASE)
+AGE_LABEL_RE = re.compile(
+    r"\bedad(?:\s+m[ií]nima)?(?:\s+recomendada)?\s*:?\s*(\d{1,2})(?!\d)\s*\+?",
+    re.IGNORECASE,
+)
+AGE_YEARS_RE = re.compile(
+    r"\b(\d{1,2})(?!\d)(?:\s*(?:-|–|a)\s*\d{1,2}(?!\d))?\s*\+?\s*(?:años|anos)\b",
+    re.IGNORECASE,
+)
+MIN_PLAUSIBLE_AGE = 1
+MAX_PLAUSIBLE_AGE = 99
 PUBLISHER_RE = re.compile(r"(?:editorial|publisher)\s*:?\s*(.+)", re.IGNORECASE)
 ENGLISH_LANGUAGE_RE = re.compile(r"\b(?:english|ingles)\b", re.IGNORECASE)
 SPANISH_LANGUAGE_RE = re.compile(r"\b(?:spanish|espanol|castellano)\b", re.IGNORECASE)
@@ -334,6 +343,9 @@ def extract_product_detail_candidate(
     product_details = _extract_product_details(parser.shopify_product_text_blocks)
     min_players, max_players = _extract_players(text, product_details)
     min_minutes, max_minutes = _extract_minutes(text, product_details)
+    min_age = _validated_min_age(
+        _first_int(_product_detail_value(product_details, "Edad minima", "Edad mínima"))
+    ) or _extract_min_age(text)
     language_detection = _detect_item_language_detail(title, product_url, description, text)
 
     raw_payload: dict[str, object] = {
@@ -361,8 +373,7 @@ def extract_product_detail_candidate(
         max_players=max_players,
         min_minutes=min_minutes,
         max_minutes=max_minutes,
-        min_age=_first_int(_product_detail_value(product_details, "Edad minima", "Edad mínima"))
-        or _extract_min_age(text),
+        min_age=min_age,
         language=language_detection.language,
         language_source=language_detection.source,
         language_evidence=language_detection.evidence,
@@ -965,8 +976,17 @@ def _extract_minutes(text: str, product_details: dict[str, str] | None = None) -
 
 
 def _extract_min_age(text: str) -> int | None:
-    match = AGE_RE.search(text)
-    return int(match.group(1)) if match else None
+    for pattern in (AGE_LABEL_RE, AGE_YEARS_RE):
+        match = pattern.search(text)
+        if match:
+            return _validated_min_age(int(match.group(1)))
+    return None
+
+
+def _validated_min_age(value: int | None) -> int | None:
+    if value is None or not MIN_PLAUSIBLE_AGE <= value <= MAX_PLAUSIBLE_AGE:
+        return None
+    return value
 
 
 def _infer_item_type(title: str, product_url: str) -> ItemCandidateType:
