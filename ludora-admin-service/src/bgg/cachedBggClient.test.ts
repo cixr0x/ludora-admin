@@ -11,6 +11,7 @@ const coffeeRushXml = `
 <items>
   <item type="boardgame" id="377061">
     <name type="primary" value="Coffee Rush" />
+    <name type="alternate" value="Cafe Barista" />
     <yearpublished value="2023" />
   </item>
 </items>
@@ -53,6 +54,7 @@ describe('cached BGG client', () => {
       2023
     ]);
     expect(cacheWrite?.params?.[6]).toMatchObject({
+      alternateNames: ['Cafe Barista'],
       bggId: 377061,
       name: 'Coffee Rush',
       type: 'boardgame',

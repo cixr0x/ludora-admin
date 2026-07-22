@@ -287,6 +287,7 @@ function thingCacheSummary(rawXml: string): {
       itemType: details.type,
       name: details.name,
       parsedJson: {
+        alternateNames: details.alternateNames,
         bggId: details.bggId,
         implementationLinks: details.implementationLinks,
         name: details.name,

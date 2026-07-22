@@ -830,7 +830,22 @@ describe('ludora admin service', () => {
   });
 
   it('returns a catalog item by id', async () => {
-    const row = { canonical_name: 'Coffee Rush', id: 77, item_type: 'base_game' };
+    const row = {
+      bgg_id: 377061,
+      bgg_thing_parsed_json: {},
+      bgg_thing_raw_xml: `
+        <items>
+          <item type="boardgame" id="377061">
+            <name type="primary" value="Coffee Rush" />
+            <name type="alternate" value="Cafe Barista" />
+            <name type="alternate" value="Coffee Rush: El juego" />
+          </item>
+        </items>
+      `,
+      canonical_name: 'Coffee Rush',
+      id: 77,
+      item_type: 'base_game'
+    };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -842,14 +857,26 @@ describe('ludora admin service', () => {
     const response = await request(createApp({ database })).get('/items/77');
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ data: row });
+    expect(response.body).toEqual({
+      data: {
+        bgg_alternate_names: ['Cafe Barista', 'Coffee Rush: El juego'],
+        bgg_id: 377061,
+        canonical_name: 'Coffee Rush',
+        id: 77,
+        item_type: 'base_game'
+      }
+    });
     const query = queries[0];
-    expect(normalizeSql(query.sql)).toContain('from items');
-    expect(normalizeSql(query.sql)).toContain('canonical_name_es');
-    expect(normalizeSql(query.sql)).toContain('normalized_name_es');
-    expect(normalizeSql(query.sql)).toContain('description_es');
-    expect(normalizeSql(query.sql)).toContain('image_url_es');
-    expect(normalizeSql(query.sql)).toContain('where id = $1');
+    const sql = normalizeSql(query.sql);
+    expect(sql).toContain('from items');
+    expect(sql).toContain('canonical_name_es');
+    expect(sql).toContain('normalized_name_es');
+    expect(sql).toContain('description_es');
+    expect(sql).toContain('image_url_es');
+    expect(sql).toContain('where id = $1');
+    expect(sql).toContain('left join bgg_thing_cache thing_cache');
+    expect(sql).toContain('thing_cache.raw_xml as bgg_thing_raw_xml');
+    expect(sql).toContain('thing_cache.parsed_json as bgg_thing_parsed_json');
     expect(query.params).toEqual(['77']);
   });
 
@@ -1406,7 +1433,14 @@ describe('ludora admin service', () => {
   });
 
   it('updates catalog items', async () => {
-    const updatedRow = { canonical_name: 'Coffee Rush Updated', id: '377061', item_type: 'base_game' };
+    const updatedRow = {
+      bgg_id: 377061,
+      bgg_thing_parsed_json: { alternateNames: ['Cafe Barista Actualizado'] },
+      bgg_thing_raw_xml: '<malformed>',
+      canonical_name: 'Coffee Rush Updated',
+      id: '377061',
+      item_type: 'base_game'
+    };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -1443,7 +1477,15 @@ describe('ludora admin service', () => {
       });
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({ data: updatedRow });
+    expect(response.body).toEqual({
+      data: {
+        bgg_alternate_names: ['Cafe Barista Actualizado'],
+        bgg_id: 377061,
+        canonical_name: 'Coffee Rush Updated',
+        id: '377061',
+        item_type: 'base_game'
+      }
+    });
     const query = queries[0];
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('update items');
@@ -1456,6 +1498,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('image_url_es = $21');
     expect(sql).toContain('where id = $23');
     expect(sql).toContain('returning id, canonical_name, normalized_name, canonical_name_es, normalized_name_es');
+    expect(sql).toContain('left join bgg_thing_cache thing_cache');
     expect(query.params).toEqual([
       'Coffee Rush Updated',
       'coffee rush updated',

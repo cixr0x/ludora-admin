@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
+import { parseBggThingResponse } from '../bgg/bggParser.js';
 import type { Database } from '../db.js';
 import type { ItemMatchingService } from '../itemMatching/itemMatchingService.js';
 import {
@@ -10,6 +11,8 @@ import {
   type ProductDetailsExtractionResult
 } from '../productDetailsExtraction/productDetailsExtractionService.js';
 import { createTraceLoggerFromHeaders } from '../trace.js';
+
+const BGG_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion';
 
 type StoreCandidateInput = {
   canonical_domain: string;
@@ -1058,9 +1061,20 @@ export function createDiscoveryRouter(
   router.get('/items/:id', async (request, response, next) => {
     try {
       const result = await database.query(
-        `select ${itemSelect}
-         from items
-         where id = $1`,
+        `
+        select
+          item_record.*,
+          thing_cache.raw_xml as bgg_thing_raw_xml,
+          thing_cache.parsed_json as bgg_thing_parsed_json
+        from (
+          select ${itemSelect}
+          from items
+          where id = $1
+        ) item_record
+        left join bgg_thing_cache thing_cache
+          on thing_cache.bgg_id = item_record.bgg_id
+         and thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+        `,
         [request.params.id]
       );
 
@@ -1068,7 +1082,7 @@ export function createDiscoveryRouter(
         throw httpError(404, 'Item not found');
       }
 
-      response.json({ data: result.rows[0] });
+      response.json({ data: itemDetailResponse(result.rows[0] as Record<string, unknown>) });
     } catch (error) {
       next(error);
     }
@@ -1312,32 +1326,42 @@ export function createDiscoveryRouter(
       const input = parseItemInput(request.body);
       const result = await database.query(
         `
-        update items
-        set canonical_name = $1,
-            normalized_name = $2,
-            canonical_name_es = $3,
-            normalized_name_es = $4,
-            item_type = $5,
-            parent_item_id = $6,
-            bgg_id = $7,
-            bgg_url = $8,
-            year_published = $9,
-            description = $10,
-            description_es = $11,
-            min_players = $12,
-            max_players = $13,
-            min_minutes = $14,
-            max_minutes = $15,
-            complexity = $16,
-            rating = $17,
-            weight = $18,
-            min_age = $19,
-            image_url = $20,
-            image_url_es = $21,
-            status = $22,
-            updated_at = now()
-        where id = $23
-        returning ${itemSelect}
+        with updated_item as (
+          update items
+          set canonical_name = $1,
+              normalized_name = $2,
+              canonical_name_es = $3,
+              normalized_name_es = $4,
+              item_type = $5,
+              parent_item_id = $6,
+              bgg_id = $7,
+              bgg_url = $8,
+              year_published = $9,
+              description = $10,
+              description_es = $11,
+              min_players = $12,
+              max_players = $13,
+              min_minutes = $14,
+              max_minutes = $15,
+              complexity = $16,
+              rating = $17,
+              weight = $18,
+              min_age = $19,
+              image_url = $20,
+              image_url_es = $21,
+              status = $22,
+              updated_at = now()
+          where id = $23
+          returning ${itemSelect}
+        )
+        select
+          updated_item.*,
+          thing_cache.raw_xml as bgg_thing_raw_xml,
+          thing_cache.parsed_json as bgg_thing_parsed_json
+        from updated_item
+        left join bgg_thing_cache thing_cache
+          on thing_cache.bgg_id = updated_item.bgg_id
+         and thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
         `,
         [...itemParams(input), request.params.id]
       );
@@ -1346,7 +1370,7 @@ export function createDiscoveryRouter(
         throw httpError(404, 'Item not found');
       }
 
-      response.json({ data: result.rows[0] });
+      response.json({ data: itemDetailResponse(result.rows[0] as Record<string, unknown>) });
     } catch (error) {
       next(error);
     }
@@ -2755,6 +2779,54 @@ function rowInteger(value: Record<string, unknown>, key: string): number | null 
   }
   const parsed = typeof field === 'number' ? field : Number(field);
   return Number.isInteger(parsed) ? parsed : null;
+}
+
+function itemDetailResponse(row: Record<string, unknown>): Record<string, unknown> {
+  const { bgg_thing_parsed_json: parsedJson, bgg_thing_raw_xml: rawXml, ...item } = row;
+  return rowInteger(item, 'bgg_id')
+    ? { ...item, bgg_alternate_names: bggAlternateNamesFromCache(parsedJson, rawXml) }
+    : item;
+}
+
+function bggAlternateNamesFromCache(parsedJson: unknown, rawXml: unknown): string[] {
+  const parsed = parsedJsonObject(parsedJson);
+  if (parsed && Object.prototype.hasOwnProperty.call(parsed, 'alternateNames')) {
+    return uniqueStringList(parsed.alternateNames);
+  }
+
+  if (typeof rawXml !== 'string' || !rawXml.trim()) {
+    return [];
+  }
+
+  try {
+    return uniqueStringList(parseBggThingResponse(rawXml)?.alternateNames);
+  } catch {
+    return [];
+  }
+}
+
+function parsedJsonObject(value: unknown): Record<string, unknown> | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  if (typeof value !== 'string' || !value.trim()) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function uniqueStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))];
 }
 
 function productDetailsFromCandidate(candidate: Record<string, unknown>): ProductDetails {

@@ -53,6 +53,14 @@ function firstTextValue(record: AdminRecord, keys: string[]) {
   return keys.map((key) => textValue(record, key)).find((value) => value !== '') ?? '';
 }
 
+function stringListValue(record: AdminRecord, key: string) {
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return [...new Set(value.map((item) => String(item).trim()).filter(Boolean))];
+}
+
 function firstLinkedStoreDescription(storeItems: AdminRecord[]) {
   return storeItems.map((storeItem) => textValue(storeItem, 'description')).find((description) => description !== '') ?? '';
 }
@@ -1064,7 +1072,11 @@ function ItemForm({
   const imageUrl = field(item, ['image_url'], '');
   const imageUrlEs = field(item, ['image_url_es'], '');
   const bggUrl = field(item, ['bgg_url'], '');
-  const formKey = itemDetailFields.map((detailField) => detailValue(item, detailField.key)).join('\u001f');
+  const bggId = textValue(item, 'bgg_id');
+  const bggAlternateNames = stringListValue(item, 'bgg_alternate_names');
+  const canonicalNameEs = detailValue(item, 'canonical_name_es');
+  const hasNonBggCanonicalNameEs = Boolean(canonicalNameEs && !bggAlternateNames.includes(canonicalNameEs));
+  const formKey = [...itemDetailFields.map((detailField) => detailValue(item, detailField.key)), ...bggAlternateNames].join('\u001f');
   const hasSourceDescriptions = Boolean(textValue(item, 'description') || firstLinkedStoreDescription(linkedStoreItems));
   const canGenerateDescription = hasSourceDescriptions && !isGeneratingDescription && !isSaving;
   const isStartingItemCoverWorkflow = Boolean(itemId && itemId === startingItemCoverWorkflowId);
@@ -1264,16 +1276,43 @@ function ItemForm({
                       gridColumn: detailField.gridColumn
                     }}
                   >
-                    <TextField
-                      defaultValue={detailValue(item, detailField.key)}
-                      fullWidth
-                      InputProps={{ readOnly: detailField.readOnly }}
-                      label={detailField.label}
-                      minRows={detailField.multiline ? 4 : undefined}
-                      multiline={detailField.multiline}
-                      name={detailField.readOnly ? undefined : detailField.key}
-                      sx={{ flex: 1, minWidth: 0 }}
-                    />
+                    {bggId ? (
+                      <TextField
+                        defaultValue={canonicalNameEs}
+                        fullWidth
+                        helperText={bggAlternateNames.length ? 'Choose an alternate name from the cached BGG thing.' : 'No alternate names found in the BGG cache.'}
+                        label={detailField.label}
+                        name={detailField.key}
+                        select
+                        SelectProps={{ displayEmpty: true }}
+                        sx={{ flex: 1, minWidth: 0 }}
+                      >
+                        <MenuItem value="">
+                          <em>None</em>
+                        </MenuItem>
+                        {hasNonBggCanonicalNameEs ? (
+                          <MenuItem disabled value={canonicalNameEs}>
+                            {canonicalNameEs} (current value; not in BGG alternate names)
+                          </MenuItem>
+                        ) : null}
+                        {bggAlternateNames.map((alternateName) => (
+                          <MenuItem key={alternateName} value={alternateName}>
+                            {alternateName}
+                          </MenuItem>
+                        ))}
+                      </TextField>
+                    ) : (
+                      <TextField
+                        defaultValue={canonicalNameEs}
+                        fullWidth
+                        InputProps={{ readOnly: detailField.readOnly }}
+                        label={detailField.label}
+                        minRows={detailField.multiline ? 4 : undefined}
+                        multiline={detailField.multiline}
+                        name={detailField.readOnly ? undefined : detailField.key}
+                        sx={{ flex: 1, minWidth: 0 }}
+                      />
+                    )}
                     <Tooltip title="Generate normalized Spanish name">
                       <span>
                         <IconButton

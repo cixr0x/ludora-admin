@@ -48,6 +48,7 @@ describe('ItemsPage', () => {
   it('opens a form view from the item table and saves changes', async () => {
     const user = userEvent.setup();
     const item = {
+      bgg_alternate_names: ['Cafe Barista', 'Cafe Barista Actualizado'],
       bgg_id: 377061,
       bgg_last_sync_at: '2026-05-29T09:53:38.466Z',
       bgg_url: 'https://boardgamegeek.com/boardgame/377061/coffee-rush',
@@ -122,6 +123,7 @@ describe('ItemsPage', () => {
       'src',
       'https://cf.geekdo-images.com/coffee-es.jpg'
     );
+    expect(screen.getByRole('combobox', { name: 'Canonical Name ES' })).toHaveTextContent('Cafe Barista');
     const normalizedNameEs = screen.getByLabelText('Normalized Name ES');
     const generateDescription = screen.getByRole('button', { name: 'Generate Spanish item description' });
     const description = screen.getByLabelText('Description');
@@ -134,8 +136,11 @@ describe('ItemsPage', () => {
     expect(descriptionEs.compareDocumentPosition(itemType)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
     fireEvent.change(screen.getByLabelText('Canonical Name'), { target: { value: 'Coffee Rush Updated' } });
-    fireEvent.change(screen.getByLabelText('Canonical Name ES'), { target: { value: 'Cafe Barista Actualizado' } });
-    fireEvent.change(screen.getByLabelText('Normalized Name ES'), { target: { value: 'cafe barista actualizado' } });
+    await user.click(screen.getByRole('combobox', { name: 'Canonical Name ES' }));
+    expect(await screen.findByRole('option', { name: 'Cafe Barista' })).toBeInTheDocument();
+    await user.click(screen.getByRole('option', { name: 'Cafe Barista Actualizado' }));
+    await user.click(screen.getByRole('button', { name: 'Generate normalized Spanish name' }));
+    expect(screen.getByLabelText('Normalized Name ES')).toHaveValue('cafe barista actualizado');
     fireEvent.change(screen.getByLabelText('Image URL ES'), {
       target: { value: 'https://cf.geekdo-images.com/coffee-es-updated.jpg' }
     });
@@ -164,8 +169,6 @@ describe('ItemsPage', () => {
   it('generates the Spanish normalized name from the Spanish canonical name', async () => {
     const user = userEvent.setup();
     const item = {
-      bgg_id: 377061,
-      bgg_url: 'https://boardgamegeek.com/boardgame/377061/coffee-rush',
       canonical_name: 'Coffee Rush',
       canonical_name_es: '',
       description: '',
