@@ -97,11 +97,11 @@ describe('ItemsPage', () => {
         return jsonResponse({
           ...item,
           canonical_name: 'Coffee Rush Updated',
-          canonical_name_es: 'Cafe Barista Actualizado',
+          canonical_name_es: 'Nombre manual',
           description: 'Updated description',
           description_es: 'Descripcion actualizada',
           image_url_es: 'https://cf.geekdo-images.com/coffee-es-updated.jpg',
-          normalized_name_es: 'cafe barista actualizado'
+          normalized_name_es: 'nombre manual'
         });
       }
       throw new Error(`Unexpected request: ${url}`);
@@ -123,7 +123,7 @@ describe('ItemsPage', () => {
       'src',
       'https://cf.geekdo-images.com/coffee-es.jpg'
     );
-    expect(screen.getByRole('combobox', { name: 'Canonical Name ES' })).toHaveTextContent('Cafe Barista');
+    expect(screen.getByRole('combobox', { name: 'Canonical Name ES' })).toHaveValue('Cafe Barista');
     const normalizedNameEs = screen.getByLabelText('Normalized Name ES');
     const generateDescription = screen.getByRole('button', { name: 'Generate Spanish item description' });
     const description = screen.getByLabelText('Description');
@@ -139,8 +139,11 @@ describe('ItemsPage', () => {
     await user.click(screen.getByRole('combobox', { name: 'Canonical Name ES' }));
     expect(await screen.findByRole('option', { name: 'Cafe Barista' })).toBeInTheDocument();
     await user.click(screen.getByRole('option', { name: 'Cafe Barista Actualizado' }));
+    expect(screen.getByRole('combobox', { name: 'Canonical Name ES' })).toHaveValue('Cafe Barista Actualizado');
+    await user.clear(screen.getByRole('combobox', { name: 'Canonical Name ES' }));
+    await user.type(screen.getByRole('combobox', { name: 'Canonical Name ES' }), 'Nombre manual');
     await user.click(screen.getByRole('button', { name: 'Generate normalized Spanish name' }));
-    expect(screen.getByLabelText('Normalized Name ES')).toHaveValue('cafe barista actualizado');
+    expect(screen.getByLabelText('Normalized Name ES')).toHaveValue('nombre manual');
     fireEvent.change(screen.getByLabelText('Image URL ES'), {
       target: { value: 'https://cf.geekdo-images.com/coffee-es-updated.jpg' }
     });
@@ -154,11 +157,11 @@ describe('ItemsPage', () => {
     const patchCall = fetchMock.mock.calls.find(([url, init]) => pathOf(String(url)) === '/items/1' && init?.method === 'PATCH');
     expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
       canonical_name: 'Coffee Rush Updated',
-      canonical_name_es: 'Cafe Barista Actualizado',
+      canonical_name_es: 'Nombre manual',
       description: 'Updated description',
       description_es: 'Descripcion actualizada',
       image_url_es: 'https://cf.geekdo-images.com/coffee-es-updated.jpg',
-      normalized_name_es: 'cafe barista actualizado'
+      normalized_name_es: 'nombre manual'
     });
 
     await user.click(screen.getByRole('button', { name: 'Back to Items' }));

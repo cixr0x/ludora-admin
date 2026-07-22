@@ -4,7 +4,7 @@ import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import SaveIcon from '@mui/icons-material/Save';
-import { Alert, Box, Button, Chip, CircularProgress, IconButton, Link, MenuItem, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import { Alert, Autocomplete, Box, Button, Chip, CircularProgress, IconButton, Link, MenuItem, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import { Fragment, type FormEvent, type MouseEvent, useEffect, useState } from 'react';
 import { adminApi, type AdminRecord, type ItemRelationshipInput, type ItemTaxonomy, type LocalCoverWorkflow } from '../api/client';
 import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
@@ -1075,7 +1075,6 @@ function ItemForm({
   const bggId = textValue(item, 'bgg_id');
   const bggAlternateNames = stringListValue(item, 'bgg_alternate_names');
   const canonicalNameEs = detailValue(item, 'canonical_name_es');
-  const hasNonBggCanonicalNameEs = Boolean(canonicalNameEs && !bggAlternateNames.includes(canonicalNameEs));
   const formKey = [...itemDetailFields.map((detailField) => detailValue(item, detailField.key)), ...bggAlternateNames].join('\u001f');
   const hasSourceDescriptions = Boolean(textValue(item, 'description') || firstLinkedStoreDescription(linkedStoreItems));
   const canGenerateDescription = hasSourceDescriptions && !isGeneratingDescription && !isSaving;
@@ -1277,30 +1276,27 @@ function ItemForm({
                     }}
                   >
                     {bggId ? (
-                      <TextField
+                      <Autocomplete
+                        clearOnBlur={false}
                         defaultValue={canonicalNameEs}
-                        fullWidth
-                        helperText={bggAlternateNames.length ? 'Choose an alternate name from the cached BGG thing.' : 'No alternate names found in the BGG cache.'}
-                        label={detailField.label}
-                        name={detailField.key}
-                        select
-                        SelectProps={{ displayEmpty: true }}
+                        forcePopupIcon
+                        freeSolo
+                        options={bggAlternateNames}
+                        renderInput={(params) => (
+                          <TextField
+                            {...params}
+                            fullWidth
+                            helperText={
+                              bggAlternateNames.length
+                                ? 'Choose a cached BGG alternate name or type any name.'
+                                : 'No alternate names found in the BGG cache. You can type any name.'
+                            }
+                            label={detailField.label}
+                            name={detailField.key}
+                          />
+                        )}
                         sx={{ flex: 1, minWidth: 0 }}
-                      >
-                        <MenuItem value="">
-                          <em>None</em>
-                        </MenuItem>
-                        {hasNonBggCanonicalNameEs ? (
-                          <MenuItem disabled value={canonicalNameEs}>
-                            {canonicalNameEs} (current value; not in BGG alternate names)
-                          </MenuItem>
-                        ) : null}
-                        {bggAlternateNames.map((alternateName) => (
-                          <MenuItem key={alternateName} value={alternateName}>
-                            {alternateName}
-                          </MenuItem>
-                        ))}
-                      </TextField>
+                      />
                     ) : (
                       <TextField
                         defaultValue={canonicalNameEs}
