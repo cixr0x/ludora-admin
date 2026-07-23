@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "gcpProject": "ludora-501213",
+  "instance": "ludora-admin-img-20260714-105613",
+  "zone": "us-central1-a",
+  "machineType": "e2-small",
+  "sshUser": "robertorojas87",
+  "expectedExternalIp": "34.55.19.20",
+  "publicHost": "admin.ludora.bobbycrimson.com",
+  "adminCheckout": "/opt/ludora/ludora-admin",
+  "originUrl": "https://github.com/cixr0x/ludora-admin.git"
+}

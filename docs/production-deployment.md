@@ -161,7 +161,50 @@ codex login --device-auth
 
 Complete the displayed device flow in a local browser while logged in as `robertorojas87` on the VM shell. Do not run the login with `sudo`.
 
-## Routine Admin Deployment
+## Automated Routine Admin Deployment
+
+Run routine `ludora-admin` deployments from a Windows workstation with Google Cloud CLI access. Commit and push the intended change first, then pass the exact full commit SHA:
+
+```powershell
+Set-Location C:\PROJECTS\ludora\ludora-admin
+$expectedCommit = (git rev-parse HEAD).Trim()
+
+# Preview the pinned target and operation without contacting or changing the VM.
+.\ops\Deploy-LudoraAdmin.ps1 -ExpectedCommit $expectedCommit -Component Auto -WhatIf
+
+# Deploy the exact origin/main commit and run production verification.
+.\ops\Deploy-LudoraAdmin.ps1 -ExpectedCommit $expectedCommit -Component Auto
+```
+
+`Auto` compares the last successfully verified deployment with the expected commit and selects `Ui`, `Service`, `Discovery`, `Full`, or verification-only behavior. The success stamp lives under the remote checkout's `.git` directory and is updated only after every smoke check passes, so retrying a failed deployment reruns the affected work even when the checkout already reached the expected SHA. To require a particular scope, pass `-Component Ui`, `Service`, `Discovery`, or `Full`; the script refuses an explicitly narrower scope when another runtime component also changed. Unclassified production paths conservatively select `Full`. For a visible UI change, add `-AssetMarker '<literal built text>'` so both the activated local bundle and a JavaScript asset fetched over HTTPS must contain that exact marker.
+
+The first automated deployment on an existing VM has no trustworthy success stamp and therefore stops without changing the checkout. After confirming the currently deployed revision, services, schema state, and live smoke checks against this runbook, initialize the baseline once with:
+
+```powershell
+.\ops\Deploy-LudoraAdmin.ps1 `
+  -ExpectedCommit $expectedCommit `
+  -Component Auto `
+  -InitializeDeploymentBaseline
+```
+
+Baseline initialization always runs a full deployment and refreshes discovery dependencies. Do not use it to bypass an unexplained, missing, stale, or inconsistent deployment stamp.
+
+The script fails closed unless all of these conditions hold:
+
+- The local checkout is clean, on `main`, and at the supplied full 40-character SHA.
+- The supplied SHA is exactly the current `origin/main` revision.
+- The configured instance is running in the pinned project and zone with the expected machine type, IP, and DNS record.
+- The remote checkout is on `main`, has the pinned origin, has no tracked changes, and can fast-forward to the exact SHA.
+- No other deployment holds the remote lock.
+- Required production configuration files are regular ignored/untracked files, owned by `robertorojas87`, and mode `600`. Their values are never printed.
+
+If SQL files under `database/` changed between the deployed and expected revisions, the script stops before fast-forwarding the checkout or changing the running application and lists the files. It never executes SQL. Only after the exact SQL has been shown and the required DDL/DML approval and execution workflow has been completed may an operator rerun with `-AllowDatabasePatchPresence`; that switch only acknowledges the files and does not apply them.
+
+After a successful fast-forward, the script runs component-specific installs, tests, builds, and restarts, then verifies the exact remote HEAD, clean tracked state, active services, the effective nginx static root and API upstream, loopback health, listener bindings, HTTPS, HTTP redirect, authenticated read-only stores access, and optional UI marker. UI builds use a staging directory and activate only after the Vite build succeeds, so a failed build does not empty nginx's live `dist`. The script also confirms from the workstation that ports `3001` and `4001` are not externally reachable.
+
+The script does not stage, commit, push, reset, clean, bootstrap the VM, deploy `codexapi`, or automatically roll back. Preserve its structured `DEPLOY_STEP`, `DEPLOY_STATUS`, and `DEPLOY_RESULT` output when diagnosing a failure. Use the manual commands below only for focused recovery or when the script itself is unavailable.
+
+## Manual Routine Admin Deployment
 
 Use this when `ludora-admin` changes and the VM is already provisioned.
 
