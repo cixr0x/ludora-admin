@@ -313,7 +313,20 @@ describe('fetchRows', () => {
   });
 
   it('fetches paged store item discovery jobs with page metadata', async () => {
-    const records = [{ id: 19, new_items: 7, run_id: 'run-discovery-19', status: 'completed', store_id: 12 }];
+    const records = [
+      {
+        confirmed_boardgames: 3,
+        confirmed_non_boardgames: 2,
+        id: 19,
+        items_discovered: 9,
+        new_items: 7,
+        run_id: 'run-discovery-19',
+        status: 'completed',
+        store_id: 12,
+        unconfirmed_boardgames: 1,
+        unconfirmed_non_boardgames: 3
+      }
+    ];
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(

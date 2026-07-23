@@ -62,7 +62,8 @@ class AdminItemMatcher:
         )
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
-                response.read()
+                response_body = response.read()
+            _apply_response_classification(record, response_body)
             self.trace_logger.log("admin_matcher.request.completed", candidate_id=candidate_id, source_url=record.source_url)
         except HTTPError as exc:
             message = _http_error_message(exc)
@@ -128,3 +129,20 @@ def _json_error_message(body: str) -> str:
         return ""
     message = error.get("message")
     return str(message) if message else ""
+
+
+def _apply_response_classification(record: DiscoveryItemCandidateRecord, response_body: bytes) -> None:
+    try:
+        payload = json.loads(response_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), dict):
+        return
+
+    data = payload["data"]
+    is_boardgame = data.get("is_boardgame")
+    is_boardgame_confirmed = data.get("is_boardgame_confirmed")
+    if isinstance(is_boardgame, bool):
+        record.is_boardgame = is_boardgame
+    if isinstance(is_boardgame_confirmed, bool):
+        record.is_boardgame_confirmed = is_boardgame_confirmed

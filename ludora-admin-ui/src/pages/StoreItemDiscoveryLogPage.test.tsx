@@ -33,12 +33,17 @@ describe('StoreItemDiscoveryLogPage', () => {
             has_more: false,
             job: {
               completed_at: '2026-07-11T12:01:00Z',
+              confirmed_boardgames: 3,
+              confirmed_non_boardgames: 2,
               id: 19,
+              items_discovered: 9,
               run_id: 'run-19',
               started_at: '2026-07-11T12:00:00Z',
               status: 'completed',
               store_id: 12,
-              store_name: 'Alpha Games'
+              store_name: 'Alpha Games',
+              unconfirmed_boardgames: 1,
+              unconfirmed_non_boardgames: 3
             },
             next_cursor: 220
           }
@@ -54,6 +59,11 @@ describe('StoreItemDiscoveryLogPage', () => {
     expect(consoleOutput).toHaveTextContent('[discovery] item_discovery.run.start {"store_id":12}');
     expect(consoleOutput).toHaveTextContent('[discovery] item_discovery.run.completed {"new_items":7}');
     expect(screen.getByText('Alpha Games')).toBeInTheDocument();
+    expect(screen.getByText('Items discovered')).toBeInTheDocument();
+    expect(screen.getByText('Confirmed boardgames')).toBeInTheDocument();
+    expect(screen.getByText('Confirmed non-boardgames')).toBeInTheDocument();
+    expect(screen.getByText('Unconfirmed boardgames')).toBeInTheDocument();
+    expect(screen.getByText('Unconfirmed non-boardgames')).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: 'Follow log' })).toBeChecked();
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:4001/admin/operations/store-item-discovery-jobs/19/log?after_id=0',

@@ -167,6 +167,11 @@ create table if not exists job_store_item_discovery_log (
     started_at timestamptz not null default now(),
     completed_at timestamptz,
     new_items integer not null default 0,
+    items_discovered integer not null default 0,
+    confirmed_boardgames integer not null default 0,
+    confirmed_non_boardgames integer not null default 0,
+    unconfirmed_boardgames integer not null default 0,
+    unconfirmed_non_boardgames integer not null default 0,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );

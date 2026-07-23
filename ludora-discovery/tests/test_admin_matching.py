@@ -25,7 +25,9 @@ class AdminItemMatcherTests(unittest.TestCase):
         )
 
         with patch("ludora.admin_matching.urlopen") as urlopen:
-            urlopen.return_value.__enter__.return_value.read.return_value = b'{"data": {"id": 42}}'
+            urlopen.return_value.__enter__.return_value.read.return_value = (
+                b'{"data": {"id": 42, "is_boardgame": true, "is_boardgame_confirmed": true}}'
+            )
 
             AdminItemMatcher(
                 "http://admin.test/",
@@ -51,6 +53,8 @@ class AdminItemMatcherTests(unittest.TestCase):
         )
         self.assertEqual(trace_logger.log.call_args_list[0].kwargs["candidate_id"], 42)
         self.assertEqual(trace_logger.log.call_args_list[0].kwargs["title"], "Catan")
+        self.assertTrue(record.is_boardgame)
+        self.assertTrue(record.is_boardgame_confirmed)
 
     def test_forwards_trace_context_to_admin_confirm_endpoint(self):
         repository = Mock()

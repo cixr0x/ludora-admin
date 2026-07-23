@@ -3707,13 +3707,18 @@ describe('ludora admin service', () => {
         completed_at: '2026-07-05T20:03:00Z',
         created_at: '2026-07-05T20:00:00Z',
         error: '',
+        confirmed_boardgames: 3,
+        confirmed_non_boardgames: 2,
         id: 19,
+        items_discovered: 9,
         new_items: 7,
         run_id: 'run-discovery-19',
         started_at: '2026-07-05T20:00:00Z',
         status: 'completed',
         store_id: 12,
         store_name: 'Alpha Games',
+        unconfirmed_boardgames: 1,
+        unconfirmed_non_boardgames: 3,
         updated_at: '2026-07-05T20:03:00Z',
         website_url: 'https://store.example'
       }
@@ -3746,6 +3751,12 @@ describe('ludora admin service', () => {
     const countQuery = queries.find((query) => normalizeSql(query.sql).includes('count(*)'));
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from job_store_item_discovery_log');
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('left join stores on stores.id = jobs.store_id');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain(
+      'jobs.items_discovered, jobs.confirmed_boardgames, jobs.confirmed_non_boardgames'
+    );
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain(
+      'jobs.unconfirmed_boardgames, jobs.unconfirmed_non_boardgames'
+    );
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((stores.name)::text, '') ilike $1 escape '\\'");
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by jobs.started_at desc');
     expect(rowQuery?.params).toEqual(['%Alpha%', 25, 0]);

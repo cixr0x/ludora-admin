@@ -253,25 +253,48 @@ class DatabaseRepositoryTests(unittest.TestCase):
             website_url="https://example.mx/",
             started_at=started_at,
         )
+        repository.update_store_item_discovery_progress(
+            run_id="run-123",
+            new_items=2,
+            items_discovered=4,
+            confirmed_boardgames=1,
+            confirmed_non_boardgames=1,
+            unconfirmed_boardgames=1,
+            unconfirmed_non_boardgames=1,
+        )
         repository.complete_store_item_discovery_log(
             run_id="run-123",
             status="completed",
             completed_at=completed_at,
             new_items=3,
+            items_discovered=5,
+            confirmed_boardgames=2,
+            confirmed_non_boardgames=1,
+            unconfirmed_boardgames=1,
+            unconfirmed_non_boardgames=1,
             error="",
         )
 
         insert_sql, insert_params = connection.cursor_instance.executions[0]
-        update_sql, update_params = connection.cursor_instance.executions[1]
+        progress_sql, progress_params = connection.cursor_instance.executions[1]
+        update_sql, update_params = connection.cursor_instance.executions[2]
         self.assertIn("insert into job_store_item_discovery_log", insert_sql.casefold())
         self.assertIn("run_id", insert_sql.casefold())
         self.assertIn("started_at", insert_sql.casefold())
-        self.assertEqual(insert_params, ("run-123", 12, "https://example.mx/", "running", "", started_at, None, 0))
+        self.assertEqual(
+            insert_params,
+            ("run-123", 12, "https://example.mx/", "running", "", started_at, None, 0, 0, 0, 0, 0, 0),
+        )
+        self.assertIn("update job_store_item_discovery_log", progress_sql.casefold())
+        self.assertIn("items_discovered = %s", progress_sql.casefold())
+        self.assertIn("confirmed_boardgames = %s", progress_sql.casefold())
+        self.assertEqual(progress_params, (2, 4, 1, 1, 1, 1, "run-123"))
         self.assertIn("update job_store_item_discovery_log", update_sql.casefold())
         self.assertIn("completed_at = %s", update_sql.casefold())
         self.assertIn("new_items = %s", update_sql.casefold())
-        self.assertEqual(update_params, ("completed", "", completed_at, 3, "run-123"))
-        self.assertEqual(connection.commits, 2)
+        self.assertIn("unconfirmed_non_boardgames = %s", update_sql.casefold())
+        self.assertEqual(update_params, ("completed", "", completed_at, 3, 5, 2, 1, 1, 1, "run-123"))
+        self.assertEqual(connection.commits, 3)
 
     def test_lists_store_item_discovery_sources_for_selected_stores(self):
         connection = FakeConnection(

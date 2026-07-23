@@ -120,12 +120,29 @@ export function StoreItemDiscoveryLogPage({ jobId, onBack }: { jobId: string; on
 
       {job ? (
         <Paper variant="outlined">
-          <Stack direction={{ xs: 'column', md: 'row' }} spacing={{ xs: 1, md: 3 }} sx={{ p: 2 }}>
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 2,
+              gridTemplateColumns: {
+                lg: 'repeat(5, minmax(150px, 1fr))',
+                md: 'repeat(3, minmax(150px, 1fr))',
+                sm: 'repeat(2, minmax(150px, 1fr))',
+                xs: '1fr'
+              },
+              p: 2
+            }}
+          >
             <LogDetail label="Status" value={<Chip label={recordText(job, 'status', 'unknown')} size="small" />} />
             <LogDetail label="Store" value={recordText(job, 'store_name', recordText(job, 'store_id', '-'))} />
             <LogDetail label="Started" value={recordText(job, 'started_at', '-')} />
             <LogDetail label="Completed" value={recordText(job, 'completed_at', '-')} />
-          </Stack>
+            <LogDetail label="Items discovered" value={recordText(job, 'items_discovered', '0')} />
+            <LogDetail label="Confirmed boardgames" value={recordText(job, 'confirmed_boardgames', '0')} />
+            <LogDetail label="Confirmed non-boardgames" value={recordText(job, 'confirmed_non_boardgames', '0')} />
+            <LogDetail label="Unconfirmed boardgames" value={recordText(job, 'unconfirmed_boardgames', '0')} />
+            <LogDetail label="Unconfirmed non-boardgames" value={recordText(job, 'unconfirmed_non_boardgames', '0')} />
+          </Box>
         </Paper>
       ) : null}
 

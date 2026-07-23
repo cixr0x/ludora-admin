@@ -64,6 +64,14 @@ class SchemaTests(unittest.TestCase):
                 "create table if not exists store_item_discovery_trace_log",
                 "store_item_discovery_trace_log_run_id_id_idx",
             ],
+            "20260723_001_store_item_discovery_realtime_statistics.sql": [
+                "alter table if exists job_store_item_discovery_log",
+                "add column if not exists items_discovered integer not null default 0",
+                "add column if not exists confirmed_boardgames integer not null default 0",
+                "add column if not exists confirmed_non_boardgames integer not null default 0",
+                "add column if not exists unconfirmed_boardgames integer not null default 0",
+                "add column if not exists unconfirmed_non_boardgames integer not null default 0",
+            ],
         }
 
         for filename, expected_snippets in expected_patches.items():
@@ -310,6 +318,11 @@ class SchemaTests(unittest.TestCase):
             "started_at",
             "completed_at",
             "new_items",
+            "items_discovered",
+            "confirmed_boardgames",
+            "confirmed_non_boardgames",
+            "unconfirmed_boardgames",
+            "unconfirmed_non_boardgames",
             "created_at",
             "updated_at",
         ]:
@@ -322,6 +335,11 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("started_at timestamptz not null default now()", table)
         self.assertIn("completed_at timestamptz", table)
         self.assertIn("new_items integer not null default 0", table)
+        self.assertIn("items_discovered integer not null default 0", table)
+        self.assertIn("confirmed_boardgames integer not null default 0", table)
+        self.assertIn("confirmed_non_boardgames integer not null default 0", table)
+        self.assertIn("unconfirmed_boardgames integer not null default 0", table)
+        self.assertIn("unconfirmed_non_boardgames integer not null default 0", table)
         self.assertIn("job_store_item_discovery_log_store_id_started_at_idx", schema)
         self.assertIn("job_store_item_discovery_log_status_idx", schema)
 

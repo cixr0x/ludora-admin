@@ -321,14 +321,19 @@ describe('OperationsPage', () => {
           data: [
             {
               completed_at: '2026-07-05T20:03:00Z',
+              confirmed_boardgames: 3,
+              confirmed_non_boardgames: 2,
               error: '',
               id: 19,
+              items_discovered: 9,
               new_items: 7,
               run_id: 'run-discovery-19',
               started_at: '2026-07-05T20:00:00Z',
               status: 'completed',
               store_id: 12,
               store_name: 'Alpha Games',
+              unconfirmed_boardgames: 1,
+              unconfirmed_non_boardgames: 3,
               website_url: 'https://store.example'
             }
           ],
@@ -352,6 +357,11 @@ describe('OperationsPage', () => {
     expect(screen.getByRole('columnheader', { name: 'Store' })).toBeInTheDocument();
     expect(screen.getByText('Alpha Games')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Website URL' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Items discovered' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Confirmed boardgames' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Confirmed non-boardgames' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Unconfirmed boardgames' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Unconfirmed non-boardgames' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'New items' })).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Accepted stores' })).not.toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Embedding model' })).not.toBeInTheDocument();

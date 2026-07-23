@@ -67,6 +67,11 @@ class ItemDiscoveryRunResult:
     website_url: str
     item_candidates: int
     new_items: int = 0
+    items_discovered: int = 0
+    confirmed_boardgames: int = 0
+    confirmed_non_boardgames: int = 0
+    unconfirmed_boardgames: int = 0
+    unconfirmed_non_boardgames: int = 0
     stores_scanned: int = 1
 
     def to_dict(self) -> dict[str, object]:
@@ -75,6 +80,11 @@ class ItemDiscoveryRunResult:
             "website_url": self.website_url,
             "item_candidates": self.item_candidates,
             "new_items": self.new_items,
+            "items_discovered": self.items_discovered,
+            "confirmed_boardgames": self.confirmed_boardgames,
+            "confirmed_non_boardgames": self.confirmed_non_boardgames,
+            "unconfirmed_boardgames": self.unconfirmed_boardgames,
+            "unconfirmed_non_boardgames": self.unconfirmed_non_boardgames,
             "stores_scanned": self.stores_scanned,
         }
 
@@ -224,13 +234,14 @@ def run_item_discovery(
                 platform=platform,
                 store_id=store_id,
             )
-            tracking_repository = _StoreItemDiscoveryTrackingRepository(repository)
-            item_processor = AdminItemMatcher(
+            tracking_repository = _StoreItemDiscoveryTrackingRepository(repository, resolved_run_id)
+            admin_item_matcher = AdminItemMatcher(
                 admin_api_url,
                 repository,
                 internal_api_token=internal_api_token,
                 trace_logger=trace_logger,
             )
+            item_processor = _StoreItemDiscoveryTrackingProcessor(admin_item_matcher, tracking_repository)
             normalized_platform = platform.strip().casefold()
             item_title_extractor = (
                 AdminAmazonTitleExtractor(admin_api_url, internal_api_token=internal_api_token).extract_title
@@ -256,77 +267,162 @@ def run_item_discovery(
             )
             raise_if_cancelled(cancellation_token)
         except OperationCancelled as exc:
+            statistics = _item_discovery_statistics(tracking_repository)
             trace_logger.log(
                 "item_discovery.run.cancelled",
                 error=str(exc),
-                new_items=_new_items_count(tracking_repository),
                 store_id=store_id,
+                **statistics,
             )
             repository.complete_store_item_discovery_log(
                 run_id=resolved_run_id,
                 status="cancelled",
                 completed_at=_utc_now(),
-                new_items=_new_items_count(tracking_repository),
                 error=str(exc),
+                **statistics,
             )
             raise
         except Exception as exc:
+            statistics = _item_discovery_statistics(tracking_repository)
             trace_logger.log(
                 "item_discovery.run.failed",
                 error=str(exc),
-                new_items=_new_items_count(tracking_repository),
                 store_id=store_id,
+                **statistics,
             )
             repository.complete_store_item_discovery_log(
                 run_id=resolved_run_id,
                 status="failed",
                 completed_at=_utc_now(),
-                new_items=_new_items_count(tracking_repository),
                 error=str(exc),
+                **statistics,
             )
             raise
 
-        new_items = tracking_repository.new_items if tracking_repository is not None else 0
+        statistics = _item_discovery_statistics(tracking_repository)
         trace_logger.log(
             "item_discovery.run.completed",
             item_candidates=len(records),
-            new_items=new_items,
             store_id=store_id,
+            **statistics,
         )
         repository.complete_store_item_discovery_log(
             run_id=resolved_run_id,
             status="completed",
             completed_at=_utc_now(),
-            new_items=new_items,
             error="",
+            **statistics,
         )
         return ItemDiscoveryRunResult(
             store_id=store_id,
             website_url=website_url,
             item_candidates=len(records),
-            new_items=new_items,
+            **statistics,
         )
     finally:
         connection.close()
 
 
 class _StoreItemDiscoveryTrackingRepository:
-    def __init__(self, repository: DiscoveryRepository) -> None:
+    _CLASSIFICATION_FIELDS = (
+        "confirmed_boardgames",
+        "confirmed_non_boardgames",
+        "unconfirmed_boardgames",
+        "unconfirmed_non_boardgames",
+    )
+
+    def __init__(self, repository: DiscoveryRepository, run_id: str) -> None:
         self.repository = repository
+        self.run_id = run_id
         self.new_items = 0
+        self.items_discovered = 0
+        self.confirmed_boardgames = 0
+        self.confirmed_non_boardgames = 0
+        self.unconfirmed_boardgames = 0
+        self.unconfirmed_non_boardgames = 0
 
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         result = self.repository.upsert_item_candidate(record)
         if getattr(result, "created", False):
             self.new_items += 1
+        self.items_discovered += 1
+        self._change_classification_count(_classification_counter_name(record), 1)
+        self._persist()
         return result
+
+    def update_classification(
+        self,
+        previous_classification: tuple[bool, bool],
+        record: DiscoveryItemCandidateRecord,
+    ) -> None:
+        current_classification = (record.is_boardgame, record.is_boardgame_confirmed)
+        if previous_classification == current_classification:
+            return
+        self._change_classification_count(_classification_counter_name(previous_classification), -1)
+        self._change_classification_count(_classification_counter_name(current_classification), 1)
+        self._persist()
+
+    def statistics(self) -> dict[str, int]:
+        return {
+            "new_items": self.new_items,
+            "items_discovered": self.items_discovered,
+            "confirmed_boardgames": self.confirmed_boardgames,
+            "confirmed_non_boardgames": self.confirmed_non_boardgames,
+            "unconfirmed_boardgames": self.unconfirmed_boardgames,
+            "unconfirmed_non_boardgames": self.unconfirmed_non_boardgames,
+        }
+
+    def _change_classification_count(self, field_name: str, change: int) -> None:
+        if field_name not in self._CLASSIFICATION_FIELDS:
+            raise ValueError(f"Unknown discovery classification counter: {field_name}")
+        setattr(self, field_name, getattr(self, field_name) + change)
+
+    def _persist(self) -> None:
+        self.repository.update_store_item_discovery_progress(run_id=self.run_id, **self.statistics())
 
     def __getattr__(self, name: str) -> object:
         return getattr(self.repository, name)
 
 
-def _new_items_count(repository: _StoreItemDiscoveryTrackingRepository | None) -> int:
-    return repository.new_items if repository is not None else 0
+class _StoreItemDiscoveryTrackingProcessor:
+    def __init__(
+        self,
+        processor: AdminItemMatcher,
+        tracking_repository: _StoreItemDiscoveryTrackingRepository,
+    ) -> None:
+        self.processor = processor
+        self.tracking_repository = tracking_repository
+
+    def process_candidate(self, candidate_id: int, record: DiscoveryItemCandidateRecord) -> None:
+        previous_classification = (record.is_boardgame, record.is_boardgame_confirmed)
+        try:
+            self.processor.process_candidate(candidate_id, record)
+        finally:
+            self.tracking_repository.update_classification(previous_classification, record)
+
+
+def _classification_counter_name(record: DiscoveryItemCandidateRecord | tuple[bool, bool]) -> str:
+    if isinstance(record, tuple):
+        is_boardgame, is_confirmed = record
+    else:
+        is_boardgame = record.is_boardgame
+        is_confirmed = record.is_boardgame_confirmed
+    if is_boardgame:
+        return "confirmed_boardgames" if is_confirmed else "unconfirmed_boardgames"
+    return "confirmed_non_boardgames" if is_confirmed else "unconfirmed_non_boardgames"
+
+
+def _item_discovery_statistics(repository: _StoreItemDiscoveryTrackingRepository | None) -> dict[str, int]:
+    if repository is not None:
+        return repository.statistics()
+    return {
+        "new_items": 0,
+        "items_discovered": 0,
+        "confirmed_boardgames": 0,
+        "confirmed_non_boardgames": 0,
+        "unconfirmed_boardgames": 0,
+        "unconfirmed_non_boardgames": 0,
+    }
 
 
 def run_item_discovery_batch(
@@ -355,6 +451,11 @@ def run_item_discovery_batch(
     resolved_run_id = run_id or str(uuid.uuid4())
     item_candidates = 0
     new_items = 0
+    items_discovered = 0
+    confirmed_boardgames = 0
+    confirmed_non_boardgames = 0
+    unconfirmed_boardgames = 0
+    unconfirmed_non_boardgames = 0
     stores_scanned = 0
     for store in stores:
         raise_if_cancelled(cancellation_token)
@@ -370,6 +471,11 @@ def run_item_discovery_batch(
         )
         item_candidates += result.item_candidates
         new_items += result.new_items
+        items_discovered += result.items_discovered
+        confirmed_boardgames += result.confirmed_boardgames
+        confirmed_non_boardgames += result.confirmed_non_boardgames
+        unconfirmed_boardgames += result.unconfirmed_boardgames
+        unconfirmed_non_boardgames += result.unconfirmed_non_boardgames
         stores_scanned += 1
 
     return ItemDiscoveryRunResult(
@@ -377,6 +483,11 @@ def run_item_discovery_batch(
         website_url="",
         item_candidates=item_candidates,
         new_items=new_items,
+        items_discovered=items_discovered,
+        confirmed_boardgames=confirmed_boardgames,
+        confirmed_non_boardgames=confirmed_non_boardgames,
+        unconfirmed_boardgames=unconfirmed_boardgames,
+        unconfirmed_non_boardgames=unconfirmed_non_boardgames,
         stores_scanned=stores_scanned,
     )
 

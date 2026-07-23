@@ -7,10 +7,15 @@ export type StoreDiscoveryRunResult = {
 };
 
 export type ItemDiscoveryRunResult = {
+  confirmed_boardgames?: number;
+  confirmed_non_boardgames?: number;
   item_candidates: number;
+  items_discovered?: number;
   new_items?: number;
   store_id: number | null;
   stores_scanned?: number;
+  unconfirmed_boardgames?: number;
+  unconfirmed_non_boardgames?: number;
   website_url: string;
 };
 

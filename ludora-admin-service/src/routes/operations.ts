@@ -28,6 +28,8 @@ const MAX_LOG_CHUNK_ROWS = 1_000;
 const storeItemDiscoveryJobSelect = `
   jobs.id, jobs.run_id, jobs.store_id, stores.name as store_name, jobs.website_url,
   jobs.status, jobs.error, jobs.started_at, jobs.completed_at, jobs.new_items,
+  jobs.items_discovered, jobs.confirmed_boardgames, jobs.confirmed_non_boardgames,
+  jobs.unconfirmed_boardgames, jobs.unconfirmed_non_boardgames,
   jobs.created_at, jobs.updated_at
 `;
 
@@ -76,13 +78,18 @@ const storeItemDiscoveryJobsTableConfig: TableQueryConfig = {
     completed_at: columnSql('jobs.completed_at'),
     created_at: columnSql('jobs.created_at'),
     error: columnSql('jobs.error'),
+    confirmed_boardgames: columnSql('jobs.confirmed_boardgames'),
+    confirmed_non_boardgames: columnSql('jobs.confirmed_non_boardgames'),
     id: columnSql('jobs.id'),
+    items_discovered: columnSql('jobs.items_discovered'),
     new_items: columnSql('jobs.new_items'),
     run_id: columnSql('jobs.run_id'),
     started_at: columnSql('jobs.started_at'),
     status: columnSql('jobs.status'),
     store_id: columnSql('jobs.store_id'),
     store_name: columnSql('stores.name'),
+    unconfirmed_boardgames: columnSql('jobs.unconfirmed_boardgames'),
+    unconfirmed_non_boardgames: columnSql('jobs.unconfirmed_non_boardgames'),
     updated_at: columnSql('jobs.updated_at'),
     website_url: columnSql('jobs.website_url')
   },

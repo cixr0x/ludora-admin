@@ -313,6 +313,46 @@ const storeItemDiscoveryJobColumns: DataTableColumn<AdminRecord>[] = [
     sortValue: (row) => recordText(row, 'completed_at')
   },
   {
+    filterValue: (row) => recordText(row, 'items_discovered'),
+    id: 'items_discovered',
+    label: 'Items discovered',
+    minWidth: 160,
+    render: (row) => recordText(row, 'items_discovered'),
+    sortValue: (row) => recordText(row, 'items_discovered')
+  },
+  {
+    filterValue: (row) => recordText(row, 'confirmed_boardgames'),
+    id: 'confirmed_boardgames',
+    label: 'Confirmed boardgames',
+    minWidth: 195,
+    render: (row) => recordText(row, 'confirmed_boardgames'),
+    sortValue: (row) => recordText(row, 'confirmed_boardgames')
+  },
+  {
+    filterValue: (row) => recordText(row, 'confirmed_non_boardgames'),
+    id: 'confirmed_non_boardgames',
+    label: 'Confirmed non-boardgames',
+    minWidth: 225,
+    render: (row) => recordText(row, 'confirmed_non_boardgames'),
+    sortValue: (row) => recordText(row, 'confirmed_non_boardgames')
+  },
+  {
+    filterValue: (row) => recordText(row, 'unconfirmed_boardgames'),
+    id: 'unconfirmed_boardgames',
+    label: 'Unconfirmed boardgames',
+    minWidth: 215,
+    render: (row) => recordText(row, 'unconfirmed_boardgames'),
+    sortValue: (row) => recordText(row, 'unconfirmed_boardgames')
+  },
+  {
+    filterValue: (row) => recordText(row, 'unconfirmed_non_boardgames'),
+    id: 'unconfirmed_non_boardgames',
+    label: 'Unconfirmed non-boardgames',
+    minWidth: 245,
+    render: (row) => recordText(row, 'unconfirmed_non_boardgames'),
+    sortValue: (row) => recordText(row, 'unconfirmed_non_boardgames')
+  },
+  {
     filterValue: (row) => recordText(row, 'new_items'),
     id: 'new_items',
     label: 'New items',
@@ -469,7 +509,7 @@ function StoreItemDiscoveryJobsTable({ refreshKey }: { refreshKey: number }) {
         onLoadMore: loadMore,
         totalCount: totalRows
       }}
-      minWidth={1980}
+      minWidth={3020}
       rows={rows}
       serverSide
       tableState={table.tableState}

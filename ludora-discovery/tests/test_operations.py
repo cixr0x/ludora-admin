@@ -84,28 +84,35 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
     def test_run_item_discovery_crawls_one_store_and_closes_database(self):
         connection = Mock()
         repository = Mock()
-        records = [object(), object(), object()]
 
-        item_processor = object()
+        item_processor = Mock()
+        item_processor.process_candidate.side_effect = (
+            lambda _candidate_id, record: setattr(record, "is_boardgame_confirmed", True)
+        )
         ai_classifier = Mock()
         ai_classifier.apply_item_classification = object()
 
         def collect_inventory(_website_url, _store_id, inventory_repository, **_kwargs):
-            inventory_repository.upsert_item_candidate(
-                DiscoveryItemCandidateRecord(
-                    store_id=12,
-                    source_url="https://example.mx/products/catan",
-                    title="Catan",
-                )
+            catan = DiscoveryItemCandidateRecord(
+                store_id=12,
+                source_url="https://example.mx/products/catan",
+                title="Catan",
+                is_boardgame=True,
+            )
+            catan_result = inventory_repository.upsert_item_candidate(catan)
+            _kwargs["item_processor"].process_candidate(catan_result.candidate_id, catan)
+
+            sleeves = DiscoveryItemCandidateRecord(
+                store_id=12,
+                source_url="https://example.mx/products/sleeves",
+                title="Card Sleeves",
+                is_boardgame=False,
+                is_boardgame_confirmed=True,
             )
             inventory_repository.upsert_item_candidate(
-                DiscoveryItemCandidateRecord(
-                    store_id=12,
-                    source_url="https://example.mx/products/pandemic",
-                    title="Pandemic",
-                )
+                sleeves
             )
-            return records
+            return [catan, sleeves]
 
         repository.upsert_item_candidate.side_effect = [
             ItemCandidateUpsertResult(candidate_id=101, listing_status="PENDING", item_id=None, should_process=True, created=True),
@@ -185,7 +192,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(collect_store_inventory.call_args.kwargs["store_name"], "Hasbro Gaming")
         self.assertTrue(collect_store_inventory.call_args.kwargs["browser_sitemap_fetch_enabled"])
         self.assertIs(collect_store_inventory.call_args.kwargs["item_classifier"], ai_classifier.apply_item_classification)
-        self.assertIs(collect_store_inventory.call_args.kwargs["item_processor"], item_processor)
+        tracking_processor = collect_store_inventory.call_args.kwargs["item_processor"]
+        self.assertIs(tracking_processor.processor, item_processor)
         self.assertIs(
             collect_store_inventory.call_args.kwargs["item_title_extractor"],
             admin_title_extractor.return_value.extract_title,
@@ -198,12 +206,59 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["status"], "completed")
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["new_items"], 1)
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["items_discovered"], 2)
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["confirmed_boardgames"], 1)
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["confirmed_non_boardgames"], 1)
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["unconfirmed_boardgames"], 0)
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["unconfirmed_non_boardgames"], 0)
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["error"], "")
+        self.assertEqual(repository.update_store_item_discovery_progress.call_count, 3)
+        self.assertEqual(
+            repository.update_store_item_discovery_progress.call_args_list[0].kwargs,
+            {
+                "run_id": "run-123",
+                "new_items": 1,
+                "items_discovered": 1,
+                "confirmed_boardgames": 0,
+                "confirmed_non_boardgames": 0,
+                "unconfirmed_boardgames": 1,
+                "unconfirmed_non_boardgames": 0,
+            },
+        )
+        self.assertEqual(
+            repository.update_store_item_discovery_progress.call_args_list[1].kwargs,
+            {
+                "run_id": "run-123",
+                "new_items": 1,
+                "items_discovered": 1,
+                "confirmed_boardgames": 1,
+                "confirmed_non_boardgames": 0,
+                "unconfirmed_boardgames": 0,
+                "unconfirmed_non_boardgames": 0,
+            },
+        )
+        self.assertEqual(
+            repository.update_store_item_discovery_progress.call_args_list[2].kwargs,
+            {
+                "run_id": "run-123",
+                "new_items": 1,
+                "items_discovered": 2,
+                "confirmed_boardgames": 1,
+                "confirmed_non_boardgames": 1,
+                "unconfirmed_boardgames": 0,
+                "unconfirmed_non_boardgames": 0,
+            },
+        )
         connection.close.assert_called_once_with()
         self.assertEqual(result.store_id, 12)
         self.assertEqual(result.website_url, "https://example.mx/")
-        self.assertEqual(result.item_candidates, 3)
+        self.assertEqual(result.item_candidates, 2)
         self.assertEqual(result.new_items, 1)
+        self.assertEqual(result.items_discovered, 2)
+        self.assertEqual(result.confirmed_boardgames, 1)
+        self.assertEqual(result.confirmed_non_boardgames, 1)
+        self.assertEqual(result.unconfirmed_boardgames, 0)
+        self.assertEqual(result.unconfirmed_non_boardgames, 0)
 
     def test_run_item_discovery_writes_database_trace_events(self):
         connection = MagicMock()
@@ -284,6 +339,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["status"], "failed")
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["new_items"], 0)
+        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["items_discovered"], 0)
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["error"], "crawl failed")
         connection.close.assert_called_once_with()
 
@@ -361,8 +417,25 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
             "ludora.operations.run_item_discovery",
             side_effect=[
-                ItemDiscoveryRunResult(store_id=12, website_url="https://alpha.mx/", item_candidates=4, new_items=3),
-                ItemDiscoveryRunResult(store_id=34, website_url="https://beta.mx/", item_candidates=2, new_items=1),
+                ItemDiscoveryRunResult(
+                    store_id=12,
+                    website_url="https://alpha.mx/",
+                    item_candidates=4,
+                    new_items=3,
+                    items_discovered=4,
+                    confirmed_boardgames=2,
+                    confirmed_non_boardgames=1,
+                    unconfirmed_boardgames=1,
+                ),
+                ItemDiscoveryRunResult(
+                    store_id=34,
+                    website_url="https://beta.mx/",
+                    item_candidates=2,
+                    new_items=1,
+                    items_discovered=2,
+                    confirmed_boardgames=1,
+                    unconfirmed_non_boardgames=1,
+                ),
             ],
         ) as run_item_discovery_:
             result = run_item_discovery_batch(env_file="custom.env", run_id="batch-run", store_ids=[12, 34])
@@ -382,6 +455,11 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(result.website_url, "")
         self.assertEqual(result.item_candidates, 6)
         self.assertEqual(result.new_items, 4)
+        self.assertEqual(result.items_discovered, 6)
+        self.assertEqual(result.confirmed_boardgames, 3)
+        self.assertEqual(result.confirmed_non_boardgames, 1)
+        self.assertEqual(result.unconfirmed_boardgames, 1)
+        self.assertEqual(result.unconfirmed_non_boardgames, 1)
         self.assertEqual(result.stores_scanned, 2)
         connection.close.assert_called_once_with()
 

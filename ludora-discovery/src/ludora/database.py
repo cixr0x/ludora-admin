@@ -184,11 +184,52 @@ class DiscoveryRepository:
                     error,
                     started_at,
                     completed_at,
-                    new_items
+                    new_items,
+                    items_discovered,
+                    confirmed_boardgames,
+                    confirmed_non_boardgames,
+                    unconfirmed_boardgames,
+                    unconfirmed_non_boardgames
                 )
-                values (%s, %s, %s, %s, %s, %s, %s, %s)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
-                (run_id, store_id, website_url, "running", "", started_at, None, 0),
+                (run_id, store_id, website_url, "running", "", started_at, None, 0, 0, 0, 0, 0, 0),
+            )
+        self.connection.commit()
+
+    def update_store_item_discovery_progress(
+        self,
+        *,
+        run_id: str,
+        new_items: int,
+        items_discovered: int,
+        confirmed_boardgames: int,
+        confirmed_non_boardgames: int,
+        unconfirmed_boardgames: int,
+        unconfirmed_non_boardgames: int,
+    ) -> None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update job_store_item_discovery_log
+                set new_items = %s,
+                    items_discovered = %s,
+                    confirmed_boardgames = %s,
+                    confirmed_non_boardgames = %s,
+                    unconfirmed_boardgames = %s,
+                    unconfirmed_non_boardgames = %s,
+                    updated_at = now()
+                where run_id = %s
+                """,
+                (
+                    new_items,
+                    items_discovered,
+                    confirmed_boardgames,
+                    confirmed_non_boardgames,
+                    unconfirmed_boardgames,
+                    unconfirmed_non_boardgames,
+                    run_id,
+                ),
             )
         self.connection.commit()
 
@@ -199,6 +240,11 @@ class DiscoveryRepository:
         status: str,
         completed_at: datetime,
         new_items: int,
+        items_discovered: int,
+        confirmed_boardgames: int,
+        confirmed_non_boardgames: int,
+        unconfirmed_boardgames: int,
+        unconfirmed_non_boardgames: int,
         error: str = "",
     ) -> None:
         with self.connection.cursor() as cursor:
@@ -209,10 +255,26 @@ class DiscoveryRepository:
                     error = %s,
                     completed_at = %s,
                     new_items = %s,
+                    items_discovered = %s,
+                    confirmed_boardgames = %s,
+                    confirmed_non_boardgames = %s,
+                    unconfirmed_boardgames = %s,
+                    unconfirmed_non_boardgames = %s,
                     updated_at = now()
                 where run_id = %s
                 """,
-                (status, error, completed_at, new_items, run_id),
+                (
+                    status,
+                    error,
+                    completed_at,
+                    new_items,
+                    items_discovered,
+                    confirmed_boardgames,
+                    confirmed_non_boardgames,
+                    unconfirmed_boardgames,
+                    unconfirmed_non_boardgames,
+                    run_id,
+                ),
             )
         self.connection.commit()
 
