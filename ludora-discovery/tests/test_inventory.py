@@ -375,6 +375,34 @@ class InventoryTests(unittest.TestCase):
         ))
         self.assertEqual(brand_crawler.call_args.kwargs["brand_name"], "Hasbro Gaming")
 
+    def test_collect_store_inventory_routes_catito_domain_to_custom_crawler(self):
+        repository = FakeRepository()
+        expected_records = [
+            DiscoveryItemCandidateRecord(
+                store_id=16,
+                source_url="https://www.catitogames.com/product/catan",
+                title="Catan",
+            )
+        ]
+
+        with patch("ludora.inventory.crawl_catito_inventory", return_value=expected_records) as catito_crawler, patch(
+            "ludora.inventory.crawl_store_product_details"
+        ) as generic_crawler:
+            records = collect_store_inventory(
+                "https://www.catitogames.com/",
+                16,
+                repository,
+                platform="custom",
+            )
+
+        self.assertEqual(records, expected_records)
+        generic_crawler.assert_not_called()
+        catito_crawler.assert_called_once()
+        self.assertEqual(
+            catito_crawler.call_args.args[:3],
+            ("https://www.catitogames.com/", 16, repository),
+        )
+
     def test_collect_store_inventory_enables_browser_fetch_for_godaddy_platform(self):
         repository = FakeRepository()
 

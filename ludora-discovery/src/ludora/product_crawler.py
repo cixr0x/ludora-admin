@@ -108,6 +108,10 @@ class ItemCandidateProcessor(Protocol):
 
 
 ItemClassifier = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidateRecord]
+ItemCandidateEnricher = Callable[
+    [DiscoveryItemCandidateRecord, DiscoveryItemCandidateRecord],
+    DiscoveryItemCandidateRecord,
+]
 
 
 class ProductPageRemovedError(RuntimeError):
@@ -222,100 +226,128 @@ def crawl_store_product_details(
                 store_id=store_id,
             )
 
-        records: list[DiscoveryItemCandidateRecord] = []
-        for listing_candidate in listing_candidates:
-            raise_if_cancelled(cancellation_token)
-            trace.log(
-                "inventory.candidate.exists_check.start",
-                source_url=listing_candidate.source_url,
-                store_id=listing_candidate.store_id,
-                title=listing_candidate.title,
-            )
-            if repository.item_candidate_exists(listing_candidate.store_id, listing_candidate.source_url):
-                trace.log(
-                    "inventory.candidate.skipped_existing",
-                    source_url=listing_candidate.source_url,
-                    store_id=listing_candidate.store_id,
-                    title=listing_candidate.title,
-                )
-                continue
-
-            trace.log(
-                "inventory.candidate.detail_fetch.start",
-                source_url=listing_candidate.source_url,
-                store_id=listing_candidate.store_id,
-                title=listing_candidate.title,
-            )
-            try:
-                detail_candidate = _fetch_detail_candidate(
-                    listing_candidate=listing_candidate,
-                    source_listing_url=source_listing_url,
-                    browser_fetcher=browser_fetcher if use_browser_fetch else None,
-                    trace_logger=trace,
-                    cancellation_token=cancellation_token,
-                )
-            except ProductDetailRejectedError:
-                continue
-            trace.log(
-                "inventory.candidate.detail_fetch.completed",
-                source_url=detail_candidate.source_url,
-                store_id=detail_candidate.store_id,
-                title=detail_candidate.title,
-            )
-            raise_if_cancelled(cancellation_token)
-            item_classifier(detail_candidate)
-            trace.log(
-                "inventory.candidate.classified",
-                category_confidence=detail_candidate.category_confidence,
-                is_boardgame=detail_candidate.is_boardgame,
-                source_url=detail_candidate.source_url,
-                store_id=detail_candidate.store_id,
-                title=detail_candidate.title,
-            )
-            upsert_result = repository.upsert_item_candidate(detail_candidate)
-            candidate_id = getattr(upsert_result, "candidate_id", None)
-            trace.log(
-                "inventory.candidate.upsert.completed",
-                candidate_id=candidate_id,
-                created=getattr(upsert_result, "created", None),
-                should_process=getattr(upsert_result, "should_process", None),
-                source_url=detail_candidate.source_url,
-                store_id=detail_candidate.store_id,
-                title=detail_candidate.title,
-            )
-            if item_processor is not None and getattr(upsert_result, "should_process", False):
-                trace.log(
-                    "inventory.candidate.process.start",
-                    candidate_id=candidate_id,
-                    source_url=detail_candidate.source_url,
-                    store_id=detail_candidate.store_id,
-                    title=detail_candidate.title,
-                )
-                try:
-                    item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
-                except Exception as exc:
-                    trace.log(
-                        "inventory.candidate.process.failed",
-                        candidate_id=candidate_id,
-                        error=str(exc),
-                        source_url=detail_candidate.source_url,
-                        store_id=detail_candidate.store_id,
-                        title=detail_candidate.title,
-                    )
-                    raise
-                trace.log(
-                    "inventory.candidate.process.completed",
-                    candidate_id=candidate_id,
-                    source_url=detail_candidate.source_url,
-                    store_id=detail_candidate.store_id,
-                    title=detail_candidate.title,
-                )
-            records.append(detail_candidate)
+        records = crawl_listing_candidates(
+            listing_candidates,
+            repository,
+            source_listing_url=source_listing_url,
+            browser_fetcher=browser_fetcher if use_browser_fetch else None,
+            item_classifier=item_classifier,
+            item_processor=item_processor,
+            trace_logger=trace,
+            cancellation_token=cancellation_token,
+        )
         trace.log("inventory.crawl.completed", record_count=len(records), store_id=store_id, store_url=store_url)
         return records
     finally:
         if browser_session is not None:
             browser_session.__exit__(None, None, None)
+
+
+def crawl_listing_candidates(
+    listing_candidates: list[DiscoveryItemCandidateRecord],
+    repository: ItemCandidateRepository,
+    *,
+    source_listing_url: str,
+    browser_fetcher: Callable[[str], FetchResult | None] | None = None,
+    item_classifier: ItemClassifier = apply_item_classification,
+    item_processor: ItemCandidateProcessor | None = None,
+    item_candidate_enricher: ItemCandidateEnricher | None = None,
+    trace_logger: TraceLogger | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> list[DiscoveryItemCandidateRecord]:
+    trace = trace_logger or NullTraceLogger()
+    records: list[DiscoveryItemCandidateRecord] = []
+    for listing_candidate in listing_candidates:
+        raise_if_cancelled(cancellation_token)
+        trace.log(
+            "inventory.candidate.exists_check.start",
+            source_url=listing_candidate.source_url,
+            store_id=listing_candidate.store_id,
+            title=listing_candidate.title,
+        )
+        if repository.item_candidate_exists(listing_candidate.store_id, listing_candidate.source_url):
+            trace.log(
+                "inventory.candidate.skipped_existing",
+                source_url=listing_candidate.source_url,
+                store_id=listing_candidate.store_id,
+                title=listing_candidate.title,
+            )
+            continue
+
+        trace.log(
+            "inventory.candidate.detail_fetch.start",
+            source_url=listing_candidate.source_url,
+            store_id=listing_candidate.store_id,
+            title=listing_candidate.title,
+        )
+        try:
+            detail_candidate = _fetch_detail_candidate(
+                listing_candidate=listing_candidate,
+                source_listing_url=listing_candidate.source_listing_url or source_listing_url,
+                browser_fetcher=browser_fetcher,
+                trace_logger=trace,
+                cancellation_token=cancellation_token,
+            )
+        except ProductDetailRejectedError:
+            continue
+        if item_candidate_enricher is not None:
+            detail_candidate = item_candidate_enricher(detail_candidate, listing_candidate)
+        trace.log(
+            "inventory.candidate.detail_fetch.completed",
+            source_url=detail_candidate.source_url,
+            store_id=detail_candidate.store_id,
+            title=detail_candidate.title,
+        )
+        raise_if_cancelled(cancellation_token)
+        item_classifier(detail_candidate)
+        trace.log(
+            "inventory.candidate.classified",
+            category_confidence=detail_candidate.category_confidence,
+            is_boardgame=detail_candidate.is_boardgame,
+            source_url=detail_candidate.source_url,
+            store_id=detail_candidate.store_id,
+            title=detail_candidate.title,
+        )
+        upsert_result = repository.upsert_item_candidate(detail_candidate)
+        candidate_id = getattr(upsert_result, "candidate_id", None)
+        trace.log(
+            "inventory.candidate.upsert.completed",
+            candidate_id=candidate_id,
+            created=getattr(upsert_result, "created", None),
+            should_process=getattr(upsert_result, "should_process", None),
+            source_url=detail_candidate.source_url,
+            store_id=detail_candidate.store_id,
+            title=detail_candidate.title,
+        )
+        if item_processor is not None and getattr(upsert_result, "should_process", False):
+            trace.log(
+                "inventory.candidate.process.start",
+                candidate_id=candidate_id,
+                source_url=detail_candidate.source_url,
+                store_id=detail_candidate.store_id,
+                title=detail_candidate.title,
+            )
+            try:
+                item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
+            except Exception as exc:
+                trace.log(
+                    "inventory.candidate.process.failed",
+                    candidate_id=candidate_id,
+                    error=str(exc),
+                    source_url=detail_candidate.source_url,
+                    store_id=detail_candidate.store_id,
+                    title=detail_candidate.title,
+                )
+                raise
+            trace.log(
+                "inventory.candidate.process.completed",
+                candidate_id=candidate_id,
+                source_url=detail_candidate.source_url,
+                store_id=detail_candidate.store_id,
+                title=detail_candidate.title,
+            )
+        records.append(detail_candidate)
+    return records
 
 
 def update_confirmed_store_item_details(
