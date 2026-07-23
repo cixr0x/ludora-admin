@@ -1350,7 +1350,12 @@ describe('fetchRows', () => {
     ];
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch')
-      .mockResolvedValueOnce(new Response(new Blob(['source'], { type: 'image/png' }), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response('source', {
+          headers: { 'Content-Type': 'image/png' },
+          status: 200
+        })
+      )
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ data: workflow }), {
           headers: { 'Content-Type': 'application/json' },
