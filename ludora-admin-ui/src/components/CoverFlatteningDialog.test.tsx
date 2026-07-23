@@ -54,7 +54,7 @@ describe('CoverFlatteningDialog', () => {
         }, 201);
       }
       if (url.endsWith('/admin/cover-flattening-workflows/flatten-mobile-77/candidates/1')) {
-        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+        return imageResponse('candidate');
       }
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -120,7 +120,7 @@ describe('CoverFlatteningDialog', () => {
         }, 201);
       }
       if (url.includes('/admin/cover-flattening-workflows/flatten-reset-') && url.endsWith('/candidates/1')) {
-        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+        return imageResponse('candidate');
       }
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -179,7 +179,7 @@ describe('CoverFlatteningDialog', () => {
         }, 201);
       }
       if (url.endsWith('/admin/cover-flattening-workflows/flatten-77/candidates/1')) {
-        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+        return imageResponse('candidate');
       }
       if (url.endsWith('/admin/cover-flattening-workflows/flatten-77/accept')) {
         return jsonResponse({
@@ -295,13 +295,13 @@ describe('CoverFlatteningDialog', () => {
         return jsonResponse({ data: workflow }, 201);
       }
       if (url.endsWith('/admin/cover-flattening-workflows/flatten-manual-77/source')) {
-        return new Response(new Blob(['source'], { type: 'image/png' }), { status: 200 });
+        return imageResponse('source');
       }
       if (url.endsWith('/admin/cover-flattening-workflows/flatten-manual-77/manual-candidate')) {
         return jsonResponse({ data: { ...workflow, candidates: [automaticCandidate, manualCandidate] } });
       }
       if (url.includes('/admin/cover-flattening-workflows/flatten-manual-77/candidates/')) {
-        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+        return imageResponse('candidate');
       }
       throw new Error(`Unexpected request: ${url} ${init?.method ?? 'GET'}`);
     });
@@ -389,13 +389,13 @@ describe('CoverFlatteningDialog', () => {
         return jsonResponse({ data: failedWorkflow }, 201);
       }
       if (url.endsWith('/admin/cover-flattening-workflows/flatten-fallback-77/source')) {
-        return new Response(new Blob(['source'], { type: 'image/png' }), { status: 200 });
+        return imageResponse('source');
       }
       if (url.endsWith('/admin/cover-flattening-workflows/flatten-fallback-77/manual-candidate')) {
         return jsonResponse({ data: { ...failedWorkflow, candidates: [manualCandidate] } });
       }
       if (url.endsWith('/admin/cover-flattening-workflows/flatten-fallback-77/candidates/3')) {
-        return new Response(new Blob(['candidate'], { type: 'image/png' }), { status: 200 });
+        return imageResponse('candidate');
       }
       throw new Error(`Unexpected request: ${url}`);
     });
@@ -474,6 +474,13 @@ function jsonResponse(payload: unknown, status = 200): Response {
   return new Response(JSON.stringify(payload), {
     headers: { 'Content-Type': 'application/json' },
     status
+  });
+}
+
+function imageResponse(body: string): Response {
+  return new Response(body, {
+    headers: { 'Content-Type': 'image/png' },
+    status: 200
   });
 }
 

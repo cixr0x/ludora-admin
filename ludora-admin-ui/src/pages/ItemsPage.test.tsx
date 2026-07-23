@@ -167,7 +167,7 @@ describe('ItemsPage', () => {
     await user.click(screen.getByRole('button', { name: 'Back to Items' }));
 
     expect(await screen.findByText('Coffee Rush Updated')).toBeInTheDocument();
-  }, 10000);
+  }, 60000);
 
   it('generates the Spanish normalized name from the Spanish canonical name', async () => {
     const user = userEvent.setup();

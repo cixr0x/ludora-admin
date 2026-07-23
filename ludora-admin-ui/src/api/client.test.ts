@@ -1363,7 +1363,9 @@ describe('fetchRows', () => {
         })
       );
 
-    await expect(adminApi.getCoverFlatteningSource('flatten-77')).resolves.toBeInstanceOf(Blob);
+    const source = await adminApi.getCoverFlatteningSource('flatten-77');
+    expect(source.size).toBe(6);
+    expect(source.type).toBe('image/png');
     await expect(adminApi.createManualCoverFlatteningCandidate('flatten-77', points)).resolves.toEqual(workflow);
 
     expectFetchNth(

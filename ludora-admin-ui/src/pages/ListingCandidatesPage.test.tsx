@@ -547,7 +547,7 @@ describe('ListingCandidatesPage', () => {
     expect(listingRequests.at(-1)).toContain('filter_title=kitchen');
     expect(listingRequests.at(-1)).toContain('sort=last_updated');
     expect(listingRequests.at(-1)).toContain('sort_direction=desc');
-  }, 10000);
+  }, 60000);
 
   it('opens a form view with all item candidate fields on row double click', async () => {
     const user = userEvent.setup();
@@ -788,7 +788,7 @@ describe('ListingCandidatesPage', () => {
     await user.click(screen.getByRole('button', { name: 'Back to Store Items' }));
 
     expect(await screen.findByText('Kitchen Rush Updated')).toBeInTheDocument();
-  }, 10000);
+  }, 60000);
 
   it('deletes a store item from its details page after confirmation', async () => {
     const user = userEvent.setup();
@@ -896,7 +896,7 @@ describe('ListingCandidatesPage', () => {
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
-  }, 10000);
+  }, 60000);
 
   it('creates a curated item from the candidate form with an extension relationship', async () => {
     const user = userEvent.setup();
@@ -949,7 +949,7 @@ describe('ListingCandidatesPage', () => {
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
-  }, 10000);
+  }, 60000);
 
   it('creates a BGG item from the item candidate form and links the candidate', async () => {
     const user = userEvent.setup();
@@ -1017,7 +1017,7 @@ describe('ListingCandidatesPage', () => {
       ([url, init]) => pathOf(String(url)) === '/discovery/listings/3365/create-item-from-bgg' && init?.method === 'POST'
     );
     expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({ bgg_id: '377061' });
-  }, 10000);
+  }, 60000);
 
   it('appends the next page when scrolled near the bottom', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {

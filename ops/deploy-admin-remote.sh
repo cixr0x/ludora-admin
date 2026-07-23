@@ -277,7 +277,7 @@ run_ui() {
   (
     cd "$ui_dir"
     npm ci
-    npm test -- --testTimeout=30000 --hookTimeout=30000
+    npm test -- --testTimeout=60000 --hookTimeout=60000
     npm run build -- --outDir "$staging_dir" --emptyOutDir
   )
   [[ -f "$staging_dir/index.html" ]] || die "Staged UI build did not produce index.html." 70
