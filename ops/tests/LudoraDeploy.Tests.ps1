@@ -73,6 +73,21 @@ Describe 'Ludora deployment tooling' {
             $command.Contains((ConvertTo-LudoraBase64 -Value $marker)) | Should Be $true
         }
 
+        It 'omits the optional marker argument when no marker is configured' {
+            $config = Read-LudoraDeployConfig -ConfigPath (Join-Path $script:LudoraDeployModuleRoot 'admin-production.json')
+            $command = New-LudoraRemoteCommand `
+                -RemoteScriptPath (Join-Path $script:LudoraDeployModuleRoot 'deploy-admin-remote.sh') `
+                -ExpectedCommit ('a' * 40) `
+                -Component Auto `
+                -AssetMarker '' `
+                -Config $config `
+                -AllowDatabasePatchPresence $false `
+                -InitializeDeploymentBaseline $false
+
+            $command | Should Not Match '--asset-marker-base64'
+            $command | Should Match "--component .* --admin-checkout "
+        }
+
         It 'requires one remote success result for the exact commit' {
             $commit = 'a' * 40
             $output = @(

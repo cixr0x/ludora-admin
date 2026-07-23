@@ -316,12 +316,18 @@ function New-LudoraRemoteCommand {
     $arguments = @(
         '--expected-commit', (ConvertTo-LudoraBashLiteral -Value $ExpectedCommit),
         '--component', (ConvertTo-LudoraBashLiteral -Value $Component.ToLowerInvariant()),
-        '--asset-marker-base64', (ConvertTo-LudoraBashLiteral -Value $markerBase64),
         '--admin-checkout', (ConvertTo-LudoraBashLiteral -Value ([string]$Config.adminCheckout)),
         '--origin-url', (ConvertTo-LudoraBashLiteral -Value ([string]$Config.originUrl)),
         '--public-host', (ConvertTo-LudoraBashLiteral -Value ([string]$Config.publicHost)),
         '--expected-user', (ConvertTo-LudoraBashLiteral -Value ([string]$Config.sshUser))
     )
+
+    # An empty quoted argument is not preserved by every gcloud/SSH command
+    # serialization layer. Omit the optional marker flag entirely when unused;
+    # the remote script already defaults it to an empty value.
+    if ($markerBase64) {
+        $arguments += @('--asset-marker-base64', (ConvertTo-LudoraBashLiteral -Value $markerBase64))
+    }
 
     if ($AllowDatabasePatchPresence) {
         $arguments += '--allow-database-patch-presence'
