@@ -342,6 +342,7 @@ function New-LudoraRemoteCommand {
 
 function Assert-LudoraRemoteDeployResult {
     param(
+        [AllowEmptyString()]
         [AllowEmptyCollection()]
         [Parameter(Mandatory = $true)]
         [string[]]$Output,

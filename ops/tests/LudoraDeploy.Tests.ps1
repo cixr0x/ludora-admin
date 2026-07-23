@@ -91,6 +91,7 @@ Describe 'Ludora deployment tooling' {
         It 'requires one remote success result for the exact commit' {
             $commit = 'a' * 40
             $output = @(
+                ''
                 'DEPLOY_STEP=verify.record_success',
                 'REMOTE_DEPLOY_STATUS=success',
                 "REMOTE_DEPLOY_RESULT={`"status`":`"success`",`"component`":`"Ui`",`"previousCommit`":`"$commit`",`"commit`":`"$commit`"}"
