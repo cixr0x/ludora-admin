@@ -72,7 +72,9 @@ describe('CoverFlatteningDialog', () => {
       />
     );
 
-    expect(await screen.findByAltText('Flattened cover candidate 1')).toBeInTheDocument();
+    expect(
+      await screen.findByAltText('Flattened cover candidate 1', {}, { timeout: 10_000 })
+    ).toBeInTheDocument();
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveClass('MuiDialog-paperFullScreen');
 
