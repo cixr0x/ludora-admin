@@ -123,6 +123,7 @@ def update_confirmed_store_items(
     run_id: str | None = None,
     store_ids: list[int] | None = None,
     item_title_extractor: Callable[[DiscoveryItemCandidateRecord], str] | None = None,
+    trace_logger: TraceLogger | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
         repository,
@@ -133,4 +134,5 @@ def update_confirmed_store_items(
         run_id=run_id,
         store_ids=store_ids,
         item_title_extractor=item_title_extractor,
+        trace_logger=trace_logger,
     )

@@ -3,13 +3,13 @@ import unittest
 from email.message import Message
 from http.client import HTTPException
 from pathlib import Path
-from urllib.error import HTTPError
-from unittest.mock import patch
+from urllib.error import HTTPError, URLError
+from unittest.mock import Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.webfetch import fetch_html
+from ludora.webfetch import FetchResult, fetch_html, fetch_with_transient_retries
 
 
 class WebFetchTests(unittest.TestCase):
@@ -73,6 +73,53 @@ class WebFetchTests(unittest.TestCase):
         assert result is not None
         self.assertEqual(result.status_code, 503)
         self.assertEqual(result.retry_after_seconds, 179.0)
+
+    def test_fetch_html_can_preserve_network_error_details_for_tracing(self):
+        with patch("ludora.webfetch.urlopen", side_effect=URLError("connection reset")):
+            result = fetch_html(
+                "https://example.mx/products/catan",
+                include_http_error_status=True,
+            )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status_code, 0)
+        self.assertEqual(result.error_type, "URLError")
+        self.assertIn("connection reset", result.error or "")
+
+    def test_verbose_retry_trace_records_attempt_error_delay_and_success(self):
+        trace = Mock()
+        responses = [
+            FetchResult(
+                url="https://example.mx/products/catan",
+                text="",
+                status_code=429,
+                retry_after_seconds=60,
+            ),
+            FetchResult(url="https://example.mx/products/catan", text="<html></html>"),
+        ]
+
+        with patch("ludora.webfetch._wait_for_fetch_retry") as wait_for_retry:
+            result = fetch_with_transient_retries(
+                "https://example.mx/products/catan",
+                lambda _url: responses.pop(0),
+                trace_event="item_update.item.fetch.http_error",
+                trace_logger=trace,
+                trace_fields={"store_item_id": 501},
+                trace_attempts=True,
+            )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(
+            [call.args[0] for call in trace.log.call_args_list],
+            [
+                "item_update.item.fetch.http_error",
+                "item_update.item.fetch.retry.scheduled",
+            ],
+        )
+        self.assertEqual(trace.log.call_args_list[0].kwargs["status_code"], 429)
+        self.assertEqual(trace.log.call_args_list[1].kwargs["retry_in_seconds"], 60)
+        wait_for_retry.assert_called_once_with(60, None)
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ from ludora.embeddings import OpenAIEmbeddingClient, build_item_embedding_text, 
 from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.item_classification import apply_item_classification
 from ludora.models import DiscoveryItemCandidateRecord
-from ludora.trace import create_item_discovery_trace_logger
+from ludora.trace import create_item_discovery_trace_logger, create_item_update_trace_logger
 
 
 RunStatus = Literal["running", "cancelling", "cancelled", "completed", "failed"]
@@ -528,11 +528,26 @@ def run_item_update(
     ).extract_title
 
     connection = connect_database(database_url)
+    trace_connection = None
     resolved_run_id = run_id or str(uuid.uuid4())
     job_store_id = store_ids[0] if store_ids is not None and len(store_ids) == 1 else None
     try:
         repository = DiscoveryRepository(connection)
         job_id = repository.start_store_item_update_log(run_id=resolved_run_id, store_id=job_store_id)
+        try:
+            trace_connection = connect_database(database_url)
+        except Exception:
+            # Trace writes are best-effort and can safely share the primary connection
+            # when a dedicated trace connection cannot be opened.
+            trace_connection = connection
+        trace_logger = create_item_update_trace_logger(trace_connection, resolved_run_id, job_id)
+        trace_logger.log(
+            "item_update.run.started",
+            browser_fetch_enabled=browser_fetch_enabled,
+            job_id=job_id,
+            message="Store item update started",
+            selected_store_ids=store_ids or [],
+        )
         update_kwargs = {}
         if cancellation_token is not None:
             update_kwargs["cancellation_token"] = cancellation_token
@@ -544,9 +559,17 @@ def run_item_update(
                 run_id=resolved_run_id,
                 store_ids=store_ids,
                 item_title_extractor=item_title_extractor,
+                trace_logger=trace_logger,
                 **update_kwargs,
             )
-        except OperationCancelled:
+        except OperationCancelled as exc:
+            trace_logger.log(
+                "item_update.run.cancelled",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                job_id=job_id,
+                message="Store item update was cancelled",
+            )
             repository.complete_store_item_update_log(
                 job_id=job_id,
                 status="cancelled",
@@ -555,6 +578,13 @@ def run_item_update(
             )
             raise
         except Exception as exc:
+            trace_logger.log(
+                "item_update.run.failed",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                job_id=job_id,
+                message=f"Store item update failed: {exc}",
+            )
             repository.complete_store_item_update_log(
                 job_id=job_id,
                 status="failed",
@@ -562,6 +592,16 @@ def run_item_update(
                 error=str(exc),
             )
             raise
+        trace_logger.log(
+            "item_update.run.completed",
+            job_id=job_id,
+            message=(
+                f"Store item update completed after scanning {len(records)} items; "
+                f"{getattr(records, 'updated_items', len(records))} items changed"
+            ),
+            scanned_items=len(records),
+            updated_items=getattr(records, "updated_items", len(records)),
+        )
         repository.complete_store_item_update_log(
             job_id=job_id,
             status="completed",
@@ -572,6 +612,8 @@ def run_item_update(
         )
         return ItemUpdateRunResult(updated_items=getattr(records, "updated_items", len(records)))
     finally:
+        if trace_connection is not None and trace_connection is not connection:
+            trace_connection.close()
         connection.close()
 
 

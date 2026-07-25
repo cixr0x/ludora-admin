@@ -26,6 +26,8 @@ class FetchResult:
     text: str
     status_code: int = 200
     retry_after_seconds: float | None = None
+    error: str | None = None
+    error_type: str | None = None
 
 
 def fetch_html(
@@ -63,7 +65,15 @@ def fetch_html(
                 retry_after_seconds=retry_after_seconds_from_headers(exc.headers),
             )
         return None
-    except (HTTPException, URLError, TimeoutError, ValueError):
+    except (HTTPException, URLError, TimeoutError, ValueError) as exc:
+        if include_http_error_status:
+            return FetchResult(
+                url=url,
+                text="",
+                status_code=0,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
         return None
 
 
@@ -77,6 +87,7 @@ def fetch_with_transient_retries(
     cancellation_token: CancellationToken | None = None,
     ambiguous_failure_attempts: int = 1,
     max_attempts: int = DEFAULT_FETCH_MAX_ATTEMPTS,
+    trace_attempts: bool = False,
 ) -> FetchResult | None:
     trace = trace_logger or NullTraceLogger()
     resolved_trace_fields = dict(trace_fields or {})
@@ -85,9 +96,37 @@ def fetch_with_transient_retries(
 
     for attempt in range(1, resolved_max_attempts + 1):
         raise_if_cancelled(cancellation_token)
+        attempt_started_at = time.monotonic()
         fetched = fetcher(url)
-        if fetched is None:
-            if attempt < resolved_ambiguous_attempts:
+        attempt_elapsed_ms = int((time.monotonic() - attempt_started_at) * 1000)
+        if fetched is None or fetched.error:
+            will_retry = attempt < resolved_ambiguous_attempts
+            if trace_attempts:
+                error = fetched.error if fetched is not None else "No response was returned"
+                error_type = fetched.error_type if fetched is not None else "NoResponse"
+                trace.log(
+                    _related_trace_event(trace_event, "attempt.failed"),
+                    **resolved_trace_fields,
+                    attempt=attempt,
+                    attempt_elapsed_ms=attempt_elapsed_ms,
+                    error=error,
+                    error_type=error_type,
+                    max_attempts=resolved_max_attempts,
+                    message=f"Fetch failed: {error}",
+                    source_url=url,
+                    will_retry=will_retry,
+                )
+            if will_retry:
+                if trace_attempts:
+                    _log_retry_scheduled(
+                        trace,
+                        trace_event,
+                        resolved_trace_fields,
+                        attempt=attempt,
+                        max_attempts=resolved_max_attempts,
+                        retry_in_seconds=0.0,
+                        source_url=url,
+                    )
                 continue
             return None
         if fetched.status_code not in TRANSIENT_FETCH_STATUS_CODES:
@@ -102,6 +141,7 @@ def fetch_with_transient_retries(
                     retry_in_seconds=0.0,
                     source_url=url,
                     will_retry=False,
+                    include_message=trace_attempts,
                 )
             return fetched
 
@@ -117,9 +157,20 @@ def fetch_with_transient_retries(
             retry_in_seconds=retry_in_seconds,
             source_url=url,
             will_retry=will_retry,
+            include_message=trace_attempts,
         )
         if not will_retry:
             return fetched
+        if trace_attempts:
+            _log_retry_scheduled(
+                trace,
+                trace_event,
+                resolved_trace_fields,
+                attempt=attempt,
+                max_attempts=resolved_max_attempts,
+                retry_in_seconds=retry_in_seconds,
+                source_url=url,
+            )
         _wait_for_fetch_retry(retry_in_seconds, cancellation_token)
 
     return None
@@ -174,6 +225,7 @@ def _log_http_error(
     retry_in_seconds: float,
     source_url: str,
     will_retry: bool,
+    include_message: bool,
 ) -> None:
     fields = dict(trace_fields)
     fields.update(
@@ -185,4 +237,33 @@ def _log_http_error(
         status_code=fetched.status_code,
         will_retry=will_retry,
     )
+    if include_message:
+        fields["message"] = f"Product detail returned HTTP {fetched.status_code}"
     trace.log(event, **fields)
+
+
+def _log_retry_scheduled(
+    trace: TraceLogger,
+    event: str,
+    trace_fields: Mapping[str, object],
+    *,
+    attempt: int,
+    max_attempts: int,
+    retry_in_seconds: float,
+    source_url: str,
+) -> None:
+    fields = dict(trace_fields)
+    fields.update(
+        attempt=attempt,
+        max_attempts=max_attempts,
+        message=f"Retrying product detail in {retry_in_seconds:g} seconds",
+        next_attempt=attempt + 1,
+        retry_in_seconds=retry_in_seconds,
+        source_url=source_url,
+    )
+    trace.log(_related_trace_event(event, "retry.scheduled"), **fields)
+
+
+def _related_trace_event(event: str, suffix: str) -> str:
+    prefix = event.removesuffix(".http_error")
+    return f"{prefix}.{suffix}"

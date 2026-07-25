@@ -82,6 +82,12 @@ class SchemaTests(unittest.TestCase):
                 "alter table if exists store_items add column if not exists original_title text not null default ''",
                 "update store_items set original_title = title where original_title = ''",
             ],
+            "20260725_003_store_item_update_trace_log.sql": [
+                "create table if not exists store_item_update_trace_log",
+                "job_id bigint not null references job_store_item_update_log(id) on delete cascade",
+                "store_item_update_trace_log_job_id_id_idx",
+                "store_item_update_trace_log_run_id_id_idx",
+            ],
         }
 
         for filename, expected_snippets in expected_patches.items():
@@ -122,6 +128,7 @@ class SchemaTests(unittest.TestCase):
             "job_store_item_discovery_log",
             "store_item_discovery_trace_log",
             "job_store_item_update_log",
+            "store_item_update_trace_log",
             "store_item_update_change_log",
             "publishers",
         ]:

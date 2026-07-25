@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 import re
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from html import unescape
 from typing import Protocol
 from urllib.parse import urljoin, urlparse
@@ -361,23 +361,37 @@ def update_confirmed_store_item_details(
     run_id: str | None = None,
     store_ids: list[int] | None = None,
     item_title_extractor: ItemTitleExtractor | None = None,
+    trace_logger: TraceLogger | None = None,
 ) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
+    trace = trace_logger or NullTraceLogger()
+    store_sources = repository.list_store_item_discovery_sources(store_ids=store_ids)
     store_platforms = {
         source.store_id: source.platform.strip().casefold()
-        for source in repository.list_store_item_discovery_sources(store_ids=store_ids)
+        for source in store_sources
+    }
+    store_names = {
+        source.store_id: str(getattr(source, "store_name", "")).strip() or f"Store {source.store_id}"
+        for source in store_sources
     }
     browser_session = None
     if browser_fetch_enabled and browser_fetcher is None:
         from ludora.browser_fetch import BrowserTextFetcher
 
-        browser_session = BrowserTextFetcher()
+        browser_session = BrowserTextFetcher(trace_logger=trace)
         browser_fetcher = browser_session.__enter__().fetch
 
     try:
         records = StoreItemUpdateRecords()
         update_candidates = list(
             repository.list_confirmed_boardgame_item_candidates(limit=limit, store_ids=store_ids)
+        )
+        trace.log(
+            "item_update.candidates.loaded",
+            browser_fetch_enabled=browser_fetch_enabled,
+            candidate_count=len(update_candidates),
+            message=f"Loaded {len(update_candidates)} store items to update",
+            selected_store_ids=store_ids or [],
         )
         # The repository returns candidates oldest-first by refreshed_date. Keep
         # the older half ahead of the newer half while varying order within each.
@@ -387,14 +401,46 @@ def update_confirmed_store_item_details(
         random.shuffle(older_candidates)
         random.shuffle(newer_candidates)
         update_candidates = [*older_candidates, *newer_candidates]
+        trace.log(
+            "item_update.pools.prepared",
+            message=(
+                f"Prepared normal update pool with {len(older_candidates)} older and "
+                f"{len(newer_candidates)} newer items"
+            ),
+            newer_items=len(newer_candidates),
+            older_items=len(older_candidates),
+            total_items=len(update_candidates),
+        )
 
         retry_candidates: list[DiscoveryItemCandidateRecord] = []
         # The second tuple entry references the list populated during the first pass.
-        candidate_pools = ((update_candidates, True), (retry_candidates, False))
-        for candidate_pool, defer_transient_failures in candidate_pools:
-            for existing_record in candidate_pool:
+        candidate_pools = (("normal", update_candidates, True), ("retry", retry_candidates, False))
+        for pool_name, candidate_pool, defer_transient_failures in candidate_pools:
+            trace.log(
+                "item_update.pool.started",
+                item_count=len(candidate_pool),
+                message=f"Starting {pool_name} pool with {len(candidate_pool)} items",
+                pool=pool_name,
+            )
+            for item_index, existing_record in enumerate(candidate_pool, start=1):
                 raise_if_cancelled(cancellation_token)
                 platform = store_platforms.get(existing_record.store_id, "").strip().casefold()
+                item_trace_fields = _store_item_trace_fields(
+                    existing_record,
+                    platform=platform,
+                    store_name=store_names.get(existing_record.store_id, f"Store {existing_record.store_id}"),
+                    pool=pool_name,
+                    pool_item_count=len(candidate_pool),
+                    pool_item_index=item_index,
+                )
+                trace.log(
+                    "item_update.item.fetch.started",
+                    **item_trace_fields,
+                    message=(
+                        f"Fetching product {existing_record.title or existing_record.source_url} "
+                        f"from {item_trace_fields['store_name']}"
+                    ),
+                )
                 try:
                     refreshed_record = _fetch_detail_candidate(
                         listing_candidate=existing_record,
@@ -402,16 +448,38 @@ def update_confirmed_store_item_details(
                         platform=platform,
                         browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
                         detect_removed=True,
+                        trace_logger=trace,
                         cancellation_token=cancellation_token,
                     )
-                except TransientProductFetchError:
+                except TransientProductFetchError as exc:
                     if not defer_transient_failures:
+                        trace.log(
+                            "item_update.item.failed",
+                            **item_trace_fields,
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            message=f"Product update failed in retry pool: {exc}",
+                        )
                         raise
                     retry_candidates.append(existing_record)
+                    trace.log(
+                        "item_update.item.deferred",
+                        **item_trace_fields,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        message="Product failed after fetch retries and was moved to the retry pool",
+                        retry_pool_size=len(retry_candidates),
+                    )
                     continue
-                except ProductPageRemovedError:
+                except ProductPageRemovedError as exc:
                     if run_id and job_id is None:
                         raise ValueError("job id is required to log update changes")
+                    trace.log(
+                        "item_update.item.removed",
+                        **item_trace_fields,
+                        message=f"Product page was removed; marking the store item inactive: {exc}",
+                        reason=str(exc),
+                    )
                     update_result = repository.mark_item_candidate_inactive(
                         existing_record,
                         job_id=job_id,
@@ -422,35 +490,85 @@ def update_confirmed_store_item_details(
                     existing_record.store_active = False
                     records.append(existing_record)
                     _persist_store_item_update_progress(repository, job_id, records)
+                    trace.log(
+                        "item_update.item.completed",
+                        **item_trace_fields,
+                        changed=bool(getattr(update_result, "changed", False)),
+                        message="Store item marked inactive",
+                        scanned_items=len(records),
+                        updated_items=records.updated_items,
+                    )
                     continue
+                except Exception as exc:
+                    trace.log(
+                        "item_update.item.failed",
+                        **item_trace_fields,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        message=f"Product update failed: {exc}",
+                    )
+                    raise
                 raise_if_cancelled(cancellation_token)
-                _prepare_refreshed_titles(
-                    existing_record,
-                    refreshed_record,
-                    platform=platform,
-                    item_title_extractor=item_title_extractor,
+                try:
+                    _prepare_refreshed_titles(
+                        existing_record,
+                        refreshed_record,
+                        platform=platform,
+                        item_title_extractor=item_title_extractor,
+                    )
+                    _preserve_confirmed_item_state(refreshed_record, existing_record)
+                    if run_id:
+                        if job_id is None:
+                            raise ValueError("job id is required to log update changes")
+                        update_result = repository.update_item_candidate_with_change_log(
+                            existing_record,
+                            refreshed_record,
+                            job_id=job_id,
+                            run_id=run_id,
+                        )
+                        if getattr(update_result, "changed", False):
+                            records.updated_items += 1
+                    else:
+                        update_result = repository.update_item_candidate_price_availability(
+                            existing_record,
+                            refreshed_record,
+                        )
+                        if getattr(update_result, "changed", False):
+                            records.updated_items += 1
+                    records.append(refreshed_record)
+                    _persist_store_item_update_progress(repository, job_id, records)
+                except Exception as exc:
+                    trace.log(
+                        "item_update.item.failed",
+                        **item_trace_fields,
+                        error=str(exc),
+                        error_type=type(exc).__name__,
+                        message=f"Product update failed while processing or persisting details: {exc}",
+                    )
+                    raise
+                trace.log(
+                    "item_update.item.completed",
+                    **item_trace_fields,
+                    changed=bool(getattr(update_result, "changed", False)),
+                    message=(
+                        "Store item updated"
+                        if getattr(update_result, "changed", False)
+                        else "Store item checked; no tracked values changed"
+                    ),
+                    original_title=refreshed_record.original_title,
+                    resolved_title=refreshed_record.title,
+                    scanned_items=len(records),
+                    updated_items=records.updated_items,
                 )
-                _preserve_confirmed_item_state(refreshed_record, existing_record)
-                if run_id:
-                    if job_id is None:
-                        raise ValueError("job id is required to log update changes")
-                    update_result = repository.update_item_candidate_with_change_log(
-                        existing_record,
-                        refreshed_record,
-                        job_id=job_id,
-                        run_id=run_id,
-                    )
-                    if getattr(update_result, "changed", False):
-                        records.updated_items += 1
-                else:
-                    update_result = repository.update_item_candidate_price_availability(
-                        existing_record,
-                        refreshed_record,
-                    )
-                    if getattr(update_result, "changed", False):
-                        records.updated_items += 1
-                records.append(refreshed_record)
-                _persist_store_item_update_progress(repository, job_id, records)
+            trace.log(
+                "item_update.pool.completed",
+                item_count=len(candidate_pool),
+                message=f"Completed {pool_name} pool",
+                pool=pool_name,
+                retry_pool_size=len(retry_candidates),
+                scanned_items=len(records),
+                updated_items=records.updated_items,
+            )
         return records
     finally:
         if browser_session is not None:
@@ -487,6 +605,16 @@ def _fetch_detail_candidate(
         listing_candidate.source_url,
         detect_removed=detect_removed,
         trace_logger=trace,
+        trace_fields=(
+            {
+                "platform": platform,
+                "store_id": listing_candidate.store_id,
+                "store_item_id": listing_candidate.store_item_id,
+                "store_item_title": listing_candidate.title,
+            }
+            if detect_removed
+            else None
+        ),
         cancellation_token=cancellation_token,
     )
     _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
@@ -523,6 +651,14 @@ def _fetch_detail_candidate(
     if browser_fetcher is not None and (
         fetched_detail is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate, platform=platform)
     ):
+        trace.log(
+            "item_update.item.browser_fetch.started" if detect_removed else "inventory.candidate.browser_fetch.started",
+            message="Retrying product detail with browser rendering",
+            platform=platform,
+            source_url=listing_candidate.source_url,
+            store_id=listing_candidate.store_id,
+            store_item_id=listing_candidate.store_item_id,
+        )
         fetched_detail = browser_fetcher(listing_candidate.source_url)
         _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
         if fetched_detail is not None and fetched_detail.status_code >= 400:
@@ -550,6 +686,17 @@ def _fetch_detail_candidate(
             fetched_detail = None
             amazon_detail_validation_failed = True
         if fetched_detail is not None:
+            trace.log(
+                "item_update.item.browser_fetch.completed"
+                if detect_removed
+                else "inventory.candidate.browser_fetch.completed",
+                final_url=fetched_detail.url,
+                message="Browser-rendered product detail fetched successfully",
+                source_url=listing_candidate.source_url,
+                status_code=fetched_detail.status_code,
+                store_id=listing_candidate.store_id,
+                store_item_id=listing_candidate.store_item_id,
+            )
             browser_detail_candidate = _extract_refresh_detail_candidate(
                 fetched_detail=fetched_detail,
                 listing_candidate=listing_candidate,
@@ -575,11 +722,14 @@ def _fetch_detail_candidate(
     rejection_reason = _detail_rejection_reason(detail_candidate, listing_candidate, platform=platform)
     if rejection_reason:
         trace.log(
-            "inventory.candidate.detail_fetch.rejected",
+            "item_update.item.detail.rejected"
+            if detect_removed
+            else "inventory.candidate.detail_fetch.rejected",
             detail_sku=detail_candidate.store_sku,
             detail_title=detail_candidate.title,
             listing_sku=listing_candidate.store_sku,
             listing_title=listing_candidate.title,
+            message=f"Parsed product detail was rejected: {rejection_reason}",
             reason=rejection_reason,
             source_url=listing_candidate.source_url,
         )
@@ -650,17 +800,46 @@ def _fetch_static_product_detail(
     *,
     detect_removed: bool,
     trace_logger: TraceLogger | None = None,
+    trace_fields: Mapping[str, object] | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> FetchResult | None:
+    resolved_trace_fields = {"fetch_method": "static", **dict(trace_fields or {})}
     return fetch_with_transient_retries(
         source_url,
         lambda url: fetch_html(url, include_http_error_status=True),
-        trace_event="inventory.candidate.detail_fetch.http_error",
+        trace_event=(
+            "item_update.item.fetch.http_error"
+            if detect_removed
+            else "inventory.candidate.detail_fetch.http_error"
+        ),
         trace_logger=trace_logger,
-        trace_fields={"fetch_method": "static"},
+        trace_fields=resolved_trace_fields,
         cancellation_token=cancellation_token,
         ambiguous_failure_attempts=2 if detect_removed else 1,
+        trace_attempts=detect_removed,
     )
+
+
+def _store_item_trace_fields(
+    record: DiscoveryItemCandidateRecord,
+    *,
+    platform: str,
+    store_name: str,
+    pool: str,
+    pool_item_count: int,
+    pool_item_index: int,
+) -> dict[str, object]:
+    return {
+        "platform": platform,
+        "pool": pool,
+        "pool_item_count": pool_item_count,
+        "pool_item_index": pool_item_index,
+        "source_url": record.source_url,
+        "store_id": record.store_id,
+        "store_item_id": record.store_item_id,
+        "store_item_title": record.title,
+        "store_name": store_name,
+    }
 
 
 def _raise_if_product_page_removed(

@@ -208,7 +208,7 @@ export function createOperationsRouter(
       }
 
       const runId = String(job.run_id ?? '').trim();
-      const trace = runId ? await readDiscoveryTraceEntries(database, runId, afterId) : emptyDiscoveryTrace(afterId);
+      const trace = runId ? await readDiscoveryTraceEntries(database, runId, afterId) : emptyTrace(afterId);
       response.json({
         data: {
           ...trace,
@@ -288,6 +288,38 @@ export function createOperationsRouter(
           page: pagination.page,
           page_size: pagination.pageSize,
           total
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/admin/operations/store-item-update-jobs/:runId/log', async (request, response, next) => {
+    try {
+      const runId = request.params.runId.trim();
+      if (!runId) {
+        throw httpError(400, 'Run ID is required');
+      }
+      const afterId = nonNegativeIntegerQueryField(request.query.after_id, 'after_id');
+      const result = await database.query(
+        `select ${storeItemUpdateJobSelect}
+         from job_store_item_update_log jobs
+         left join stores on stores.id = jobs.store_id
+         where jobs.run_id = $1`,
+        [runId]
+      );
+      const job = result.rows[0] as Record<string, unknown> | undefined;
+      if (!job) {
+        throw httpError(404, 'Store item update job not found');
+      }
+
+      const jobId = numberField(job, 'id');
+      const trace = jobId > 0 ? await readUpdateTraceEntries(database, jobId, afterId) : emptyTrace(afterId);
+      response.json({
+        data: {
+          ...trace,
+          job
         }
       });
     } catch (error) {
@@ -570,7 +602,34 @@ async function readDiscoveryTraceEntries(database: Database, runId: string, afte
   };
 }
 
-function emptyDiscoveryTrace(afterId: number) {
+async function readUpdateTraceEntries(database: Database, jobId: number, afterId: number) {
+  const result = await database.query(
+    `select id, job_id, run_id, source, event, payload, created_at
+     from store_item_update_trace_log
+     where job_id = $1 and id > $2
+     order by id
+     limit $3`,
+    [jobId, afterId, MAX_LOG_CHUNK_ROWS + 1]
+  );
+  const rows = result.rows as Array<Record<string, unknown>>;
+  const entries = rows.slice(0, MAX_LOG_CHUNK_ROWS).map((row) => ({
+    created_at: row.created_at,
+    event: row.event,
+    id: Number(row.id),
+    job_id: Number(row.job_id),
+    payload: isRecord(row.payload) ? row.payload : {},
+    run_id: row.run_id,
+    source: row.source
+  }));
+  const lastEntry = entries.at(-1);
+  return {
+    entries,
+    has_more: rows.length > MAX_LOG_CHUNK_ROWS,
+    next_cursor: lastEntry?.id ?? afterId
+  };
+}
+
+function emptyTrace(afterId: number) {
   return {
     entries: [],
     has_more: false,

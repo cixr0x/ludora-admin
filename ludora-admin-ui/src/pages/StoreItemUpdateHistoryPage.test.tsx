@@ -9,58 +9,84 @@ describe('StoreItemUpdateHistoryPage', () => {
 
   it('shows store-scoped changes newest first and schedules a ten-second refresh', async () => {
     const setIntervalSpy = vi.spyOn(window, 'setInterval');
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(
-        JSON.stringify({
+    const job = {
+      id: 27,
+      run_id: 'run-update-27',
+      scanned_items: 3,
+      status: 'running',
+      store_id: 12,
+      store_name: 'Alpha Games',
+      updated_items: 2
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/log')) {
+        return jsonResponse({
           data: {
-            changes: [
+            entries: [
               {
-                created_at: '2026-07-11T20:03:00Z',
-                field_name: 'store_active',
-                id: 92,
-                new_value: false,
-                old_value: true,
+                created_at: '2026-07-11T20:01:00Z',
+                event: 'item_update.item.fetch.http_error',
+                id: 101,
+                job_id: 27,
+                payload: {
+                  elapsed_ms: 1000,
+                  message: 'Product detail returned HTTP 429',
+                  retry_in_seconds: 60,
+                  store_name: 'Alpha Games'
+                },
                 run_id: 'run-update-27',
-                store_item_id: 503,
-                store_item_title: 'Azul',
-                store_name: 'Alpha Games'
-              },
-              {
-                created_at: '2026-07-11T20:02:00Z',
-                field_name: 'price',
-                id: 91,
-                new_value: 799,
-                old_value: 899,
-                run_id: 'run-update-27',
-                store_item_id: 502,
-                store_item_title: 'Catan',
-                store_name: 'Alpha Games'
-              },
-              {
-                created_at: '2026-07-11T20:00:00Z',
-                field_name: 'availability',
-                id: 90,
-                new_value: 'in_stock',
-                old_value: 'unknown',
-                run_id: 'older-run',
-                store_item_id: 501,
-                store_item_title: 'Coffee Rush',
-                store_name: 'Alpha Games'
+                source: 'item_update'
               }
             ],
-            job: {
-              id: 27,
+            has_more: false,
+            job,
+            next_cursor: 101
+          }
+        });
+      }
+      return jsonResponse({
+        data: {
+          changes: [
+            {
+              created_at: '2026-07-11T20:03:00Z',
+              field_name: 'store_active',
+              id: 92,
+              new_value: false,
+              old_value: true,
               run_id: 'run-update-27',
-              status: 'running',
-              store_id: 12,
+              store_item_id: 503,
+              store_item_title: 'Azul',
+              store_name: 'Alpha Games'
+            },
+            {
+              created_at: '2026-07-11T20:02:00Z',
+              field_name: 'price',
+              id: 91,
+              new_value: 799,
+              old_value: 899,
+              run_id: 'run-update-27',
+              store_item_id: 502,
+              store_item_title: 'Catan',
+              store_name: 'Alpha Games'
+            },
+            {
+              created_at: '2026-07-11T20:00:00Z',
+              field_name: 'availability',
+              id: 90,
+              new_value: 'in_stock',
+              old_value: 'unknown',
+              run_id: 'older-run',
+              store_item_id: 501,
+              store_item_title: 'Coffee Rush',
               store_name: 'Alpha Games'
             }
-          },
-          meta: { page: 0, page_size: 100, total: 3 }
-        }),
-        { headers: { 'Content-Type': 'application/json' }, status: 200 }
-      )
-    );
+          ],
+          job
+        },
+        meta: { page: 0, page_size: 100, total: 3 }
+      });
+    });
 
     const view = render(<StoreItemUpdateHistoryPage runId="run-update-27" onBack={() => undefined} />);
 
@@ -73,6 +99,10 @@ describe('StoreItemUpdateHistoryPage', () => {
     expect(within(dataRows[2]).getByText('Coffee Rush')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '502' })).toHaveAttribute('href', '#listings?id=502');
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
+    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);
+    expect(await screen.findByRole('log', { name: 'Update trace for run run-update-27' })).toHaveTextContent(
+      'Product detail returned HTTP 429'
+    );
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:4001/admin/operations/store-item-update-jobs/run-update-27/changes?page=0&page_size=100&sort=created_at&sort_direction=desc',
       { credentials: 'include' }
@@ -84,7 +114,18 @@ describe('StoreItemUpdateHistoryPage', () => {
   it('appends the next history page when the table scrolls near the bottom', async () => {
     const setIntervalSpy = vi.spyOn(window, 'setInterval');
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
-      const page = new URL(String(input)).searchParams.get('page');
+      const url = new URL(String(input));
+      if (url.pathname.endsWith('/log')) {
+        return jsonResponse({
+          data: {
+            entries: [],
+            has_more: false,
+            job: { id: 27, run_id: 'run-update-27', status: 'completed', store_id: 12, store_name: 'Alpha Games' },
+            next_cursor: 0
+          }
+        });
+      }
+      const page = url.searchParams.get('page');
       const changes =
         page === '1'
           ? [
@@ -114,16 +155,13 @@ describe('StoreItemUpdateHistoryPage', () => {
               }
             ];
 
-      return new Response(
-        JSON.stringify({
-          data: {
-            changes,
-            job: { id: 27, run_id: 'run-update-27', store_id: 12, store_name: 'Alpha Games' }
-          },
-          meta: { page: Number(page ?? 0), page_size: 100, total: 2 }
-        }),
-        { headers: { 'Content-Type': 'application/json' }, status: 200 }
-      );
+      return jsonResponse({
+        data: {
+          changes,
+          job: { id: 27, run_id: 'run-update-27', status: 'completed', store_id: 12, store_name: 'Alpha Games' }
+        },
+        meta: { page: Number(page ?? 0), page_size: 100, total: 2 }
+      });
     });
 
     render(<StoreItemUpdateHistoryPage runId="run-update-27" onBack={() => undefined} />);
@@ -148,6 +186,13 @@ describe('StoreItemUpdateHistoryPage', () => {
     if (typeof refreshCallback === 'function') {
       refreshCallback();
     }
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
+
+function jsonResponse(body: unknown) {
+  return new Response(JSON.stringify(body), {
+    headers: { 'Content-Type': 'application/json' },
+    status: 200
+  });
+}

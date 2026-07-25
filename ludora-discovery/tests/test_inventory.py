@@ -1192,6 +1192,7 @@ class InventoryTests(unittest.TestCase):
             )
         ]
         repository = FakeRepository(confirmed_items=candidates)
+        trace = FakeTraceLogger()
         attempts_by_url = {candidate.source_url: 0 for candidate in candidates}
         fetch_order = []
 
@@ -1211,7 +1212,12 @@ class InventoryTests(unittest.TestCase):
             "ludora.product_crawler.fetch_html",
             side_effect=fetch_detail,
         ) as fetch_html, patch("ludora.webfetch._wait_for_fetch_retry") as wait_for_retry:
-            records = update_confirmed_store_item_details(repository, job_id=99, run_id="run-123")
+            records = update_confirmed_store_item_details(
+                repository,
+                job_id=99,
+                run_id="run-123",
+                trace_logger=trace,
+            )
 
         self.assertEqual(fetch_html.call_count, 9)
         self.assertEqual(wait_for_retry.call_count, 4)
@@ -1232,6 +1238,19 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual([record.store_item_id for record in records], [58, 56, 57])
         self.assertEqual([record.store_item_id for record in repository.item_records], [58, 56, 57])
         self.assertEqual(repository.progress_updates, [(99, 1, 0), (99, 2, 0), (99, 3, 0)])
+        event_names = [event for event, _fields in trace.events]
+        self.assertIn("item_update.item.fetch.started", event_names)
+        self.assertIn("item_update.item.fetch.http_error", event_names)
+        self.assertIn("item_update.item.fetch.retry.scheduled", event_names)
+        self.assertEqual(event_names.count("item_update.item.deferred"), 2)
+        retry_pool_started = next(
+            fields
+            for event, fields in trace.events
+            if event == "item_update.pool.started" and fields["pool"] == "retry"
+        )
+        self.assertEqual(retry_pool_started["item_count"], 2)
+        completed = [fields for event, fields in trace.events if event == "item_update.item.completed"]
+        self.assertEqual([fields["store_item_id"] for fields in completed], [58, 56, 57])
 
     def test_update_confirmed_store_item_details_fails_on_first_retry_pool_failure(self):
         candidates = [

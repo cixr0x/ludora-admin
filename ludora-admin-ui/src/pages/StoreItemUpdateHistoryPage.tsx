@@ -1,12 +1,26 @@
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import { Alert, Button, CircularProgress, Link, Paper, Stack, Typography } from '@mui/material';
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { adminApi, type AdminRecord, type TableQuery } from '../api/client';
+import {
+  Alert,
+  Box,
+  Button,
+  Checkbox,
+  Chip,
+  CircularProgress,
+  FormControlLabel,
+  Link,
+  Paper,
+  Stack,
+  Typography
+} from '@mui/material';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { adminApi, type AdminRecord, type StoreItemUpdateTraceEntry, type TableQuery } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 const REFRESH_INTERVAL_MS = 10_000;
+const TRACE_POLL_INTERVAL_MS = 2_000;
+const TERMINAL_STATUSES = new Set(['cancelled', 'completed', 'failed']);
 
 const updateChangeColumns: DataTableColumn<AdminRecord>[] = [
   {
@@ -88,6 +102,13 @@ const updateChangeColumns: DataTableColumn<AdminRecord>[] = [
 
 export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; onBack: () => void }) {
   const [job, setJob] = useState<AdminRecord | null>(null);
+  const [traceEntries, setTraceEntries] = useState<StoreItemUpdateTraceEntry[]>([]);
+  const [traceError, setTraceError] = useState('');
+  const [traceHasMore, setTraceHasMore] = useState(false);
+  const [isFollowingTrace, setIsFollowingTrace] = useState(true);
+  const traceConsoleRef = useRef<HTMLDivElement | null>(null);
+  const traceCursorRef = useRef(0);
+  const traceRequestInFlightRef = useRef(false);
   const table = useServerTableState('created_at', 'desc');
   const fetchHistoryPage = useCallback(async (query: TableQuery) => {
     const result = await adminApi.getStoreItemUpdateHistoryPage(runId, query);
@@ -112,7 +133,57 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
     return () => window.clearInterval(timer);
   }, [runId]);
 
+  const loadTrace = useCallback(async () => {
+    if (traceRequestInFlightRef.current) {
+      return;
+    }
+    traceRequestInFlightRef.current = true;
+    try {
+      const result = await adminApi.getStoreItemUpdateJobLog(runId, traceCursorRef.current);
+      setJob(result.job);
+      setTraceHasMore(result.has_more);
+      setTraceEntries((current) => [...current, ...result.entries]);
+      traceCursorRef.current = result.next_cursor;
+      setTraceError('');
+    } catch (loadError) {
+      setTraceError(loadError instanceof Error ? loadError.message : 'Store item update trace could not be loaded.');
+    } finally {
+      traceRequestInFlightRef.current = false;
+    }
+  }, [runId]);
+
+  useEffect(() => {
+    setTraceEntries([]);
+    setTraceError('');
+    setTraceHasMore(false);
+    traceCursorRef.current = 0;
+    void loadTrace();
+  }, [loadTrace, runId]);
+
+  const jobStatus = recordText(job, 'status').toLowerCase();
+  const shouldPollTrace = !traceError && (!TERMINAL_STATUSES.has(jobStatus) || jobStatus === '' || traceHasMore);
+
+  useEffect(() => {
+    if (!shouldPollTrace) {
+      return;
+    }
+    const timer = window.setInterval(() => void loadTrace(), TRACE_POLL_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [loadTrace, shouldPollTrace]);
+
+  const formattedTrace = useMemo(() => traceEntries.map(formatTraceEntry).join('\n'), [traceEntries]);
+
+  useEffect(() => {
+    if (isFollowingTrace && traceConsoleRef.current) {
+      traceConsoleRef.current.scrollTop = traceConsoleRef.current.scrollHeight;
+    }
+  }, [formattedTrace, isFollowingTrace]);
+
   const storeName = recordText(job, 'store_name', 'Multiple stores');
+  const refreshAll = () => {
+    table.refresh();
+    void loadTrace();
+  };
 
   return (
     <Stack spacing={2.5}>
@@ -139,7 +210,7 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
           <Button startIcon={<ArrowBackIcon />} variant="outlined" onClick={onBack}>
             Back to update jobs
           </Button>
-          <Button startIcon={<RefreshIcon />} variant="contained" onClick={table.refresh}>
+          <Button startIcon={<RefreshIcon />} variant="contained" onClick={refreshAll}>
             Refresh
           </Button>
         </Stack>
@@ -152,6 +223,75 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
         </Stack>
       ) : null}
       {state === 'error' ? <Alert severity="error">Store item update history could not be loaded.</Alert> : null}
+      {traceError ? <Alert severity="error">{traceError}</Alert> : null}
+
+      {job ? (
+        <Paper variant="outlined">
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 2,
+              gridTemplateColumns: {
+                md: 'repeat(5, minmax(140px, 1fr))',
+                sm: 'repeat(2, minmax(140px, 1fr))',
+                xs: '1fr'
+              },
+              p: 2
+            }}
+          >
+            <LogDetail label="Status" value={<Chip label={recordText(job, 'status', 'unknown')} size="small" />} />
+            <LogDetail label="Store" value={storeName} />
+            <LogDetail label="Started" value={recordText(job, 'started_at', '-')} />
+            <LogDetail label="Scanned items" value={recordText(job, 'scanned_items', '0')} />
+            <LogDetail label="Updated items" value={recordText(job, 'updated_items', '0')} />
+          </Box>
+        </Paper>
+      ) : null}
+
+      <Paper variant="outlined">
+        <Stack
+          alignItems="center"
+          direction="row"
+          justifyContent="space-between"
+          sx={{ bgcolor: '#161b22', borderBottom: '1px solid #30363d', color: '#c9d1d9', px: 2, py: 1 }}
+        >
+          <Typography sx={{ fontFamily: 'monospace' }} variant="body2">
+            Update trace
+          </Typography>
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={isFollowingTrace}
+                size="small"
+                sx={{ color: '#8b949e', '&.Mui-checked': { color: '#58a6ff' } }}
+                onChange={(event) => setIsFollowingTrace(event.target.checked)}
+              />
+            }
+            label="Follow log"
+            sx={{ m: 0, '& .MuiFormControlLabel-label': { fontSize: 13 } }}
+          />
+        </Stack>
+        <Box
+          ref={traceConsoleRef}
+          aria-label={`Update trace for run ${runId}`}
+          role="log"
+          sx={{
+            bgcolor: '#0d1117',
+            color: '#c9d1d9',
+            fontFamily: 'Consolas, Monaco, monospace',
+            fontSize: 13,
+            lineHeight: 1.6,
+            maxHeight: 420,
+            minHeight: 220,
+            overflow: 'auto',
+            p: 2,
+            whiteSpace: 'pre-wrap',
+            wordBreak: 'break-word'
+          }}
+        >
+          {formattedTrace || 'No update trace entries are available for this job yet.'}
+        </Box>
+      </Paper>
 
       {state === 'ready' ? (
         changes.length ? (
@@ -184,6 +324,17 @@ export function StoreItemUpdateHistoryPage({ runId, onBack }: { runId: string; o
       <Typography color="text.secondary" variant="caption">
         Loads more changes as you scroll. The first page refreshes every 10 seconds; manual refresh returns to the newest changes.
       </Typography>
+    </Stack>
+  );
+}
+
+function LogDetail({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <Stack spacing={0.25} sx={{ minWidth: 140 }}>
+      <Typography color="text.secondary" variant="caption">
+        {label}
+      </Typography>
+      <Box>{value}</Box>
     </Stack>
   );
 }
@@ -222,4 +373,14 @@ function changeEventLabel(row: AdminRecord): string {
     return 'Item updated';
   }
   return `${readableField.charAt(0).toUpperCase()}${readableField.slice(1)} changed`;
+}
+
+function formatTraceEntry(entry: StoreItemUpdateTraceEntry): string {
+  const elapsed = typeof entry.payload.elapsed_ms === 'number' ? ` +${entry.payload.elapsed_ms}ms` : '';
+  const message = typeof entry.payload.message === 'string' ? entry.payload.message : entry.event;
+  const details = Object.fromEntries(
+    Object.entries(entry.payload).filter(([key]) => key !== 'elapsed_ms' && key !== 'message')
+  );
+  const detailText = Object.keys(details).length ? ` ${JSON.stringify(details)}` : '';
+  return `${entry.created_at}${elapsed}  ${message}${detailText}`.trim();
 }

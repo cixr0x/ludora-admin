@@ -467,6 +467,38 @@ describe('fetchRows', () => {
     );
   });
 
+  it('fetches store item update trace entries after a cursor', async () => {
+    const log = {
+      entries: [
+        {
+          created_at: '2026-07-11T20:01:00Z',
+          event: 'item_update.item.fetch.http_error',
+          id: 91,
+          job_id: 27,
+          payload: { message: 'Product detail returned HTTP 429', retry_in_seconds: 60 },
+          run_id: 'run update/27',
+          source: 'item_update'
+        }
+      ],
+      has_more: false,
+      job: { id: 27, run_id: 'run update/27', status: 'running' },
+      next_cursor: 91
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: log }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getStoreItemUpdateJobLog('run update/27', 90)).resolves.toEqual(log);
+    expectFetch(
+      fetchMock,
+      'http://127.0.0.1:4001/admin/operations/store-item-update-jobs/run%20update%2F27/log?after_id=90'
+    );
+  });
+
   it('fetches paged catalog items with page metadata', async () => {
     const records = [{ canonical_name: 'Coffee Rush', id: '377061', item_type: 'base_game' }];
     const { adminApi } = await importClient();

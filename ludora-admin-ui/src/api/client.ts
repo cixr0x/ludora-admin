@@ -33,6 +33,17 @@ export type StoreItemDiscoveryJobLog = {
   next_cursor: number;
 };
 
+export type StoreItemUpdateTraceEntry = StoreItemDiscoveryTraceEntry & {
+  job_id: number;
+};
+
+export type StoreItemUpdateJobLog = {
+  entries: StoreItemUpdateTraceEntry[];
+  has_more: boolean;
+  job: AdminRecord;
+  next_cursor: number;
+};
+
 export type StoreItemUpdateHistory = {
   changes: AdminRecord[];
   job: AdminRecord;
@@ -595,6 +606,10 @@ export const adminApi = {
     fetchStoreItemUpdateHistoryPage(
       pagedPath(`/admin/operations/store-item-update-jobs/${encodeURIComponent(runId)}/changes`, query),
       query
+    ),
+  getStoreItemUpdateJobLog: (runId: string, afterId = 0) =>
+    fetchData<StoreItemUpdateJobLog>(
+      `/admin/operations/store-item-update-jobs/${encodeURIComponent(runId)}/log?after_id=${encodeURIComponent(afterId)}`
     ),
   getLatestStoreDiscoveryRun: () => fetchData<StoreDiscoveryRun | null>('/admin/operations/store-discovery-runs/latest'),
   getCurrentLocalCoverWorkflow: () => fetchData<LocalCoverWorkflow | null>('/admin/local-cover-workflows/current'),

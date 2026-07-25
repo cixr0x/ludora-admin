@@ -498,7 +498,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(resolve_admin_api_url.call_args.kwargs["dotenv_path"], "custom.env")
         resolve_internal_api_token.assert_called_once()
         self.assertEqual(resolve_internal_api_token.call_args.kwargs["dotenv_path"], "custom.env")
-        connect_database.assert_called_once_with("postgresql://ludora")
+        self.assertEqual(connect_database.call_count, 2)
+        connect_database.assert_called_with("postgresql://ludora")
         admin_title_extractor.assert_called_once_with("http://admin.test", internal_api_token="internal-token")
         update_confirmed_store_items.assert_called_once_with(
             repository,
@@ -507,6 +508,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             run_id=ANY,
             store_ids=[12, 34],
             item_title_extractor=ANY,
+            trace_logger=ANY,
         )
         repository.start_store_item_update_log.assert_called_once()
         update_run_id = repository.start_store_item_update_log.call_args.kwargs["run_id"]
