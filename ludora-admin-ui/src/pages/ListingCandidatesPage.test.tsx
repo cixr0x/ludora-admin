@@ -650,16 +650,25 @@ describe('ListingCandidatesPage', () => {
       source_url: 'https://store.mx/products/kitchen-rush-bundle',
       title: 'Kitchen Rush Bundle'
     };
+    const primaryItem = {
+      canonical_name: 'Kitchen Rush',
+      canonical_name_es: '',
+      id: 77,
+      image_url: 'https://catalog.mx/kitchen-rush.jpg'
+    };
     const existingAdditionalItem = {
       canonical_name: 'Kitchen Rush: Piece of Cake',
       canonical_name_es: '',
       id: 88,
+      image_url: 'https://catalog.mx/kitchen-rush-piece-of-cake.jpg',
       item_type: 'expansion'
     };
     const newAdditionalItem = {
       canonical_name: 'Kitchen Rush: Restaurant Upgrade',
       canonical_name_es: '',
       id: 99,
+      image_url: '',
+      image_url_es: 'https://catalog.mx/kitchen-rush-restaurant-upgrade-es.jpg',
       item_type: 'expansion'
     };
     let additionalItems = [existingAdditionalItem];
@@ -671,6 +680,9 @@ describe('ListingCandidatesPage', () => {
       }
       if (path === '/discovery/listings/3365/additional-items' && !init?.method) {
         return jsonResponse(additionalItems);
+      }
+      if (path === '/items/77' && !init?.method) {
+        return jsonResponse(primaryItem);
       }
       if (path === '/items' && !init?.method) {
         return jsonResponse(
@@ -697,7 +709,16 @@ describe('ListingCandidatesPage', () => {
     render(<ListingCandidatesPage />);
 
     await user.dblClick(await screen.findByText('Kitchen Rush Bundle'));
+    expect(await screen.findByText('Kitchen Rush')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Kitchen Rush cover' })).toHaveAttribute(
+      'src',
+      'https://catalog.mx/kitchen-rush.jpg'
+    );
     expect(await screen.findByText('Kitchen Rush: Piece of Cake')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Kitchen Rush: Piece of Cake cover' })).toHaveAttribute(
+      'src',
+      'https://catalog.mx/kitchen-rush-piece-of-cake.jpg'
+    );
 
     await user.click(screen.getByRole('button', { name: 'Add additional item' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add Additional Item' });
@@ -709,6 +730,10 @@ describe('ListingCandidatesPage', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Add Kitchen Rush: Restaurant Upgrade' }));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Additional Item' })).not.toBeInTheDocument());
     expect(await screen.findByText('Kitchen Rush: Restaurant Upgrade')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Kitchen Rush: Restaurant Upgrade cover' })).toHaveAttribute(
+      'src',
+      'https://catalog.mx/kitchen-rush-restaurant-upgrade-es.jpg'
+    );
 
     await user.click(screen.getByRole('button', { name: 'Remove Kitchen Rush: Piece of Cake' }));
     await waitFor(() => expect(screen.queryByText('Kitchen Rush: Piece of Cake')).not.toBeInTheDocument());

@@ -1272,6 +1272,8 @@ function ItemCandidateForm({
           </Stack>
         </Stack>
 
+        <PrimaryItemSection itemId={itemId} />
+
         <AdditionalItemsSection
           primaryItemId={itemId}
           storeItemId={candidateIdValue}
@@ -1400,6 +1402,92 @@ function ItemCandidateForm({
   );
 }
 
+function PrimaryItemSection({ itemId }: { itemId: string }) {
+  const [item, setItem] = useState<AdminRecord | null>(null);
+  const [loadState, setLoadState] = useState<LoadState>(itemId ? 'loading' : 'ready');
+
+  useEffect(() => {
+    if (!itemId) {
+      setItem(null);
+      setLoadState('ready');
+      return;
+    }
+
+    let ignore = false;
+    setItem(null);
+    setLoadState('loading');
+    adminApi
+      .getItem(itemId)
+      .then((linkedItem) => {
+        if (!ignore) {
+          setItem(linkedItem);
+          setLoadState('ready');
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setItem(null);
+          setLoadState('error');
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [itemId]);
+
+  const linkedItemId = item ? field(item, ['id'], itemId) : itemId;
+  const itemName = item ? catalogItemDisplayName(item) : '';
+  const imageUrl = item ? catalogItemImageUrl(item) : '';
+
+  return (
+    <Paper sx={{ p: 2 }} variant="outlined">
+      <Stack spacing={1.5}>
+        <Box>
+          <Typography fontWeight={700}>Linked item</Typography>
+          <Typography color="text.secondary" variant="body2">
+            Primary catalog item for this store item.
+          </Typography>
+        </Box>
+
+        {!itemId ? <Alert severity="info">No primary catalog item is linked.</Alert> : null}
+        {loadState === 'loading' ? (
+          <Stack alignItems="center" direction="row" spacing={1.5}>
+            <CircularProgress size={18} />
+            <Typography color="text.secondary" variant="body2">
+              Loading linked item
+            </Typography>
+          </Stack>
+        ) : null}
+        {loadState === 'error' ? <Alert severity="error">Linked item details could not be loaded.</Alert> : null}
+        {loadState === 'ready' && item ? (
+          <Stack
+            alignItems="center"
+            direction="row"
+            spacing={1.5}
+            sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}
+          >
+            <Avatar
+              alt={`${itemName} cover`}
+              src={imageUrl || undefined}
+              sx={{ bgcolor: 'grey.100', height: 72, width: 72, '& img': { objectFit: 'contain' } }}
+              variant="rounded"
+            />
+            <Box sx={{ minWidth: 0 }}>
+              <Link href={`#items?id=${encodeURIComponent(linkedItemId)}`} sx={{ fontWeight: 600 }}>
+                {itemName}
+              </Link>
+              <Typography color="text.secondary" variant="caption">
+                Item {linkedItemId}
+              </Typography>
+            </Box>
+          </Stack>
+        ) : null}
+      </Stack>
+    </Paper>
+  );
+}
+
 function AdditionalItemsSection({
   primaryItemId,
   storeItemId,
@@ -1469,7 +1557,7 @@ function AdditionalItemsSection({
       const savedItem = await adminApi.addStoreItemAdditionalItem(storeItemId, itemId);
       setAdditionalItems((currentItems) =>
         [...currentItems.filter((currentItem) => field(currentItem, ['id'], '') !== itemId), savedItem].sort((left, right) =>
-          additionalItemDisplayName(left).localeCompare(additionalItemDisplayName(right))
+          catalogItemDisplayName(left).localeCompare(catalogItemDisplayName(right))
         )
       );
       setIsSearchOpen(false);
@@ -1544,7 +1632,8 @@ function AdditionalItemsSection({
           ) : null}
           {additionalItems.map((item) => {
             const itemId = field(item, ['id'], '');
-            const itemName = additionalItemDisplayName(item);
+            const itemName = catalogItemDisplayName(item);
+            const imageUrl = catalogItemImageUrl(item);
             return (
               <Stack
                 alignItems="center"
@@ -1554,14 +1643,22 @@ function AdditionalItemsSection({
                 spacing={1}
                 sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}
               >
-                <Box sx={{ minWidth: 0 }}>
-                  <Link href={`#items?id=${encodeURIComponent(itemId)}`} sx={{ fontWeight: 600 }}>
-                    {itemName}
-                  </Link>
-                  <Typography color="text.secondary" variant="caption">
-                    Item {itemId}
-                  </Typography>
-                </Box>
+                <Stack alignItems="center" direction="row" spacing={1.5} sx={{ flex: 1, minWidth: 0 }}>
+                  <Avatar
+                    alt={`${itemName} cover`}
+                    src={imageUrl || undefined}
+                    sx={{ bgcolor: 'grey.100', height: 64, width: 64, '& img': { objectFit: 'contain' } }}
+                    variant="rounded"
+                  />
+                  <Box sx={{ minWidth: 0 }}>
+                    <Link href={`#items?id=${encodeURIComponent(itemId)}`} sx={{ fontWeight: 600 }}>
+                      {itemName}
+                    </Link>
+                    <Typography color="text.secondary" variant="caption">
+                      Item {itemId}
+                    </Typography>
+                  </Box>
+                </Stack>
                 <Tooltip title="Remove additional item">
                   <span>
                     <IconButton
@@ -1721,7 +1818,7 @@ function AdditionalItemSearchDialog({
             >
               {results.map((item) => {
                 const itemId = field(item, ['id'], '');
-                const primaryName = additionalItemDisplayName(item);
+                const primaryName = catalogItemDisplayName(item);
                 const canonicalName = field(item, ['canonical_name'], '');
                 const secondaryName = canonicalName && canonicalName !== primaryName ? canonicalName : '';
                 const imageUrl = field(item, ['image_url_es', 'image_url'], '');
@@ -1755,8 +1852,12 @@ function AdditionalItemSearchDialog({
   );
 }
 
-function additionalItemDisplayName(item: AdminRecord) {
+function catalogItemDisplayName(item: AdminRecord) {
   return field(item, ['canonical_name_es', 'canonical_name'], 'Untitled item');
+}
+
+function catalogItemImageUrl(item: AdminRecord) {
+  return field(item, ['image_url_es', 'image_url'], '');
 }
 
 function itemCandidateInputFromForm(formData: FormData): AdminRecord {
