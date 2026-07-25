@@ -29,6 +29,7 @@ describe('ListingCandidatesPage', () => {
               matched_name: 'Azul',
               max_players: 4,
               min_players: 2,
+              original_title: 'Azul MX Original',
               price: '899.00',
               price_source: 'json_ld_offer',
               processing_error: '',
@@ -69,7 +70,9 @@ describe('ListingCandidatesPage', () => {
 
     const headers = await screen.findAllByRole('columnheader');
     expect(headers[0]).toHaveTextContent('Image');
+    expect(screen.getByRole('columnheader', { name: 'Original Title' })).toBeInTheDocument();
     expect(await screen.findByText('Azul MX')).toBeInTheDocument();
+    expect(screen.getByText('Azul MX Original')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Azul MX product image' })).toHaveAttribute('src', 'https://store.mx/azul.jpg');
     const itemLink = screen.getByRole('link', { name: 'https://store.mx/products/azul-mx' });
     expect(itemLink).toHaveAttribute('href', 'https://store.mx/products/azul-mx');
@@ -949,6 +952,7 @@ describe('ListingCandidatesPage', () => {
       min_age: 8,
       min_minutes: 30,
       min_players: 2,
+      original_title: 'Kitchen Rush Original',
       price: '899.00',
       price_source: 'woocommerce_product_price',
       processed_at: null,
@@ -982,6 +986,7 @@ describe('ListingCandidatesPage', () => {
 
     const titleCells = await screen.findAllByText('Kitchen Rush');
     await user.dblClick(titleCells[0]);
+    expect(screen.getByDisplayValue('Kitchen Rush Original')).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Kitchen Rush Updated' } });
     fireEvent.change(screen.getByLabelText('Listing Status'), { target: { value: 'UNLISTED' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Updated description' } });
@@ -997,6 +1002,7 @@ describe('ListingCandidatesPage', () => {
     expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
       description: 'Updated description',
       listing_status: 'UNLISTED',
+      original_title: 'Kitchen Rush Original',
       title: 'Kitchen Rush Updated'
     });
 

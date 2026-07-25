@@ -75,6 +75,7 @@ type ItemCandidateInput = {
   min_age: number | null;
   min_minutes: number | null;
   min_players: number | null;
+  original_title: string;
   price: number | null;
   price_source: string;
   processing_error: string;
@@ -151,7 +152,7 @@ const storeSelect = `
 `;
 
 const itemCandidateSelect = `
-  id, store_id, source_url, source_listing_url, title, publisher, description,
+  id, store_id, source_url, source_listing_url, title, original_title, publisher, description,
   item_id, item_type, min_players, max_players, min_minutes, max_minutes,
   min_age, language, language_source, language_evidence, image_url, listing_status,
   raw_price, price, price_source, currency, availability, availability_source,
@@ -171,7 +172,7 @@ const itemSelect = `
 
 const itemLinkedCandidateSelect = `
   dic.id, dic.store_id, s.name as store_name, s.canonical_domain as store_domain,
-  dic.source_url, dic.source_listing_url, dic.title, dic.publisher,
+  dic.source_url, dic.source_listing_url, dic.title, dic.original_title, dic.publisher,
   dic.description, dic.item_id, dic.item_type, dic.min_players, dic.max_players,
   dic.language, dic.image_url, dic.listing_status, dic.raw_price, dic.price, dic.currency,
   dic.availability, dic.match_source, dic.match_score,
@@ -636,6 +637,7 @@ const itemCandidatesTableConfig: TableQueryConfig = {
     matched_name: columnSql('matched_name'),
     min_age: columnSql('min_age'),
     min_minutes: columnSql('min_minutes'),
+    original_title: columnSql('original_title'),
     players: {
       filterSql: textSql("concat_ws(' ', min_players, max_players)"),
       sortSql: 'min_players'
@@ -2115,41 +2117,42 @@ export function createDiscoveryRouter(
               source_url = $2,
               source_listing_url = $3,
               title = $4,
-              publisher = $5,
-              description = $6,
-              item_id = $7,
-              item_type = $8,
-              min_players = $9,
-              max_players = $10,
-              min_minutes = $11,
-              max_minutes = $12,
-              min_age = $13,
-              language = $14,
-              language_source = $15,
-              language_evidence = $16,
-              image_url = $17,
-              listing_status = $18,
-              raw_price = $19,
-              price = $20,
-              price_source = $21,
-              currency = $22,
-              availability = $23,
-              availability_source = $24,
-              store_sku = $25,
-              raw_payload = $26::jsonb,
-              is_boardgame = $27,
-              is_boardgame_confirmed = $28,
-              category_confidence = $29,
-              classification_reasons = $30::jsonb,
-              match_source = $31,
-              matched_bgg_id = $32,
-              matched_name = $33,
-              match_score = $34,
-              match_reasons = $35::jsonb,
-              match_payload = $36::jsonb,
-              processing_error = $37,
+              original_title = $5,
+              publisher = $6,
+              description = $7,
+              item_id = $8,
+              item_type = $9,
+              min_players = $10,
+              max_players = $11,
+              min_minutes = $12,
+              max_minutes = $13,
+              min_age = $14,
+              language = $15,
+              language_source = $16,
+              language_evidence = $17,
+              image_url = $18,
+              listing_status = $19,
+              raw_price = $20,
+              price = $21,
+              price_source = $22,
+              currency = $23,
+              availability = $24,
+              availability_source = $25,
+              store_sku = $26,
+              raw_payload = $27::jsonb,
+              is_boardgame = $28,
+              is_boardgame_confirmed = $29,
+              category_confidence = $30,
+              classification_reasons = $31::jsonb,
+              match_source = $32,
+              matched_bgg_id = $33,
+              matched_name = $34,
+              match_score = $35,
+              match_reasons = $36::jsonb,
+              match_payload = $37::jsonb,
+              processing_error = $38,
               last_updated = now()
-          where id = $38
+          where id = $39
           returning ${itemCandidateSelect}
         ),
         deleted_duplicate_additional_item as (
@@ -2748,6 +2751,7 @@ function parseItemRelationshipInput(body: unknown): ItemRelationshipInput {
 
 function parseItemCandidateInput(body: unknown): ItemCandidateInput {
   const value = (body ?? {}) as Record<string, unknown>;
+  const title = stringField(value, 'title');
   const input: ItemCandidateInput = {
     availability: stringField(value, 'availability') || 'unknown',
     availability_source: stringField(value, 'availability_source') || 'none',
@@ -2774,6 +2778,7 @@ function parseItemCandidateInput(body: unknown): ItemCandidateInput {
     min_age: nullableIntegerField(value, 'min_age'),
     min_minutes: nullableIntegerField(value, 'min_minutes'),
     min_players: nullableIntegerField(value, 'min_players'),
+    original_title: stringField(value, 'original_title') || title,
     price: nullableNumberField(value, 'price'),
     price_source: stringField(value, 'price_source') || 'none',
     processing_error: stringField(value, 'processing_error'),
@@ -2785,7 +2790,7 @@ function parseItemCandidateInput(body: unknown): ItemCandidateInput {
     listing_status: listingStatusField(value, 'listing_status'),
     store_id: nullableIntegerField(value, 'store_id'),
     store_sku: stringField(value, 'store_sku'),
-    title: stringField(value, 'title')
+    title
   };
 
   if (!input.title || !input.source_url) {
@@ -2801,6 +2806,7 @@ function itemCandidateParams(input: ItemCandidateInput): unknown[] {
     input.source_url,
     input.source_listing_url,
     input.title,
+    input.original_title,
     input.publisher,
     input.description,
     input.item_id,

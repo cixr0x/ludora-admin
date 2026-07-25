@@ -863,6 +863,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.confirmed_items_limit, 25)
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].title, "Catan Nueva Edicion")
+        self.assertEqual(records[0].original_title, "Catan Nueva Edicion")
         self.assertEqual(records[0].price, "799.00")
         self.assertEqual(len(repository.price_availability_update_calls), 1)
         self.assertEqual(repository.price_availability_update_calls[0][0], existing_record)
@@ -927,6 +928,7 @@ class InventoryTests(unittest.TestCase):
             source_url="https://www.amazon.com.mx/dp/B0TEST1234",
             source_listing_url="https://www.amazon.com.mx/stores/page/store-id/search?terms=jue",
             title="Catan",
+            original_title="Catan - Juego de Mesa",
             item_id=77,
             listing_status="LISTED",
             price_source="amazon_detail",
@@ -949,8 +951,10 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].price_source, "amazon_detail")
         self.assertEqual(records[0].availability, "available")
         self.assertEqual(records[0].availability_source, "amazon_detail")
+        self.assertEqual(records[0].original_title, "Catan - Juego de Mesa")
+        self.assertEqual(records[0].title, "Catan")
         self.assertEqual(len(repository.update_change_log_calls), 1)
-        self.assertFalse(repository.update_change_log_calls[0][4])
+        self.assertTrue(repository.update_change_log_calls[0][4])
 
     def test_update_confirmed_amazon_item_marks_missing_direct_buy_option_out_of_stock(self):
         product_html = """
@@ -967,6 +971,7 @@ class InventoryTests(unittest.TestCase):
             source_url="https://www.amazon.com.mx/dp/B0DQVHVBX6",
             source_listing_url="https://www.amazon.com.mx/stores/page/store-id/search?terms=jue",
             title="Survive The Island Monster Pack",
+            original_title="Asmodee Survive The Island Monster Pack",
             raw_price="$199.00",
             price="199.00",
             price_source="amazon_detail",
@@ -992,7 +997,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].price, "")
         self.assertEqual(records[0].price_source, "none")
         self.assertEqual(len(repository.update_change_log_calls), 1)
-        self.assertFalse(repository.update_change_log_calls[0][4])
+        self.assertTrue(repository.update_change_log_calls[0][4])
 
     def test_update_confirmed_amazon_item_retries_generic_shell_with_browser(self):
         source_url = "https://www.amazon.com.mx/dp/B0GZ4XV2KH"
@@ -1016,6 +1021,7 @@ class InventoryTests(unittest.TestCase):
             store_id=12,
             source_url=source_url,
             title="Copa Casas Harry Potter + Alohomora",
+            original_title="Copa Casas Harry Potter + Alohomora",
             raw_price="$380.39",
             price="380.39",
             price_source="amazon_detail",
@@ -1051,7 +1057,52 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].price, "380.39")
         self.assertEqual(records[0].price_source, "amazon_detail")
         self.assertEqual(len(repository.update_change_log_calls), 1)
-        self.assertFalse(repository.update_change_log_calls[0][4])
+        self.assertTrue(repository.update_change_log_calls[0][4])
+
+    def test_update_changed_amazon_original_title_uses_transformer_for_same_asin(self):
+        source_url = "https://www.amazon.com.mx/dp/B08LRDKF6V"
+        product_html = """
+        <html><body>
+          <span id="productTitle">Asmodee Giocattolo</span>
+          <span class="a-offscreen">$599.00</span>
+          <div id="availability">Disponible</div>
+          <input id="add-to-cart-button" type="submit" value="Agregar al carrito">
+          <div>ASIN: B08LRDKF6V</div>
+        </body></html>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=15032,
+            store_id=12,
+            source_url=source_url,
+            title="Timeline",
+            original_title="Timeline",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record], store_platforms={12: "amazon"})
+        extracted_titles = []
+
+        def transform_title(record):
+            extracted_titles.append(record.title)
+            return "Timeline"
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=source_url, text=product_html),
+        ):
+            records = update_confirmed_store_item_details(
+                repository,
+                job_id=102,
+                run_id="run-amazon-title-change",
+                item_title_extractor=transform_title,
+            )
+
+        self.assertEqual(extracted_titles, ["Asmodee Giocattolo"])
+        self.assertEqual(records[0].original_title, "Asmodee Giocattolo")
+        self.assertEqual(records[0].title, "Timeline")
+        self.assertTrue(repository.update_change_log_calls[0][4])
 
     def test_update_confirmed_amazon_item_defers_invalid_static_and_browser_shells(self):
         source_url = "https://www.amazon.com.mx/dp/B0GZ4XV2KH"
@@ -1549,6 +1600,7 @@ class InventoryTests(unittest.TestCase):
         )
         self.assertIs(logged_existing, existing_record)
         self.assertEqual(logged_refreshed.title, "Catan Nueva Edicion")
+        self.assertEqual(logged_refreshed.original_title, "Catan Nueva Edicion")
         self.assertEqual(logged_refreshed.store_item_id, 56)
         self.assertEqual(logged_refreshed.item_id, 77)
         self.assertEqual(logged_refreshed.listing_status, "LISTED")

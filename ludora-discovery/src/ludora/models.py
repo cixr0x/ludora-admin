@@ -135,6 +135,7 @@ class DiscoveryItemCandidateRecord:
     store_id: int | None
     source_url: str
     title: str
+    original_title: str = ""
     source_listing_url: str = ""
     publisher: str = ""
     description: str = ""
@@ -174,12 +175,17 @@ class DiscoveryItemCandidateRecord:
     processing_error: str = ""
     store_item_id: int | None = None
 
+    def __post_init__(self) -> None:
+        if not self.original_title.strip():
+            self.original_title = self.title
+
     def to_db_dict(self) -> dict[str, object]:
         return {
             "store_id": self.store_id,
             "source_url": self.source_url,
             "source_listing_url": self.source_listing_url,
             "title": self.title,
+            "original_title": self.original_title,
             "publisher": self.publisher,
             "description": self.description,
             "item_id": self.item_id,

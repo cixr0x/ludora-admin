@@ -78,6 +78,10 @@ class SchemaTests(unittest.TestCase):
                 "store_item_additional_items_item_id_idx",
                 "create or replace view active_item as",
             ],
+            "20260725_002_store_item_original_title.sql": [
+                "alter table if exists store_items add column if not exists original_title text not null default ''",
+                "update store_items set original_title = title where original_title = ''",
+            ],
         }
 
         for filename, expected_snippets in expected_patches.items():
@@ -189,6 +193,7 @@ class SchemaTests(unittest.TestCase):
         schema = schema_path().read_text(encoding="utf-8").casefold()
         item_candidate_table = schema.split("create table if not exists store_items", 1)[1].split(");", 1)[0]
 
+        self.assertIn("original_title text not null default ''", item_candidate_table)
         self.assertNotIn("create table if not exists discovery_listing_candidates", schema)
         self.assertIn("drop table if exists discovery_listing_candidates", schema)
         self.assertIn("alter table discovery_item_candidates rename to store_items", schema)

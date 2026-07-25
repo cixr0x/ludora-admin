@@ -208,8 +208,13 @@ class AmazonDiscoveryTests(unittest.TestCase):
         )
 
         self.assertEqual(records[0].title, "Yokai Pagoda")
+        self.assertEqual(
+            records[0].original_title,
+            "La Compania de los Juegos | Yokai Pagoda | Juega Cartas para Evitar Recibir Puntos Negativos | Juego en Espanol",
+        )
         self.assertEqual(classified, ["Yokai Pagoda"])
         self.assertEqual(repository.item_records[0].title, "Yokai Pagoda")
+        self.assertEqual(repository.item_records[0].original_title, records[0].original_title)
         self.assertEqual(
             records[0].raw_payload["amazon"]["product_title"],
             "La Compania de los Juegos | Yokai Pagoda | Juega Cartas para Evitar Recibir Puntos Negativos | Juego en Espanol",

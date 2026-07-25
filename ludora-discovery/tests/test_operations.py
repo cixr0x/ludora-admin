@@ -476,10 +476,16 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora") as resolve_database_url, patch(
             "ludora.operations.resolve_browser_fetch_enabled", return_value=True
         ) as resolve_browser_fetch_enabled, patch(
+            "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
+        ) as resolve_admin_api_url, patch(
+            "ludora.operations.resolve_internal_api_token", return_value="internal-token"
+        ) as resolve_internal_api_token, patch(
             "ludora.operations.connect_database", return_value=connection
         ) as connect_database, patch(
             "ludora.operations.DiscoveryRepository", return_value=repository
         ), patch(
+            "ludora.operations.AdminAmazonTitleExtractor"
+        ) as admin_title_extractor, patch(
             "ludora.operations.update_confirmed_store_items", return_value=records
         ) as update_confirmed_store_items:
             result = run_item_update(env_file="custom.env", store_ids=[12, 34])
@@ -488,13 +494,19 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(resolve_database_url.call_args.kwargs["dotenv_path"], "custom.env")
         resolve_browser_fetch_enabled.assert_called_once()
         self.assertEqual(resolve_browser_fetch_enabled.call_args.kwargs["dotenv_path"], "custom.env")
+        resolve_admin_api_url.assert_called_once()
+        self.assertEqual(resolve_admin_api_url.call_args.kwargs["dotenv_path"], "custom.env")
+        resolve_internal_api_token.assert_called_once()
+        self.assertEqual(resolve_internal_api_token.call_args.kwargs["dotenv_path"], "custom.env")
         connect_database.assert_called_once_with("postgresql://ludora")
+        admin_title_extractor.assert_called_once_with("http://admin.test", internal_api_token="internal-token")
         update_confirmed_store_items.assert_called_once_with(
             repository,
             browser_fetch_enabled=True,
             job_id=99,
             run_id=ANY,
             store_ids=[12, 34],
+            item_title_extractor=ANY,
         )
         repository.start_store_item_update_log.assert_called_once()
         update_run_id = repository.start_store_item_update_log.call_args.kwargs["run_id"]

@@ -108,6 +108,7 @@ class ItemCandidateProcessor(Protocol):
 
 
 ItemClassifier = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidateRecord]
+ItemTitleExtractor = Callable[[DiscoveryItemCandidateRecord], str]
 ItemCandidateEnricher = Callable[
     [DiscoveryItemCandidateRecord, DiscoveryItemCandidateRecord],
     DiscoveryItemCandidateRecord,
@@ -359,6 +360,7 @@ def update_confirmed_store_item_details(
     job_id: int | None = None,
     run_id: str | None = None,
     store_ids: list[int] | None = None,
+    item_title_extractor: ItemTitleExtractor | None = None,
 ) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
     store_platforms = {
@@ -393,7 +395,6 @@ def update_confirmed_store_item_details(
             for existing_record in candidate_pool:
                 raise_if_cancelled(cancellation_token)
                 platform = store_platforms.get(existing_record.store_id, "").strip().casefold()
-                include_title = platform not in AMAZON_STORE_PLATFORMS
                 try:
                     refreshed_record = _fetch_detail_candidate(
                         listing_candidate=existing_record,
@@ -423,6 +424,12 @@ def update_confirmed_store_item_details(
                     _persist_store_item_update_progress(repository, job_id, records)
                     continue
                 raise_if_cancelled(cancellation_token)
+                _prepare_refreshed_titles(
+                    existing_record,
+                    refreshed_record,
+                    platform=platform,
+                    item_title_extractor=item_title_extractor,
+                )
                 _preserve_confirmed_item_state(refreshed_record, existing_record)
                 if run_id:
                     if job_id is None:
@@ -432,7 +439,6 @@ def update_confirmed_store_item_details(
                         refreshed_record,
                         job_id=job_id,
                         run_id=run_id,
-                        include_title=include_title,
                     )
                     if getattr(update_result, "changed", False):
                         records.updated_items += 1
@@ -440,7 +446,6 @@ def update_confirmed_store_item_details(
                     update_result = repository.update_item_candidate_price_availability(
                         existing_record,
                         refreshed_record,
-                        include_title=include_title,
                     )
                     if getattr(update_result, "changed", False):
                         records.updated_items += 1
@@ -516,7 +521,7 @@ def _fetch_detail_candidate(
     )
 
     if browser_fetcher is not None and (
-        fetched_detail is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate)
+        fetched_detail is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate, platform=platform)
     ):
         fetched_detail = browser_fetcher(listing_candidate.source_url)
         _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
@@ -567,7 +572,7 @@ def _fetch_detail_candidate(
         listing_candidate.source_listing_url = source_listing_url
         return listing_candidate
 
-    rejection_reason = _detail_rejection_reason(detail_candidate, listing_candidate)
+    rejection_reason = _detail_rejection_reason(detail_candidate, listing_candidate, platform=platform)
     if rejection_reason:
         trace.log(
             "inventory.candidate.detail_fetch.rejected",
@@ -728,13 +733,17 @@ def _is_amazon_without_direct_buy_option(record: DiscoveryItemCandidateRecord) -
 def _should_retry_detail_with_browser(
     detail_candidate: DiscoveryItemCandidateRecord | None,
     listing_candidate: DiscoveryItemCandidateRecord,
+    *,
+    platform: str = "",
 ) -> bool:
-    return bool(_detail_rejection_reason(detail_candidate, listing_candidate))
+    return bool(_detail_rejection_reason(detail_candidate, listing_candidate, platform=platform))
 
 
 def _detail_rejection_reason(
     detail_candidate: DiscoveryItemCandidateRecord | None,
     listing_candidate: DiscoveryItemCandidateRecord,
+    *,
+    platform: str = "",
 ) -> str:
     if detail_candidate is None:
         return "missing_detail_candidate"
@@ -747,8 +756,24 @@ def _detail_rejection_reason(
 
     listing_sku = listing_candidate.store_sku.strip().casefold()
     detail_sku = detail_candidate.store_sku.strip().casefold()
-    if listing_sku and detail_sku and listing_sku != detail_sku:
+    normalized_platform = platform.strip().casefold()
+    identity_sku = listing_sku
+    if normalized_platform in AMAZON_STORE_PLATFORMS and not identity_sku:
+        # Amazon fetch validation already requires the ASIN from the requested URL
+        # to be present in the returned page. Reuse it for title-independent identity.
+        from ludora.amazon_discovery import _asin_from_url
+
+        identity_sku = _asin_from_url(listing_candidate.source_url).casefold()
+
+    if identity_sku and detail_sku and identity_sku != detail_sku:
         return "store_sku_mismatch"
+    if (
+        normalized_platform in AMAZON_STORE_PLATFORMS
+        and identity_sku
+        and detail_sku
+        and identity_sku == detail_sku
+    ):
+        return ""
 
     listing_tokens = _significant_listing_tokens(listing_candidate)
     detail_tokens = _significant_text_tokens(title)
@@ -760,7 +785,8 @@ def _detail_rejection_reason(
 
 def _significant_listing_tokens(listing_candidate: DiscoveryItemCandidateRecord) -> set[str]:
     path_slug = urlparse(listing_candidate.source_url).path.rstrip("/").rsplit("/", 1)[-1]
-    return _significant_text_tokens(f"{listing_candidate.title} {path_slug}")
+    source_title = listing_candidate.original_title or listing_candidate.title
+    return _significant_text_tokens(f"{source_title} {path_slug}")
 
 
 def _significant_text_tokens(value: str) -> set[str]:
@@ -792,6 +818,35 @@ def _title_from_url(product_url: str) -> str:
     path = urlparse(product_url).path.rstrip("/")
     slug = path.rsplit("/", 1)[-1]
     return " ".join(part for part in slug.replace("-", " ").split() if part)
+
+
+def _prepare_refreshed_titles(
+    existing_record: DiscoveryItemCandidateRecord,
+    refreshed_record: DiscoveryItemCandidateRecord,
+    *,
+    platform: str,
+    item_title_extractor: ItemTitleExtractor | None,
+) -> None:
+    source_title = (refreshed_record.original_title or refreshed_record.title).strip()
+    existing_source_title = (existing_record.original_title or existing_record.title).strip()
+    refreshed_record.original_title = source_title
+
+    if source_title == existing_source_title:
+        refreshed_record.title = existing_record.title
+        return
+
+    if platform.strip().casefold() not in AMAZON_STORE_PLATFORMS:
+        refreshed_record.title = source_title
+        return
+
+    if item_title_extractor is None:
+        raise RuntimeError("Amazon title extractor is required when the original product title changes")
+
+    # Imported lazily because amazon_discovery imports the protocols in this module.
+    from ludora.amazon_discovery import _apply_item_title_extractor
+
+    refreshed_record.title = source_title
+    _apply_item_title_extractor(refreshed_record, item_title_extractor)
 
 
 def _preserve_confirmed_item_state(

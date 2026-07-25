@@ -122,6 +122,7 @@ def update_confirmed_store_items(
     job_id: int | None = None,
     run_id: str | None = None,
     store_ids: list[int] | None = None,
+    item_title_extractor: Callable[[DiscoveryItemCandidateRecord], str] | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
         repository,
@@ -131,4 +132,5 @@ def update_confirmed_store_items(
         job_id=job_id,
         run_id=run_id,
         store_ids=store_ids,
+        item_title_extractor=item_title_extractor,
     )

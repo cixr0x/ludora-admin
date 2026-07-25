@@ -520,6 +520,12 @@ def run_item_update(
     if not database_url:
         raise RuntimeError("Missing database URL")
     browser_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
+    admin_api_url = resolve_admin_api_url(env=current_env, dotenv_path=env_file)
+    internal_api_token = resolve_internal_api_token(env=current_env, dotenv_path=env_file)
+    item_title_extractor = AdminAmazonTitleExtractor(
+        admin_api_url,
+        internal_api_token=internal_api_token,
+    ).extract_title
 
     connection = connect_database(database_url)
     resolved_run_id = run_id or str(uuid.uuid4())
@@ -537,6 +543,7 @@ def run_item_update(
                 job_id=job_id,
                 run_id=resolved_run_id,
                 store_ids=store_ids,
+                item_title_extractor=item_title_extractor,
                 **update_kwargs,
             )
         except OperationCancelled:

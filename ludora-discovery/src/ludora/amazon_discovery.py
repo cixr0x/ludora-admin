@@ -1078,6 +1078,7 @@ def _apply_item_title_extractor(
     record: DiscoveryItemCandidateRecord,
     item_title_extractor: ItemTitleExtractor | None,
 ) -> None:
+    record.original_title = record.title
     if item_title_extractor is None:
         return
     extracted_title = item_title_extractor(record).strip()

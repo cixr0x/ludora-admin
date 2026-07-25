@@ -88,6 +88,7 @@ create table if not exists store_items (
     source_url text not null default '',
     source_listing_url text not null default '',
     title text not null,
+    original_title text not null default '',
     publisher text not null default '',
     description text not null default '',
     item_id bigint,
@@ -130,6 +131,9 @@ create table if not exists store_items (
     refreshed_date timestamptz not null default now(),
     unique (store_id, source_url)
 );
+
+alter table if exists store_items add column if not exists original_title text not null default '';
+update store_items set original_title = title where original_title = '';
 
 alter table if exists store_items add column if not exists refreshed_date timestamptz;
 update store_items set refreshed_date = last_updated where refreshed_date is null;

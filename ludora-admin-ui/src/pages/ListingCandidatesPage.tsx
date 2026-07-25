@@ -209,6 +209,7 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { gridColumn: { md: 'span 2' }, key: 'source_url', label: 'Source URL' },
   { gridColumn: { md: 'span 2' }, key: 'source_listing_url', label: 'Source Listing URL' },
   { gridColumn: { md: 'span 2' }, key: 'title', label: 'Title' },
+  { gridColumn: { md: 'span 2' }, key: 'original_title', label: 'Original Title' },
   { key: 'publisher', label: 'Publisher' },
   { key: 'item_id', label: 'Item ID' },
   { key: 'item_type', label: 'Item Type' },
@@ -270,6 +271,14 @@ function buildItemCandidateColumns(
     minWidth: 220,
     render: (row) => field(row, ['title', 'name']),
     sortValue: (row) => field(row, ['title', 'name'])
+  },
+  {
+    filterValue: (row) => field(row, ['original_title']),
+    id: 'original_title',
+    label: 'Original Title',
+    minWidth: 220,
+    render: (row) => field(row, ['original_title']),
+    sortValue: (row) => field(row, ['original_title'])
   },
   {
     filterable: false,

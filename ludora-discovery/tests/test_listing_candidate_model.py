@@ -52,6 +52,7 @@ class ItemCandidateModelTests(unittest.TestCase):
         self.assertEqual(output["store_id"], 12)
         self.assertEqual(output["source_listing_url"], "https://example.mx/collections/juegos")
         self.assertEqual(output["title"], "Catan - Edicion en Espanol")
+        self.assertEqual(output["original_title"], "Catan - Edicion en Espanol")
         self.assertEqual(output["publisher"], "Devir")
         self.assertEqual(output["item_type"], "base_game")
         self.assertEqual(output["min_players"], 3)

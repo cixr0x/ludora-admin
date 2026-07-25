@@ -186,23 +186,24 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(params[0], 12)
         self.assertEqual(params[2], "https://example.mx/collections/juegos")
         self.assertEqual(params[3], "Catan")
-        self.assertEqual(params[4], "Devir")
-        self.assertEqual(params[7], "base_game")
-        self.assertEqual(params[13], "es")
-        self.assertEqual(params[14], "product_highlights")
-        self.assertEqual(params[15], "Highlights: 10+ 3-4 jugadores 60-90 min Español")
-        self.assertEqual(params[16], "https://example.mx/catan.jpg")
-        self.assertEqual(params[18], "$899")
-        self.assertEqual(params[19], "899.00")
-        self.assertEqual(params[20], "json_ld_offer")
-        self.assertEqual(params[21], "MXN")
-        self.assertEqual(params[23], "json_ld_offer")
-        self.assertEqual(params[24], "CATAN-ES")
-        self.assertEqual(json.loads(params[25]), {"json_ld": {"name": "Catan"}})
-        self.assertEqual(params[26], True)
-        self.assertEqual(params[27], False)
-        self.assertEqual(params[28], 0.87)
-        self.assertEqual(json.loads(params[29]), ["player count found", "boardgame category found"])
+        self.assertEqual(params[4], "Catan")
+        self.assertEqual(params[5], "Devir")
+        self.assertEqual(params[8], "base_game")
+        self.assertEqual(params[14], "es")
+        self.assertEqual(params[15], "product_highlights")
+        self.assertEqual(params[16], "Highlights: 10+ 3-4 jugadores 60-90 min Español")
+        self.assertEqual(params[17], "https://example.mx/catan.jpg")
+        self.assertEqual(params[19], "$899")
+        self.assertEqual(params[20], "899.00")
+        self.assertEqual(params[21], "json_ld_offer")
+        self.assertEqual(params[22], "MXN")
+        self.assertEqual(params[24], "json_ld_offer")
+        self.assertEqual(params[25], "CATAN-ES")
+        self.assertEqual(json.loads(params[26]), {"json_ld": {"name": "Catan"}})
+        self.assertEqual(params[27], True)
+        self.assertEqual(params[28], False)
+        self.assertEqual(params[29], 0.87)
+        self.assertEqual(json.loads(params[30]), ["player count found", "boardgame category found"])
         self.assertEqual(connection.commits, 1)
         self.assertTrue(result.created)
 
@@ -408,6 +409,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         refreshed_record = replace(
             existing_record,
             title="Catan Nueva Edicion",
+            original_title="Catan Edicion 2026",
             description="Updated detail page text",
             image_url="https://example.mx/catan-new.jpg",
             raw_price="$799",
@@ -436,13 +438,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("refreshed_date = now()", update_sql.casefold())
         self.assertNotIn("last_updated = now()", update_sql.casefold())
         self.assertEqual(update_params[-1], 56)
-        self.assertEqual(len(change_entries), 7)
+        self.assertEqual(len(change_entries), 8)
         self.assertEqual(connection.commits, 1)
         self.assertTrue(result.changed)
         logged_fields = [params[3] for _sql, params in change_entries]
         self.assertEqual(
             logged_fields,
             [
+                "original_title",
                 "title",
                 "raw_price",
                 "price",
@@ -458,11 +461,13 @@ class DatabaseRepositoryTests(unittest.TestCase):
             self.assertEqual(params[1], "run-123")
             self.assertEqual(params[2], 56)
         self.assertEqual(json.loads(change_entries[0][1][4]), "Catan")
-        self.assertEqual(json.loads(change_entries[0][1][5]), "Catan Nueva Edicion")
-        self.assertEqual(json.loads(change_entries[1][1][4]), "$899")
-        self.assertEqual(json.loads(change_entries[1][1][5]), "$799")
-        self.assertEqual(json.loads(change_entries[2][1][4]), "899.00")
-        self.assertEqual(json.loads(change_entries[2][1][5]), "799.00")
+        self.assertEqual(json.loads(change_entries[0][1][5]), "Catan Edicion 2026")
+        self.assertEqual(json.loads(change_entries[1][1][4]), "Catan")
+        self.assertEqual(json.loads(change_entries[1][1][5]), "Catan Nueva Edicion")
+        self.assertEqual(json.loads(change_entries[2][1][4]), "$899")
+        self.assertEqual(json.loads(change_entries[2][1][5]), "$799")
+        self.assertEqual(json.loads(change_entries[3][1][4]), "899.00")
+        self.assertEqual(json.loads(change_entries[3][1][5]), "799.00")
 
     def test_update_change_log_compares_price_numerically(self):
         connection = FakeConnection()
@@ -516,6 +521,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         refreshed_record = replace(
             existing_record,
             title="Amazon merchandising title",
+            original_title="Amazon source title",
             raw_price="$799",
             price="799.00",
             price_source="amazon_detail",
@@ -532,7 +538,9 @@ class DatabaseRepositoryTests(unittest.TestCase):
         update_sql, update_params = connection.cursor_instance.executions[0]
         change_entries = connection.cursor_instance.executions[1:]
         self.assertNotIn("title = %s", update_sql.casefold())
+        self.assertNotIn("original_title = %s", update_sql.casefold())
         self.assertNotIn("Amazon merchandising title", update_params)
+        self.assertNotIn("Amazon source title", update_params)
         self.assertEqual(update_params[0], "$799")
         self.assertEqual(update_params[-1], 56)
         self.assertEqual(
@@ -663,8 +671,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("last_seen_at = now()", normalized_sql)
         self.assertIn("raw_price = %s", normalized_sql)
         self.assertIn("listing_status = %s", normalized_sql)
-        self.assertEqual(params[16], "https://example.mx/products/unknown.jpg")
-        self.assertEqual(params[17], "REJECTED")
+        self.assertEqual(params[17], "https://example.mx/products/unknown.jpg")
+        self.assertEqual(params[18], "REJECTED")
 
     def test_upsert_linked_store_item_refreshes_store_item_only(self):
         connection = FakeConnection(fetchone_rows=[(56, "LISTED", 7, "LOCAL", "2026-05-01T00:00:00Z")])
@@ -691,8 +699,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         candidate_sql, candidate_params = connection.cursor_instance.executions[1]
         self.assertIn("update store_items", candidate_sql.casefold())
         self.assertIn("raw_price = %s", candidate_sql.casefold())
-        self.assertEqual(candidate_params[17], "LISTED")
-        self.assertEqual(candidate_params[6], 7)
+        self.assertEqual(candidate_params[18], "LISTED")
+        self.assertEqual(candidate_params[7], 7)
 
     def test_item_candidate_exists_checks_store_and_source_url(self):
         connection = FakeConnection(fetchone_rows=[(1,)])
@@ -717,6 +725,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
                         12,
                         "https://example.mx/products/catan",
                         "https://example.mx/sitemap.xml",
+                        "Catan",
                         "Catan",
                         "Devir",
                         "Juego base",
@@ -781,6 +790,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(records[0].store_item_id, 56)
         self.assertEqual(records[0].store_id, 12)
         self.assertEqual(records[0].source_url, "https://example.mx/products/catan")
+        self.assertEqual(records[0].original_title, "Catan")
         self.assertEqual(records[0].item_id, 77)
         self.assertTrue(records[0].is_boardgame)
         self.assertTrue(records[0].is_boardgame_confirmed)

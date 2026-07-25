@@ -97,6 +97,7 @@ class StoreItemDiscoverySource:
 
 
 STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS = (
+    "original_title",
     "title",
     "raw_price",
     "price",
@@ -809,6 +810,7 @@ class DiscoveryRepository:
             data["source_url"],
             data["source_listing_url"],
             data["title"],
+            data["original_title"],
             data["publisher"],
             data["description"],
             data["item_id"],
@@ -890,6 +892,7 @@ def _insert_item_candidate_sql() -> str:
         source_url,
         source_listing_url,
         title,
+        original_title,
         publisher,
         description,
         item_id,
@@ -920,7 +923,7 @@ def _insert_item_candidate_sql() -> str:
         last_updated,
         refreshed_date
     )
-    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, now(), now(), now())
+    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, now(), now(), now())
     returning id, listing_status, item_id
     """
 
@@ -943,6 +946,7 @@ def _update_item_candidate_sql(*, refresh_from_source: bool = False) -> str:
         source_url = %s,
         source_listing_url = %s,
         title = %s,
+        original_title = %s,
         publisher = %s,
         description = %s,
         item_id = %s,
@@ -975,7 +979,7 @@ def _update_item_candidate_sql(*, refresh_from_source: bool = False) -> str:
 
 
 def _update_item_candidate_price_availability_sql(*, include_title: bool = True) -> str:
-    title_assignment = "title = %s,\n        " if include_title else ""
+    title_assignment = "original_title = %s,\n        title = %s,\n        " if include_title else ""
     return f"""
     update store_items
     set {title_assignment}raw_price = %s,
@@ -996,6 +1000,7 @@ def _item_candidate_select_columns() -> str:
         source_url,
         source_listing_url,
         title,
+        original_title,
         publisher,
         description,
         item_id,
@@ -1042,43 +1047,44 @@ def _item_candidate_from_row(row: Any) -> DiscoveryItemCandidateRecord:
         source_url=_text(row[1]),
         source_listing_url=_text(row[2]),
         title=_text(row[3]),
-        publisher=_text(row[4]),
-        description=_text(row[5]),
-        item_id=_optional_int(row[6]),
-        item_type=_text(row[7]) or "unknown",
-        min_players=_optional_int(row[8]),
-        max_players=_optional_int(row[9]),
-        min_minutes=_optional_int(row[10]),
-        max_minutes=_optional_int(row[11]),
-        min_age=_optional_int(row[12]),
-        language=_text(row[13]),
-        language_source=_text(row[14]),
-        language_evidence=_text(row[15]),
-        image_url=_text(row[16]),
-        listing_status=_text(row[17]) or "PENDING",
-        raw_price=_text(row[18]),
-        price=_text(row[19]),
-        price_source=_text(row[20]) or "none",
-        currency=_text(row[21]) or "MXN",
-        availability=_text(row[22]) or "unknown",
-        availability_source=_text(row[23]) or "none",
-        store_active=bool(row[24]),
-        store_sku=_text(row[25]),
-        raw_payload=_json_object(row[26]),
-        is_boardgame=bool(row[27]),
-        is_boardgame_confirmed=bool(row[28]),
-        category_confidence=_optional_float(row[29]),
-        classification_reasons=_json_list(row[30]),
-        match_source=_text(row[31]),
-        matched_bgg_id=_optional_int(row[32]),
-        matched_name=_text(row[33]),
-        match_score=_optional_float(row[34]),
-        match_reasons=_json_list(row[35]),
-        match_payload=_json_object(row[36]),
-        matched_at=_text(row[37]) or None,
-        processed_at=_text(row[38]) or None,
-        processing_error=_text(row[39]),
-        store_item_id=_optional_int(row[40]),
+        original_title=_text(row[4]),
+        publisher=_text(row[5]),
+        description=_text(row[6]),
+        item_id=_optional_int(row[7]),
+        item_type=_text(row[8]) or "unknown",
+        min_players=_optional_int(row[9]),
+        max_players=_optional_int(row[10]),
+        min_minutes=_optional_int(row[11]),
+        max_minutes=_optional_int(row[12]),
+        min_age=_optional_int(row[13]),
+        language=_text(row[14]),
+        language_source=_text(row[15]),
+        language_evidence=_text(row[16]),
+        image_url=_text(row[17]),
+        listing_status=_text(row[18]) or "PENDING",
+        raw_price=_text(row[19]),
+        price=_text(row[20]),
+        price_source=_text(row[21]) or "none",
+        currency=_text(row[22]) or "MXN",
+        availability=_text(row[23]) or "unknown",
+        availability_source=_text(row[24]) or "none",
+        store_active=bool(row[25]),
+        store_sku=_text(row[26]),
+        raw_payload=_json_object(row[27]),
+        is_boardgame=bool(row[28]),
+        is_boardgame_confirmed=bool(row[29]),
+        category_confidence=_optional_float(row[30]),
+        classification_reasons=_json_list(row[31]),
+        match_source=_text(row[32]),
+        matched_bgg_id=_optional_int(row[33]),
+        matched_name=_text(row[34]),
+        match_score=_optional_float(row[35]),
+        match_reasons=_json_list(row[36]),
+        match_payload=_json_object(row[37]),
+        matched_at=_text(row[38]) or None,
+        processed_at=_text(row[39]) or None,
+        processing_error=_text(row[40]),
+        store_item_id=_optional_int(row[41]),
     )
 
 
@@ -1102,7 +1108,11 @@ def _item_update_changes(
 def _store_item_refresh_fields(*, include_title: bool) -> tuple[str, ...]:
     if include_title:
         return STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS
-    return tuple(field_name for field_name in STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS if field_name != "title")
+    return tuple(
+        field_name
+        for field_name in STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS
+        if field_name not in {"original_title", "title"}
+    )
 
 
 def _item_update_values_equal(field_name: str, old_value: object, new_value: object) -> bool:

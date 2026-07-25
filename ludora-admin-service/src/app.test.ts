@@ -1824,6 +1824,7 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(queries[0] ?? '');
     expect(sql).toContain('from store_items');
     expect(sql).toContain('source_listing_url');
+    expect(sql).toContain('original_title');
     expect(sql).toContain('image_url');
     expect(sql).toContain('listing_status');
     expect(sql).toContain('item_type');
@@ -2592,6 +2593,7 @@ describe('ludora admin service', () => {
         min_age: '8',
         min_minutes: '30',
         min_players: '2',
+        original_title: 'Kitchen Rush Original',
         price: '899.00',
         price_source: 'manual',
         processing_error: '',
@@ -2612,7 +2614,7 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('update store_items');
     expect(sql).toContain('last_updated = now()');
-    expect(sql).toContain('where id = $38');
+    expect(sql).toContain('where id = $39');
     expect(sql).toContain('returning id, store_id, source_url, source_listing_url');
     expect(sql).toContain('delete from store_item_additional_items siai');
     expect(sql).toContain('siai.item_id = updated_candidate.item_id');
@@ -2621,6 +2623,7 @@ describe('ludora admin service', () => {
       'https://store.mx/products/kitchen-rush',
       'https://store.mx/collections/boardgames',
       'Kitchen Rush Updated',
+      'Kitchen Rush Original',
       'Artipia Games',
       'Updated description',
       null,
