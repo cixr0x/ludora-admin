@@ -10,6 +10,7 @@ ADMIN_CHECKOUT=""
 ORIGIN_URL=""
 PUBLIC_HOST=""
 EXPECTED_USER=""
+RUN_TESTS="false"
 ALLOW_DATABASE_PATCH_PRESENCE="false"
 INITIALIZE_DEPLOYMENT_BASELINE="false"
 PREVIOUS_COMMIT=""
@@ -72,6 +73,10 @@ while (($# > 0)); do
     --expected-user)
       EXPECTED_USER=$2
       shift 2
+      ;;
+    --run-tests)
+      RUN_TESTS="true"
+      shift
       ;;
     --allow-database-patch-presence)
       ALLOW_DATABASE_PATCH_PRESENCE="true"
@@ -253,6 +258,7 @@ printf 'RESOLVED_COMPONENT=%s\n' "$RESOLVED_COMPONENT"
 printf 'PREVIOUS_COMMIT=%s\n' "$PREVIOUS_COMMIT"
 printf 'LAST_SUCCESSFUL_COMMIT=%s\n' "${LAST_SUCCESSFUL_COMMIT:-none}"
 printf 'CHANGE_BASE=%s\n' "$CHANGE_BASE"
+printf 'TESTS_REQUESTED=%s\n' "$RUN_TESTS"
 
 step "deploy.fast_forward"
 git -C "$ADMIN_CHECKOUT" merge --ff-only "$EXPECTED_COMMIT"
@@ -277,7 +283,9 @@ run_ui() {
   (
     cd "$ui_dir"
     npm ci
-    npm test -- --testTimeout=60000 --hookTimeout=60000
+    if [[ "$RUN_TESTS" == "true" ]]; then
+      npm test -- --testTimeout=60000 --hookTimeout=60000
+    fi
     npm run build -- --outDir "$staging_dir" --emptyOutDir
   )
   [[ -f "$staging_dir/index.html" ]] || die "Staged UI build did not produce index.html." 70
@@ -312,7 +320,9 @@ run_service() {
   (
     cd "$ADMIN_CHECKOUT/ludora-admin-service"
     npm ci
-    npm test
+    if [[ "$RUN_TESTS" == "true" ]]; then
+      npm test
+    fi
     npm run build
   )
 }
@@ -325,7 +335,9 @@ run_discovery() {
       .venv/bin/python -m pip install -e .
       .venv/bin/python -m playwright install chromium
     fi
-    .venv/bin/python -m unittest discover -s tests -v
+    if [[ "$RUN_TESTS" == "true" ]]; then
+      .venv/bin/python -m unittest discover -s tests -v
+    fi
   )
 }
 
@@ -358,6 +370,12 @@ case "$RESOLVED_COMPONENT" in
     die "Resolved unexpected component '$RESOLVED_COMPONENT'." 70
     ;;
 esac
+
+tests_executed="false"
+if [[ "$RUN_TESTS" == "true" && "$RESOLVED_COMPONENT" != "verify" ]]; then
+  tests_executed="true"
+fi
+printf 'TESTS_EXECUTED=%s\n' "$tests_executed"
 
 retry_curl() {
   local url=$1
@@ -482,5 +500,5 @@ printf '%s\n' "$EXPECTED_COMMIT" >"$success_state_temp"
 mv -f -- "$success_state_temp" "$success_state_file"
 
 printf 'REMOTE_DEPLOY_STATUS=success\n'
-printf 'REMOTE_DEPLOY_RESULT={"status":"success","component":"%s","previousCommit":"%s","commit":"%s"}\n' \
-  "$RESOLVED_COMPONENT" "$PREVIOUS_COMMIT" "$EXPECTED_COMMIT"
+printf 'REMOTE_DEPLOY_RESULT={"status":"success","component":"%s","testsRequested":%s,"testsExecuted":%s,"previousCommit":"%s","commit":"%s"}\n' \
+  "$RESOLVED_COMPONENT" "$RUN_TESTS" "$tests_executed" "$PREVIOUS_COMMIT" "$EXPECTED_COMMIT"

@@ -15,7 +15,7 @@ Do not choose another port automatically. If one of these ports is busy, report 
 ## Production VM
 
 - Follow `docs/production-deployment.md` for provisioning, routine deployment, rollback, and verification.
-- For routine `ludora-admin` deployments, run `ops/Deploy-LudoraAdmin.ps1` from the local repository with the full expected commit SHA. Let its default `Auto` mode select the affected admin component and complete production verification.
+- For routine `ludora-admin` deployments, run `ops/Deploy-LudoraAdmin.ps1` from the local repository with the full expected commit SHA. Let its default `Auto` mode select the affected admin component, build and deploy it without test suites, and complete production verification. Pass `-RunTests` only when tests were explicitly requested.
 - Do not reconstruct the routine remote command sequence manually unless the deploy script is unavailable or its reported failed step requires focused recovery. The script does not commit/push code, apply SQL, bootstrap the VM, or deploy the sibling `codexapi` repository.
 - Instance: `ludora-admin-img-20260714-105613`
 - GCP project: `ludora-501213`

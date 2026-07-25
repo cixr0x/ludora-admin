@@ -137,7 +137,7 @@ LUDORA_BROWSER_FETCH_ENABLED=true
 Before changing the VM:
 
 1. Confirm intentional changes are committed and pushed.
-2. Run the affected repository tests and builds locally.
+2. Run the affected repository builds locally. Run test suites only when explicitly requested.
 3. Check both VM worktrees before pulling:
 
 ```bash
@@ -172,11 +172,14 @@ $expectedCommit = (git rev-parse HEAD).Trim()
 # Preview the pinned target and operation without contacting or changing the VM.
 .\ops\Deploy-LudoraAdmin.ps1 -ExpectedCommit $expectedCommit -Component Auto -WhatIf
 
-# Deploy the exact origin/main commit and run production verification.
+# Build and deploy the exact origin/main commit without test suites, then run production verification.
 .\ops\Deploy-LudoraAdmin.ps1 -ExpectedCommit $expectedCommit -Component Auto
+
+# Add test suites only when they were explicitly requested.
+.\ops\Deploy-LudoraAdmin.ps1 -ExpectedCommit $expectedCommit -Component Auto -RunTests
 ```
 
-`Auto` compares the last successfully verified deployment with the expected commit and selects `Ui`, `Service`, `Discovery`, `Full`, or verification-only behavior. The success stamp lives under the remote checkout's `.git` directory and is updated only after every smoke check passes, so retrying a failed deployment reruns the affected work even when the checkout already reached the expected SHA. To require a particular scope, pass `-Component Ui`, `Service`, `Discovery`, or `Full`; the script refuses an explicitly narrower scope when another runtime component also changed. Unclassified production paths conservatively select `Full`. For a visible UI change, add `-AssetMarker '<literal built text>'` so both the activated local bundle and a JavaScript asset fetched over HTTPS must contain that exact marker.
+`Auto` compares the last successfully verified deployment with the expected commit and selects `Ui`, `Service`, `Discovery`, `Full`, or verification-only behavior. By default, the selected path installs required dependencies, builds and activates the application, restarts or reloads affected services, and performs production verification without running test suites. Pass `-RunTests` only when tests were explicitly requested; it runs the selected component's test suite before its build or restart. The success stamp lives under the remote checkout's `.git` directory and is updated only after every smoke check passes, so retrying a failed deployment reruns the affected work even when the checkout already reached the expected SHA. To require a particular scope, pass `-Component Ui`, `Service`, `Discovery`, or `Full`; the script refuses an explicitly narrower scope when another runtime component also changed. Unclassified production paths conservatively select `Full`. For a visible UI change, add `-AssetMarker '<literal built text>'` so both the activated local bundle and a JavaScript asset fetched over HTTPS must contain that exact marker.
 
 The first automated deployment on an existing VM has no trustworthy success stamp and therefore stops without changing the checkout. After confirming the currently deployed revision, services, schema state, and live smoke checks against this runbook, initialize the baseline once with:
 
@@ -200,7 +203,7 @@ The script fails closed unless all of these conditions hold:
 
 If SQL files under `database/` changed between the deployed and expected revisions, the script stops before fast-forwarding the checkout or changing the running application and lists the files. It never executes SQL. Only after the exact SQL has been shown and the required DDL/DML approval and execution workflow has been completed may an operator rerun with `-AllowDatabasePatchPresence`; that switch only acknowledges the files and does not apply them.
 
-After a successful fast-forward, the script runs component-specific installs, tests, builds, and restarts, then verifies the exact remote HEAD, clean tracked state, active services, the effective nginx static root and API upstream, loopback health, listener bindings, HTTPS, HTTP redirect, authenticated read-only stores access, and optional UI marker. UI builds use a staging directory and activate only after the Vite build succeeds, so a failed build does not empty nginx's live `dist`. The script also confirms from the workstation that ports `3001` and `4001` are not externally reachable.
+After a successful fast-forward, the script runs component-specific installs, builds, activation, and restarts, plus opt-in tests when `-RunTests` is present. It then verifies the exact remote HEAD, clean tracked state, active services, the effective nginx static root and API upstream, loopback health, listener bindings, HTTPS, HTTP redirect, authenticated read-only stores access, and optional UI marker. UI builds use a staging directory and activate only after the Vite build succeeds, so a failed build does not empty nginx's live `dist`. The script also confirms from the workstation that ports `3001` and `4001` are not externally reachable.
 
 The script does not stage, commit, push, reset, clean, bootstrap the VM, deploy `codexapi`, or automatically roll back. Preserve its structured `DEPLOY_STEP`, `DEPLOY_STATUS`, and `DEPLOY_RESULT` output when diagnosing a failure. Use the manual commands below only for focused recovery or when the script itself is unavailable.
 
@@ -232,7 +235,7 @@ cd /opt/ludora/ludora-admin/ludora-discovery
 .venv/bin/python -m playwright install --with-deps chromium
 ```
 
-Run discovery tests from its checkout when discovery code changes:
+Run discovery tests from its checkout only when they were explicitly requested:
 
 ```bash
 cd /opt/ludora/ludora-admin/ludora-discovery
@@ -596,7 +599,7 @@ Do not expose `codexapi` publicly as a workaround.
 Use Git history as the source of truth:
 
 1. Revert the problematic commit in the affected local repository.
-2. Run tests and build locally.
+2. Run the build locally; run tests only when explicitly requested.
 3. Push the revert to `main`.
 4. Run the appropriate routine deployment section.
 5. Verify the live revision, services, ports, and public endpoint again.

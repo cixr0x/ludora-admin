@@ -63,6 +63,7 @@ Describe 'Ludora deployment tooling' {
                 -Component Auto `
                 -AssetMarker $marker `
                 -Config $config `
+                -RunTests $true `
                 -AllowDatabasePatchPresence $false `
                 -InitializeDeploymentBaseline $false
 
@@ -71,6 +72,7 @@ Describe 'Ludora deployment tooling' {
             $command | Should Match '^bash -o pipefail -c '
             $command | Should Match 'base64 --decode \| gzip --decompress \| bash -s -- '
             $command.Contains((ConvertTo-LudoraBase64 -Value $marker)) | Should Be $true
+            $command | Should Match '--run-tests'
         }
 
         It 'omits the optional marker argument when no marker is configured' {
@@ -81,10 +83,12 @@ Describe 'Ludora deployment tooling' {
                 -Component Auto `
                 -AssetMarker '' `
                 -Config $config `
+                -RunTests $false `
                 -AllowDatabasePatchPresence $false `
                 -InitializeDeploymentBaseline $false
 
             $command | Should Not Match '--asset-marker-base64'
+            $command | Should Not Match '--run-tests'
             $command | Should Match "--component .* --admin-checkout "
         }
 
@@ -94,11 +98,13 @@ Describe 'Ludora deployment tooling' {
                 ''
                 'DEPLOY_STEP=verify.record_success',
                 'REMOTE_DEPLOY_STATUS=success',
-                "REMOTE_DEPLOY_RESULT={`"status`":`"success`",`"component`":`"Ui`",`"previousCommit`":`"$commit`",`"commit`":`"$commit`"}"
+                "REMOTE_DEPLOY_RESULT={`"status`":`"success`",`"component`":`"Ui`",`"testsRequested`":true,`"testsExecuted`":true,`"previousCommit`":`"$commit`",`"commit`":`"$commit`"}"
             )
 
             $result = Assert-LudoraRemoteDeployResult -Output $output -ExpectedCommit $commit
             $result.component | Should Be 'Ui'
+            $result.testsRequested | Should Be $true
+            $result.testsExecuted | Should Be $true
             { Assert-LudoraRemoteDeployResult -Output @('REMOTE_DEPLOY_STATUS=success') -ExpectedCommit $commit } | Should Throw
             { Assert-LudoraRemoteDeployResult -Output $output -ExpectedCommit ('b' * 40) } | Should Throw
         }

@@ -10,6 +10,8 @@ param(
     [ValidateLength(0, 256)]
     [string]$AssetMarker = '',
 
+    [switch]$RunTests,
+
     [switch]$AllowDatabasePatchPresence,
 
     [switch]$InitializeDeploymentBaseline
@@ -25,6 +27,7 @@ $invokeParameters = @{
     ExpectedCommit = $ExpectedCommit
     Component = $Component
     AssetMarker = $AssetMarker
+    RunTests = $RunTests
     AllowDatabasePatchPresence = $AllowDatabasePatchPresence
     InitializeDeploymentBaseline = $InitializeDeploymentBaseline
     ConfigPath = (Join-Path $PSScriptRoot 'admin-production.json')

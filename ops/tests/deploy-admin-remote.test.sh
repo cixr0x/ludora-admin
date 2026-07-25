@@ -161,10 +161,20 @@ grep -Fq 'FAILED_STEP=deploy.ui' <<<"$first_output"
 
 second_output=$(bash "$SCRIPT_UNDER_TEST" --expected-commit "$UI_COMMIT" "${common_arguments[@]}" 2>&1)
 grep -Fq 'RESOLVED_COMPONENT=ui' <<<"$second_output"
+grep -Fq 'TESTS_REQUESTED=false' <<<"$second_output"
+grep -Fq 'TESTS_EXECUTED=false' <<<"$second_output"
 grep -Fq 'REMOTE_DEPLOY_STATUS=success' <<<"$second_output"
 [[ "$(<"$REMOTE_REPO/.git/ludora-production-deploy.success")" == "$UI_COMMIT" ]]
 [[ "$(grep -c 'ludora-admin-ui:run build' "$CALL_LOG")" == '2' ]]
+! grep -Fq 'ludora-admin-ui:test' "$CALL_LOG"
 ! grep -Fq 'ludora-admin-service' "$CALL_LOG"
+
+tests_output=$(bash "$SCRIPT_UNDER_TEST" --expected-commit "$UI_COMMIT" "${common_arguments[@]}" --component ui --run-tests 2>&1)
+grep -Fq 'RESOLVED_COMPONENT=ui' <<<"$tests_output"
+grep -Fq 'TESTS_REQUESTED=true' <<<"$tests_output"
+grep -Fq 'TESTS_EXECUTED=true' <<<"$tests_output"
+grep -Fq 'ludora-admin-ui:test -- --testTimeout=60000 --hookTimeout=60000' "$CALL_LOG"
+[[ "$(grep -c 'ludora-admin-ui:run build' "$CALL_LOG")" == '3' ]]
 
 mkdir -p "$SEED_REPO/unexpected-runtime"
 printf 'runtime change\n' >"$SEED_REPO/unexpected-runtime/config.txt"
@@ -175,7 +185,12 @@ UNKNOWN_COMMIT=$(git -C "$SEED_REPO" rev-parse HEAD)
 marker_base64=$(printf '%s' "$TEST_ASSET_MARKER" | base64 --wrap=0)
 unknown_output=$(bash "$SCRIPT_UNDER_TEST" --expected-commit "$UNKNOWN_COMMIT" --component auto --asset-marker-base64 "$marker_base64" "${common_arguments[@]:4}" 2>&1)
 grep -Fq 'RESOLVED_COMPONENT=full' <<<"$unknown_output"
+grep -Fq 'TESTS_REQUESTED=false' <<<"$unknown_output"
+grep -Fq 'TESTS_EXECUTED=false' <<<"$unknown_output"
 grep -Fq 'SERVED_ASSET_MARKER=found' <<<"$unknown_output"
+[[ "$(grep -c 'ludora-admin-ui:test' "$CALL_LOG")" == '1' ]]
+! grep -Fq 'ludora-admin-service:test' "$CALL_LOG"
+! grep -Fq 'unittest discover' "$CALL_LOG"
 [[ "$(<"$REMOTE_REPO/.git/ludora-production-deploy.success")" == "$UNKNOWN_COMMIT" ]]
 
 exec 8>"$REMOTE_REPO/.git/ludora-production-deploy.lock"

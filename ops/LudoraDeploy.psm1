@@ -303,6 +303,9 @@ function New-LudoraRemoteCommand {
         [psobject]$Config,
 
         [Parameter(Mandatory = $true)]
+        [bool]$RunTests,
+
+        [Parameter(Mandatory = $true)]
         [bool]$AllowDatabasePatchPresence,
 
         [Parameter(Mandatory = $true)]
@@ -329,6 +332,9 @@ function New-LudoraRemoteCommand {
         $arguments += @('--asset-marker-base64', (ConvertTo-LudoraBashLiteral -Value $markerBase64))
     }
 
+    if ($RunTests) {
+        $arguments += '--run-tests'
+    }
     if ($AllowDatabasePatchPresence) {
         $arguments += '--allow-database-patch-presence'
     }
@@ -364,7 +370,7 @@ function Assert-LudoraRemoteDeployResult {
         throw "Remote deployment emitted invalid result JSON: $($_.Exception.Message)"
     }
 
-    $requiredProperties = @('status', 'component', 'previousCommit', 'commit')
+    $requiredProperties = @('status', 'component', 'testsRequested', 'testsExecuted', 'previousCommit', 'commit')
     foreach ($property in $requiredProperties) {
         if ($result.PSObject.Properties.Name -notcontains $property) {
             throw "Remote deployment result is missing '$property'."
@@ -379,6 +385,9 @@ function Assert-LudoraRemoteDeployResult {
     }
     if ([string]$result.component -notin @('Verify', 'Ui', 'Service', 'Discovery', 'Full')) {
         throw "Remote deployment reported invalid component '$($result.component)'."
+    }
+    if ($result.testsRequested -isnot [bool] -or $result.testsExecuted -isnot [bool]) {
+        throw 'Remote deployment reported invalid test execution state.'
     }
 
     return $result
@@ -457,6 +466,8 @@ function Invoke-LudoraAdminDeploy {
         [ValidateLength(0, 256)]
         [string]$AssetMarker = '',
 
+        [switch]$RunTests,
+
         [switch]$AllowDatabasePatchPresence,
 
         [switch]$InitializeDeploymentBaseline,
@@ -515,12 +526,14 @@ function Invoke-LudoraAdminDeploy {
         project = $config.gcpProject
         zone = $config.zone
         publicHost = $config.publicHost
+        testsRequested = [bool]$RunTests
         allowsDatabasePatchPresence = [bool]$AllowDatabasePatchPresence
         initializesDeploymentBaseline = [bool]$InitializeDeploymentBaseline
     }
     Write-Output ('DEPLOY_PLAN=' + ($plan | ConvertTo-Json -Compress))
 
-    $operationDescription = "deploy exact commit $ExpectedCommit with component mode $Component"
+    $testDescription = if ($RunTests) { ' with tests' } else { ' without tests' }
+    $operationDescription = "build and deploy exact commit $ExpectedCommit with component mode $Component$testDescription"
     if (-not $PSCmdlet.ShouldProcess("$($config.instance) in $($config.zone)", $operationDescription)) {
         Write-Output 'DEPLOY_STATUS=not_started'
         return
@@ -579,6 +592,7 @@ function Invoke-LudoraAdminDeploy {
         -Component $Component `
         -AssetMarker $AssetMarker `
         -Config $config `
+        -RunTests ([bool]$RunTests) `
         -AllowDatabasePatchPresence ([bool]$AllowDatabasePatchPresence) `
         -InitializeDeploymentBaseline ([bool]$InitializeDeploymentBaseline)
 
@@ -602,6 +616,8 @@ function Invoke-LudoraAdminDeploy {
         status = 'success'
         requestedComponent = $Component
         resolvedComponent = [string]$remoteResult.component
+        testsRequested = [bool]$remoteResult.testsRequested
+        testsExecuted = [bool]$remoteResult.testsExecuted
         expectedCommit = $ExpectedCommit
         instance = $config.instance
         zone = $config.zone
