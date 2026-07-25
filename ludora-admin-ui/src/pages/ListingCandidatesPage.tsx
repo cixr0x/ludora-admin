@@ -8,6 +8,7 @@ import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import SaveIcon from '@mui/icons-material/Save';
 import {
   Alert,
+  Avatar,
   Box,
   Button,
   Checkbox,
@@ -19,6 +20,10 @@ import {
   FormControlLabel,
   IconButton,
   Link,
+  List,
+  ListItemAvatar,
+  ListItemButton,
+  ListItemText,
   Paper,
   Stack,
   TextField,
@@ -34,6 +39,7 @@ import { useInfiniteServerRows, useServerTableState } from '../components/useSer
 
 type LoadState = 'loading' | 'ready' | 'error';
 type ViewMode = 'form' | 'table';
+const ADDITIONAL_ITEM_SEARCH_LIMIT = 20;
 
 type ItemCandidateDetailField = {
   fieldType?: 'boolean';
@@ -1266,6 +1272,12 @@ function ItemCandidateForm({
           </Stack>
         </Stack>
 
+        <AdditionalItemsSection
+          primaryItemId={itemId}
+          storeItemId={candidateIdValue}
+          storeItemTitle={title}
+        />
+
         <Box
           sx={{
             display: 'grid',
@@ -1386,6 +1398,365 @@ function ItemCandidateForm({
       </Dialog>
     </Paper>
   );
+}
+
+function AdditionalItemsSection({
+  primaryItemId,
+  storeItemId,
+  storeItemTitle
+}: {
+  primaryItemId: string;
+  storeItemId: string;
+  storeItemTitle: string;
+}) {
+  const [additionalItems, setAdditionalItems] = useState<AdminRecord[]>([]);
+  const [deletingItemId, setDeletingItemId] = useState('');
+  const [error, setError] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [loadState, setLoadState] = useState<LoadState>('loading');
+
+  useEffect(() => {
+    if (!storeItemId) {
+      setAdditionalItems([]);
+      setError('');
+      setLoadState('ready');
+      return;
+    }
+
+    let ignore = false;
+    setLoadState('loading');
+    setError('');
+    adminApi
+      .getStoreItemAdditionalItems(storeItemId)
+      .then((items) => {
+        if (!ignore) {
+          setAdditionalItems(items);
+          setLoadState('ready');
+        }
+      })
+      .catch(() => {
+        if (!ignore) {
+          setAdditionalItems([]);
+          setError('Additional items could not be loaded.');
+          setLoadState('error');
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [storeItemId]);
+
+  const excludedItemIds = useMemo(
+    () =>
+      new Set(
+        [primaryItemId, ...additionalItems.map((item) => field(item, ['id'], ''))].filter(Boolean)
+      ),
+    [additionalItems, primaryItemId]
+  );
+
+  async function handleAdd(item: AdminRecord) {
+    const itemId = field(item, ['id'], '');
+    if (!storeItemId || !itemId) {
+      setError('The store item or catalog item is missing an ID.');
+      return;
+    }
+
+    setIsAdding(true);
+    setError('');
+    try {
+      const savedItem = await adminApi.addStoreItemAdditionalItem(storeItemId, itemId);
+      setAdditionalItems((currentItems) =>
+        [...currentItems.filter((currentItem) => field(currentItem, ['id'], '') !== itemId), savedItem].sort((left, right) =>
+          additionalItemDisplayName(left).localeCompare(additionalItemDisplayName(right))
+        )
+      );
+      setIsSearchOpen(false);
+    } catch {
+      setError('The additional item could not be added.');
+    } finally {
+      setIsAdding(false);
+    }
+  }
+
+  async function handleRemove(item: AdminRecord) {
+    const itemId = field(item, ['id'], '');
+    if (!storeItemId || !itemId) {
+      return;
+    }
+
+    setDeletingItemId(itemId);
+    setError('');
+    try {
+      await adminApi.deleteStoreItemAdditionalItem(storeItemId, itemId);
+      setAdditionalItems((currentItems) =>
+        currentItems.filter((currentItem) => field(currentItem, ['id'], '') !== itemId)
+      );
+    } catch {
+      setError('The additional item could not be removed.');
+    } finally {
+      setDeletingItemId('');
+    }
+  }
+
+  return (
+    <>
+      <Paper sx={{ p: 2 }} variant="outlined">
+        <Stack spacing={1.5}>
+          <Stack alignItems={{ sm: 'center', xs: 'stretch' }} direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1}>
+            <Box>
+              <Typography fontWeight={700}>Additional items</Typography>
+              <Typography color="text.secondary" variant="body2">
+                Offers for this store item will also appear on these catalog items.
+              </Typography>
+            </Box>
+            <Button
+              disabled={!primaryItemId || loadState === 'loading'}
+              startIcon={<AddCircleIcon />}
+              type="button"
+              variant="outlined"
+              onClick={() => {
+                setError('');
+                setIsSearchOpen(true);
+              }}
+            >
+              Add additional item
+            </Button>
+          </Stack>
+
+          {!primaryItemId ? (
+            <Alert severity="info">Link a primary catalog item before adding additional items.</Alert>
+          ) : null}
+          {error ? <Alert severity="error">{error}</Alert> : null}
+          {loadState === 'loading' ? (
+            <Stack alignItems="center" direction="row" spacing={1.5}>
+              <CircularProgress size={18} />
+              <Typography color="text.secondary" variant="body2">
+                Loading additional items
+              </Typography>
+            </Stack>
+          ) : null}
+          {loadState === 'ready' && additionalItems.length === 0 ? (
+            <Typography color="text.secondary" variant="body2">
+              No additional items linked.
+            </Typography>
+          ) : null}
+          {additionalItems.map((item) => {
+            const itemId = field(item, ['id'], '');
+            const itemName = additionalItemDisplayName(item);
+            return (
+              <Stack
+                alignItems="center"
+                direction="row"
+                justifyContent="space-between"
+                key={itemId}
+                spacing={1}
+                sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}
+              >
+                <Box sx={{ minWidth: 0 }}>
+                  <Link href={`#items?id=${encodeURIComponent(itemId)}`} sx={{ fontWeight: 600 }}>
+                    {itemName}
+                  </Link>
+                  <Typography color="text.secondary" variant="caption">
+                    Item {itemId}
+                  </Typography>
+                </Box>
+                <Tooltip title="Remove additional item">
+                  <span>
+                    <IconButton
+                      aria-label={`Remove ${itemName}`}
+                      color="error"
+                      disabled={deletingItemId === itemId}
+                      type="button"
+                      onClick={() => void handleRemove(item)}
+                    >
+                      {deletingItemId === itemId ? <CircularProgress size={18} /> : <DeleteIcon />}
+                    </IconButton>
+                  </span>
+                </Tooltip>
+              </Stack>
+            );
+          })}
+        </Stack>
+      </Paper>
+
+      <AdditionalItemSearchDialog
+        error={error}
+        excludedItemIds={excludedItemIds}
+        initialQuery={storeItemTitle}
+        isAdding={isAdding}
+        open={isSearchOpen}
+        onAdd={handleAdd}
+        onClose={() => {
+          if (!isAdding) {
+            setIsSearchOpen(false);
+            setError('');
+          }
+        }}
+      />
+    </>
+  );
+}
+
+function AdditionalItemSearchDialog({
+  error,
+  excludedItemIds,
+  initialQuery,
+  isAdding,
+  onAdd,
+  onClose,
+  open
+}: {
+  error: string;
+  excludedItemIds: Set<string>;
+  initialQuery: string;
+  isAdding: boolean;
+  onAdd: (item: AdminRecord) => Promise<void>;
+  onClose: () => void;
+  open: boolean;
+}) {
+  const [isSearching, setIsSearching] = useState(false);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<AdminRecord[]>([]);
+  const [searchError, setSearchError] = useState('');
+
+  useEffect(() => {
+    if (!open) {
+      setQuery('');
+      setResults([]);
+      setSearchError('');
+      setIsSearching(false);
+      return;
+    }
+
+    setQuery(initialQuery);
+    setResults([]);
+    setSearchError('');
+  }, [initialQuery, open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const searchQuery = query.trim();
+    if (searchQuery.length < 2) {
+      setResults([]);
+      setSearchError('');
+      setIsSearching(false);
+      return;
+    }
+
+    let ignore = false;
+    setIsSearching(true);
+    setSearchError('');
+    const timeoutId = window.setTimeout(() => {
+      adminApi
+        .getItemsPage({
+          filters: { name: searchQuery },
+          page: 0,
+          pageSize: ADDITIONAL_ITEM_SEARCH_LIMIT,
+          sortColumnId: 'canonical_name',
+          sortDirection: 'asc'
+        })
+        .then((page) => {
+          if (!ignore) {
+            setResults(page.rows.filter((item) => !excludedItemIds.has(field(item, ['id'], ''))));
+          }
+        })
+        .catch(() => {
+          if (!ignore) {
+            setResults([]);
+            setSearchError('Catalog items could not be searched.');
+          }
+        })
+        .finally(() => {
+          if (!ignore) {
+            setIsSearching(false);
+          }
+        });
+    }, 200);
+
+    return () => {
+      ignore = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [excludedItemIds, open, query]);
+
+  return (
+    <Dialog fullWidth maxWidth="sm" open={open} onClose={isAdding ? undefined : onClose}>
+      <DialogTitle>Add Additional Item</DialogTitle>
+      <DialogContent>
+        <Stack spacing={2} sx={{ pt: 0.5 }}>
+          <TextField
+            autoFocus
+            disabled={isAdding}
+            fullWidth
+            label="Search catalog items"
+            placeholder="Type at least 2 characters"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+          {error ? <Alert severity="error">{error}</Alert> : null}
+          {searchError ? <Alert severity="error">{searchError}</Alert> : null}
+          {isSearching ? (
+            <Stack alignItems="center" direction="row" spacing={1.5} sx={{ py: 2 }}>
+              <CircularProgress size={18} />
+              <Typography color="text.secondary" variant="body2">
+                Searching catalog items
+              </Typography>
+            </Stack>
+          ) : null}
+          {!isSearching && query.trim().length >= 2 && results.length === 0 && !searchError ? (
+            <Typography color="text.secondary" sx={{ py: 2 }} textAlign="center" variant="body2">
+              No matching catalog items.
+            </Typography>
+          ) : null}
+          {!isSearching && results.length > 0 ? (
+            <List
+              aria-label="Additional catalog item matches"
+              disablePadding
+              sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 480, overflowY: 'auto' }}
+            >
+              {results.map((item) => {
+                const itemId = field(item, ['id'], '');
+                const primaryName = additionalItemDisplayName(item);
+                const canonicalName = field(item, ['canonical_name'], '');
+                const secondaryName = canonicalName && canonicalName !== primaryName ? canonicalName : '';
+                const imageUrl = field(item, ['image_url_es', 'image_url'], '');
+                return (
+                  <ListItemButton
+                    aria-label={`Add ${primaryName}`}
+                    disabled={isAdding || !itemId}
+                    key={itemId}
+                    onClick={() => void onAdd(item)}
+                  >
+                    <ListItemAvatar>
+                      <Avatar alt={`${primaryName} cover`} src={imageUrl} sx={{ bgcolor: 'grey.100' }} variant="rounded" />
+                    </ListItemAvatar>
+                    <ListItemText
+                      primary={primaryName}
+                      secondary={[secondaryName, itemId ? `Item ${itemId}` : ''].filter(Boolean).join(' · ')}
+                    />
+                  </ListItemButton>
+                );
+              })}
+            </List>
+          ) : null}
+        </Stack>
+      </DialogContent>
+      <DialogActions>
+        <Button disabled={isAdding} type="button" onClick={onClose}>
+          Close
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+}
+
+function additionalItemDisplayName(item: AdminRecord) {
+  return field(item, ['canonical_name_es', 'canonical_name'], 'Untitled item');
 }
 
 function itemCandidateInputFromForm(formData: FormData): AdminRecord {

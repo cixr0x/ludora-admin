@@ -72,6 +72,12 @@ class SchemaTests(unittest.TestCase):
                 "add column if not exists unconfirmed_boardgames integer not null default 0",
                 "add column if not exists unconfirmed_non_boardgames integer not null default 0",
             ],
+            "20260724_001_store_item_additional_items.sql": [
+                "create table if not exists store_item_additional_items",
+                "primary key (store_item_id, item_id)",
+                "store_item_additional_items_item_id_idx",
+                "create or replace view active_item as",
+            ],
         }
 
         for filename, expected_snippets in expected_patches.items():
@@ -102,6 +108,7 @@ class SchemaTests(unittest.TestCase):
         for table_name in [
             "discovery_store_candidates",
             "store_items",
+            "store_item_additional_items",
             "discovery_evidence",
             "admin_review_tasks",
             "stores",
@@ -303,6 +310,18 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("primary key (store_item_id, clicked_hour)", table)
         self.assertNotIn("references store_items", table)
 
+    def test_schema_contains_store_item_additional_items(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+
+        self.assertIn("create table if not exists store_item_additional_items", schema)
+        table = schema.split("create table if not exists store_item_additional_items", 1)[1].split(");", 1)[0]
+
+        self.assertIn("store_item_id bigint not null references store_items(id) on delete cascade", table)
+        self.assertIn("item_id bigint not null references items(id) on delete cascade", table)
+        self.assertIn("primary key (store_item_id, item_id)", table)
+        self.assertIn("store_item_additional_items_item_id_idx", schema)
+        self.assertIn("on store_item_additional_items (item_id)", schema)
+
     def test_schema_contains_store_item_discovery_job_log(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()
 
@@ -425,6 +444,9 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("where exists", view)
         self.assertIn("from store_items si", view)
         self.assertIn("si.item_id = i.id", view)
+        self.assertIn("from store_item_additional_items siai", view)
+        self.assertIn("siai.store_item_id = si.id", view)
+        self.assertIn("siai.item_id = i.id", view)
         self.assertIn("si.is_boardgame = true", view)
         self.assertIn("si.is_boardgame_confirmed = true", view)
         self.assertIn("as has_approved_listing", view)

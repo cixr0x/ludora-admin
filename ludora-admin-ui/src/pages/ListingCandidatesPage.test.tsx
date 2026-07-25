@@ -641,6 +641,93 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByRole('table', { name: 'Store items' })).toBeInTheDocument();
   });
 
+  it('adds and removes additional catalog items from the store item details', async () => {
+    const user = userEvent.setup();
+    const candidate = {
+      id: '3365',
+      item_id: 77,
+      listing_status: 'LISTED',
+      source_url: 'https://store.mx/products/kitchen-rush-bundle',
+      title: 'Kitchen Rush Bundle'
+    };
+    const existingAdditionalItem = {
+      canonical_name: 'Kitchen Rush: Piece of Cake',
+      canonical_name_es: '',
+      id: 88,
+      item_type: 'expansion'
+    };
+    const newAdditionalItem = {
+      canonical_name: 'Kitchen Rush: Restaurant Upgrade',
+      canonical_name_es: '',
+      id: 99,
+      item_type: 'expansion'
+    };
+    let additionalItems = [existingAdditionalItem];
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([candidate], 200, { page: 0, page_size: 100, total: 1 });
+      }
+      if (path === '/discovery/listings/3365/additional-items' && !init?.method) {
+        return jsonResponse(additionalItems);
+      }
+      if (path === '/items' && !init?.method) {
+        return jsonResponse(
+          [
+            { canonical_name: 'Kitchen Rush', id: 77 },
+            existingAdditionalItem,
+            newAdditionalItem
+          ],
+          200,
+          { page: 0, page_size: 20, total: 3 }
+        );
+      }
+      if (path === '/discovery/listings/3365/additional-items' && init?.method === 'POST') {
+        additionalItems = [...additionalItems, newAdditionalItem];
+        return jsonResponse(newAdditionalItem, 201);
+      }
+      if (path === '/discovery/listings/3365/additional-items/88' && init?.method === 'DELETE') {
+        additionalItems = additionalItems.filter((item) => item.id !== 88);
+        return jsonResponse({ item_id: 88, store_item_id: 3365 });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    await user.dblClick(await screen.findByText('Kitchen Rush Bundle'));
+    expect(await screen.findByText('Kitchen Rush: Piece of Cake')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Add additional item' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Add Additional Item' });
+    expect(within(dialog).getByRole('textbox', { name: 'Search catalog items' })).toHaveValue('Kitchen Rush Bundle');
+    expect(await within(dialog).findByRole('button', { name: 'Add Kitchen Rush: Restaurant Upgrade' })).toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Add Kitchen Rush' })).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('button', { name: 'Add Kitchen Rush: Piece of Cake' })).not.toBeInTheDocument();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Add Kitchen Rush: Restaurant Upgrade' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Add Additional Item' })).not.toBeInTheDocument());
+    expect(await screen.findByText('Kitchen Rush: Restaurant Upgrade')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Remove Kitchen Rush: Piece of Cake' }));
+    await waitFor(() => expect(screen.queryByText('Kitchen Rush: Piece of Cake')).not.toBeInTheDocument());
+
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/listings/3365/additional-items', {
+      body: JSON.stringify({ item_id: '99' }),
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4001/discovery/listings/3365/additional-items/88',
+      {
+        credentials: 'include',
+        method: 'DELETE'
+      }
+    );
+  });
+
   it('starts a local cover workflow from the store item form', async () => {
     const user = userEvent.setup();
     const originalCandidate = {

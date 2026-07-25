@@ -1134,6 +1134,34 @@ describe('ludora admin service', () => {
     expect(query.params).toEqual(['77']);
   });
 
+  it('returns the additional catalog items linked to a store item', async () => {
+    const rows = [
+      {
+        canonical_name: 'Coffee Rush: Piece of Cake',
+        canonical_name_es: 'Coffee Rush: Piece of Cake',
+        id: 88,
+        item_type: 'expansion'
+      }
+    ];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database })).get('/discovery/listings/3365/additional-items');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('from store_item_additional_items siai');
+    expect(sql).toContain('join items on items.id = siai.item_id');
+    expect(sql).toContain('where siai.store_item_id = $1');
+    expect(queries[0].params).toEqual([3365]);
+  });
+
   it('returns taxonomy metadata linked to a catalog item', async () => {
     const categories = [{ bgg_id: 1021, id: 1, value: 'Economic', value_es: 'Economico' }];
     const mechanics = [{ bgg_id: 2912, id: 2, value: 'Contracts', value_es: 'Contratos' }];
@@ -2586,6 +2614,8 @@ describe('ludora admin service', () => {
     expect(sql).toContain('last_updated = now()');
     expect(sql).toContain('where id = $38');
     expect(sql).toContain('returning id, store_id, source_url, source_listing_url');
+    expect(sql).toContain('delete from store_item_additional_items siai');
+    expect(sql).toContain('siai.item_id = updated_candidate.item_id');
     expect(query.params).toEqual([
       42,
       'https://store.mx/products/kitchen-rush',
@@ -2863,12 +2893,93 @@ describe('ludora admin service', () => {
     expect(sql).toContain("match_source = 'manual'");
     expect(sql).toContain('matched_bgg_id = linked_item.bgg_id');
     expect(sql).toContain('matched_name = linked_item.canonical_name');
+    expect(sql).toContain('delete from store_item_additional_items siai');
+    expect(sql).toContain('siai.item_id = updated_candidate.item_id');
     expect(queries[0].params).toEqual([
       42,
       77,
       JSON.stringify(['Manually associated with an existing catalog item from store item review']),
       JSON.stringify({ item_id: 77, source: 'admin_store_item_review' })
     ]);
+  });
+
+  it('adds an additional catalog item to a store item', async () => {
+    const row = {
+      association_inserted: true,
+      canonical_name: 'Coffee Rush: Piece of Cake',
+      current_primary_item_id: 77,
+      id: 88,
+      item_type: 'expansion'
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/discovery/listings/3365/additional-items')
+      .send({ item_id: '88' });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      data: {
+        canonical_name: 'Coffee Rush: Piece of Cake',
+        id: 88,
+        item_type: 'expansion'
+      }
+    });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('insert into store_item_additional_items (store_item_id, item_id)');
+    expect(sql).toContain('candidate.item_id is distinct from linked_item.id');
+    expect(sql).toContain('on conflict (store_item_id, item_id) do nothing');
+    expect(queries[0].params).toEqual([3365, 88]);
+  });
+
+  it('rejects adding the primary catalog item as an additional item', async () => {
+    const database: Database = {
+      query: async () => ({
+        rows: [
+          {
+            association_inserted: false,
+            canonical_name: 'Coffee Rush',
+            current_primary_item_id: 77,
+            id: 77
+          }
+        ]
+      })
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/discovery/listings/3365/additional-items')
+      .send({ item_id: '77' });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: { message: 'The primary catalog item cannot also be an additional item' }
+    });
+  });
+
+  it('removes an additional catalog item from a store item', async () => {
+    const row = { item_id: 88, store_item_id: 3365 };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).delete('/discovery/listings/3365/additional-items/88');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('delete from store_item_additional_items');
+    expect(sql).toContain('where store_item_id = $1 and item_id = $2');
+    expect(queries[0].params).toEqual([3365, 88]);
   });
 
   it('confirms a store item as boardgame and runs item matching', async () => {

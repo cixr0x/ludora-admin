@@ -1587,6 +1587,100 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.get('/discovery/listings/:id/additional-items', async (request, response, next) => {
+    try {
+      const storeItemId = integerPathParam(request.params.id);
+      const result = await database.query(
+        `
+        select ${itemSelect}
+        from store_item_additional_items siai
+        join items on items.id = siai.item_id
+        where siai.store_item_id = $1
+        order by items.canonical_name asc, items.id asc
+        `,
+        [storeItemId]
+      );
+
+      response.json({ data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/discovery/listings/:id/additional-items', async (request, response, next) => {
+    try {
+      const storeItemId = integerPathParam(request.params.id);
+      const itemId = positiveIntegerBodyField(request.body, 'item_id');
+      const result = await database.query(
+        `
+        with candidate as (
+          select id, item_id
+          from store_items
+          where id = $1
+        ),
+        linked_item as (
+          select *
+          from items
+          where id = $2
+        ),
+        inserted as (
+          insert into store_item_additional_items (store_item_id, item_id)
+          select candidate.id, linked_item.id
+          from candidate
+          cross join linked_item
+          where candidate.item_id is distinct from linked_item.id
+          on conflict (store_item_id, item_id) do nothing
+          returning item_id
+        )
+        select
+          linked_item.*,
+          candidate.item_id as current_primary_item_id,
+          exists (select 1 from inserted) as association_inserted
+        from candidate
+        cross join linked_item
+        `,
+        [storeItemId, itemId]
+      );
+
+      const row = result.rows[0] as Record<string, unknown> | undefined;
+      if (!row) {
+        throw httpError(404, 'Store item or catalog item not found');
+      }
+      if (Number(row.current_primary_item_id) === itemId) {
+        throw httpError(400, 'The primary catalog item cannot also be an additional item');
+      }
+
+      const { association_inserted: _associationInserted, current_primary_item_id: _currentPrimaryItemId, ...item } = row;
+      response.status(201).json({ data: item });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.delete('/discovery/listings/:id/additional-items/:itemId', async (request, response, next) => {
+    try {
+      const storeItemId = integerPathParam(request.params.id);
+      const itemId = integerPathParam(request.params.itemId);
+      const result = await database.query(
+        `
+        delete from store_item_additional_items
+        where store_item_id = $1
+          and item_id = $2
+        returning store_item_id, item_id
+        `,
+        [storeItemId, itemId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Additional item association not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.delete('/discovery/listings/:id', async (request, response, next) => {
     try {
       const candidateId = integerPathParam(request.params.id);
@@ -1963,6 +2057,12 @@ export function createDiscoveryRouter(
           from linked_item
           where store_items.id = $1
           returning store_items.*
+        ),
+        deleted_duplicate_additional_item as (
+          delete from store_item_additional_items siai
+          using updated_candidate
+          where siai.store_item_id = updated_candidate.id
+            and siai.item_id = updated_candidate.item_id
         )
         select ${itemCandidateSelect}
         from updated_candidate
@@ -2009,47 +2109,57 @@ export function createDiscoveryRouter(
       const input = parseItemCandidateInput(request.body);
       const result = await database.query(
         `
-        update store_items
-        set store_id = $1,
-            source_url = $2,
-            source_listing_url = $3,
-            title = $4,
-            publisher = $5,
-            description = $6,
-            item_id = $7,
-            item_type = $8,
-            min_players = $9,
-            max_players = $10,
-            min_minutes = $11,
-            max_minutes = $12,
-            min_age = $13,
-            language = $14,
-            language_source = $15,
-            language_evidence = $16,
-            image_url = $17,
-            listing_status = $18,
-            raw_price = $19,
-            price = $20,
-            price_source = $21,
-            currency = $22,
-            availability = $23,
-            availability_source = $24,
-            store_sku = $25,
-            raw_payload = $26::jsonb,
-            is_boardgame = $27,
-            is_boardgame_confirmed = $28,
-            category_confidence = $29,
-            classification_reasons = $30::jsonb,
-            match_source = $31,
-            matched_bgg_id = $32,
-            matched_name = $33,
-            match_score = $34,
-            match_reasons = $35::jsonb,
-            match_payload = $36::jsonb,
-            processing_error = $37,
-            last_updated = now()
-        where id = $38
-        returning ${itemCandidateSelect}
+        with updated_candidate as (
+          update store_items
+          set store_id = $1,
+              source_url = $2,
+              source_listing_url = $3,
+              title = $4,
+              publisher = $5,
+              description = $6,
+              item_id = $7,
+              item_type = $8,
+              min_players = $9,
+              max_players = $10,
+              min_minutes = $11,
+              max_minutes = $12,
+              min_age = $13,
+              language = $14,
+              language_source = $15,
+              language_evidence = $16,
+              image_url = $17,
+              listing_status = $18,
+              raw_price = $19,
+              price = $20,
+              price_source = $21,
+              currency = $22,
+              availability = $23,
+              availability_source = $24,
+              store_sku = $25,
+              raw_payload = $26::jsonb,
+              is_boardgame = $27,
+              is_boardgame_confirmed = $28,
+              category_confidence = $29,
+              classification_reasons = $30::jsonb,
+              match_source = $31,
+              matched_bgg_id = $32,
+              matched_name = $33,
+              match_score = $34,
+              match_reasons = $35::jsonb,
+              match_payload = $36::jsonb,
+              processing_error = $37,
+              last_updated = now()
+          where id = $38
+          returning ${itemCandidateSelect}
+        ),
+        deleted_duplicate_additional_item as (
+          delete from store_item_additional_items siai
+          using updated_candidate
+          where siai.store_item_id = updated_candidate.id
+            and siai.item_id = updated_candidate.item_id
+        )
+        select ${itemCandidateSelect}
+        from updated_candidate
         `,
         [...itemCandidateParams(input), request.params.id]
       );

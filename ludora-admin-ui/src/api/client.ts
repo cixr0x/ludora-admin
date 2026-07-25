@@ -514,6 +514,19 @@ export const adminApi = {
   getItemCandidates: () => fetchRows('/discovery/listings'),
   getItemCandidate: (id: string) => fetchData<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`),
   getItemCandidatesPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/discovery/listings', query), query),
+  getStoreItemAdditionalItems: (id: string) =>
+    fetchRows<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/additional-items`),
+  addStoreItemAdditionalItem: (id: string, itemId: string) =>
+    sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/additional-items`, 'POST', {
+      item_id: itemId
+    }),
+  deleteStoreItemAdditionalItem: (id: string, itemId: string) =>
+    fetchData<AdminRecord>(
+      `/discovery/listings/${encodeURIComponent(id)}/additional-items/${encodeURIComponent(itemId)}`,
+      {
+        method: 'DELETE'
+      }
+    ),
   deleteItemCandidate: (id: string) =>
     fetchData<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`, {
       method: 'DELETE'
