@@ -807,46 +807,54 @@ create table if not exists item_relationships (
 );
 
 create or replace view active_item as
+with eligible_item_links as (
+    select
+        primary_store_item.item_id,
+        primary_store_item.listing_status
+    from store_items primary_store_item
+    where primary_store_item.item_id is not null
+      and primary_store_item.is_boardgame = true
+      and primary_store_item.is_boardgame_confirmed = true
+
+    union all
+
+    select
+        additional_link.item_id,
+        bundled_store_item.listing_status
+    from store_item_additional_items additional_link
+    join store_items bundled_store_item
+      on bundled_store_item.id = additional_link.store_item_id
+    where bundled_store_item.is_boardgame = true
+      and bundled_store_item.is_boardgame_confirmed = true
+),
+active_item_links as (
+    select
+        eligible_item_links.item_id,
+        coalesce(
+            bool_or(eligible_item_links.listing_status = 'LISTED'),
+            false
+        ) as has_approved_listing
+    from eligible_item_links
+    group by eligible_item_links.item_id
+)
 select
-    i.*,
+    catalog_item.*,
+    active_item_links.has_approved_listing,
     exists (
         select 1
-        from store_items si
+        from item_relationships relationship
         where (
-            si.item_id = i.id
-            or exists (
-                select 1
-                from store_item_additional_items siai
-                where siai.store_item_id = si.id
-                  and siai.item_id = i.id
-            )
+            relationship.link_type = 'extension'
+            and relationship.item_a_id = catalog_item.id
         )
-          and si.is_boardgame = true
-          and si.is_boardgame_confirmed = true
-          and si.listing_status = 'LISTED'
-    ) as has_approved_listing,
-    exists (
-        select 1
-        from item_relationships ir
-        where (ir.link_type = 'extension' and ir.item_a_id = i.id)
-           or (ir.link_type = 'expansion' and ir.item_b_id = i.id)
+        or (
+            relationship.link_type = 'expansion'
+            and relationship.item_b_id = catalog_item.id
+        )
     ) as is_expansion
-from items i
-where exists (
-    select 1
-    from store_items si
-    where (
-        si.item_id = i.id
-        or exists (
-            select 1
-            from store_item_additional_items siai
-            where siai.store_item_id = si.id
-              and siai.item_id = i.id
-        )
-    )
-      and si.is_boardgame = true
-      and si.is_boardgame_confirmed = true
-);
+from active_item_links
+join items catalog_item
+  on catalog_item.id = active_item_links.item_id;
 
 create table if not exists item_themes (
     item_id bigint not null references items(id) on delete cascade,
