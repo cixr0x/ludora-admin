@@ -641,6 +641,109 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByRole('table', { name: 'Store items' })).toBeInTheDocument();
   });
 
+  it.each([
+    {
+      actionLabel: 'Change linked item',
+      currentItemId: 77,
+      scenario: 'changes the existing linked item'
+    },
+    {
+      actionLabel: 'Link item',
+      currentItemId: null,
+      scenario: 'links an item when none is assigned'
+    }
+  ])('$scenario from the store item details', async ({ actionLabel, currentItemId }) => {
+    const user = userEvent.setup();
+    const originalCandidate = {
+      id: '3365',
+      item_id: currentItemId,
+      listing_status: 'LISTED',
+      source_url: 'https://store.mx/products/kitchen-rush-bundle',
+      title: 'Kitchen Rush Bundle'
+    };
+    const currentItem = {
+      canonical_name: 'Kitchen Rush',
+      canonical_name_es: '',
+      id: 77,
+      image_url: 'https://catalog.mx/kitchen-rush.jpg'
+    };
+    const replacementItem = {
+      canonical_name: 'Kitchen Rush: Restaurant Upgrade',
+      canonical_name_es: 'Kitchen Rush: Mejora del Restaurante',
+      id: 99,
+      image_url: '',
+      image_url_es: 'https://catalog.mx/kitchen-rush-restaurant-upgrade-es.jpg'
+    };
+    const linkedCandidate = { ...originalCandidate, item_id: 99, match_source: 'MANUAL' };
+    let associated = false;
+
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([associated ? linkedCandidate : originalCandidate], 200, {
+          page: 0,
+          page_size: 100,
+          total: 1
+        });
+      }
+      if (path === '/discovery/listings/3365/additional-items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77' && !init?.method) {
+        return jsonResponse(currentItem);
+      }
+      if (path === '/items/99' && !init?.method) {
+        return jsonResponse(replacementItem);
+      }
+      if (path === '/items' && !init?.method) {
+        return jsonResponse([currentItem, replacementItem], 200, { page: 0, page_size: 20, total: 2 });
+      }
+      if (path === '/discovery/listings/3365/associate-item' && init?.method === 'POST') {
+        associated = true;
+        return jsonResponse(linkedCandidate);
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    await user.dblClick(await screen.findByText('Kitchen Rush Bundle'));
+    if (currentItemId) {
+      expect(await screen.findByText('Kitchen Rush')).toBeInTheDocument();
+    } else {
+      expect(screen.getByText('No primary catalog item is linked.')).toBeInTheDocument();
+    }
+
+    await user.click(screen.getByRole('button', { name: actionLabel }));
+    const dialog = await screen.findByRole('dialog', { name: 'Link Catalog Item' });
+    expect(within(dialog).getByRole('textbox', { name: 'Search catalog items' })).toHaveValue('Kitchen Rush Bundle');
+    expect(
+      await within(dialog).findByRole('button', { name: 'Associate with Kitchen Rush: Mejora del Restaurante' })
+    ).toBeInTheDocument();
+    if (currentItemId) {
+      expect(within(dialog).queryByRole('button', { name: 'Associate with Kitchen Rush' })).not.toBeInTheDocument();
+    }
+
+    await user.click(
+      within(dialog).getByRole('button', { name: 'Associate with Kitchen Rush: Mejora del Restaurante' })
+    );
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Link Catalog Item' })).not.toBeInTheDocument());
+    expect(await screen.findByText('Kitchen Rush: Mejora del Restaurante')).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Kitchen Rush: Mejora del Restaurante cover' })).toHaveAttribute(
+      'src',
+      'https://catalog.mx/kitchen-rush-restaurant-upgrade-es.jpg'
+    );
+    expect(screen.getByLabelText('Item ID')).toHaveValue('99');
+    expect(screen.getByText('Store item associated with Kitchen Rush: Mejora del Restaurante.')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/listings/3365/associate-item', {
+      body: JSON.stringify({ item_id: '99' }),
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
   it('adds and removes additional catalog items from the store item details', async () => {
     const user = userEvent.setup();
     const candidate = {

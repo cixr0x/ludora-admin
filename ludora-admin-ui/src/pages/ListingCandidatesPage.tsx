@@ -784,6 +784,17 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     }
   }
 
+  function handlePrimaryItemAssociated(savedCandidate: AdminRecord, item: AdminRecord) {
+    const candidateId = field(savedCandidate, ['id'], '');
+    setRows((currentRows) =>
+      currentRows.map((row, index) => (field(row, ['id'], String(index)) === candidateId ? savedCandidate : row))
+    );
+    setSelectedCandidate(savedCandidate);
+    setSaveError('');
+    setSaveMessage(`Store item associated with ${catalogItemDisplayName(item)}.`);
+    table.refresh();
+  }
+
   async function handleDeleteCandidate(): Promise<boolean> {
     if (!selectedCandidate) {
       return false;
@@ -988,6 +999,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
           }}
           onCreateItemFromBggId={handleCreateItemFromBggId}
           onDelete={handleDeleteCandidate}
+          onPrimaryItemAssociated={handlePrimaryItemAssociated}
           onSave={handleSaveCandidate}
           onCreateItem={handleCreateItemFromCandidate}
           onStartCoverFlattening={handleStartCoverFlattening}
@@ -1042,6 +1054,7 @@ function ItemCandidateForm({
   onCreateItemFromBggId,
   onCreateItem,
   onDelete,
+  onPrimaryItemAssociated,
   onSave,
   onStartCoverFlattening,
   onStartLocalCoverWorkflow,
@@ -1059,6 +1072,7 @@ function ItemCandidateForm({
   onCreateItemFromBggId: (bggId: string) => void;
   onCreateItem: (input?: CreateItemFromCandidateInput) => Promise<void>;
   onDelete: () => Promise<boolean>;
+  onPrimaryItemAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
   onStartCoverFlattening: (candidate: AdminRecord) => void;
   onStartLocalCoverWorkflow: (candidate: AdminRecord) => void;
@@ -1272,7 +1286,12 @@ function ItemCandidateForm({
           </Stack>
         </Stack>
 
-        <PrimaryItemSection itemId={itemId} />
+        <PrimaryItemSection
+          itemId={itemId}
+          storeItemId={candidateIdValue}
+          storeItemTitle={title}
+          onAssociated={onPrimaryItemAssociated}
+        />
 
         <AdditionalItemsSection
           primaryItemId={itemId}
@@ -1402,7 +1421,20 @@ function ItemCandidateForm({
   );
 }
 
-function PrimaryItemSection({ itemId }: { itemId: string }) {
+function PrimaryItemSection({
+  itemId,
+  onAssociated,
+  storeItemId,
+  storeItemTitle
+}: {
+  itemId: string;
+  onAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
+  storeItemId: string;
+  storeItemTitle: string;
+}) {
+  const [error, setError] = useState('');
+  const [isAssociating, setIsAssociating] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [item, setItem] = useState<AdminRecord | null>(null);
   const [loadState, setLoadState] = useState<LoadState>(itemId ? 'loading' : 'ready');
 
@@ -1439,52 +1471,113 @@ function PrimaryItemSection({ itemId }: { itemId: string }) {
   const linkedItemId = item ? field(item, ['id'], itemId) : itemId;
   const itemName = item ? catalogItemDisplayName(item) : '';
   const imageUrl = item ? catalogItemImageUrl(item) : '';
+  const excludedItemIds = useMemo(() => new Set(itemId ? [itemId] : []), [itemId]);
+
+  async function handleAssociate(selectedItem: AdminRecord) {
+    const selectedItemId = field(selectedItem, ['id'], '');
+    if (!storeItemId || !selectedItemId) {
+      setError('The store item or catalog item is missing an ID.');
+      return;
+    }
+
+    setIsAssociating(true);
+    setError('');
+    try {
+      const savedCandidate = await adminApi.associateItemCandidate(storeItemId, selectedItemId);
+      onAssociated(savedCandidate, selectedItem);
+      setIsSearchOpen(false);
+    } catch {
+      setError('The store item could not be associated with this catalog item.');
+    } finally {
+      setIsAssociating(false);
+    }
+  }
 
   return (
-    <Paper sx={{ p: 2 }} variant="outlined">
-      <Stack spacing={1.5}>
-        <Box>
-          <Typography fontWeight={700}>Linked item</Typography>
-          <Typography color="text.secondary" variant="body2">
-            Primary catalog item for this store item.
-          </Typography>
-        </Box>
-
-        {!itemId ? <Alert severity="info">No primary catalog item is linked.</Alert> : null}
-        {loadState === 'loading' ? (
-          <Stack alignItems="center" direction="row" spacing={1.5}>
-            <CircularProgress size={18} />
-            <Typography color="text.secondary" variant="body2">
-              Loading linked item
-            </Typography>
-          </Stack>
-        ) : null}
-        {loadState === 'error' ? <Alert severity="error">Linked item details could not be loaded.</Alert> : null}
-        {loadState === 'ready' && item ? (
+    <>
+      <Paper sx={{ p: 2 }} variant="outlined">
+        <Stack spacing={1.5}>
           <Stack
-            alignItems="center"
-            direction="row"
-            spacing={1.5}
-            sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}
+            alignItems={{ sm: 'center', xs: 'stretch' }}
+            direction={{ sm: 'row', xs: 'column' }}
+            justifyContent="space-between"
+            spacing={1}
           >
-            <Avatar
-              alt={`${itemName} cover`}
-              src={imageUrl || undefined}
-              sx={{ bgcolor: 'grey.100', height: 72, width: 72, '& img': { objectFit: 'contain' } }}
-              variant="rounded"
-            />
-            <Box sx={{ minWidth: 0 }}>
-              <Link href={`#items?id=${encodeURIComponent(linkedItemId)}`} sx={{ fontWeight: 600 }}>
-                {itemName}
-              </Link>
-              <Typography color="text.secondary" variant="caption">
-                Item {linkedItemId}
+            <Box>
+              <Typography fontWeight={700}>Linked item</Typography>
+              <Typography color="text.secondary" variant="body2">
+                Primary catalog item for this store item.
               </Typography>
             </Box>
+            <Button
+              disabled={!storeItemId || loadState === 'loading'}
+              startIcon={<AddCircleIcon />}
+              type="button"
+              variant="outlined"
+              onClick={() => {
+                setError('');
+                setIsSearchOpen(true);
+              }}
+            >
+              {itemId ? 'Change linked item' : 'Link item'}
+            </Button>
           </Stack>
-        ) : null}
-      </Stack>
-    </Paper>
+
+          {!itemId ? <Alert severity="info">No primary catalog item is linked.</Alert> : null}
+          {error && !isSearchOpen ? <Alert severity="error">{error}</Alert> : null}
+          {loadState === 'loading' ? (
+            <Stack alignItems="center" direction="row" spacing={1.5}>
+              <CircularProgress size={18} />
+              <Typography color="text.secondary" variant="body2">
+                Loading linked item
+              </Typography>
+            </Stack>
+          ) : null}
+          {loadState === 'error' ? <Alert severity="error">Linked item details could not be loaded.</Alert> : null}
+          {loadState === 'ready' && item ? (
+            <Stack
+              alignItems="center"
+              direction="row"
+              spacing={1.5}
+              sx={{ border: 1, borderColor: 'divider', borderRadius: 1, p: 1 }}
+            >
+              <Avatar
+                alt={`${itemName} cover`}
+                src={imageUrl || undefined}
+                sx={{ bgcolor: 'grey.100', height: 72, width: 72, '& img': { objectFit: 'contain' } }}
+                variant="rounded"
+              />
+              <Box sx={{ minWidth: 0 }}>
+                <Link href={`#items?id=${encodeURIComponent(linkedItemId)}`} sx={{ fontWeight: 600 }}>
+                  {itemName}
+                </Link>
+                <Typography color="text.secondary" variant="caption">
+                  Item {linkedItemId}
+                </Typography>
+              </Box>
+            </Stack>
+          ) : null}
+        </Stack>
+      </Paper>
+
+      <CatalogItemSearchDialog
+        dialogTitle="Link Catalog Item"
+        error={error}
+        excludedItemIds={excludedItemIds}
+        initialQuery={storeItemTitle}
+        isSubmitting={isAssociating}
+        listAriaLabel="Catalog item matches"
+        open={isSearchOpen}
+        resultActionLabel="Associate with"
+        onClose={() => {
+          if (!isAssociating) {
+            setIsSearchOpen(false);
+            setError('');
+          }
+        }}
+        onSelect={handleAssociate}
+      />
+    </>
   );
 }
 
@@ -1534,7 +1627,7 @@ function AdditionalItemsSection({
     return () => {
       ignore = true;
     };
-  }, [storeItemId]);
+  }, [primaryItemId, storeItemId]);
 
   const excludedItemIds = useMemo(
     () =>
@@ -1678,39 +1771,48 @@ function AdditionalItemsSection({
         </Stack>
       </Paper>
 
-      <AdditionalItemSearchDialog
+      <CatalogItemSearchDialog
+        dialogTitle="Add Additional Item"
         error={error}
         excludedItemIds={excludedItemIds}
         initialQuery={storeItemTitle}
-        isAdding={isAdding}
+        isSubmitting={isAdding}
+        listAriaLabel="Additional catalog item matches"
         open={isSearchOpen}
-        onAdd={handleAdd}
+        resultActionLabel="Add"
         onClose={() => {
           if (!isAdding) {
             setIsSearchOpen(false);
             setError('');
           }
         }}
+        onSelect={handleAdd}
       />
     </>
   );
 }
 
-function AdditionalItemSearchDialog({
+function CatalogItemSearchDialog({
+  dialogTitle,
   error,
   excludedItemIds,
   initialQuery,
-  isAdding,
-  onAdd,
+  isSubmitting,
+  listAriaLabel,
   onClose,
+  onSelect,
+  resultActionLabel,
   open
 }: {
+  dialogTitle: string;
   error: string;
   excludedItemIds: Set<string>;
   initialQuery: string;
-  isAdding: boolean;
-  onAdd: (item: AdminRecord) => Promise<void>;
+  isSubmitting: boolean;
+  listAriaLabel: string;
   onClose: () => void;
+  onSelect: (item: AdminRecord) => Promise<void>;
+  resultActionLabel: string;
   open: boolean;
 }) {
   const [isSearching, setIsSearching] = useState(false);
@@ -1782,13 +1884,13 @@ function AdditionalItemSearchDialog({
   }, [excludedItemIds, open, query]);
 
   return (
-    <Dialog fullWidth maxWidth="sm" open={open} onClose={isAdding ? undefined : onClose}>
-      <DialogTitle>Add Additional Item</DialogTitle>
+    <Dialog fullWidth maxWidth="sm" open={open} onClose={isSubmitting ? undefined : onClose}>
+      <DialogTitle>{dialogTitle}</DialogTitle>
       <DialogContent>
         <Stack spacing={2} sx={{ pt: 0.5 }}>
           <TextField
             autoFocus
-            disabled={isAdding}
+            disabled={isSubmitting}
             fullWidth
             label="Search catalog items"
             placeholder="Type at least 2 characters"
@@ -1812,7 +1914,7 @@ function AdditionalItemSearchDialog({
           ) : null}
           {!isSearching && results.length > 0 ? (
             <List
-              aria-label="Additional catalog item matches"
+              aria-label={listAriaLabel}
               disablePadding
               sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 480, overflowY: 'auto' }}
             >
@@ -1824,10 +1926,10 @@ function AdditionalItemSearchDialog({
                 const imageUrl = field(item, ['image_url_es', 'image_url'], '');
                 return (
                   <ListItemButton
-                    aria-label={`Add ${primaryName}`}
-                    disabled={isAdding || !itemId}
+                    aria-label={`${resultActionLabel} ${primaryName}`}
+                    disabled={isSubmitting || !itemId}
                     key={itemId}
-                    onClick={() => void onAdd(item)}
+                    onClick={() => void onSelect(item)}
                   >
                     <ListItemAvatar>
                       <Avatar alt={`${primaryName} cover`} src={imageUrl} sx={{ bgcolor: 'grey.100' }} variant="rounded" />
@@ -1844,7 +1946,7 @@ function AdditionalItemSearchDialog({
         </Stack>
       </DialogContent>
       <DialogActions>
-        <Button disabled={isAdding} type="button" onClick={onClose}>
+        <Button disabled={isSubmitting} type="button" onClick={onClose}>
           Close
         </Button>
       </DialogActions>
