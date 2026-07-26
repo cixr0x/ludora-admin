@@ -18,7 +18,7 @@ from ludora.product_crawler import (
     crawl_store_product_details,
     update_confirmed_store_item_details,
 )
-from ludora.webfetch import FetchResult
+from ludora.webfetch import FetchResult, PerHostRequestThrottle
 
 
 class FakeRepository:
@@ -1251,6 +1251,125 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(retry_pool_started["item_count"], 2)
         completed = [fields for event, fields in trace.events if event == "item_update.item.completed"]
         self.assertEqual([fields["store_item_id"] for fields in completed], [58, 56, 57])
+
+    def test_update_confirmed_shopify_items_throttles_and_defers_429_without_browser_retry(self):
+        rate_limited_item = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://shop.example/products/catan",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        other_store_item = DiscoveryItemCandidateRecord(
+            store_item_id=57,
+            store_id=34,
+            source_url="https://other.example/products/azul",
+            title="Azul",
+            item_id=78,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        cooled_store_item = DiscoveryItemCandidateRecord(
+            store_item_id=58,
+            store_id=12,
+            source_url="https://shop.example/products/splendor",
+            title="Splendor",
+            item_id=79,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        candidates = [rate_limited_item, other_store_item, cooled_store_item]
+        repository = FakeRepository(
+            confirmed_items=candidates,
+            store_platforms={12: "shopify", 34: "custom"},
+        )
+        trace = FakeTraceLogger()
+        fetch_order = []
+        browser_fetches = []
+        attempts_by_url = {candidate.source_url: 0 for candidate in candidates}
+        clock_value = [0.0]
+        waits = []
+
+        def clock():
+            return clock_value[0]
+
+        def wait(delay_seconds, _cancellation_token):
+            waits.append(delay_seconds)
+            clock_value[0] += delay_seconds
+
+        throttle = PerHostRequestThrottle(
+            minimum_interval_seconds=2.0,
+            jitter_seconds=0.0,
+            fallback_cooldown_seconds=30.0,
+            clock=clock,
+            waiter=wait,
+        )
+
+        def fetch_detail(url, include_http_error_status=False):
+            self.assertTrue(include_http_error_status)
+            fetch_order.append(url)
+            attempts_by_url[url] += 1
+            if url == rate_limited_item.source_url and attempts_by_url[url] == 1:
+                return FetchResult(url=url, text="", status_code=429, retry_after_seconds=120.0)
+            title = next(candidate.title for candidate in candidates if candidate.source_url == url)
+            return FetchResult(
+                url=url,
+                text=f'<script type="application/ld+json">{{"@type":"Product","name":"{title}"}}</script>',
+            )
+
+        def browser_fetch(url):
+            browser_fetches.append(url)
+            return FetchResult(url=url, text="")
+
+        with patch("ludora.product_crawler.random.shuffle"), patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=fetch_detail,
+        ) as fetch_html:
+            records = update_confirmed_store_item_details(
+                repository,
+                browser_fetch_enabled=True,
+                browser_fetcher=browser_fetch,
+                job_id=99,
+                run_id="run-shopify-throttle",
+                shopify_throttle=throttle,
+                trace_logger=trace,
+            )
+
+        self.assertEqual(fetch_html.call_count, 4)
+        self.assertEqual(
+            fetch_order,
+            [
+                rate_limited_item.source_url,
+                other_store_item.source_url,
+                cooled_store_item.source_url,
+                rate_limited_item.source_url,
+            ],
+        )
+        self.assertEqual(browser_fetches, [])
+        self.assertEqual(waits, [120.0, 2.0])
+        self.assertEqual([record.store_item_id for record in records], [57, 58, 56])
+        event_names = [event for event, _fields in trace.events]
+        self.assertIn("item_update.store.cooldown.started", event_names)
+        self.assertIn("item_update.item.cooldown.deferred", event_names)
+        self.assertEqual(event_names.count("item_update.store.throttle.wait"), 2)
+        self.assertNotIn("item_update.item.fetch.retry.scheduled", event_names)
+        cooldown_pool = next(
+            fields
+            for event, fields in trace.events
+            if event == "item_update.pool.started" and fields["pool"] == "cooldown"
+        )
+        retry_pool = next(
+            fields
+            for event, fields in trace.events
+            if event == "item_update.pool.started" and fields["pool"] == "retry"
+        )
+        self.assertEqual(cooldown_pool["item_count"], 1)
+        self.assertEqual(retry_pool["item_count"], 1)
 
     def test_update_confirmed_store_item_details_fails_on_first_retry_pool_failure(self):
         candidates = [

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from http.client import HTTPException
+from random import uniform
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from ludora.cancellation import CancellationToken, raise_if_cancelled
@@ -28,6 +30,88 @@ class FetchResult:
     retry_after_seconds: float | None = None
     error: str | None = None
     error_type: str | None = None
+
+
+@dataclass(frozen=True)
+class HostThrottleWait:
+    host: str
+    delay_seconds: float
+    reason: str
+
+
+class PerHostRequestThrottle:
+    def __init__(
+        self,
+        *,
+        minimum_interval_seconds: float,
+        jitter_seconds: float = 0.0,
+        fallback_cooldown_seconds: float = 30.0,
+        maximum_cooldown_seconds: float = DEFAULT_FETCH_RETRY_MAX_SECONDS,
+        clock: Callable[[], float] | None = None,
+        waiter: Callable[[float, CancellationToken | None], None] | None = None,
+        jitter: Callable[[float, float], float] | None = None,
+    ):
+        self.minimum_interval_seconds = max(0.0, minimum_interval_seconds)
+        self.jitter_seconds = max(0.0, jitter_seconds)
+        self.fallback_cooldown_seconds = max(0.0, fallback_cooldown_seconds)
+        self.maximum_cooldown_seconds = max(0.0, maximum_cooldown_seconds)
+        self._clock = clock or time.monotonic
+        self._waiter = waiter or _wait_for_fetch_retry
+        self._jitter = jitter or uniform
+        self._next_request_at: dict[str, float] = {}
+        self._cooldown_until: dict[str, float] = {}
+
+    def cooldown_remaining(self, url: str) -> float:
+        host = _request_host(url)
+        if not host:
+            return 0.0
+        return max(0.0, self._cooldown_until.get(host, 0.0) - self._clock())
+
+    def start_cooldown(self, url: str, retry_after_seconds: float | None) -> float:
+        host = _request_host(url)
+        if not host:
+            return 0.0
+        requested_delay = (
+            self.fallback_cooldown_seconds
+            if retry_after_seconds is None
+            else max(0.0, retry_after_seconds)
+        )
+        delay_seconds = min(self.maximum_cooldown_seconds, requested_delay)
+        self._cooldown_until[host] = max(
+            self._cooldown_until.get(host, 0.0),
+            self._clock() + delay_seconds,
+        )
+        return delay_seconds
+
+    def wait_before_request(
+        self,
+        url: str,
+        cancellation_token: CancellationToken | None = None,
+        on_wait: Callable[[HostThrottleWait], None] | None = None,
+    ) -> HostThrottleWait:
+        host = _request_host(url)
+        if not host:
+            return HostThrottleWait(host="", delay_seconds=0.0, reason="")
+
+        now = self._clock()
+        cooldown_until = self._cooldown_until.get(host, 0.0)
+        paced_until = self._next_request_at.get(host, 0.0)
+        ready_at = max(cooldown_until, paced_until)
+        delay_seconds = max(0.0, ready_at - now)
+        reason = "cooldown" if cooldown_until >= paced_until and cooldown_until > now else "pacing"
+        if delay_seconds > 0.0:
+            if on_wait is not None:
+                on_wait(HostThrottleWait(host=host, delay_seconds=delay_seconds, reason=reason))
+            self._waiter(delay_seconds, cancellation_token)
+
+        request_started_at = self._clock()
+        jitter_seconds = self._jitter(0.0, self.jitter_seconds) if self.jitter_seconds > 0.0 else 0.0
+        self._next_request_at[host] = (
+            request_started_at + self.minimum_interval_seconds + max(0.0, jitter_seconds)
+        )
+        if self._cooldown_until.get(host, 0.0) <= request_started_at:
+            self._cooldown_until.pop(host, None)
+        return HostThrottleWait(host=host, delay_seconds=delay_seconds, reason=reason if delay_seconds > 0.0 else "")
 
 
 def fetch_html(
@@ -88,6 +172,7 @@ def fetch_with_transient_retries(
     ambiguous_failure_attempts: int = 1,
     max_attempts: int = DEFAULT_FETCH_MAX_ATTEMPTS,
     trace_attempts: bool = False,
+    immediate_return_status_codes: Collection[int] = (),
 ) -> FetchResult | None:
     trace = trace_logger or NullTraceLogger()
     resolved_trace_fields = dict(trace_fields or {})
@@ -143,6 +228,21 @@ def fetch_with_transient_retries(
                     will_retry=False,
                     include_message=trace_attempts,
                 )
+            return fetched
+
+        if fetched.status_code in immediate_return_status_codes:
+            _log_http_error(
+                trace,
+                trace_event,
+                resolved_trace_fields,
+                attempt=attempt,
+                max_attempts=resolved_max_attempts,
+                fetched=fetched,
+                retry_in_seconds=0.0,
+                source_url=url,
+                will_retry=False,
+                include_message=trace_attempts,
+            )
             return fetched
 
         will_retry = attempt < resolved_max_attempts
@@ -267,3 +367,7 @@ def _log_retry_scheduled(
 def _related_trace_event(event: str, suffix: str) -> str:
     prefix = event.removesuffix(".http_error")
     return f"{prefix}.{suffix}"
+
+
+def _request_host(url: str) -> str:
+    return (urlparse(url).hostname or "").strip().casefold()

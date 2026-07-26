@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.webfetch import FetchResult, fetch_html, fetch_with_transient_retries
+from ludora.webfetch import FetchResult, PerHostRequestThrottle, fetch_html, fetch_with_transient_retries
 
 
 class WebFetchTests(unittest.TestCase):
@@ -120,6 +120,73 @@ class WebFetchTests(unittest.TestCase):
         self.assertEqual(trace.log.call_args_list[0].kwargs["status_code"], 429)
         self.assertEqual(trace.log.call_args_list[1].kwargs["retry_in_seconds"], 60)
         wait_for_retry.assert_called_once_with(60, None)
+
+    def test_configured_transient_status_returns_immediately_for_outer_scheduling(self):
+        trace = Mock()
+        fetcher = Mock(
+            side_effect=[
+                FetchResult(
+                    url="https://shop.example/products/catan",
+                    text="",
+                    status_code=429,
+                    retry_after_seconds=120,
+                ),
+                FetchResult(url="https://shop.example/products/catan", text="<html></html>"),
+            ]
+        )
+
+        with patch("ludora.webfetch._wait_for_fetch_retry") as wait_for_retry:
+            result = fetch_with_transient_retries(
+                "https://shop.example/products/catan",
+                fetcher,
+                trace_event="item_update.item.fetch.http_error",
+                trace_logger=trace,
+                trace_attempts=True,
+                immediate_return_status_codes={429},
+            )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status_code, 429)
+        self.assertEqual(fetcher.call_count, 1)
+        wait_for_retry.assert_not_called()
+        self.assertEqual([call.args[0] for call in trace.log.call_args_list], ["item_update.item.fetch.http_error"])
+        self.assertFalse(trace.log.call_args.kwargs["will_retry"])
+
+    def test_per_host_throttle_spaces_requests_and_honors_cooldown(self):
+        clock_value = [10.0]
+        waits = []
+
+        def clock():
+            return clock_value[0]
+
+        def wait(delay_seconds, _cancellation_token):
+            waits.append(delay_seconds)
+            clock_value[0] += delay_seconds
+
+        throttle = PerHostRequestThrottle(
+            minimum_interval_seconds=2.0,
+            jitter_seconds=1.0,
+            fallback_cooldown_seconds=30.0,
+            clock=clock,
+            waiter=wait,
+            jitter=lambda _minimum, _maximum: 1.0,
+        )
+
+        first = throttle.wait_before_request("https://shop.example/products/catan")
+        second = throttle.wait_before_request("https://shop.example/products/azul")
+        other_host = throttle.wait_before_request("https://other.example/products/catan")
+        cooldown = throttle.start_cooldown("https://shop.example/products/catan", 120.0)
+        after_cooldown = throttle.wait_before_request("https://shop.example/products/splendor")
+
+        self.assertEqual(first.delay_seconds, 0.0)
+        self.assertEqual(second.delay_seconds, 3.0)
+        self.assertEqual(second.reason, "pacing")
+        self.assertEqual(other_host.delay_seconds, 0.0)
+        self.assertEqual(cooldown, 120.0)
+        self.assertEqual(after_cooldown.delay_seconds, 120.0)
+        self.assertEqual(after_cooldown.reason, "cooldown")
+        self.assertEqual(waits, [3.0, 120.0])
 
 
 if __name__ == "__main__":
