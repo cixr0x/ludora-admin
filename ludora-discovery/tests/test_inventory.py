@@ -119,6 +119,14 @@ class FakeTraceLogger:
 
 
 class InventoryTests(unittest.TestCase):
+    def setUp(self):
+        interval_patcher = patch("ludora.product_crawler.STORE_UPDATE_MIN_INTERVAL_SECONDS", 0.0)
+        jitter_patcher = patch("ludora.product_crawler.STORE_UPDATE_JITTER_SECONDS", 0.0)
+        interval_patcher.start()
+        jitter_patcher.start()
+        self.addCleanup(interval_patcher.stop)
+        self.addCleanup(jitter_patcher.stop)
+
     def test_title_tokens_expand_common_ligatures_before_ascii_folding(self):
         self.assertEqual(
             _significant_text_tokens("Æterna Œuvre Straße"),
@@ -1252,7 +1260,7 @@ class InventoryTests(unittest.TestCase):
         completed = [fields for event, fields in trace.events if event == "item_update.item.completed"]
         self.assertEqual([fields["store_item_id"] for fields in completed], [58, 56, 57])
 
-    def test_update_confirmed_shopify_items_throttles_and_defers_429_without_browser_retry(self):
+    def test_update_confirmed_items_throttle_every_store_and_defer_429_without_browser_retry(self):
         rate_limited_item = DiscoveryItemCandidateRecord(
             store_item_id=56,
             store_id=12,
@@ -1286,7 +1294,7 @@ class InventoryTests(unittest.TestCase):
         candidates = [rate_limited_item, other_store_item, cooled_store_item]
         repository = FakeRepository(
             confirmed_items=candidates,
-            store_platforms={12: "shopify", 34: "custom"},
+            store_platforms={12: "woocommerce", 34: "custom"},
         )
         trace = FakeTraceLogger()
         fetch_order = []
@@ -1335,8 +1343,8 @@ class InventoryTests(unittest.TestCase):
                 browser_fetch_enabled=True,
                 browser_fetcher=browser_fetch,
                 job_id=99,
-                run_id="run-shopify-throttle",
-                shopify_throttle=throttle,
+                run_id="run-store-throttle",
+                request_throttle=throttle,
                 trace_logger=trace,
             )
 

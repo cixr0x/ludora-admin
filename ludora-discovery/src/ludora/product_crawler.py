@@ -26,10 +26,9 @@ from ludora.webfetch import (
 
 
 AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
-SHOPIFY_STORE_PLATFORMS = {"shopify"}
-SHOPIFY_UPDATE_MIN_INTERVAL_SECONDS = 2.0
-SHOPIFY_UPDATE_JITTER_SECONDS = 1.0
-SHOPIFY_UPDATE_FALLBACK_COOLDOWN_SECONDS = 30.0
+STORE_UPDATE_MIN_INTERVAL_SECONDS = 2.0
+STORE_UPDATE_JITTER_SECONDS = 1.0
+STORE_UPDATE_FALLBACK_COOLDOWN_SECONDS = 30.0
 ASCII_LIGATURE_TRANSLATION = str.maketrans({"æ": "ae", "œ": "oe", "ß": "ss"})
 GENERIC_TITLE_MATCH_TOKENS = {
     "base",
@@ -381,7 +380,7 @@ def update_confirmed_store_item_details(
     store_ids: list[int] | None = None,
     item_title_extractor: ItemTitleExtractor | None = None,
     trace_logger: TraceLogger | None = None,
-    shopify_throttle: PerHostRequestThrottle | None = None,
+    request_throttle: PerHostRequestThrottle | None = None,
 ) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
@@ -394,10 +393,10 @@ def update_confirmed_store_item_details(
         source.store_id: str(getattr(source, "store_name", "")).strip() or f"Store {source.store_id}"
         for source in store_sources
     }
-    resolved_shopify_throttle = shopify_throttle or PerHostRequestThrottle(
-        minimum_interval_seconds=SHOPIFY_UPDATE_MIN_INTERVAL_SECONDS,
-        jitter_seconds=SHOPIFY_UPDATE_JITTER_SECONDS,
-        fallback_cooldown_seconds=SHOPIFY_UPDATE_FALLBACK_COOLDOWN_SECONDS,
+    resolved_request_throttle = request_throttle or PerHostRequestThrottle(
+        minimum_interval_seconds=STORE_UPDATE_MIN_INTERVAL_SECONDS,
+        jitter_seconds=STORE_UPDATE_JITTER_SECONDS,
+        fallback_cooldown_seconds=STORE_UPDATE_FALLBACK_COOLDOWN_SECONDS,
     )
     browser_session = None
     if browser_fetch_enabled and browser_fetcher is None:
@@ -463,8 +462,8 @@ def update_confirmed_store_item_details(
                     pool_item_count=len(candidate_pool),
                     pool_item_index=item_index,
                 )
-                if platform in SHOPIFY_STORE_PLATFORMS and pool_name == "normal":
-                    cooldown_remaining = resolved_shopify_throttle.cooldown_remaining(existing_record.source_url)
+                if pool_name == "normal":
+                    cooldown_remaining = resolved_request_throttle.cooldown_remaining(existing_record.source_url)
                     if cooldown_remaining > 0.0:
                         cooldown_candidates.append(existing_record)
                         trace.log(
@@ -473,20 +472,18 @@ def update_confirmed_store_item_details(
                             cooldown_remaining_seconds=cooldown_remaining,
                             cooldown_pool_size=len(cooldown_candidates),
                             message=(
-                                f"Shopify host is cooling down for {cooldown_remaining:g} more seconds; "
+                                f"Store host is cooling down for {cooldown_remaining:g} more seconds; "
                                 "processing other stores first"
                             ),
                         )
                         continue
-                request_waiter: Callable[[str], None] | None = None
-                if platform in SHOPIFY_STORE_PLATFORMS:
-                    request_waiter = lambda url: _wait_for_shopify_update_request(
-                        resolved_shopify_throttle,
-                        url,
-                        trace=trace,
-                        trace_fields=item_trace_fields,
-                        cancellation_token=cancellation_token,
-                    )
+                request_waiter = lambda url: _wait_for_store_update_request(
+                    resolved_request_throttle,
+                    url,
+                    trace=trace,
+                    trace_fields=item_trace_fields,
+                    cancellation_token=cancellation_token,
+                )
                 trace.log(
                     "item_update.item.fetch.started",
                     **item_trace_fields,
@@ -507,8 +504,8 @@ def update_confirmed_store_item_details(
                         before_request=request_waiter,
                     )
                 except TransientProductFetchError as exc:
-                    if platform in SHOPIFY_STORE_PLATFORMS and exc.status_code == 429:
-                        cooldown_seconds = resolved_shopify_throttle.start_cooldown(
+                    if exc.status_code == 429:
+                        cooldown_seconds = resolved_request_throttle.start_cooldown(
                             existing_record.source_url,
                             exc.retry_after_seconds,
                         )
@@ -517,7 +514,7 @@ def update_confirmed_store_item_details(
                             **item_trace_fields,
                             cooldown_seconds=cooldown_seconds,
                             message=(
-                                f"Shopify returned HTTP 429; cooling down the host for "
+                                f"Store returned HTTP 429; cooling down the host for "
                                 f"{cooldown_seconds:g} seconds"
                             ),
                             retry_after_seconds=exc.retry_after_seconds,
@@ -539,7 +536,7 @@ def update_confirmed_store_item_details(
                         error=str(exc),
                         error_type=type(exc).__name__,
                         message=(
-                            "Shopify rate limited the product; it was moved to the retry pool "
+                            "Store rate limited the product; it was moved to the retry pool "
                             "without blocking other stores"
                             if exc.status_code == 429
                             else "Product failed after fetch retries and was moved to the retry pool"
@@ -667,7 +664,7 @@ def _persist_store_item_update_progress(
     )
 
 
-def _wait_for_shopify_update_request(
+def _wait_for_store_update_request(
     throttle: PerHostRequestThrottle,
     source_url: str,
     *,
@@ -681,7 +678,7 @@ def _wait_for_shopify_update_request(
             "item_update.store.throttle.wait",
             **dict(trace_fields),
             host=wait.host,
-            message=f"Waiting {wait.delay_seconds:g} seconds for Shopify {wait_label}",
+            message=f"Waiting {wait.delay_seconds:g} seconds for store {wait_label}",
             reason=wait.reason,
             wait_seconds=wait.delay_seconds,
         )
@@ -705,7 +702,7 @@ def _fetch_detail_candidate(
 ) -> DiscoveryItemCandidateRecord:
     trace = trace_logger or NullTraceLogger()
     amazon_detail_request = platform.strip().casefold() in AMAZON_STORE_PLATFORMS
-    shopify_update_request = detect_removed and platform.strip().casefold() in SHOPIFY_STORE_PLATFORMS
+    store_item_update_request = detect_removed
     amazon_detail_validation_failed = False
     fetched_detail = _fetch_static_product_detail(
         listing_candidate.source_url,
@@ -723,7 +720,7 @@ def _fetch_detail_candidate(
         ),
         cancellation_token=cancellation_token,
         before_request=before_request,
-        immediate_return_status_codes={429} if shopify_update_request else (),
+        immediate_return_status_codes={429} if store_item_update_request else (),
     )
     _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
     last_failure_status_code = (
@@ -732,7 +729,7 @@ def _fetch_detail_candidate(
     last_failure_retry_after_seconds = (
         fetched_detail.retry_after_seconds if last_failure_status_code is not None and fetched_detail is not None else None
     )
-    explicitly_throttled = shopify_update_request and last_failure_status_code == 429
+    explicitly_throttled = store_item_update_request and last_failure_status_code == 429
     static_fetch_failed = fetched_detail is None or last_failure_status_code is not None
     if last_failure_status_code is not None:
         fetched_detail = None
