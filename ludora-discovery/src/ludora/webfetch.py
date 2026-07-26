@@ -16,7 +16,7 @@ from ludora.cancellation import CancellationToken, raise_if_cancelled
 from ludora.trace import NullTraceLogger, TraceLogger
 
 
-TRANSIENT_FETCH_STATUS_CODES = {429, 502, 503, 504}
+TRANSIENT_FETCH_STATUS_CODES = {429, 500, 502, 503, 504}
 DEFAULT_FETCH_MAX_ATTEMPTS = 3
 DEFAULT_FETCH_RETRY_BASE_SECONDS = 1.0
 DEFAULT_FETCH_RETRY_MAX_SECONDS = 300.0

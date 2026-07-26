@@ -1209,7 +1209,7 @@ class InventoryTests(unittest.TestCase):
             attempts_by_url[url] += 1
             fetch_order.append(url)
             if url != candidates[2].source_url and attempts_by_url[url] <= 3:
-                return FetchResult(url=url, text="", status_code=503, retry_after_seconds=0.0)
+                return FetchResult(url=url, text="", status_code=500, retry_after_seconds=0.0)
             title = next(candidate.title for candidate in candidates if candidate.source_url == url)
             return FetchResult(
                 url=url,
@@ -1250,6 +1250,12 @@ class InventoryTests(unittest.TestCase):
         self.assertIn("item_update.item.fetch.started", event_names)
         self.assertIn("item_update.item.fetch.http_error", event_names)
         self.assertIn("item_update.item.fetch.retry.scheduled", event_names)
+        http_errors = [
+            fields
+            for event, fields in trace.events
+            if event == "item_update.item.fetch.http_error"
+        ]
+        self.assertEqual([fields["status_code"] for fields in http_errors], [500] * 6)
         self.assertEqual(event_names.count("item_update.item.deferred"), 2)
         retry_pool_started = next(
             fields
