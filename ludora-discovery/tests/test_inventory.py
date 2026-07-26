@@ -1746,6 +1746,68 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(logged_run_id, "run-123")
         self.assertTrue(include_title)
 
+    def test_update_confirmed_store_item_accepts_title_mismatch_as_logged_title_change(self):
+        detail_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Completely Renamed Game",
+          "offers": {"price": "890.00", "priceCurrency": "MXN"}
+        }
+        </script>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=56,
+            store_id=12,
+            source_url="https://example.mx/productos/the-resistance-avalon",
+            source_listing_url="https://example.mx/sitemap.xml",
+            title="The Resistance Avalon",
+            original_title="The Resistance Avalon",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[existing_record])
+        trace = FakeTraceLogger()
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=existing_record.source_url, text=detail_html),
+        ):
+            records = update_confirmed_store_item_details(
+                repository,
+                job_id=99,
+                run_id="run-title-mismatch",
+                trace_logger=trace,
+            )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].title, "Completely Renamed Game")
+        self.assertEqual(records[0].original_title, "Completely Renamed Game")
+        self.assertEqual(len(repository.update_change_log_calls), 1)
+        logged_existing, logged_refreshed, logged_job_id, logged_run_id, include_title = (
+            repository.update_change_log_calls[0]
+        )
+        self.assertIs(logged_existing, existing_record)
+        self.assertEqual(logged_refreshed.title, "Completely Renamed Game")
+        self.assertEqual(logged_refreshed.original_title, "Completely Renamed Game")
+        self.assertEqual(logged_job_id, 99)
+        self.assertEqual(logged_run_id, "run-title-mismatch")
+        self.assertTrue(include_title)
+        accepted = [
+            fields
+            for event, fields in trace.events
+            if event == "item_update.item.detail.title_mismatch_accepted"
+        ]
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(accepted[0]["listing_title"], "The Resistance Avalon")
+        self.assertEqual(accepted[0]["detail_title"], "Completely Renamed Game")
+        self.assertNotIn(
+            "item_update.item.detail.rejected",
+            [event for event, _fields in trace.events],
+        )
+
     def test_update_confirmed_store_item_details_counts_only_changed_items_as_updated(self):
         first_detail_html = """
         <script type="application/ld+json">

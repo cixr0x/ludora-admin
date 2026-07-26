@@ -837,6 +837,16 @@ def _fetch_detail_candidate(
         return listing_candidate
 
     rejection_reason = _detail_rejection_reason(detail_candidate, listing_candidate, platform=platform)
+    if detect_removed and rejection_reason == "title_mismatch":
+        trace.log(
+            "item_update.item.detail.title_mismatch_accepted",
+            detail_title=detail_candidate.title,
+            listing_title=listing_candidate.title,
+            message="Product detail title changed; accepting it as a tracked store item update",
+            reason=rejection_reason,
+            source_url=listing_candidate.source_url,
+        )
+        rejection_reason = ""
     if rejection_reason:
         trace.log(
             "item_update.item.detail.rejected"
