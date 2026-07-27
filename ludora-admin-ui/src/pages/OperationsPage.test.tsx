@@ -523,7 +523,7 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('runs external cover image optimization and renders the returned summary', async () => {
+  it('runs cover image optimization and renders the returned summary', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (url.endsWith('/admin/operations/store-discovery-runs/latest')) {
@@ -578,8 +578,8 @@ describe('OperationsPage', () => {
 
     render(<OperationsPage operation="image_optimization" />);
 
-    await screen.findByRole('button', { name: /Optimize External Cover Images/i });
-    await userEvent.click(screen.getByRole('button', { name: /Optimize External Cover Images/i }));
+    await screen.findByRole('button', { name: /Optimize Cover Images/i });
+    await userEvent.click(screen.getByRole('button', { name: /Optimize Cover Images/i }));
 
     expect(await screen.findByText('Image optimization summary')).toBeInTheDocument();
     expect(screen.getByText('Items scanned')).toBeInTheDocument();

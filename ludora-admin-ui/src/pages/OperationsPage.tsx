@@ -38,7 +38,7 @@ type StartingOperation = OperationPageMode | '';
 
 const operationPageContent: Record<OperationPageMode, { description: string; title: string }> = {
   image_optimization: {
-    description: 'Optimize oversized external item cover images and update catalog image URLs.',
+    description: 'Optimize oversized item cover images, including images already hosted in S3.',
     title: 'Image Optimization'
   },
   item_discovery: {
@@ -200,7 +200,6 @@ const imageOptimizationSummaryItems: Array<{
   { key: 'uploadedImages', label: 'Uploaded images' },
   { key: 'updatedRows', label: 'Updated rows' },
   { key: 'failedImages', label: 'Failed images' },
-  { key: 'skippedManaged', label: 'Skipped managed' },
   { key: 'skippedWithinLimit', label: 'Skipped within limit' },
   { key: 'skippedBlank', label: 'Skipped blank' }
 ];
@@ -765,7 +764,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
       setImageOptimizationResult(result);
       setLoadState('ready');
     } catch {
-      setError('External cover image optimization could not be started.');
+      setError('Cover image optimization could not be started.');
     } finally {
       setStartingOperation('');
     }
@@ -1162,10 +1161,10 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
           <Stack direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={2}>
             <Box>
               <Typography sx={{ fontWeight: 700 }} variant="subtitle1">
-                External cover images
+                Cover images
               </Typography>
               <Typography color="text.secondary" variant="body2">
-                Convert oversized external item covers to managed WebP assets.
+                Convert oversized item covers, including managed S3 images, to optimized WebP assets.
               </Typography>
             </Box>
             <Button
@@ -1181,7 +1180,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
               variant="contained"
               onClick={handleOptimizeExternalCoverImages}
             >
-              Optimize External Cover Images
+              Optimize Cover Images
             </Button>
           </Stack>
         </Paper>

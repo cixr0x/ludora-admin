@@ -1,4 +1,5 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 
 import type { Database } from './db.js';
@@ -55,7 +56,7 @@ export type OptimizedCoverImage = {
 export type SkippedCoverImage = {
   field: CoverImageField;
   itemId: number;
-  reason: 'blank' | 'managed' | 'within_limit';
+  reason: 'blank' | 'within_limit';
   sizeBytes?: number | null;
   sourceUrl?: string;
 };
@@ -95,10 +96,34 @@ type ItemCoverImageRow = {
   normalized_name_es?: string | null;
 };
 
+type CoverImageCandidate = {
+  field: CoverImageField;
+  item: ItemCoverImageRow;
+  itemId: number;
+  sourceUrl: string;
+};
+
+type InspectedCoverImageCandidate =
+  | {
+      candidate: CoverImageCandidate;
+      kind: 'blank';
+    }
+  | {
+      candidate: CoverImageCandidate;
+      error: string;
+      kind: 'failed';
+    }
+  | {
+      candidate: CoverImageCandidate;
+      inspection: RemoteImageInspection;
+      kind: 'inspected';
+    };
+
 const DEFAULT_MAX_BYTES = 100 * 1024;
 const DEFAULT_MAX_DIMENSION = 800;
 const DEFAULT_CACHE_CONTROL = 'public, max-age=31536000, immutable';
 const DEFAULT_MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+const DEFAULT_INSPECTION_CONCURRENCY = 20;
 
 export async function optimizeExternalCoverImages(
   database: Database,
@@ -108,7 +133,7 @@ export async function optimizeExternalCoverImages(
   const apply = options.apply === true;
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
   const maxDimension = options.maxDimension ?? DEFAULT_MAX_DIMENSION;
-  const items = await loadItemCoverImages(database, dependencies.config.publicBaseUrl, options.limit, options.offset);
+  const items = await loadItemCoverImages(database, options.limit, options.offset);
   const skipped: SkippedCoverImage[] = [];
   const optimized: OptimizedCoverImage[] = [];
   const failures: FailedCoverImage[] = [];
@@ -116,6 +141,7 @@ export async function optimizeExternalCoverImages(
   let uploadedImages = 0;
   let updatedRows = 0;
 
+  const candidates: CoverImageCandidate[] = [];
   for (const item of items) {
     const itemId = numberOrNull(item.id);
     if (itemId === null) {
@@ -123,64 +149,106 @@ export async function optimizeExternalCoverImages(
     }
 
     for (const field of ['image_url', 'image_url_es'] as const) {
-      const sourceUrl = stringValue(item[field]);
-      if (!sourceUrl) {
-        skipped.push({ field, itemId, reason: 'blank' });
-        continue;
-      }
-      if (isManagedImageUrl(sourceUrl, dependencies.config.publicBaseUrl)) {
-        skipped.push({ field, itemId, reason: 'managed', sourceUrl });
-        continue;
-      }
+      candidates.push({
+        field,
+        item,
+        itemId,
+        sourceUrl: stringValue(item[field])
+      });
+    }
+  }
 
+  const inspectedCandidates = await mapWithConcurrency(
+    candidates,
+    DEFAULT_INSPECTION_CONCURRENCY,
+    async (candidate): Promise<InspectedCoverImageCandidate> => {
+      if (!candidate.sourceUrl) {
+        return { candidate, kind: 'blank' };
+      }
       try {
-        const inspection = await dependencies.inspectImage(sourceUrl);
-        if (inspection.contentLength !== null && inspection.contentLength <= maxBytes) {
-          skipped.push({ field, itemId, reason: 'within_limit', sizeBytes: inspection.contentLength, sourceUrl });
-          continue;
-        }
-
-        const originalImage = await dependencies.downloadImage(sourceUrl);
-        downloadedImages += 1;
-        const optimizedImage = await dependencies.optimizeImage(originalImage, {
-          maxBytes,
-          maxDimension
-        });
-        const s3Key = coverImageS3Key(dependencies.config.s3Prefix, item, itemId, field);
-        const publicUrl = publicUrlFor(dependencies.config.publicBaseUrl, s3Key);
-
-        if (apply) {
-          await dependencies.uploadImage(optimizedImage, {
-            bucket: dependencies.config.s3Bucket,
-            cacheControl: DEFAULT_CACHE_CONTROL,
-            contentType: 'image/webp',
-            key: s3Key
-          });
-          uploadedImages += 1;
-          await updateItemImageUrl(database, itemId, field, publicUrl);
-          updatedRows += 1;
-        }
-
-        optimized.push({
-          applied: apply,
-          field,
-          itemId,
-          newName: filenameFromPath(s3Key),
-          optimizedSizeBytes: optimizedImage.length,
-          originalSizeBytes: inspection.contentLength ?? originalImage.length,
-          publicUrl,
-          s3Key,
-          sourceName: filenameFromUrl(sourceUrl),
-          sourceUrl
-        });
+        return {
+          candidate,
+          inspection: await dependencies.inspectImage(candidate.sourceUrl),
+          kind: 'inspected'
+        };
       } catch (error) {
-        failures.push({
+        return {
+          candidate,
           error: error instanceof Error ? error.message : String(error),
-          field,
-          itemId,
-          sourceUrl
-        });
+          kind: 'failed'
+        };
       }
+    }
+  );
+
+  for (const inspectedCandidate of inspectedCandidates) {
+    const { field, item, itemId, sourceUrl } = inspectedCandidate.candidate;
+    if (inspectedCandidate.kind === 'blank') {
+      skipped.push({ field, itemId, reason: 'blank' });
+      continue;
+    }
+    if (inspectedCandidate.kind === 'failed') {
+      failures.push({
+        error: inspectedCandidate.error,
+        field,
+        itemId,
+        sourceUrl
+      });
+      continue;
+    }
+
+    const { inspection } = inspectedCandidate;
+    if (inspection.contentLength !== null && inspection.contentLength <= maxBytes) {
+      skipped.push({ field, itemId, reason: 'within_limit', sizeBytes: inspection.contentLength, sourceUrl });
+      continue;
+    }
+
+    try {
+      const originalImage = await dependencies.downloadImage(sourceUrl);
+      downloadedImages += 1;
+      const optimizedImage = await dependencies.optimizeImage(originalImage, {
+        maxBytes,
+        maxDimension
+      });
+      let s3Key = coverImageS3Key(dependencies.config.s3Prefix, item, itemId, field);
+      let publicUrl = publicUrlFor(dependencies.config.publicBaseUrl, s3Key);
+      if (sourceUrl === publicUrl) {
+        const contentVersion = createHash('sha256').update(optimizedImage).digest('hex').slice(0, 12);
+        s3Key = coverImageS3Key(dependencies.config.s3Prefix, item, itemId, field, `-${contentVersion}`);
+        publicUrl = publicUrlFor(dependencies.config.publicBaseUrl, s3Key);
+      }
+
+      if (apply) {
+        await dependencies.uploadImage(optimizedImage, {
+          bucket: dependencies.config.s3Bucket,
+          cacheControl: DEFAULT_CACHE_CONTROL,
+          contentType: 'image/webp',
+          key: s3Key
+        });
+        uploadedImages += 1;
+        await updateItemImageUrl(database, itemId, field, publicUrl);
+        updatedRows += 1;
+      }
+
+      optimized.push({
+        applied: apply,
+        field,
+        itemId,
+        newName: filenameFromPath(s3Key),
+        optimizedSizeBytes: optimizedImage.length,
+        originalSizeBytes: inspection.contentLength ?? originalImage.length,
+        publicUrl,
+        s3Key,
+        sourceName: filenameFromUrl(sourceUrl),
+        sourceUrl
+      });
+    } catch (error) {
+      failures.push({
+        error: error instanceof Error ? error.message : String(error),
+        field,
+        itemId,
+        sourceUrl
+      });
     }
   }
 
@@ -195,7 +263,7 @@ export async function optimizeExternalCoverImages(
       itemsScanned: items.length,
       optimizedImages: optimized.length,
       skippedBlank: skipped.filter((image) => image.reason === 'blank').length,
-      skippedManaged: skipped.filter((image) => image.reason === 'managed').length,
+      skippedManaged: 0,
       skippedWithinLimit: skipped.filter((image) => image.reason === 'within_limit').length,
       updatedRows,
       uploadedImages
@@ -228,26 +296,18 @@ export function createNodeExternalCoverImageOptimizerDependencies(
 
 async function loadItemCoverImages(
   database: Database,
-  publicBaseUrl: string,
   limit?: number,
   offset?: number
 ): Promise<ItemCoverImageRow[]> {
-  const managedUrlPattern = `${publicBaseUrl.replace(/\/+$/, '')}/%`;
-  const params: unknown[] = [managedUrlPattern];
+  const params: unknown[] = [];
   const limitSql = limit !== undefined ? `limit $${params.push(limit)}` : '';
   const offsetSql = offset !== undefined ? `offset $${params.push(offset)}` : '';
   const result = await database.query(
     `
     select id, canonical_name, normalized_name, canonical_name_es, normalized_name_es, image_url, image_url_es
     from items
-    where (
-        coalesce(image_url, '') <> ''
-        and image_url not like $1
-      )
-       or (
-        coalesce(image_url_es, '') <> ''
-        and image_url_es not like $1
-      )
+    where coalesce(image_url, '') <> ''
+       or coalesce(image_url_es, '') <> ''
     order by id asc
     ${limitSql}
     ${offsetSql}
@@ -257,10 +317,16 @@ async function loadItemCoverImages(
   return result.rows as ItemCoverImageRow[];
 }
 
-function coverImageS3Key(prefix: string, item: ItemCoverImageRow, itemId: number, field: CoverImageField): string {
+function coverImageS3Key(
+  prefix: string,
+  item: ItemCoverImageRow,
+  itemId: number,
+  field: CoverImageField,
+  version = ''
+): string {
   const baseFilename = normalizeCoverFilename(item).replace(/\.webp$/i, '');
   const suffix = field === 'image_url' ? 'en' : 'es';
-  return keyFor(prefix, `${itemId}-${baseFilename}.${suffix}.webp`);
+  return keyFor(prefix, `${itemId}-${baseFilename}${version}.${suffix}.webp`);
 }
 
 async function updateItemImageUrl(database: Database, itemId: number, field: CoverImageField, publicUrl: string): Promise<void> {
@@ -352,12 +418,6 @@ async function optimizeImageToWebp(image: Buffer, options: CoverImageOptimizeOpt
   throw new Error(`Image could not be reduced below ${options.maxBytes} bytes`);
 }
 
-function isManagedImageUrl(url: string, publicBaseUrl: string): boolean {
-  const normalizedUrl = url.trim().replace(/\/+$/, '');
-  const normalizedBaseUrl = publicBaseUrl.trim().replace(/\/+$/, '');
-  return normalizedUrl === normalizedBaseUrl || normalizedUrl.startsWith(`${normalizedBaseUrl}/`);
-}
-
 function publicUrlFor(baseUrl: string, key: string): string {
   return `${baseUrl.replace(/\/+$/, '')}/${key.split('/').map(encodeURIComponent).join('/')}`;
 }
@@ -397,4 +457,25 @@ function numberOrNull(value: unknown): number | null {
   }
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+async function mapWithConcurrency<T, Result>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<Result>
+): Promise<Result[]> {
+  const results = new Array<Result>(values.length);
+  let nextIndex = 0;
+
+  async function worker(): Promise<void> {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index] as T);
+    }
+  }
+
+  const workerCount = Math.min(concurrency, values.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }

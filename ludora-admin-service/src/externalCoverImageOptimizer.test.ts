@@ -8,7 +8,7 @@ import {
 } from './externalCoverImageOptimizer.js';
 
 describe('external cover image optimizer', () => {
-  it('dry-runs oversized external item cover fields without uploading or updating rows', async () => {
+  it('dry-runs oversized external and managed item cover fields without uploading or updating rows', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -73,29 +73,35 @@ describe('external cover image optimizer', () => {
 
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('from items');
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('image_url_es');
+    expect(normalizeSql(queries[0]?.sql ?? '')).not.toContain('not like');
+    expect(queries[0]?.params).toBeUndefined();
     expect(calls).toEqual([
       'inspect:https://cf.geekdo-images.com/coffee.jpg',
+      'inspect:https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.es.webp',
+      'inspect:https://cf.geekdo-images.com/fiesta.png',
+      'inspect:https://cdn.example/small.jpg',
       'download:https://cf.geekdo-images.com/coffee.jpg',
       'optimize:150000:102400',
-      'inspect:https://cf.geekdo-images.com/fiesta.png',
+      'download:https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.es.webp',
+      'optimize:150000:102400',
       'download:https://cf.geekdo-images.com/fiesta.png',
-      'optimize:180000:102400',
-      'inspect:https://cdn.example/small.jpg'
+      'optimize:180000:102400'
     ]);
     expect(result.summary).toEqual({
-      downloadedImages: 2,
+      downloadedImages: 3,
       failedImages: 0,
       imageFields: 6,
       itemsScanned: 3,
-      optimizedImages: 2,
+      optimizedImages: 3,
       skippedBlank: 2,
-      skippedManaged: 1,
+      skippedManaged: 0,
       skippedWithinLimit: 1,
       updatedRows: 0,
       uploadedImages: 0
     });
     expect(result.optimized.map((image) => `${image.itemId}:${image.field}:${image.publicUrl}:${image.applied}`)).toEqual([
       '10:image_url:https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush.en.webp:false',
+      '10:image_url_es:https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush.es.webp:false',
       '11:image_url_es:https://ludora.s3.us-east-2.amazonaws.com/boardgame/11-fiestadelosmuertos.es.webp:false'
     ]);
     expect(result.optimized[0]).toMatchObject({
@@ -104,7 +110,7 @@ describe('external cover image optimizer', () => {
     });
   });
 
-  it('uploads and updates only oversized external image fields when apply is enabled', async () => {
+  it('uploads and updates oversized managed S3 image fields when apply is enabled', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -116,7 +122,7 @@ describe('external cover image optimizer', () => {
                 canonical_name: 'Coffee Rush',
                 canonical_name_es: '',
                 id: 10,
-                image_url: 'https://cf.geekdo-images.com/coffee.jpg',
+                image_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.webp',
                 image_url_es: '',
                 normalized_name: 'coffee rush',
                 normalized_name_es: ''
@@ -149,7 +155,7 @@ describe('external cover image optimizer', () => {
     });
 
     expect(calls).toEqual([
-      'download:https://cf.geekdo-images.com/coffee.jpg',
+      'download:https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.webp',
       'optimize:150000:102400',
       'upload:80000:ludora:boardgame/10-coffeerush.en.webp:image/webp:public, max-age=31536000, immutable'
     ]);
@@ -167,6 +173,53 @@ describe('external cover image optimizer', () => {
       newName: '10-coffeerush.en.webp',
       s3Key: 'boardgame/10-coffeerush.en.webp'
     });
+  });
+
+  it('uses a content-versioned key instead of overwriting an immutable managed URL', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (normalizeSql(sql).startsWith('select')) {
+          return {
+            rows: [
+              {
+                canonical_name: 'Coffee Rush',
+                canonical_name_es: '',
+                id: 10,
+                image_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush.en.webp',
+                image_url_es: '',
+                normalized_name: 'coffee rush',
+                normalized_name_es: ''
+              }
+            ]
+          };
+        }
+        return { rows: [{ id: 10 }] };
+      }
+    };
+    const uploads: string[] = [];
+    const dependencies = fakeDependencies({
+      downloadImage: async () => Buffer.alloc(150000),
+      inspectImage: async () => ({ contentLength: 150000, contentType: 'image/webp' }),
+      optimizeImage: async () => Buffer.alloc(80000),
+      uploadImage: async (_image, upload) => {
+        uploads.push(upload.key);
+      }
+    });
+
+    const result = await optimizeExternalCoverImages(database, dependencies, {
+      apply: true,
+      maxBytes: 100 * 1024
+    });
+
+    expect(uploads).toHaveLength(1);
+    expect(uploads[0]).toMatch(/^boardgame\/10-coffeerush-[0-9a-f]{12}\.en\.webp$/);
+    expect(result.optimized[0]?.publicUrl).toMatch(
+      /^https:\/\/ludora\.s3\.us-east-2\.amazonaws\.com\/boardgame\/10-coffeerush-[0-9a-f]{12}\.en\.webp$/
+    );
+    const update = queries.find((query) => normalizeSql(query.sql).startsWith('update items'));
+    expect(update?.params?.[0]).toBe(result.optimized[0]?.publicUrl);
   });
 });
 

@@ -381,7 +381,7 @@ describe('App', () => {
     render(<App />);
 
     expect(await screen.findByRole('heading', { name: 'Image Optimization' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Optimize External Cover Images/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Optimize Cover Images/i })).toBeInTheDocument();
   });
 
   it('opens the front page preview from the front page review hash alias', async () => {
