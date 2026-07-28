@@ -565,6 +565,10 @@ export const adminApi = {
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/associate-item`, 'POST', {
       item_id: itemId
     }),
+  copyStoreItemCoverToItem: (id: string, targetField: CoverImageField) =>
+    sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/copy-cover-to-item`, 'POST', {
+      target_field: targetField
+    }),
   updateItemCandidateListingStatus: (id: string, listingStatus: StoreItemListingStatus) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/listing-status`, 'PATCH', {
       listing_status: listingStatus

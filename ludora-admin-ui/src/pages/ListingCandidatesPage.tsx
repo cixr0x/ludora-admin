@@ -3,6 +3,7 @@ import AddCircleIcon from '@mui/icons-material/AddCircle';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import CancelIcon from '@mui/icons-material/Cancel';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
+import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import SaveIcon from '@mui/icons-material/Save';
@@ -24,6 +25,7 @@ import {
   ListItemAvatar,
   ListItemButton,
   ListItemText,
+  MenuItem,
   Paper,
   Stack,
   TextField,
@@ -1298,6 +1300,7 @@ function ItemCandidateForm({
         <PrimaryItemSection
           itemId={itemId}
           storeItemId={candidateIdValue}
+          storeItemImageUrl={imageUrl}
           storeItemTitle={title}
           onAssociated={onPrimaryItemAssociated}
         />
@@ -1434,15 +1437,21 @@ function PrimaryItemSection({
   itemId,
   onAssociated,
   storeItemId,
+  storeItemImageUrl,
   storeItemTitle
 }: {
   itemId: string;
   onAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   storeItemId: string;
+  storeItemImageUrl: string;
   storeItemTitle: string;
 }) {
+  const [copyError, setCopyError] = useState('');
+  const [copyMessage, setCopyMessage] = useState('');
+  const [copyTargetField, setCopyTargetField] = useState<'image_url' | 'image_url_es'>('image_url');
   const [error, setError] = useState('');
   const [isAssociating, setIsAssociating] = useState(false);
+  const [isCopyingCover, setIsCopyingCover] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [item, setItem] = useState<AdminRecord | null>(null);
   const [loadState, setLoadState] = useState<LoadState>(itemId ? 'loading' : 'ready');
@@ -1451,12 +1460,16 @@ function PrimaryItemSection({
     if (!itemId) {
       setItem(null);
       setLoadState('ready');
+      setCopyError('');
+      setCopyMessage('');
       return;
     }
 
     let ignore = false;
     setItem(null);
     setLoadState('loading');
+    setCopyError('');
+    setCopyMessage('');
     adminApi
       .getItem(itemId)
       .then((linkedItem) => {
@@ -1481,6 +1494,7 @@ function PrimaryItemSection({
   const itemName = item ? catalogItemDisplayName(item) : '';
   const imageUrl = item ? catalogItemImageUrl(item) : '';
   const excludedItemIds = useMemo(() => new Set(itemId ? [itemId] : []), [itemId]);
+  const canCopyCover = Boolean(storeItemId && storeItemImageUrl && linkedItemId && item && loadState === 'ready' && !isCopyingCover);
 
   async function handleAssociate(selectedItem: AdminRecord) {
     const selectedItemId = field(selectedItem, ['id'], '');
@@ -1499,6 +1513,27 @@ function PrimaryItemSection({
       setError('The store item could not be associated with this catalog item.');
     } finally {
       setIsAssociating(false);
+    }
+  }
+
+  async function handleCopyCover() {
+    if (!canCopyCover) {
+      return;
+    }
+
+    setIsCopyingCover(true);
+    setCopyError('');
+    setCopyMessage('');
+    try {
+      const savedItem = await adminApi.copyStoreItemCoverToItem(storeItemId, copyTargetField);
+      setItem(savedItem);
+      setCopyMessage(
+        `Store item cover copied to the linked item's ${copyTargetField === 'image_url' ? 'image' : 'Spanish image'}.`
+      );
+    } catch {
+      setCopyError('The store item cover could not be copied to the linked item.');
+    } finally {
+      setIsCopyingCover(false);
     }
   }
 
@@ -1534,6 +1569,35 @@ function PrimaryItemSection({
 
           {!itemId ? <Alert severity="info">No primary catalog item is linked.</Alert> : null}
           {error && !isSearchOpen ? <Alert severity="error">{error}</Alert> : null}
+          {copyError ? <Alert severity="error">{copyError}</Alert> : null}
+          {copyMessage ? <Alert severity="success">{copyMessage}</Alert> : null}
+          <Stack alignItems={{ sm: 'center', xs: 'stretch' }} direction={{ sm: 'row', xs: 'column' }} spacing={1}>
+            <TextField
+              disabled={!itemId || !storeItemImageUrl || isCopyingCover}
+              label="Copy cover as"
+              select
+              size="small"
+              sx={{ minWidth: 180 }}
+              value={copyTargetField}
+              onChange={(event) => setCopyTargetField(event.target.value as 'image_url' | 'image_url_es')}
+            >
+              <MenuItem value="image_url">Image</MenuItem>
+              <MenuItem value="image_url_es">Spanish image</MenuItem>
+            </TextField>
+            <Tooltip title={canCopyCover ? 'Copy the store item cover URL to the linked item' : 'Requires a linked item and store item image'}>
+              <Box component="span">
+                <Button
+                  disabled={!canCopyCover}
+                  startIcon={isCopyingCover ? <CircularProgress size={18} /> : <ContentCopyIcon />}
+                  type="button"
+                  variant="outlined"
+                  onClick={handleCopyCover}
+                >
+                  {isCopyingCover ? 'Copying...' : 'Copy cover to item'}
+                </Button>
+              </Box>
+            </Tooltip>
+          </Stack>
           {loadState === 'loading' ? (
             <Stack alignItems="center" direction="row" spacing={1.5}>
               <CircularProgress size={18} />

@@ -747,6 +747,70 @@ describe('ListingCandidatesPage', () => {
     });
   });
 
+  it('copies the store item cover to the selected linked-item image field', async () => {
+    const user = userEvent.setup();
+    const candidate = {
+      id: '3365',
+      image_url: 'https://store.mx/kitchen-rush.jpg',
+      item_id: 77,
+      listing_status: 'LISTED',
+      source_url: 'https://store.mx/products/kitchen-rush',
+      title: 'Kitchen Rush'
+    };
+    const linkedItem = {
+      canonical_name: 'Kitchen Rush',
+      canonical_name_es: '',
+      id: 77,
+      image_url: 'https://catalog.mx/kitchen-rush.jpg',
+      image_url_es: ''
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([candidate], 200, { page: 0, page_size: 100, total: 1 });
+      }
+      if (path === '/discovery/listings/3365/additional-items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77' && !init?.method) {
+        return jsonResponse(linkedItem);
+      }
+      if (path === '/discovery/listings/3365/copy-cover-to-item' && init?.method === 'POST') {
+        return jsonResponse({
+          ...linkedItem,
+          image_url_es: candidate.image_url
+        });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage />);
+
+    await user.dblClick(await screen.findByText('Kitchen Rush'));
+    expect(await screen.findByRole('button', { name: 'Copy cover to item' })).toBeEnabled();
+
+    await user.click(screen.getByRole('combobox', { name: 'Copy cover as' }));
+    await user.click(screen.getByRole('option', { name: 'Spanish image' }));
+    await user.click(screen.getByRole('button', { name: 'Copy cover to item' }));
+
+    expect(
+      await screen.findByText("Store item cover copied to the linked item's Spanish image.")
+    ).toBeInTheDocument();
+    expect(screen.getByRole('img', { name: 'Kitchen Rush cover' })).toHaveAttribute(
+      'src',
+      'https://store.mx/kitchen-rush.jpg'
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4001/discovery/listings/3365/copy-cover-to-item',
+      {
+        body: JSON.stringify({ target_field: 'image_url_es' }),
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST'
+      }
+    );
+  });
+
   it('adds and removes additional catalog items from the store item details', async () => {
     const user = userEvent.setup();
     const candidate = {

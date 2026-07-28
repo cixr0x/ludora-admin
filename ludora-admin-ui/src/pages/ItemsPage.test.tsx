@@ -140,6 +140,7 @@ describe('ItemsPage', () => {
     expect(await screen.findByRole('option', { name: 'Cafe Barista' })).toBeInTheDocument();
     await user.click(screen.getByRole('option', { name: 'Cafe Barista Actualizado' }));
     expect(screen.getByRole('combobox', { name: 'Canonical Name ES' })).toHaveValue('Cafe Barista Actualizado');
+    expect(screen.getByLabelText('Normalized Name ES')).toHaveValue('cafe barista actualizado');
     await user.clear(screen.getByRole('combobox', { name: 'Canonical Name ES' }));
     await user.type(screen.getByRole('combobox', { name: 'Canonical Name ES' }), 'Nombre manual');
     await user.click(screen.getByRole('button', { name: 'Generate normalized Spanish name' }));

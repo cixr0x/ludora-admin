@@ -2906,6 +2906,50 @@ describe('ludora admin service', () => {
     ]);
   });
 
+  it.each(['image_url', 'image_url_es'] as const)(
+    'copies a store item cover to the linked catalog item %s field',
+    async (targetField) => {
+      const row = {
+        canonical_name: 'Kitchen Rush',
+        id: 77,
+        image_url: 'https://catalog.mx/kitchen-rush.jpg',
+        image_url_es: targetField === 'image_url_es' ? 'https://store.mx/kitchen-rush.jpg' : ''
+      };
+      const queries: Array<{ params?: unknown[]; sql: string }> = [];
+      const database: Database = {
+        query: async (sql, params) => {
+          queries.push({ params, sql });
+          return { rows: [row] };
+        }
+      };
+
+      const response = await request(createApp({ database }))
+        .post('/discovery/listings/42/copy-cover-to-item')
+        .send({ target_field: targetField });
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ data: row });
+      const sql = normalizeSql(queries[0].sql);
+      expect(sql).toContain(`set ${targetField} = source.image_url`);
+      expect(sql).toContain('from store_items source');
+      expect(sql).toContain('source.item_id = i.id');
+      expect(sql).toContain("nullif(trim(source.image_url), '') is not null");
+      expect(sql).toContain('returning i.id, i.canonical_name');
+      expect(sql).toContain('select updated_item.*, thing_cache.raw_xml as bgg_thing_raw_xml');
+      expect(queries[0].params).toEqual([42]);
+    }
+  );
+
+  it('rejects an unsupported linked-item cover destination', async () => {
+    const database = idleDatabase();
+    const response = await request(createApp({ database }))
+      .post('/discovery/listings/42/copy-cover-to-item')
+      .send({ target_field: 'thumbnail_url' });
+
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toBe('target_field must be image_url or image_url_es');
+  });
+
   it('adds an additional catalog item to a store item', async () => {
     const row = {
       association_inserted: true,

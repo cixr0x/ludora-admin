@@ -5,7 +5,7 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import SaveIcon from '@mui/icons-material/Save';
 import { Alert, Autocomplete, Box, Button, Chip, CircularProgress, IconButton, Link, MenuItem, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
-import { Fragment, type FormEvent, type MouseEvent, useEffect, useState } from 'react';
+import { Fragment, type FormEvent, type MouseEvent, useEffect, useRef, useState } from 'react';
 import { adminApi, type AdminRecord, type ItemRelationshipInput, type ItemTaxonomy, type LocalCoverWorkflow } from '../api/client';
 import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
@@ -1076,6 +1076,7 @@ function ItemForm({
   const bggAlternateNames = stringListValue(item, 'bgg_alternate_names');
   const canonicalNameEs = detailValue(item, 'canonical_name_es');
   const formKey = [...itemDetailFields.map((detailField) => detailValue(item, detailField.key)), ...bggAlternateNames].join('\u001f');
+  const formRef = useRef<HTMLFormElement>(null);
   const hasSourceDescriptions = Boolean(textValue(item, 'description') || firstLinkedStoreDescription(linkedStoreItems));
   const canGenerateDescription = hasSourceDescriptions && !isGeneratingDescription && !isSaving;
   const isStartingItemCoverWorkflow = Boolean(itemId && itemId === startingItemCoverWorkflowId);
@@ -1102,13 +1103,17 @@ function ItemForm({
       return;
     }
 
+    populateSpanishNormalizedName(form, namedFormTextControl(form, 'canonical_name_es')?.value ?? '');
+  }
+
+  function populateSpanishNormalizedName(form: HTMLFormElement, canonicalName: string) {
     const canonicalNameEsInput = namedFormTextControl(form, 'canonical_name_es');
     const normalizedNameEsInput = namedFormTextControl(form, 'normalized_name_es');
     if (!canonicalNameEsInput || !normalizedNameEsInput) {
       return;
     }
 
-    normalizedNameEsInput.value = normalizeItemName(canonicalNameEsInput.value);
+    normalizedNameEsInput.value = normalizeItemName(canonicalName);
     normalizedNameEsInput.dispatchEvent(new Event('input', { bubbles: true }));
     normalizedNameEsInput.dispatchEvent(new Event('change', { bubbles: true }));
   }
@@ -1116,7 +1121,7 @@ function ItemForm({
   return (
     <Stack spacing={2}>
       <Paper component="section" variant="outlined" sx={{ p: 2 }}>
-        <Stack component="form" key={formKey} spacing={2} onSubmit={handleSubmit}>
+        <Stack component="form" key={formKey} ref={formRef} spacing={2} onSubmit={handleSubmit}>
           <Stack alignItems="flex-start" direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
             <Box>
               <Typography variant="h6" sx={{ fontWeight: 700 }}>
@@ -1282,6 +1287,15 @@ function ItemForm({
                         forcePopupIcon
                         freeSolo
                         options={bggAlternateNames}
+                        onChange={(_event, selectedName, reason) => {
+                          if (
+                            (reason === 'selectOption' || reason === 'createOption') &&
+                            typeof selectedName === 'string' &&
+                            formRef.current
+                          ) {
+                            populateSpanishNormalizedName(formRef.current, selectedName);
+                          }
+                        }}
                         renderInput={(params) => (
                           <TextField
                             {...params}

@@ -115,6 +115,8 @@ type ItemInput = {
   year_published: number | null;
 };
 
+type CoverImageField = 'image_url' | 'image_url_es';
+
 type ItemRelationshipInput = {
   direction: 'incoming' | 'outgoing';
   link_type: string;
@@ -2082,6 +2084,49 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.post('/discovery/listings/:id/copy-cover-to-item', async (request, response, next) => {
+    try {
+      const candidateId = integerPathParam(request.params.id);
+      const targetField = coverImageField(request.body);
+      const result = await database.query(
+        `
+        with updated_item as (
+          update items i
+          set ${targetField} = source.image_url,
+              updated_at = now()
+          from store_items source
+          where source.id = $1
+            and source.item_id = i.id
+            and nullif(trim(source.image_url), '') is not null
+          returning
+            i.id, i.canonical_name, i.normalized_name, i.canonical_name_es, i.normalized_name_es,
+            i.item_type, i.parent_item_id, i.bgg_id, i.bgg_url, i.bgg_last_sync_at,
+            i.year_published, i.rating, i.weight, i.description, i.description_es,
+            i.min_players, i.max_players, i.min_minutes, i.max_minutes, i.complexity,
+            i.min_age, i.image_url, i.image_url_es, i.status, i.created_at, i.updated_at
+        )
+        select
+          updated_item.*,
+          thing_cache.raw_xml as bgg_thing_raw_xml,
+          thing_cache.parsed_json as bgg_thing_parsed_json
+        from updated_item
+        left join bgg_thing_cache thing_cache
+          on thing_cache.bgg_id = updated_item.bgg_id
+         and thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+        `,
+        [candidateId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(400, 'Store item must have a linked catalog item and cover image');
+      }
+
+      response.json({ data: itemDetailResponse(result.rows[0] as Record<string, unknown>) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.patch('/discovery/listings/:id/listing-status', async (request, response, next) => {
     try {
       const listingStatus = listingStatusField((request.body ?? {}) as Record<string, unknown>, 'listing_status');
@@ -2895,6 +2940,14 @@ function rowInteger(value: Record<string, unknown>, key: string): number | null 
   }
   const parsed = typeof field === 'number' ? field : Number(field);
   return Number.isInteger(parsed) ? parsed : null;
+}
+
+function coverImageField(body: unknown): CoverImageField {
+  const value = stringField((body ?? {}) as Record<string, unknown>, 'target_field');
+  if (value !== 'image_url' && value !== 'image_url_es') {
+    throw httpError(400, 'target_field must be image_url or image_url_es');
+  }
+  return value;
 }
 
 function itemDetailResponse(row: Record<string, unknown>): Record<string, unknown> {
