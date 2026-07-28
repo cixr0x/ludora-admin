@@ -207,6 +207,45 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(connection.commits, 1)
         self.assertTrue(result.created)
 
+    def test_upsert_item_candidate_sanitizes_null_characters_from_jsonb_values(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        record = DiscoveryItemCandidateRecord(
+            store_id=17,
+            source_url="https://chocitajuegos.com/juego/sabika/",
+            title="SABIKA",
+            raw_payload={
+                "json_ld": {
+                    "description": "A complete board game\x00 for two to four players.",
+                },
+                "nested": ["safe", {"detail\x00": "value\x00"}],
+            },
+            is_boardgame=True,
+            category_confidence=0.99,
+            classification_reasons=[
+                'AI classifier: The payload describes "Sabika" as a complete board game (\x00not an accessory).'
+            ],
+        )
+
+        repository.upsert_item_candidate(record)
+
+        _sql, params = connection.cursor_instance.executions[1]
+        self.assertEqual(
+            json.loads(params[26]),
+            {
+                "json_ld": {
+                    "description": "A complete board game for two to four players.",
+                },
+                "nested": ["safe", {"detail": "value"}],
+            },
+        )
+        self.assertEqual(
+            json.loads(params[30]),
+            ['AI classifier: The payload describes "Sabika" as a complete board game (not an accessory).'],
+        )
+        self.assertNotIn("\\u0000", params[26])
+        self.assertNotIn("\\u0000", params[30])
+
     def test_upsert_tutorial_link_inserts_candidate_when_item_url_is_new(self):
         connection = FakeConnection(fetchone_rows=[None, (101,)])
         repository = DiscoveryRepository(connection)

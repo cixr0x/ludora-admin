@@ -57,11 +57,14 @@ class OpenAIItemClassifier:
         reasoning = classification_payload.get("reasoning")
         if not isinstance(reasoning, str) or not reasoning.strip():
             raise RuntimeError("AI item classifier returned invalid reasoning")
+        sanitized_reasoning = reasoning.replace("\x00", "").strip()
+        if not sanitized_reasoning:
+            raise RuntimeError("AI item classifier returned invalid reasoning")
 
         return ClassificationResult(
             classification,
             round(float(confidence) / 100, 2),
-            [f"AI classifier: {reasoning.strip()}"],
+            [f"AI classifier: {sanitized_reasoning}"],
         )
 
     def apply_item_classification(self, record: DiscoveryItemCandidateRecord) -> DiscoveryItemCandidateRecord:

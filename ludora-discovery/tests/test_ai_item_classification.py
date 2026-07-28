@@ -52,6 +52,32 @@ class AIItemClassificationTests(unittest.TestCase):
             ["AI classifier: The raw payload describes a boxed board game with player count."],
         )
 
+    def test_sanitizes_null_character_from_openai_reasoning(self):
+        record = DiscoveryItemCandidateRecord(
+            store_id=17,
+            source_url="https://chocitajuegos.com/juego/sabika/",
+            title="SABIKA",
+        )
+        response_body = {
+            "output_text": json.dumps(
+                {
+                    "classification": "LIKELY_BOARDGAME",
+                    "confidence": 99,
+                    "reasoning": 'The payload describes "Sabika" as a complete board game (\x00not an accessory).',
+                }
+            )
+        }
+
+        with patch("ludora.ai_item_classification.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
+
+            OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(record)
+
+        self.assertEqual(
+            record.classification_reasons,
+            ['AI classifier: The payload describes "Sabika" as a complete board game (not an accessory).'],
+        )
+
     def test_prompt_treats_boardgame_expansions_as_positive_items(self):
         record = DiscoveryItemCandidateRecord(
             store_id=12,

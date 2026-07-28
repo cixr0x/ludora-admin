@@ -160,8 +160,8 @@ class DiscoveryRepository:
                     record.store_logo,
                     record.status,
                     record.confidence,
-                    json.dumps(record.source_queries, ensure_ascii=False),
-                    json.dumps(record.evidence, ensure_ascii=False),
+                    _jsonb_dumps(record.source_queries),
+                    _jsonb_dumps(record.evidence),
                 ),
             )
         self.connection.commit()
@@ -832,11 +832,11 @@ class DiscoveryRepository:
             data["availability"],
             data["availability_source"],
             data["store_sku"],
-            json.dumps(data["raw_payload"], ensure_ascii=False),
+            _jsonb_dumps(data["raw_payload"]),
             data["is_boardgame"],
             data["is_boardgame_confirmed"],
             data["category_confidence"],
-            json.dumps(data["classification_reasons"], ensure_ascii=False),
+            _jsonb_dumps(data["classification_reasons"]),
         )
 
     def _item_candidate_price_availability_params(
@@ -880,7 +880,7 @@ class DiscoveryRepository:
                     last_updated = now()
                 where id = %s
                 """,
-                (json.dumps(reasons, ensure_ascii=False), candidate_id),
+                (_jsonb_dumps(reasons), candidate_id),
             )
         self.connection.commit()
 
@@ -1142,7 +1142,26 @@ def _decimal_price(value: object) -> Decimal | None:
 
 
 def _jsonb_log_value(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return _jsonb_dumps(value, sort_keys=True)
+
+
+def _jsonb_dumps(value: object, *, sort_keys: bool = False) -> str:
+    return json.dumps(_sanitize_jsonb_value(value), ensure_ascii=False, sort_keys=sort_keys)
+
+
+def _sanitize_jsonb_value(value: object) -> object:
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, dict):
+        return {
+            _sanitize_jsonb_value(key): _sanitize_jsonb_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_jsonb_value(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(_sanitize_jsonb_value(item) for item in value)
+    return value
 
 
 def _optional_int(value: object) -> int | None:
