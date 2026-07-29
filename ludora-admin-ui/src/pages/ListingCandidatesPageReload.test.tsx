@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../components/CoverFlatteningDialog', () => ({
@@ -61,7 +61,7 @@ describe('ListingCandidatesPage review reload', () => {
           canonical_name: 'Coffee Rush',
           id: 77,
           image_url: 'https://catalog.example/coffee-rush.jpg',
-          image_url_es: 'https://catalog.example/cafe-barista.jpg'
+          image_url_es: ''
         });
       }
       if (path === '/items/77/relationships' || path === '/items/77/store-items') {
@@ -79,6 +79,14 @@ describe('ListingCandidatesPage review reload', () => {
         reloadPage={reloadPage}
         selectedCandidateId="920"
       />
+    );
+
+    const coverComparison = await screen.findByRole('group', {
+      name: 'Store item and linked item cover comparison'
+    });
+    expect(await within(coverComparison).findByRole('img', { name: 'Coffee Rush item cover' })).toHaveAttribute(
+      'src',
+      'https://catalog.example/coffee-rush.jpg'
     );
 
     fireEvent.click(await screen.findByRole('button', { name: 'Flatten cover for Cafe Barista' }));

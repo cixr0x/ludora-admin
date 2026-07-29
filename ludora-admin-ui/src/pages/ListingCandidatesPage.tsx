@@ -1241,6 +1241,7 @@ function ItemCandidateForm({
   const [candidateExtends, setCandidateExtends] = useState(false);
   const [candidateExtendsItemId, setCandidateExtendsItemId] = useState('');
   const [candidateImplements, setCandidateImplements] = useState(false);
+  const [linkedItemPreview, setLinkedItemPreview] = useState<AdminRecord | null>(null);
 
   useEffect(() => {
     setBggDialogBggId(matchedBggId);
@@ -1444,41 +1445,65 @@ function ItemCandidateForm({
           </Alert>
         ) : null}
 
-        <Stack alignItems={{ md: 'flex-start', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={2}>
-          {imageUrl ? (
-            <Box
-              alt={`${title} candidate image`}
-              component="img"
-              src={imageUrl}
-              sx={{
-                bgcolor: 'grey.100',
-                border: 1,
-                borderColor: 'divider',
-                borderRadius: 1,
-                height: 180,
-                objectFit: 'contain',
-                width: 180
-              }}
+        {detailMode === 'review' ? (
+          <>
+            <ReviewCoverComparison
+              item={linkedItemPreview}
+              itemId={itemId}
+              storeItemImageUrl={imageUrl}
+              storeItemTitle={title}
             />
-          ) : null}
-
-          <Stack spacing={1}>
-            {sourceUrl ? (
-              <Link href={sourceUrl} rel="noreferrer" target="_blank">
-                Open product page
-              </Link>
-            ) : null}
+            <Stack direction={{ sm: 'row', xs: 'column' }} spacing={2}>
+              {sourceUrl ? (
+                <Link href={sourceUrl} rel="noreferrer" target="_blank">
+                  Open product page
+                </Link>
+              ) : null}
+              {imageUrl ? (
+                <Link href={imageUrl} rel="noreferrer" target="_blank">
+                  Open image
+                </Link>
+              ) : null}
+            </Stack>
+          </>
+        ) : (
+          <Stack alignItems={{ md: 'flex-start', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={2}>
             {imageUrl ? (
-              <Link href={imageUrl} rel="noreferrer" target="_blank">
-                Open image
-              </Link>
+              <Box
+                alt={`${title} candidate image`}
+                component="img"
+                src={imageUrl}
+                sx={{
+                  bgcolor: 'grey.100',
+                  border: 1,
+                  borderColor: 'divider',
+                  borderRadius: 1,
+                  height: 180,
+                  objectFit: 'contain',
+                  width: 180
+                }}
+              />
             ) : null}
+            <Stack spacing={1}>
+              {sourceUrl ? (
+                <Link href={sourceUrl} rel="noreferrer" target="_blank">
+                  Open product page
+                </Link>
+              ) : null}
+              {imageUrl ? (
+                <Link href={imageUrl} rel="noreferrer" target="_blank">
+                  Open image
+                </Link>
+              ) : null}
+            </Stack>
           </Stack>
-        </Stack>
+        )}
 
         <PrimaryItemSection
           itemId={itemId}
+          onItemLoaded={detailMode === 'review' ? setLinkedItemPreview : undefined}
           onItemUpdated={onLinkedItemUpdated}
+          refreshToken={detailMode === 'review' ? linkedItemRefreshToken : 0}
           storeItemId={candidateIdValue}
           storeItemImageUrl={imageUrl}
           storeItemTitle={title}
@@ -1626,17 +1651,112 @@ function ItemCandidateForm({
   );
 }
 
+function ReviewCoverComparison({
+  item,
+  itemId,
+  storeItemImageUrl,
+  storeItemTitle
+}: {
+  item: AdminRecord | null;
+  itemId: string;
+  storeItemImageUrl: string;
+  storeItemTitle: string;
+}) {
+  const itemImageUrl = item ? catalogItemImageUrl(item) : '';
+  const itemName = item ? reviewItemDisplayName(item) : itemId ? `Item ${itemId}` : 'No linked item';
+  const covers = [
+    {
+      alt: `${storeItemTitle} store item cover`,
+      imageUrl: storeItemImageUrl,
+      label: 'Store item',
+      name: storeItemTitle
+    },
+    {
+      alt: `${itemName} item cover`,
+      imageUrl: itemImageUrl,
+      label: 'Item',
+      name: itemName
+    }
+  ];
+
+  return (
+    <Box
+      aria-label="Store item and linked item cover comparison"
+      role="group"
+      sx={{
+        display: 'grid',
+        gap: 2,
+        gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+        maxWidth: 560,
+        width: '100%'
+      }}
+    >
+      {covers.map((cover) => (
+        <Stack alignItems="center" key={cover.label} spacing={1} sx={{ minWidth: 0 }}>
+          <Typography color="text.secondary" variant="caption">
+            {cover.label}
+          </Typography>
+          {cover.imageUrl ? (
+            <Box
+              alt={cover.alt}
+              component="img"
+              src={cover.imageUrl}
+              sx={{
+                bgcolor: 'grey.100',
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: 1,
+                height: { sm: 240, xs: 150 },
+                objectFit: 'contain',
+                width: '100%'
+              }}
+            />
+          ) : (
+            <Box
+              alignItems="center"
+              display="flex"
+              justifyContent="center"
+              sx={{
+                bgcolor: 'grey.100',
+                border: 1,
+                borderColor: 'divider',
+                borderRadius: 1,
+                color: 'text.secondary',
+                height: { sm: 240, xs: 150 },
+                width: '100%'
+              }}
+            >
+              <Typography variant="body2">No cover</Typography>
+            </Box>
+          )}
+          <Typography
+            aria-label={`${cover.label} name`}
+            sx={{ fontWeight: 600, overflowWrap: 'anywhere', textAlign: 'center' }}
+            variant="body2"
+          >
+            {cover.name}
+          </Typography>
+        </Stack>
+      ))}
+    </Box>
+  );
+}
+
 function PrimaryItemSection({
   itemId,
+  onItemLoaded,
   onItemUpdated,
   onAssociated,
+  refreshToken,
   storeItemId,
   storeItemImageUrl,
   storeItemTitle
 }: {
   itemId: string;
+  onItemLoaded?: (item: AdminRecord | null) => void;
   onItemUpdated: (item: AdminRecord) => void;
   onAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
+  refreshToken: number;
   storeItemId: string;
   storeItemImageUrl: string;
   storeItemTitle: string;
@@ -1652,30 +1772,35 @@ function PrimaryItemSection({
   const [loadState, setLoadState] = useState<LoadState>(itemId ? 'loading' : 'ready');
 
   useEffect(() => {
+    setCopyError('');
+    setCopyMessage('');
+  }, [itemId]);
+
+  useEffect(() => {
     if (!itemId) {
       setItem(null);
+      onItemLoaded?.(null);
       setLoadState('ready');
-      setCopyError('');
-      setCopyMessage('');
       return;
     }
 
     let ignore = false;
     setItem(null);
+    onItemLoaded?.(null);
     setLoadState('loading');
-    setCopyError('');
-    setCopyMessage('');
     adminApi
       .getItem(itemId)
       .then((linkedItem) => {
         if (!ignore) {
           setItem(linkedItem);
+          onItemLoaded?.(linkedItem);
           setLoadState('ready');
         }
       })
       .catch(() => {
         if (!ignore) {
           setItem(null);
+          onItemLoaded?.(null);
           setLoadState('error');
         }
       });
@@ -1683,7 +1808,7 @@ function PrimaryItemSection({
     return () => {
       ignore = true;
     };
-  }, [itemId]);
+  }, [itemId, onItemLoaded, refreshToken]);
 
   const linkedItemId = item ? field(item, ['id'], itemId) : itemId;
   const itemName = item ? catalogItemDisplayName(item) : '';
@@ -1722,6 +1847,7 @@ function PrimaryItemSection({
     try {
       const savedItem = await adminApi.copyStoreItemCoverToItem(storeItemId, copyTargetField);
       setItem(savedItem);
+      onItemLoaded?.(savedItem);
       onItemUpdated(savedItem);
       setCopyMessage(
         `Store item cover copied to the linked item's ${copyTargetField === 'image_url' ? 'image' : 'Spanish image'}.`
@@ -2225,6 +2351,17 @@ function CatalogItemSearchDialog({
 
 function catalogItemDisplayName(item: AdminRecord) {
   return field(item, ['canonical_name_es', 'canonical_name'], 'Untitled item');
+}
+
+function reviewItemDisplayName(item: AdminRecord) {
+  const name = field(item, ['canonical_name'], '');
+  const nameEs = field(item, ['canonical_name_es'], '');
+
+  if (name && nameEs) {
+    return `${name} (${nameEs})`;
+  }
+
+  return name || nameEs || 'Untitled item';
 }
 
 function catalogItemImageUrl(item: AdminRecord) {

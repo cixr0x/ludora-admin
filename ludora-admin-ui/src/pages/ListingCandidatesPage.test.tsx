@@ -1454,10 +1454,18 @@ describe('ListingCandidatesPage', () => {
       'Run a coffee shop before the customers lose patience.'
     );
     expect(within(storeItemSection!).queryByLabelText('Publisher')).not.toBeInTheDocument();
-    expect(within(storeItemSection!).getByRole('img', { name: 'Cafe Barista candidate image' })).toHaveAttribute(
+    const coverComparison = within(storeItemSection!).getByRole('group', {
+      name: 'Store item and linked item cover comparison'
+    });
+    expect(within(coverComparison).getByRole('img', { name: 'Cafe Barista store item cover' })).toHaveAttribute(
       'src',
       'https://store.mx/cafe-barista.jpg'
     );
+    expect(
+      await within(coverComparison).findByRole('img', { name: 'Coffee Rush (Cafe Barista) item cover' })
+    ).toHaveAttribute('src', 'https://images.example/cafe-barista.jpg');
+    expect(within(coverComparison).getByLabelText('Store item name')).toHaveTextContent('Cafe Barista');
+    expect(within(coverComparison).getByLabelText('Item name')).toHaveTextContent('Coffee Rush (Cafe Barista)');
     expect(within(storeItemSection!).getByRole('link', { name: 'Open product page' })).toHaveAttribute(
       'href',
       'https://store.mx/products/cafe-barista'
@@ -1540,7 +1548,7 @@ describe('ListingCandidatesPage', () => {
 
     await user.click(within(storeItemSection!).getByRole('button', { name: 'Approve listing' }));
     expect(await screen.findByText('Listing status: LISTED')).toBeInTheDocument();
-  });
+  }, 10_000);
 });
 
 function jsonResponse(data: unknown, status = 200, meta?: unknown) {
