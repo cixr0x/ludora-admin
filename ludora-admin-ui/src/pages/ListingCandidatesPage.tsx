@@ -488,6 +488,7 @@ function batchSelectionColumn(options: BatchSelectionOptions): DataTableColumn<A
 type ListingCandidatesPageProps = {
   detailMode?: DetailMode;
   onClearSelectedCandidateId?: () => void;
+  onOpenCandidate?: (candidateId: string) => void;
   onOpenItem?: (itemId: string) => void;
   reloadPage?: () => void;
   selectedCandidateId?: string;
@@ -496,6 +497,7 @@ type ListingCandidatesPageProps = {
 export function ListingCandidatesPage({
   detailMode = 'standard',
   onClearSelectedCandidateId,
+  onOpenCandidate,
   onOpenItem,
   reloadPage = reloadCurrentPage,
   selectedCandidateId
@@ -864,6 +866,28 @@ export function ListingCandidatesPage({
         listingStatus === 'LISTED' ? 'Store item listing approved.' : 'Store item listing rejected.'
       );
       table.refresh();
+      if (detailMode === 'review' && listingStatus === 'LISTED' && onOpenCandidate) {
+        try {
+          const nextReviews = await adminApi.getOfferReviewsPage({
+            filters: { store_item_listing_status: 'PENDING' },
+            page: 0,
+            pageSize: 2,
+            sortColumnId: 'candidate_name',
+            sortDirection: 'asc'
+          });
+          const nextCandidateId = nextReviews.rows
+            .map((review) => field(review, ['candidate_id', 'store_item_id'], ''))
+            .find((candidateId) => candidateId && candidateId !== id);
+
+          if (nextCandidateId) {
+            onOpenCandidate(nextCandidateId);
+          } else {
+            onClearSelectedCandidateId?.();
+          }
+        } catch {
+          setSaveError('Store item listing was approved, but the next review could not be loaded.');
+        }
+      }
     } catch {
       setSaveError('Store item listing status could not be saved.');
     } finally {

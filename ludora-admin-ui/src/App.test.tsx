@@ -142,12 +142,15 @@ describe('App', () => {
     expect(screen.getByDisplayValue('Coffee Rush')).toBeInTheDocument();
   });
 
-  it('opens the dedicated store item review detail from its hash route', async () => {
+  it('opens a store item review and advances to the next pending review after approval', async () => {
     window.location.hash = '#offer-reviews?id=920';
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname === '/admin/auth/me') {
         return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/discovery/listings/920/listing-status' && init?.method === 'PATCH') {
+        return jsonResponse({ id: '920', item_id: 77, listing_status: 'LISTED', title: 'Cafe Barista' });
       }
       if (url.pathname === '/discovery/listings/920') {
         return jsonResponse({
@@ -161,11 +164,28 @@ describe('App', () => {
           title: 'Cafe Barista'
         });
       }
+      if (url.pathname === '/discovery/listings/921') {
+        return jsonResponse({
+          description: 'Guide alpacas across the mountains.',
+          id: '921',
+          image_url: 'https://store.mx/alpaca-trails.jpg',
+          item_id: 78,
+          listing_status: 'PENDING',
+          source_url: 'https://store.mx/products/alpaca-trails',
+          title: 'Alpaca Trails'
+        });
+      }
       if (url.pathname === '/discovery/listings') {
         return jsonResponse([]);
       }
-      if (url.pathname === '/discovery/listings/920/additional-items') {
+      if (
+        url.pathname === '/discovery/listings/920/additional-items' ||
+        url.pathname === '/discovery/listings/921/additional-items'
+      ) {
         return jsonResponse([]);
+      }
+      if (url.pathname === '/admin/discovery/offer-reviews') {
+        return jsonResponse([{ candidate_id: 921, candidate_name: 'Alpaca Trails' }]);
       }
       if (url.pathname === '/items/77') {
         return jsonResponse({
@@ -181,10 +201,25 @@ describe('App', () => {
           normalized_name_es: 'cafe barista'
         });
       }
+      if (url.pathname === '/items/78') {
+        return jsonResponse({
+          canonical_name: 'Alpaca Trails',
+          description: 'Guide alpacas across the mountains.',
+          description_es: '',
+          id: '78',
+          image_url: 'https://images.example/alpaca-trails.jpg',
+          image_url_es: '',
+          normalized_name: 'alpaca trails',
+          normalized_name_es: ''
+        });
+      }
       if (url.pathname === '/items/77/store-items' || url.pathname === '/items/77/relationships') {
         return jsonResponse([]);
       }
-      if (url.pathname === '/items/77/taxonomy') {
+      if (url.pathname === '/items/78/store-items' || url.pathname === '/items/78/relationships') {
+        return jsonResponse([]);
+      }
+      if (url.pathname === '/items/77/taxonomy' || url.pathname === '/items/78/taxonomy') {
         return jsonResponse({ categories: [], families: [], mechanics: [] });
       }
       throw new Error(`Unexpected request: ${url.toString()}`);
@@ -197,6 +232,17 @@ describe('App', () => {
     expect(screen.getByLabelText('Title')).toHaveValue('Cafe Barista');
     expect(screen.queryByLabelText('Publisher')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Back to Review' })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve listing' }));
+
+    await waitFor(() => expect(window.location.hash).toBe('#offer-reviews?id=921'));
+    await waitFor(() => expect(screen.getByLabelText('Title')).toHaveValue('Alpaca Trails'));
+    const nextReviewRequest = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .find((url) => url.pathname === '/admin/discovery/offer-reviews');
+    expect(nextReviewRequest?.searchParams.get('filter_store_item_listing_status')).toBe('PENDING');
+    expect(nextReviewRequest?.searchParams.get('sort')).toBe('candidate_name');
+    expect(nextReviewRequest?.searchParams.get('sort_direction')).toBe('asc');
   });
 
   it('opens the newly created item after creating from a store item candidate', async () => {

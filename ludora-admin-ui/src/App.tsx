@@ -97,11 +97,17 @@ function itemHash(itemId: string) {
   return `#items?${params.toString()}`;
 }
 
+function offerReviewHash(candidateId: string) {
+  const params = new URLSearchParams({ id: candidateId });
+  return `#offer-reviews?${params.toString()}`;
+}
+
 function renderSection(
   route: AdminRoute,
   navigate: (section: AdminSection) => void,
   navigateToFrontPageCategoryProducts: (option: FrontPageCategoryOption) => void,
-  navigateToItem: (itemId: string) => void
+  navigateToItem: (itemId: string) => void,
+  navigateToOfferReview: (candidateId: string) => void
 ) {
   const selectedId = route.params.get('id') ?? undefined;
 
@@ -168,6 +174,7 @@ function renderSection(
           detailMode="review"
           selectedCandidateId={selectedId}
           onClearSelectedCandidateId={() => navigate('offer-reviews')}
+          onOpenCandidate={navigateToOfferReview}
         />
       ) : (
         <OfferReviewPage />
@@ -259,6 +266,10 @@ export default function App() {
     navigateToHash(itemHash(itemId));
   }
 
+  function navigateToOfferReview(candidateId: string) {
+    navigateToHash(offerReviewHash(candidateId));
+  }
+
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
@@ -270,7 +281,7 @@ export default function App() {
         <LoginPage error={authState.error} isSubmitting={isLoggingIn} onSubmit={handleLogin} />
       ) : (
         <AdminLayout activeSection={route.section} onLogout={handleLogout} onNavigate={navigate}>
-          {renderSection(route, navigate, navigateToFrontPageCategoryProducts, navigateToItem)}
+          {renderSection(route, navigate, navigateToFrontPageCategoryProducts, navigateToItem, navigateToOfferReview)}
         </AdminLayout>
       )}
     </ThemeProvider>
