@@ -1466,6 +1466,13 @@ describe('ListingCandidatesPage', () => {
     expect(within(storeItemSection!).getByText('Additional items')).toBeInTheDocument();
     expect(within(storeItemSection!).getByRole('button', { name: 'Approve listing' })).toBeEnabled();
     expect(within(storeItemSection!).getByRole('button', { name: 'Reject listing' })).toBeEnabled();
+    await user.click(within(storeItemSection!).getByRole('button', { name: 'Flatten cover for Cafe Barista' }));
+    const flattenDialog = await screen.findByRole('dialog', { name: 'Flatten cover: Cafe Barista' });
+    expect(within(flattenDialog).getByLabelText('Store item cover', { selector: 'input' })).toBeInTheDocument();
+    expect(within(flattenDialog).getByLabelText('Item image', { selector: 'input' })).toBeInTheDocument();
+    expect(within(flattenDialog).getByLabelText('Item Spanish image', { selector: 'input' })).toBeInTheDocument();
+    await user.click(within(flattenDialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Flatten cover: Cafe Barista' })).not.toBeInTheDocument());
 
     expect(await screen.findByRole('heading', { name: 'Linked Item Details' })).toBeInTheDocument();
     const linkedItemSection = screen.getByRole('heading', { name: 'Linked Item Details' }).closest('section');

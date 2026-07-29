@@ -44,7 +44,16 @@ export type CoverFlatteningRequest =
       kind: 'item';
       sources: Array<{ field: CoverImageField; url: string }>;
       title: string;
+    }
+  | {
+      id: string;
+      itemId: string;
+      kind: 'review';
+      sources: Array<{ field: CoverFlatteningSourceField; url: string }>;
+      title: string;
     };
+
+type CoverFlatteningSourceField = CoverImageField | 'store_item_image';
 
 export function CoverFlatteningDialog({
   onAccepted,
@@ -67,7 +76,7 @@ export function CoverFlatteningDialog({
   const [customAspectRatio, setCustomAspectRatio] = useState('1');
   const [aspectRatioOrientation, setAspectRatioOrientation] = useState<AspectRatioOrientation>('vertical');
   const [trimSteps, setTrimSteps] = useState(0);
-  const [sourceField, setSourceField] = useState<CoverImageField>('image_url');
+  const [sourceField, setSourceField] = useState<CoverFlatteningSourceField>('image_url');
   const [targetField, setTargetField] = useState<CoverImageField | ''>('');
   const [isStarting, setIsStarting] = useState(false);
   const [isAccepting, setIsAccepting] = useState(false);
@@ -77,9 +86,11 @@ export function CoverFlatteningDialog({
   const requestKeyRef = useRef('');
   const cancelRequestedRef = useRef(false);
 
-  const requestKey = request ? `${request.kind}:${request.id}` : '';
-  const itemSources = request?.kind === 'item' ? request.sources : [];
-  const needsSourceChoice = itemSources.length > 1 && !workflow;
+  const requestKey = request
+    ? `${request.kind}:${request.id}:${request.kind === 'review' ? request.itemId : ''}`
+    : '';
+  const selectableSources = request?.kind === 'item' || request?.kind === 'review' ? request.sources : [];
+  const needsSourceChoice = selectableSources.length > 1 && !workflow;
   const trimFraction = trimSteps / 1000;
 
   useEffect(() => {
@@ -104,15 +115,20 @@ export function CoverFlatteningDialog({
     setTrimSteps(0);
     setTargetField('');
     setError('');
-    const preferredSource = request.kind === 'item' && request.sources.some((source) => source.field === 'image_url')
-      ? 'image_url'
-      : request.kind === 'item'
-        ? request.sources[0]?.field ?? 'image_url'
-        : 'image_url';
+    const preferredSource = request.kind === 'review'
+      ? request.sources[0]?.field ?? 'store_item_image'
+      : request.kind === 'item' && request.sources.some((source) => source.field === 'image_url')
+        ? 'image_url'
+        : request.kind === 'item'
+          ? request.sources[0]?.field ?? 'image_url'
+          : 'image_url';
     setSourceField(preferredSource);
 
-    if (request.kind === 'store_item' || request.sources.length === 1) {
-      void startWorkflow(request, request.kind === 'item' ? request.sources[0]?.field ?? 'image_url' : 'image_url');
+    if (request.kind === 'store_item' || selectableSources.length === 1) {
+      void startWorkflow(
+        request,
+        request.kind === 'store_item' ? 'store_item_image' : selectableSources[0]?.field ?? 'image_url'
+      );
     }
   }, [request, requestKey]);
 
@@ -181,14 +197,19 @@ export function CoverFlatteningDialog({
     };
   }, [mode, workflow]);
 
-  async function startWorkflow(activeRequest: CoverFlatteningRequest, selectedSource: CoverImageField) {
-    const activeRequestKey = `${activeRequest.kind}:${activeRequest.id}`;
+  async function startWorkflow(activeRequest: CoverFlatteningRequest, selectedSource: CoverFlatteningSourceField) {
+    const activeRequestKey = `${activeRequest.kind}:${activeRequest.id}:${
+      activeRequest.kind === 'review' ? activeRequest.itemId : ''
+    }`;
     setIsStarting(true);
     setError('');
     try {
-      const started = activeRequest.kind === 'store_item'
+      const started = activeRequest.kind === 'store_item' || selectedSource === 'store_item_image'
         ? await adminApi.startStoreItemCoverFlattening(activeRequest.id)
-        : await adminApi.startItemCoverFlattening(activeRequest.id, selectedSource);
+        : await adminApi.startItemCoverFlattening(
+            activeRequest.kind === 'review' ? activeRequest.itemId : activeRequest.id,
+            selectedSource
+          );
       if (cancelRequestedRef.current || requestKeyRef.current !== activeRequestKey) {
         await adminApi.cancelCoverFlattening(started.workflow_id).catch(() => undefined);
         return;
@@ -319,12 +340,15 @@ export function CoverFlatteningDialog({
           {needsSourceChoice ? (
             <FormControl>
               <FormLabel>Source image</FormLabel>
-              <RadioGroup value={sourceField} onChange={(event) => setSourceField(event.target.value as CoverImageField)}>
-                {itemSources.map((source) => (
+              <RadioGroup
+                value={sourceField}
+                onChange={(event) => setSourceField(event.target.value as CoverFlatteningSourceField)}
+              >
+                {selectableSources.map((source) => (
                   <FormControlLabel
                     control={<Radio />}
                     key={source.field}
-                    label={source.field === 'image_url' ? 'Image' : 'Spanish image'}
+                    label={coverSourceLabel(request, source.field)}
                     value={source.field}
                   />
                 ))}
@@ -688,6 +712,16 @@ function automaticSizingLabel(candidate: CoverFlatteningWorkflow['candidates'][n
     return 'near-square correction';
   }
   return 'edge estimate';
+}
+
+function coverSourceLabel(request: CoverFlatteningRequest | null, sourceField: CoverFlatteningSourceField): string {
+  if (request?.kind === 'review') {
+    if (sourceField === 'store_item_image') {
+      return 'Store item cover';
+    }
+    return sourceField === 'image_url' ? 'Item image' : 'Item Spanish image';
+  }
+  return sourceField === 'image_url' ? 'Image' : 'Spanish image';
 }
 
 function errorMessage(error: unknown, fallback: string): string {

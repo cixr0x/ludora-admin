@@ -515,6 +515,7 @@ export function ListingCandidatesPage({
   const [selectedBatchCandidateIds, setSelectedBatchCandidateIds] = useState<Set<string>>(() => new Set());
   const batchSelectionAnchorId = useRef<string | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
+  const [preparingCoverFlatteningCandidateId, setPreparingCoverFlatteningCandidateId] = useState('');
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
   const [updatingListingStatusCandidateId, setUpdatingListingStatusCandidateId] = useState('');
   const [coverFlatteningRequest, setCoverFlatteningRequest] = useState<CoverFlatteningRequest | null>(null);
@@ -704,6 +705,7 @@ export function ListingCandidatesPage({
       setSaveMessage('');
       setSelectedCandidate(null);
       setLinkedItemRefreshToken(0);
+      setPreparingCoverFlatteningCandidateId('');
       setUpdatingListingStatusCandidateId('');
       setViewMode('table');
       return;
@@ -716,6 +718,7 @@ export function ListingCandidatesPage({
     setSaveError('');
     setSaveMessage('');
     setLinkedItemRefreshToken(0);
+    setPreparingCoverFlatteningCandidateId('');
     setUpdatingListingStatusCandidateId('');
     setViewMode('form');
 
@@ -918,11 +921,55 @@ export function ListingCandidatesPage({
     }
   }
 
-  function handleStartCoverFlattening(candidate: AdminRecord) {
+  async function handleStartCoverFlattening(candidate: AdminRecord) {
     const candidateId = field(candidate, ['id'], '');
     if (!candidateId) {
       return;
     }
+
+    if (detailMode === 'review') {
+      const itemId = field(candidate, ['item_id'], '');
+      if (!itemId) {
+        setSaveError('Link a catalog item before flattening a cover.');
+        return;
+      }
+
+      setPreparingCoverFlatteningCandidateId(candidateId);
+      setSaveError('');
+      try {
+        const linkedItem = await adminApi.getItem(itemId);
+        const sources: Extract<CoverFlatteningRequest, { kind: 'review' }>['sources'] = [];
+        const storeItemImageUrl = field(candidate, ['image_url'], '');
+        const itemImageUrl = field(linkedItem, ['image_url'], '');
+        const itemImageUrlEs = field(linkedItem, ['image_url_es'], '');
+        if (storeItemImageUrl) {
+          sources.push({ field: 'store_item_image', url: storeItemImageUrl });
+        }
+        if (itemImageUrl) {
+          sources.push({ field: 'image_url', url: itemImageUrl });
+        }
+        if (itemImageUrlEs) {
+          sources.push({ field: 'image_url_es', url: itemImageUrlEs });
+        }
+        if (sources.length === 0) {
+          setSaveError('No cover images are available to flatten.');
+          return;
+        }
+        setCoverFlatteningRequest({
+          id: candidateId,
+          itemId,
+          kind: 'review',
+          sources,
+          title: field(candidate, ['title'], 'Store item')
+        });
+      } catch {
+        setSaveError('Cover sources could not be loaded.');
+      } finally {
+        setPreparingCoverFlatteningCandidateId('');
+      }
+      return;
+    }
+
     setCoverFlatteningRequest({
       id: candidateId,
       kind: 'store_item',
@@ -1045,6 +1092,7 @@ export function ListingCandidatesPage({
         request={coverFlatteningRequest}
         onAccepted={(result) => {
           setCoverFlatteningRequest(null);
+          setLinkedItemRefreshToken((currentToken) => currentToken + 1);
           setSaveMessage(`Flattened cover saved as ${result.target_field === 'image_url' ? 'image' : 'Spanish image'}.`);
         }}
         onClose={() => setCoverFlatteningRequest(null)}
@@ -1082,6 +1130,7 @@ export function ListingCandidatesPage({
           onStartCoverFlattening={handleStartCoverFlattening}
           onStartLocalCoverWorkflow={handleStartLocalCoverWorkflow}
           saveError={saveError}
+          preparingCoverFlatteningCandidateId={preparingCoverFlatteningCandidateId}
           startingCoverWorkflowId={startingCoverWorkflowId}
           updatingListingStatusCandidateId={updatingListingStatusCandidateId}
         />
@@ -1140,6 +1189,7 @@ function ItemCandidateForm({
   onSetListingStatus,
   onStartCoverFlattening,
   onStartLocalCoverWorkflow,
+  preparingCoverFlatteningCandidateId,
   saveError,
   startingCoverWorkflowId,
   updatingListingStatusCandidateId
@@ -1161,8 +1211,9 @@ function ItemCandidateForm({
   onPrimaryItemAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
   onSetListingStatus: (candidate: AdminRecord, listingStatus: StoreItemListingStatus) => void;
-  onStartCoverFlattening: (candidate: AdminRecord) => void;
+  onStartCoverFlattening: (candidate: AdminRecord) => void | Promise<void>;
   onStartLocalCoverWorkflow: (candidate: AdminRecord) => void;
+  preparingCoverFlatteningCandidateId: string;
   saveError: string;
   startingCoverWorkflowId: string;
   updatingListingStatusCandidateId: string;
@@ -1209,6 +1260,15 @@ function ItemCandidateForm({
     (!candidateExtends || Boolean(candidateExtendsItemId.trim()));
   const isStartingCoverWorkflow = Boolean(candidateIdValue && candidateIdValue === startingCoverWorkflowId);
   const canStartCoverWorkflow = Boolean(candidateIdValue && imageUrl && itemId && !isStartingCoverWorkflow && !isDeleting);
+  const isPreparingCoverFlattening =
+    Boolean(candidateIdValue) && candidateIdValue === preparingCoverFlatteningCandidateId;
+  const canStartCoverFlattening = Boolean(
+    candidateIdValue &&
+      itemId &&
+      !isPreparingCoverFlattening &&
+      !isDeleting &&
+      (detailMode === 'review' || imageUrl)
+  );
   const isUpdatingListingStatus =
     Boolean(candidateIdValue) && candidateIdValue === updatingListingStatusCandidateId;
 
@@ -1262,18 +1322,18 @@ function ItemCandidateForm({
                 </Button>
               </span>
             </Tooltip>
-            <Tooltip title={canStartCoverWorkflow ? 'Flatten cover' : 'Requires a linked item and image'}>
+            <Tooltip title={canStartCoverFlattening ? 'Flatten cover' : 'Requires a linked item and available cover image'}>
               <span>
                 <Button
                   aria-label={`Flatten cover for ${title}`}
-                  disabled={!canStartCoverWorkflow}
-                  startIcon={<AutoFixHighIcon />}
+                  disabled={!canStartCoverFlattening}
+                  startIcon={isPreparingCoverFlattening ? <CircularProgress size={18} /> : <AutoFixHighIcon />}
                   sx={{ width: { sm: 'auto', xs: '100%' } }}
                   type="button"
                   variant="outlined"
-                  onClick={() => onStartCoverFlattening(candidate)}
+                  onClick={() => void onStartCoverFlattening(candidate)}
                 >
-                  Flatten cover
+                  {isPreparingCoverFlattening ? 'Loading sources...' : 'Flatten cover'}
                 </Button>
               </span>
             </Tooltip>

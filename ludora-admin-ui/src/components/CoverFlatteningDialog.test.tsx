@@ -259,6 +259,77 @@ describe('CoverFlatteningDialog', () => {
     });
   });
 
+  it.each([
+    [
+      'Store item cover',
+      '/admin/cover-flattening-workflows/store-items',
+      { store_item_id: '920' },
+      'store_item_image'
+    ],
+    [
+      'Item image',
+      '/admin/cover-flattening-workflows/items',
+      { item_id: '77', source_field: 'image_url' },
+      'image_url'
+    ],
+    [
+      'Item Spanish image',
+      '/admin/cover-flattening-workflows/items',
+      { item_id: '77', source_field: 'image_url_es' },
+      'image_url_es'
+    ]
+  ])('starts the selected review source: %s', async (sourceLabel, endpoint, expectedBody, sourceField) => {
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith(endpoint)) {
+        return jsonResponse({
+          data: {
+            automatic_error: 'No automatic candidate',
+            candidates: [],
+            created_at: '2026-07-29T12:00:00.000Z',
+            expires_at: '2026-07-29T12:30:00.000Z',
+            item_id: 77,
+            perspective: null,
+            source_field: sourceField,
+            store_item_id: sourceField === 'store_item_image' ? 920 : null,
+            workflow_id: `flatten-review-${sourceField}`
+          }
+        }, 201);
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+
+    render(
+      <CoverFlatteningDialog
+        request={{
+          id: '920',
+          itemId: '77',
+          kind: 'review',
+          sources: [
+            { field: 'store_item_image', url: 'https://store.example/coffee-rush.jpg' },
+            { field: 'image_url', url: 'https://catalog.example/coffee-rush.jpg' },
+            { field: 'image_url_es', url: 'https://catalog.example/cafe-barista.jpg' }
+          ],
+          title: 'Cafe Barista'
+        }}
+        onAccepted={() => undefined}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(screen.getByLabelText('Store item cover', { selector: 'input' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Item image', { selector: 'input' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Item Spanish image', { selector: 'input' })).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText(sourceLabel, { selector: 'input' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate candidates' }));
+
+    await waitFor(() => {
+      const startRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith(endpoint));
+      expect(startRequest).toBeDefined();
+      expect(JSON.parse(String(startRequest?.[1]?.body))).toEqual(expectedBody);
+    });
+  });
+
   it('selects four source points, cancels back without deleting, and generates manual candidate 3', async () => {
     const automaticCandidate = {
       aspect_ratio: 0.75,
