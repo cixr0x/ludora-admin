@@ -1241,12 +1241,19 @@ function ItemCandidateForm({
   const [candidateExtends, setCandidateExtends] = useState(false);
   const [candidateExtendsItemId, setCandidateExtendsItemId] = useState('');
   const [candidateImplements, setCandidateImplements] = useState(false);
+  const [isGeneratingTranslation, setIsGeneratingTranslation] = useState(false);
   const [linkedItemPreview, setLinkedItemPreview] = useState<AdminRecord | null>(null);
+  const [translationError, setTranslationError] = useState('');
 
   useEffect(() => {
     setBggDialogBggId(matchedBggId);
     setCandidateDialogBggId(matchedBggId);
   }, [matchedBggId]);
+
+  useEffect(() => {
+    setIsGeneratingTranslation(false);
+    setTranslationError('');
+  }, [itemId]);
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1297,6 +1304,42 @@ function ItemCandidateForm({
   async function handleConfirmDelete() {
     if (await onDelete()) {
       setIsDeleteDialogOpen(false);
+    }
+  }
+
+  async function handleGenerateTranslation() {
+    if (!linkedItemPreview || isGeneratingTranslation) {
+      return;
+    }
+
+    const linkedItemId = field(linkedItemPreview, ['id'], itemId);
+    const itemName = field(linkedItemPreview, ['canonical_name_es', 'canonical_name'], '');
+    const itemDescription = field(linkedItemPreview, ['description'], '');
+    const storeItemDescription = field(candidate, ['description'], '');
+
+    if (!linkedItemId || !itemName || (!itemDescription && !storeItemDescription)) {
+      setTranslationError('An item name and at least one source description are required.');
+      return;
+    }
+
+    setIsGeneratingTranslation(true);
+    setTranslationError('');
+    try {
+      const generated = await adminApi.generateDescription({
+        boardgame_name: itemName,
+        description_1: itemDescription,
+        description_2: storeItemDescription
+      });
+      const savedItem = await adminApi.updateItem(linkedItemId, {
+        ...linkedItemPreview,
+        description_es: generated.description_es
+      });
+      setLinkedItemPreview(savedItem);
+      onLinkedItemUpdated();
+    } catch {
+      setTranslationError('Spanish item description could not be saved.');
+    } finally {
+      setIsGeneratingTranslation(false);
     }
   }
 
@@ -1448,10 +1491,18 @@ function ItemCandidateForm({
         {detailMode === 'review' ? (
           <>
             <ReviewCoverComparison
+              canGenerateTranslation={Boolean(
+                linkedItemPreview &&
+                  field(linkedItemPreview, ['canonical_name_es', 'canonical_name'], '') &&
+                  (field(linkedItemPreview, ['description'], '') || field(candidate, ['description'], ''))
+              )}
+              isGeneratingTranslation={isGeneratingTranslation}
               item={linkedItemPreview}
               itemId={itemId}
+              translationError={translationError}
               storeItemImageUrl={imageUrl}
               storeItemTitle={title}
+              onGenerateTranslation={() => void handleGenerateTranslation()}
             />
             <Stack direction={{ sm: 'row', xs: 'column' }} spacing={2}>
               {sourceUrl ? (
@@ -1652,18 +1703,27 @@ function ItemCandidateForm({
 }
 
 function ReviewCoverComparison({
+  canGenerateTranslation,
+  isGeneratingTranslation,
   item,
   itemId,
+  onGenerateTranslation,
   storeItemImageUrl,
-  storeItemTitle
+  storeItemTitle,
+  translationError
 }: {
+  canGenerateTranslation: boolean;
+  isGeneratingTranslation: boolean;
   item: AdminRecord | null;
   itemId: string;
+  onGenerateTranslation: () => void;
   storeItemImageUrl: string;
   storeItemTitle: string;
+  translationError: string;
 }) {
   const itemImageUrl = item ? catalogItemImageUrl(item) : '';
   const itemName = item ? reviewItemDisplayName(item) : itemId ? `Item ${itemId}` : 'No linked item';
+  const translationGenerated = Boolean(item && field(item, ['description_es'], '').trim());
   const covers = [
     {
       alt: `${storeItemTitle} store item cover`,
@@ -1738,6 +1798,43 @@ function ReviewCoverComparison({
           </Typography>
         </Stack>
       ))}
+      <Stack alignItems="center" spacing={1} sx={{ gridColumn: '1 / -1' }}>
+        {translationGenerated ? (
+          <Stack
+            alignItems="center"
+            aria-label="Translation generated"
+            direction="row"
+            role="status"
+            spacing={0.75}
+          >
+            <CheckCircleIcon color="success" fontSize="small" />
+            <Typography color="success.main" sx={{ fontWeight: 600 }} variant="body2">
+              Translation generated
+            </Typography>
+          </Stack>
+        ) : (
+          <Tooltip
+            title={
+              canGenerateTranslation
+                ? 'Generate Spanish item description'
+                : 'Requires an item name and at least one source description'
+            }
+          >
+            <span>
+              <Button
+                disabled={!canGenerateTranslation || isGeneratingTranslation}
+                startIcon={isGeneratingTranslation ? <CircularProgress size={16} /> : <AutoFixHighIcon />}
+                type="button"
+                variant="outlined"
+                onClick={onGenerateTranslation}
+              >
+                {isGeneratingTranslation ? 'Generating translation...' : 'Generate translation'}
+              </Button>
+            </span>
+          </Tooltip>
+        )}
+        {translationError ? <Alert severity="error">{translationError}</Alert> : null}
+      </Stack>
     </Box>
   );
 }

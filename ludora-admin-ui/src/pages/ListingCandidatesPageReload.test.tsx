@@ -94,6 +94,82 @@ describe('ListingCandidatesPage review reload', () => {
 
     await waitFor(() => expect(reloadPage).toHaveBeenCalledTimes(1));
   });
+
+  it('generates a missing translation from the cover comparison', async () => {
+    let item: Record<string, unknown> = {
+      canonical_name: 'Coffee Rush',
+      description: 'Complete customer orders in a busy coffee shop.',
+      description_es: '',
+      id: 77,
+      image_url: 'https://catalog.example/coffee-rush.jpg',
+      image_url_es: ''
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/discovery/listings/920') {
+        return jsonResponse({
+          description: 'Run a coffee shop before the customers lose patience.',
+          id: '920',
+          image_url: 'https://store.example/cafe-barista.jpg',
+          item_id: 77,
+          listing_status: 'PENDING',
+          source_url: 'https://store.example/cafe-barista',
+          title: 'Cafe Barista'
+        });
+      }
+      if (path === '/discovery/listings') {
+        return jsonResponse([], { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items') {
+        return jsonResponse([]);
+      }
+      if (path === '/admin/description-generations' && init?.method === 'POST') {
+        return jsonResponse({
+          description_es: 'Completa los pedidos de los clientes en una cafeteria concurrida.',
+          metadata: {},
+          model: 'test-model',
+          prompt_version: 'test'
+        });
+      }
+      if (path === '/items/77' && init?.method === 'PATCH') {
+        item = { ...item, ...JSON.parse(String(init.body)) };
+        return jsonResponse(item);
+      }
+      if (path === '/items/77') {
+        return jsonResponse(item);
+      }
+      if (path === '/items/77/relationships' || path === '/items/77/store-items') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/taxonomy') {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Generate translation' }));
+
+    expect(await screen.findByRole('status', { name: 'Translation generated' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Generate translation' })).not.toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/description-generations', {
+      body: JSON.stringify({
+        boardgame_name: 'Coffee Rush',
+        description_1: 'Complete customer orders in a busy coffee shop.',
+        description_2: 'Run a coffee shop before the customers lose patience.'
+      }),
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+    const itemUpdate = fetchMock.mock.calls.find(
+      ([input, init]) => new URL(String(input)).pathname === '/items/77' && init?.method === 'PATCH'
+    );
+    expect(JSON.parse(String(itemUpdate?.[1]?.body)).description_es).toBe(
+      'Completa los pedidos de los clientes en una cafeteria concurrida.'
+    );
+  });
 });
 
 function jsonResponse(data: unknown, meta?: unknown) {

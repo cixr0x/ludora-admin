@@ -1466,6 +1466,10 @@ describe('ListingCandidatesPage', () => {
     ).toHaveAttribute('src', 'https://images.example/cafe-barista.jpg');
     expect(within(coverComparison).getByLabelText('Store item name')).toHaveTextContent('Cafe Barista');
     expect(within(coverComparison).getByLabelText('Item name')).toHaveTextContent('Coffee Rush (Cafe Barista)');
+    const translationStatus = within(coverComparison).getByRole('status', { name: 'Translation generated' });
+    expect(translationStatus).toHaveTextContent('Translation generated');
+    expect(within(translationStatus).getByTestId('CheckCircleIcon')).toBeInTheDocument();
+    expect(within(coverComparison).queryByRole('button', { name: 'Generate translation' })).not.toBeInTheDocument();
     expect(within(storeItemSection!).getByRole('link', { name: 'Open product page' })).toHaveAttribute(
       'href',
       'https://store.mx/products/cafe-barista'
