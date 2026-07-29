@@ -607,6 +607,7 @@ type ItemsPageProps = {
   detailOnly?: boolean;
   detailVariant?: ItemDetailVariant;
   onClearSelectedItemId?: () => void;
+  onItemSaved?: (item: AdminRecord) => void;
   refreshToken?: number;
   selectedItemId?: string;
 };
@@ -615,6 +616,7 @@ export function ItemsPage({
   detailOnly = false,
   detailVariant = 'standard',
   onClearSelectedItemId,
+  onItemSaved,
   refreshToken = 0,
   selectedItemId
 }: ItemsPageProps = {}) {
@@ -723,6 +725,7 @@ export function ItemsPage({
       setRows((currentRows) => currentRows.map((row, index) => (field(row, ['id'], String(index)) === itemId ? savedItem : row)));
       setSelectedItem(savedItem);
       setSaveMessage('Item saved.');
+      onItemSaved?.(savedItem);
     } catch {
       setSaveError('Item could not be saved.');
     } finally {

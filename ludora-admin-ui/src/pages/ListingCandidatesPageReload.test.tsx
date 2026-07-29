@@ -173,6 +173,74 @@ describe('ListingCandidatesPage review reload', () => {
       'Completa los pedidos de los clientes en una cafeteria concurrida.'
     );
   });
+
+  it('reloads the review page after the linked item is saved', async () => {
+    const reloadPage = vi.fn();
+    let item: Record<string, unknown> = {
+      canonical_name: 'Coffee Rush',
+      canonical_name_es: 'Cafe Barista',
+      description: 'Complete customer orders in a busy coffee shop.',
+      description_es: 'Completa pedidos en una cafeteria.',
+      id: 77,
+      image_url: 'https://catalog.example/coffee-rush.jpg',
+      image_url_es: 'https://catalog.example/cafe-barista.jpg',
+      normalized_name: 'coffee rush',
+      normalized_name_es: 'cafe barista'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/discovery/listings/920') {
+        return jsonResponse({
+          description: 'Run a coffee shop before the customers lose patience.',
+          id: '920',
+          image_url: 'https://store.example/cafe-barista.jpg',
+          item_id: 77,
+          listing_status: 'PENDING',
+          source_url: 'https://store.example/cafe-barista',
+          title: 'Cafe Barista'
+        });
+      }
+      if (path === '/discovery/listings') {
+        return jsonResponse([], { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77' && init?.method === 'PATCH') {
+        item = { ...item, ...JSON.parse(String(init.body)) };
+        return jsonResponse(item);
+      }
+      if (path === '/items/77') {
+        return jsonResponse(item);
+      }
+      if (path === '/items/77/relationships' || path === '/items/77/store-items') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/taxonomy') {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(
+      <ListingCandidatesPage
+        detailMode="review"
+        reloadPage={reloadPage}
+        selectedCandidateId="920"
+      />
+    );
+
+    fireEvent.change(await screen.findByLabelText('Canonical Name ES'), {
+      target: { value: 'Cafe Barista Actualizado' }
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save Item' }));
+
+    await waitFor(() => expect(reloadPage).toHaveBeenCalledTimes(1));
+    const itemUpdate = fetchMock.mock.calls.find(
+      ([input, init]) => new URL(String(input)).pathname === '/items/77' && init?.method === 'PATCH'
+    );
+    expect(JSON.parse(String(itemUpdate?.[1]?.body)).canonical_name_es).toBe('Cafe Barista Actualizado');
+  });
 });
 
 function jsonResponse(data: unknown, meta?: unknown) {

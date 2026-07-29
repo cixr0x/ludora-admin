@@ -1375,6 +1375,7 @@ describe('ListingCandidatesPage', () => {
 
   it('renders and edits the dedicated store item review detail', async () => {
     const user = userEvent.setup();
+    const reloadPage = vi.fn();
     let candidate: Record<string, unknown> = {
       description: 'Run a coffee shop before the customers lose patience.',
       id: '920',
@@ -1444,7 +1445,7 @@ describe('ListingCandidatesPage', () => {
       throw new Error(`Unexpected request: ${String(input)}`);
     });
 
-    render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+    render(<ListingCandidatesPage detailMode="review" reloadPage={reloadPage} selectedCandidateId="920" />);
 
     expect(await screen.findByRole('heading', { name: 'Store Item Review Details' })).toBeInTheDocument();
     const storeItemSection = screen.getByRole('heading', { name: 'Store Item Review Details' }).closest('section');
@@ -1549,6 +1550,7 @@ describe('ListingCandidatesPage', () => {
       expect(body.item_type).toBe('base_game');
       expect(body.year_published).toBe('2023');
     });
+    expect(reloadPage).toHaveBeenCalledTimes(1);
 
     await user.click(within(storeItemSection!).getByRole('button', { name: 'Approve listing' }));
     expect(await screen.findByText('Listing status: LISTED')).toBeInTheDocument();

@@ -1153,6 +1153,7 @@ export function ListingCandidatesPage({
           onCreateItemFromBggId={handleCreateItemFromBggId}
           onDelete={handleDeleteCandidate}
           onLinkedItemUpdated={() => setLinkedItemRefreshToken((currentToken) => currentToken + 1)}
+          onLinkedItemSaved={detailMode === 'review' ? reloadPage : undefined}
           onPrimaryItemAssociated={handlePrimaryItemAssociated}
           onSave={handleSaveCandidate}
           onSetListingStatus={handleSetListingStatus}
@@ -1214,6 +1215,7 @@ function ItemCandidateForm({
   onCreateItem,
   onDelete,
   onLinkedItemUpdated,
+  onLinkedItemSaved,
   onPrimaryItemAssociated,
   onSave,
   onSetListingStatus,
@@ -1238,6 +1240,7 @@ function ItemCandidateForm({
   onCreateItem: (input?: CreateItemFromCandidateInput) => Promise<void>;
   onDelete: () => Promise<boolean>;
   onLinkedItemUpdated: () => void;
+  onLinkedItemSaved?: () => void;
   onPrimaryItemAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
   onSetListingStatus: (candidate: AdminRecord, listingStatus: StoreItemListingStatus) => void;
@@ -1715,6 +1718,7 @@ function ItemCandidateForm({
         <ItemsPage
           detailOnly
           detailVariant="review"
+          onItemSaved={onLinkedItemSaved}
           refreshToken={linkedItemRefreshToken}
           selectedItemId={itemId}
         />
