@@ -489,6 +489,7 @@ type ListingCandidatesPageProps = {
   detailMode?: DetailMode;
   onClearSelectedCandidateId?: () => void;
   onOpenItem?: (itemId: string) => void;
+  reloadPage?: () => void;
   selectedCandidateId?: string;
 };
 
@@ -496,6 +497,7 @@ export function ListingCandidatesPage({
   detailMode = 'standard',
   onClearSelectedCandidateId,
   onOpenItem,
+  reloadPage = reloadCurrentPage,
   selectedCandidateId
 }: ListingCandidatesPageProps = {}) {
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
@@ -1092,6 +1094,10 @@ export function ListingCandidatesPage({
         request={coverFlatteningRequest}
         onAccepted={(result) => {
           setCoverFlatteningRequest(null);
+          if (detailMode === 'review') {
+            reloadPage();
+            return;
+          }
           setLinkedItemRefreshToken((currentToken) => currentToken + 1);
           setSaveMessage(`Flattened cover saved as ${result.target_field === 'image_url' ? 'image' : 'Spanish image'}.`);
         }}
@@ -2245,4 +2251,8 @@ function itemCandidateInputFromForm(
             : detailValue(baseRecord ?? {}, detailField.key)
       ])
   );
+}
+
+function reloadCurrentPage() {
+  window.location.reload();
 }
