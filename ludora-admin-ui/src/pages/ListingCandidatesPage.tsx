@@ -1271,6 +1271,7 @@ function ItemCandidateForm({
   const [isGeneratingTranslation, setIsGeneratingTranslation] = useState(false);
   const [linkedItemPreview, setLinkedItemPreview] = useState<AdminRecord | null>(null);
   const [translationError, setTranslationError] = useState('');
+  const hasGeneratedTranslation = Boolean(linkedItemPreview && field(linkedItemPreview, ['description_es'], '').trim());
 
   useEffect(() => {
     setBggDialogBggId(matchedBggId);
@@ -1438,7 +1439,12 @@ function ItemCandidateForm({
             <>
               <Button
                 color="success"
-                disabled={!candidateIdValue || isUpdatingListingStatus || listingStatus === 'LISTED'}
+                disabled={
+                  !candidateIdValue ||
+                  !hasGeneratedTranslation ||
+                  isUpdatingListingStatus ||
+                  listingStatus === 'LISTED'
+                }
                 startIcon={
                   isUpdatingListingStatus ? <CircularProgress color="inherit" size={18} /> : <CheckCircleIcon />
                 }

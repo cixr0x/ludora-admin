@@ -149,12 +149,14 @@ describe('ListingCandidatesPage review reload', () => {
 
     render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
 
+    expect(await screen.findByRole('button', { name: 'Approve listing' })).toBeDisabled();
     fireEvent.click(await screen.findByRole('button', { name: 'Generate translation' }));
 
     await waitFor(
       () => expect(screen.getByRole('status', { name: 'Translation generated' })).toBeInTheDocument(),
       { timeout: 5_000 }
     );
+    expect(screen.getByRole('button', { name: 'Approve listing' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: 'Generate translation' })).not.toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/description-generations', {
       body: JSON.stringify({
