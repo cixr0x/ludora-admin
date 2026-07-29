@@ -33,14 +33,22 @@ import {
   Typography
 } from '@mui/material';
 import { type FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { adminApi, type AdminRecord, type CreateItemFromCandidateInput, type LocalCoverWorkflow } from '../api/client';
+import {
+  adminApi,
+  type AdminRecord,
+  type CreateItemFromCandidateInput,
+  type LocalCoverWorkflow,
+  type StoreItemListingStatus
+} from '../api/client';
 import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
+import { ItemsPage } from './ItemsPage';
 
 type LoadState = 'loading' | 'ready' | 'error';
 type ViewMode = 'form' | 'table';
+type DetailMode = 'standard' | 'review';
 const ADDITIONAL_ITEM_SEARCH_LIMIT = 20;
 
 type ItemCandidateDetailField = {
@@ -251,6 +259,10 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { gridColumn: { md: '1 / -1' }, key: 'raw_payload', label: 'Raw Payload', multiline: true },
   { gridColumn: { md: '1 / -1' }, key: 'match_payload', label: 'Match Payload', multiline: true }
 ];
+
+const storeItemReviewDetailFields = itemCandidateDetailFields.filter((detailField) =>
+  ['title', 'description'].includes(detailField.key)
+);
 
 function buildItemCandidateColumns(
   onSetBoardgameState: (record: AdminRecord, isBoardgame: boolean) => void,
@@ -474,12 +486,18 @@ function batchSelectionColumn(options: BatchSelectionOptions): DataTableColumn<A
 }
 
 type ListingCandidatesPageProps = {
+  detailMode?: DetailMode;
   onClearSelectedCandidateId?: () => void;
   onOpenItem?: (itemId: string) => void;
   selectedCandidateId?: string;
 };
 
-export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, selectedCandidateId }: ListingCandidatesPageProps = {}) {
+export function ListingCandidatesPage({
+  detailMode = 'standard',
+  onClearSelectedCandidateId,
+  onOpenItem,
+  selectedCandidateId
+}: ListingCandidatesPageProps = {}) {
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
   const [detailState, setDetailState] = useState<LoadState>('ready');
   const [isBatchConfirming, setIsBatchConfirming] = useState(false);
@@ -488,6 +506,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
   const [isCreatingItem, setIsCreatingItem] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [linkedItemRefreshToken, setLinkedItemRefreshToken] = useState(0);
   const [localCoverWorkflow, setLocalCoverWorkflow] = useState<LocalCoverWorkflow | null>(null);
   const [localCoverWorkflowError, setLocalCoverWorkflowError] = useState('');
   const [updatingBoardgameCandidateId, setUpdatingBoardgameCandidateId] = useState('');
@@ -497,6 +516,7 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
   const batchSelectionAnchorId = useRef<string | null>(null);
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
+  const [updatingListingStatusCandidateId, setUpdatingListingStatusCandidateId] = useState('');
   const [coverFlatteningRequest, setCoverFlatteningRequest] = useState<CoverFlatteningRequest | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const table = useServerTableState('last_updated', 'desc');
@@ -683,6 +703,8 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
       setSaveError('');
       setSaveMessage('');
       setSelectedCandidate(null);
+      setLinkedItemRefreshToken(0);
+      setUpdatingListingStatusCandidateId('');
       setViewMode('table');
       return;
     }
@@ -693,6 +715,8 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
     setLocalCoverWorkflowError('');
     setSaveError('');
     setSaveMessage('');
+    setLinkedItemRefreshToken(0);
+    setUpdatingListingStatusCandidateId('');
     setViewMode('form');
 
     adminApi
@@ -801,9 +825,45 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
       currentRows.map((row, index) => (field(row, ['id'], String(index)) === candidateId ? savedCandidate : row))
     );
     setSelectedCandidate(savedCandidate);
+    setLinkedItemRefreshToken((currentToken) => currentToken + 1);
     setSaveError('');
     setSaveMessage(`Store item associated with ${catalogItemDisplayName(item)}.`);
     table.refresh();
+  }
+
+  async function handleSetListingStatus(candidate: AdminRecord, listingStatus: StoreItemListingStatus) {
+    const id = field(candidate, ['id'], '');
+    if (!id) {
+      return;
+    }
+
+    setSaveError('');
+    setSaveMessage('');
+    setUpdatingListingStatusCandidateId(id);
+
+    try {
+      const savedStoreItem = await adminApi.updateItemCandidateListingStatus(id, listingStatus);
+      const savedListingStatus = field(savedStoreItem, ['listing_status'], listingStatus);
+      const updatedCandidate = {
+        ...candidate,
+        ...savedStoreItem,
+        listing_status: savedListingStatus
+      };
+      setRows((currentRows) =>
+        currentRows.map((row, index) => (field(row, ['id'], String(index)) === id ? updatedCandidate : row))
+      );
+      setSelectedCandidate((currentCandidate) =>
+        currentCandidate && field(currentCandidate, ['id'], '') === id ? updatedCandidate : currentCandidate
+      );
+      setSaveMessage(
+        listingStatus === 'LISTED' ? 'Store item listing approved.' : 'Store item listing rejected.'
+      );
+      table.refresh();
+    } catch {
+      setSaveError('Store item listing status could not be saved.');
+    } finally {
+      setUpdatingListingStatusCandidateId('');
+    }
   }
 
   async function handleDeleteCandidate(): Promise<boolean> {
@@ -876,10 +936,12 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
         <Stack alignItems={{ md: 'center', xs: 'flex-start' }} direction={{ md: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
           <Box>
             <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
-              Store Items
+              {detailMode === 'review' ? 'Store Item Review' : 'Store Items'}
             </Typography>
             <Typography color="text.secondary" variant="body2">
-              Discovered store product rows captured from approved store inventories.
+              {detailMode === 'review'
+                ? 'Review the store item and its linked catalog item in one place.'
+                : 'Discovered store product rows captured from approved store inventories.'}
             </Typography>
           </Box>
           {viewMode === 'table' ? (
@@ -992,10 +1054,12 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
       {detailState === 'ready' && viewMode === 'form' && selectedCandidate ? (
         <ItemCandidateForm
           candidate={selectedCandidate}
+          detailMode={detailMode}
           isCreatingBggItem={isCreatingBggItem}
           isCreatingItem={isCreatingItem}
           isDeleting={isDeleting}
           isSaving={isSaving}
+          linkedItemRefreshToken={linkedItemRefreshToken}
           localCoverWorkflow={localCoverWorkflow}
           localCoverWorkflowError={localCoverWorkflowError}
           onBack={() => {
@@ -1010,13 +1074,16 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
           }}
           onCreateItemFromBggId={handleCreateItemFromBggId}
           onDelete={handleDeleteCandidate}
+          onLinkedItemUpdated={() => setLinkedItemRefreshToken((currentToken) => currentToken + 1)}
           onPrimaryItemAssociated={handlePrimaryItemAssociated}
           onSave={handleSaveCandidate}
+          onSetListingStatus={handleSetListingStatus}
           onCreateItem={handleCreateItemFromCandidate}
           onStartCoverFlattening={handleStartCoverFlattening}
           onStartLocalCoverWorkflow={handleStartLocalCoverWorkflow}
           saveError={saveError}
           startingCoverWorkflowId={startingCoverWorkflowId}
+          updatingListingStatusCandidateId={updatingListingStatusCandidateId}
         />
       ) : null}
 
@@ -1055,48 +1122,60 @@ export function ListingCandidatesPage({ onClearSelectedCandidateId, onOpenItem, 
 
 function ItemCandidateForm({
   candidate,
+  detailMode,
   isCreatingBggItem,
   isCreatingItem,
   isDeleting,
   isSaving,
+  linkedItemRefreshToken,
   localCoverWorkflow,
   localCoverWorkflowError,
   onBack,
   onCreateItemFromBggId,
   onCreateItem,
   onDelete,
+  onLinkedItemUpdated,
   onPrimaryItemAssociated,
   onSave,
+  onSetListingStatus,
   onStartCoverFlattening,
   onStartLocalCoverWorkflow,
   saveError,
-  startingCoverWorkflowId
+  startingCoverWorkflowId,
+  updatingListingStatusCandidateId
 }: {
   candidate: AdminRecord;
+  detailMode: DetailMode;
   isCreatingBggItem: boolean;
   isCreatingItem: boolean;
   isDeleting: boolean;
   isSaving: boolean;
+  linkedItemRefreshToken: number;
   localCoverWorkflow: LocalCoverWorkflow | null;
   localCoverWorkflowError: string;
   onBack: () => void;
   onCreateItemFromBggId: (bggId: string) => void;
   onCreateItem: (input?: CreateItemFromCandidateInput) => Promise<void>;
   onDelete: () => Promise<boolean>;
+  onLinkedItemUpdated: () => void;
   onPrimaryItemAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
+  onSetListingStatus: (candidate: AdminRecord, listingStatus: StoreItemListingStatus) => void;
   onStartCoverFlattening: (candidate: AdminRecord) => void;
   onStartLocalCoverWorkflow: (candidate: AdminRecord) => void;
   saveError: string;
   startingCoverWorkflowId: string;
+  updatingListingStatusCandidateId: string;
 }) {
   const title = field(candidate, ['title'], 'Item candidate');
   const candidateIdValue = field(candidate, ['id'], '');
   const imageUrl = field(candidate, ['image_url'], '');
   const itemId = field(candidate, ['item_id'], '');
+  const listingStatus = field(candidate, ['listing_status'], '').toUpperCase();
   const matchedBggId = field(candidate, ['matched_bgg_id'], '');
   const sourceUrl = field(candidate, ['source_url'], '');
-  const formKey = itemCandidateDetailFields.map((detailField) => detailValue(candidate, detailField.key)).join('\u001f');
+  const detailFields = detailMode === 'review' ? storeItemReviewDetailFields : itemCandidateDetailFields;
+  const formKey = detailFields.map((detailField) => detailValue(candidate, detailField.key)).join('\u001f');
   const [bggDialogBggId, setBggDialogBggId] = useState(matchedBggId);
   const [isBggDialogOpen, setIsBggDialogOpen] = useState(false);
   const [isCandidateDialogOpen, setIsCandidateDialogOpen] = useState(false);
@@ -1116,7 +1195,7 @@ function ItemCandidateForm({
     if (isDeleting) {
       return;
     }
-    onSave(itemCandidateInputFromForm(new FormData(event.currentTarget)));
+    onSave(itemCandidateInputFromForm(new FormData(event.currentTarget), detailFields, detailMode === 'review' ? candidate : undefined));
   }
 
   const canConfirmBggDialog =
@@ -1130,6 +1209,8 @@ function ItemCandidateForm({
     (!candidateExtends || Boolean(candidateExtendsItemId.trim()));
   const isStartingCoverWorkflow = Boolean(candidateIdValue && candidateIdValue === startingCoverWorkflowId);
   const canStartCoverWorkflow = Boolean(candidateIdValue && imageUrl && itemId && !isStartingCoverWorkflow && !isDeleting);
+  const isUpdatingListingStatus =
+    Boolean(candidateIdValue) && candidateIdValue === updatingListingStatusCandidateId;
 
   async function handleConfirmBggDialog() {
     await onCreateItemFromBggId(bggDialogBggId);
@@ -1153,12 +1234,13 @@ function ItemCandidateForm({
   }
 
   return (
-    <Paper component="section" variant="outlined" sx={{ p: 2 }}>
-      <Stack component="form" key={formKey} spacing={2} onSubmit={handleSubmit}>
+    <Stack spacing={2}>
+      <Paper component="section" variant="outlined" sx={{ p: 2 }}>
+        <Stack component="form" key={formKey} spacing={2} onSubmit={handleSubmit}>
         <Stack alignItems="flex-start" direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
           <Box>
             <Typography variant="h6" sx={{ fontWeight: 700 }}>
-              Store Item Details
+              {detailMode === 'review' ? 'Store Item Review Details' : 'Store Item Details'}
             </Typography>
             <Typography color="text.secondary" variant="body2">
               {title}
@@ -1199,7 +1281,7 @@ function ItemCandidateForm({
               {isSaving ? 'Saving...' : 'Save Store Item'}
             </Button>
             <Button disabled={isDeleting} startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
-              Back to Store Items
+              {detailMode === 'review' ? 'Back to Review' : 'Back to Store Items'}
             </Button>
             <Button
               color="error"
@@ -1215,6 +1297,37 @@ function ItemCandidateForm({
         </Stack>
 
         <Stack alignItems={{ md: 'center', xs: 'stretch' }} direction={{ md: 'row', xs: 'column' }} spacing={1}>
+          {detailMode === 'review' ? (
+            <>
+              <Button
+                color="success"
+                disabled={!candidateIdValue || isUpdatingListingStatus || listingStatus === 'LISTED'}
+                startIcon={
+                  isUpdatingListingStatus ? <CircularProgress color="inherit" size={18} /> : <CheckCircleIcon />
+                }
+                type="button"
+                variant="contained"
+                onClick={() => onSetListingStatus(candidate, 'LISTED')}
+              >
+                Approve listing
+              </Button>
+              <Button
+                color="error"
+                disabled={!candidateIdValue || isUpdatingListingStatus || listingStatus === 'REJECTED'}
+                startIcon={
+                  isUpdatingListingStatus ? <CircularProgress color="inherit" size={18} /> : <CancelIcon />
+                }
+                type="button"
+                variant="outlined"
+                onClick={() => onSetListingStatus(candidate, 'REJECTED')}
+              >
+                Reject listing
+              </Button>
+              <Typography color="text.secondary" variant="body2">
+                Listing status: {listingStatus || 'Unknown'}
+              </Typography>
+            </>
+          ) : null}
           <Button
             disabled={isSaving || isCreatingBggItem || isCreatingItem || isDeleting}
             sx={{ minHeight: 40, minWidth: { md: 190 }, textTransform: 'none', whiteSpace: 'nowrap' }}
@@ -1299,6 +1412,7 @@ function ItemCandidateForm({
 
         <PrimaryItemSection
           itemId={itemId}
+          onItemUpdated={onLinkedItemUpdated}
           storeItemId={candidateIdValue}
           storeItemImageUrl={imageUrl}
           storeItemTitle={title}
@@ -1321,7 +1435,7 @@ function ItemCandidateForm({
             }
           }}
         >
-          {itemCandidateDetailFields.map((detailField) =>
+          {detailFields.map((detailField) =>
             detailField.fieldType === 'boolean' ? (
               <FormControlLabel
                 control={
@@ -1349,9 +1463,9 @@ function ItemCandidateForm({
             )
           )}
         </Box>
-      </Stack>
+        </Stack>
 
-      <Dialog fullWidth maxWidth="xs" open={isBggDialogOpen} onClose={() => setIsBggDialogOpen(false)}>
+        <Dialog fullWidth maxWidth="xs" open={isBggDialogOpen} onClose={() => setIsBggDialogOpen(false)}>
         <DialogTitle>Create Item from BGG</DialogTitle>
         <DialogContent>
           <TextField
@@ -1371,9 +1485,9 @@ function ItemCandidateForm({
             Create BGG Item
           </Button>
         </DialogActions>
-      </Dialog>
+        </Dialog>
 
-      <Dialog fullWidth maxWidth="xs" open={isDeleteDialogOpen} onClose={() => !isDeleting && setIsDeleteDialogOpen(false)}>
+        <Dialog fullWidth maxWidth="xs" open={isDeleteDialogOpen} onClose={() => !isDeleting && setIsDeleteDialogOpen(false)}>
         <DialogTitle>Delete Store Item</DialogTitle>
         <DialogContent>
           <Typography>
@@ -1388,9 +1502,9 @@ function ItemCandidateForm({
             {isDeleting ? 'Deleting...' : 'Delete Store Item'}
           </Button>
         </DialogActions>
-      </Dialog>
+        </Dialog>
 
-      <Dialog fullWidth maxWidth="xs" open={isCandidateDialogOpen} onClose={() => setIsCandidateDialogOpen(false)}>
+        <Dialog fullWidth maxWidth="xs" open={isCandidateDialogOpen} onClose={() => setIsCandidateDialogOpen(false)}>
         <DialogTitle>Create Item from Candidate</DialogTitle>
         <DialogContent>
           <Stack spacing={1.5} sx={{ pt: 1 }}>
@@ -1428,19 +1542,34 @@ function ItemCandidateForm({
             Create Item
           </Button>
         </DialogActions>
-      </Dialog>
-    </Paper>
+        </Dialog>
+      </Paper>
+
+      {detailMode === 'review' && itemId ? (
+        <ItemsPage
+          detailOnly
+          detailVariant="review"
+          refreshToken={linkedItemRefreshToken}
+          selectedItemId={itemId}
+        />
+      ) : null}
+      {detailMode === 'review' && !itemId ? (
+        <Alert severity="info">Link or create a catalog item to edit its review fields.</Alert>
+      ) : null}
+    </Stack>
   );
 }
 
 function PrimaryItemSection({
   itemId,
+  onItemUpdated,
   onAssociated,
   storeItemId,
   storeItemImageUrl,
   storeItemTitle
 }: {
   itemId: string;
+  onItemUpdated: (item: AdminRecord) => void;
   onAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   storeItemId: string;
   storeItemImageUrl: string;
@@ -1527,6 +1656,7 @@ function PrimaryItemSection({
     try {
       const savedItem = await adminApi.copyStoreItemCoverToItem(storeItemId, copyTargetField);
       setItem(savedItem);
+      onItemUpdated(savedItem);
       setCopyMessage(
         `Store item cover copied to the linked item's ${copyTargetField === 'image_url' ? 'image' : 'Spanish image'}.`
       );
@@ -2035,13 +2165,24 @@ function catalogItemImageUrl(item: AdminRecord) {
   return field(item, ['image_url_es', 'image_url'], '');
 }
 
-function itemCandidateInputFromForm(formData: FormData): AdminRecord {
+function itemCandidateInputFromForm(
+  formData: FormData,
+  detailFields = itemCandidateDetailFields,
+  baseRecord?: AdminRecord
+): AdminRecord {
+  const displayedFieldKeys = new Set(detailFields.map((detailField) => detailField.key));
   return Object.fromEntries(
     itemCandidateDetailFields
       .filter((detailField) => !detailField.readOnly)
       .map((detailField) => [
         detailField.key,
-        detailField.fieldType === 'boolean' ? formData.has(detailField.key) : String(formData.get(detailField.key) ?? '')
+        detailField.fieldType === 'boolean'
+          ? displayedFieldKeys.has(detailField.key)
+            ? formData.has(detailField.key)
+            : booleanValue(baseRecord ?? {}, detailField.key)
+          : displayedFieldKeys.has(detailField.key)
+            ? String(formData.get(detailField.key) ?? '')
+            : detailValue(baseRecord ?? {}, detailField.key)
       ])
   );
 }

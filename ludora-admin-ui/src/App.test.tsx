@@ -142,6 +142,63 @@ describe('App', () => {
     expect(screen.getByDisplayValue('Coffee Rush')).toBeInTheDocument();
   });
 
+  it('opens the dedicated store item review detail from its hash route', async () => {
+    window.location.hash = '#offer-reviews?id=920';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') {
+        return jsonResponse({ username: 'admin' });
+      }
+      if (url.pathname === '/discovery/listings/920') {
+        return jsonResponse({
+          description: 'Run a coffee shop before customers lose patience.',
+          id: '920',
+          image_url: 'https://store.mx/cafe-barista.jpg',
+          item_id: 77,
+          listing_status: 'PENDING',
+          publisher: 'Korea Boardgames',
+          source_url: 'https://store.mx/products/cafe-barista',
+          title: 'Cafe Barista'
+        });
+      }
+      if (url.pathname === '/discovery/listings') {
+        return jsonResponse([]);
+      }
+      if (url.pathname === '/discovery/listings/920/additional-items') {
+        return jsonResponse([]);
+      }
+      if (url.pathname === '/items/77') {
+        return jsonResponse({
+          bgg_id: 377061,
+          canonical_name: 'Coffee Rush',
+          canonical_name_es: 'Cafe Barista',
+          description: 'Complete customer orders in a busy coffee shop.',
+          description_es: 'Completa pedidos en una cafeteria.',
+          id: '77',
+          image_url: 'https://images.example/coffee-rush.jpg',
+          image_url_es: 'https://images.example/cafe-barista.jpg',
+          normalized_name: 'coffee rush',
+          normalized_name_es: 'cafe barista'
+        });
+      }
+      if (url.pathname === '/items/77/store-items' || url.pathname === '/items/77/relationships') {
+        return jsonResponse([]);
+      }
+      if (url.pathname === '/items/77/taxonomy') {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Store Item Review Details' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Linked Item Details' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Title')).toHaveValue('Cafe Barista');
+    expect(screen.queryByLabelText('Publisher')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Back to Review' })).toBeInTheDocument();
+  });
+
   it('opens the newly created item after creating from a store item candidate', async () => {
     window.location.hash = '#listings?id=3365';
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {

@@ -163,7 +163,15 @@ function renderSection(
     case 'front-page-preview':
       return <FrontPagePreviewPage />;
     case 'offer-reviews':
-      return <OfferReviewPage />;
+      return selectedId ? (
+        <ListingCandidatesPage
+          detailMode="review"
+          selectedCandidateId={selectedId}
+          onClearSelectedCandidateId={() => navigate('offer-reviews')}
+        />
+      ) : (
+        <OfferReviewPage />
+      );
   }
 }
 

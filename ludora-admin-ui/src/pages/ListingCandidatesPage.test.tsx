@@ -1372,6 +1372,168 @@ describe('ListingCandidatesPage', () => {
 
     expect(await screen.findByRole('table', { name: 'Store items' })).toBeInTheDocument();
   });
+
+  it('renders and edits the dedicated store item review detail', async () => {
+    const user = userEvent.setup();
+    let candidate: Record<string, unknown> = {
+      description: 'Run a coffee shop before the customers lose patience.',
+      id: '920',
+      image_url: 'https://store.mx/cafe-barista.jpg',
+      item_id: 77,
+      listing_status: 'PENDING',
+      original_title: 'Coffee Rush',
+      publisher: 'Korea Boardgames',
+      source_url: 'https://store.mx/products/cafe-barista',
+      title: 'Cafe Barista'
+    };
+    let item: Record<string, unknown> = {
+      bgg_id: 377061,
+      bgg_url: 'https://boardgamegeek.com/boardgame/377061/coffee-rush',
+      canonical_name: 'Coffee Rush',
+      canonical_name_es: 'Cafe Barista',
+      description: 'Complete customer orders in a busy coffee shop.',
+      description_es: 'Completa pedidos en una cafeteria.',
+      id: 77,
+      image_url: 'https://images.example/coffee-rush.jpg',
+      image_url_es: 'https://images.example/cafe-barista.jpg',
+      item_type: 'base_game',
+      normalized_name: 'coffee rush',
+      normalized_name_es: 'cafe barista',
+      status: 'active',
+      year_published: 2023
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings/920' && init?.method === 'PATCH') {
+        candidate = { ...candidate, ...JSON.parse(String(init.body)) };
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings/920/listing-status' && init?.method === 'PATCH') {
+        candidate = { ...candidate, listing_status: JSON.parse(String(init.body)).listing_status };
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings/920' && !init?.method) {
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([], 200, { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77' && init?.method === 'PATCH') {
+        item = { ...item, ...JSON.parse(String(init.body)) };
+        return jsonResponse(item);
+      }
+      if (path === '/items/77' && !init?.method) {
+        return jsonResponse(item);
+      }
+      if (path === '/items/77/relationships') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/store-items') {
+        return jsonResponse([candidate]);
+      }
+      if (path === '/items/77/taxonomy') {
+        return jsonResponse({
+          categories: [{ id: 5, value: 'Strategy', value_es: 'Estrategia' }],
+          families: [{ id: 9, value: 'Food and Drink', value_es: 'Comida y bebida' }],
+          mechanics: [{ id: 7, value: 'Worker Placement', value_es: 'Colocacion de trabajadores' }]
+        });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+
+    expect(await screen.findByRole('heading', { name: 'Store Item Review Details' })).toBeInTheDocument();
+    const storeItemSection = screen.getByRole('heading', { name: 'Store Item Review Details' }).closest('section');
+    expect(storeItemSection).not.toBeNull();
+    expect(within(storeItemSection!).getByLabelText('Title')).toHaveValue('Cafe Barista');
+    expect(within(storeItemSection!).getByLabelText('Description')).toHaveValue(
+      'Run a coffee shop before the customers lose patience.'
+    );
+    expect(within(storeItemSection!).queryByLabelText('Publisher')).not.toBeInTheDocument();
+    expect(within(storeItemSection!).getByRole('img', { name: 'Cafe Barista candidate image' })).toHaveAttribute(
+      'src',
+      'https://store.mx/cafe-barista.jpg'
+    );
+    expect(within(storeItemSection!).getByRole('link', { name: 'Open product page' })).toHaveAttribute(
+      'href',
+      'https://store.mx/products/cafe-barista'
+    );
+    expect(within(storeItemSection!).getByText('Linked item')).toBeInTheDocument();
+    expect(within(storeItemSection!).getByText('Additional items')).toBeInTheDocument();
+    expect(within(storeItemSection!).getByRole('button', { name: 'Approve listing' })).toBeEnabled();
+    expect(within(storeItemSection!).getByRole('button', { name: 'Reject listing' })).toBeEnabled();
+
+    expect(await screen.findByRole('heading', { name: 'Linked Item Details' })).toBeInTheDocument();
+    const linkedItemSection = screen.getByRole('heading', { name: 'Linked Item Details' }).closest('section');
+    expect(linkedItemSection).not.toBeNull();
+    for (const label of [
+      'Canonical Name',
+      'Normalized Name',
+      'Canonical Name ES',
+      'Normalized Name ES',
+      'BGG ID',
+      'Description',
+      'Description ES',
+      'Image URL',
+      'Image URL ES'
+    ]) {
+      expect(within(linkedItemSection!).getByLabelText(label)).toBeInTheDocument();
+    }
+    expect(within(linkedItemSection!).queryByLabelText('Item Type')).not.toBeInTheDocument();
+    expect(within(linkedItemSection!).getByRole('img', { name: 'Coffee Rush item image' })).toHaveAttribute(
+      'src',
+      'https://images.example/coffee-rush.jpg'
+    );
+    expect(within(linkedItemSection!).getByRole('img', { name: 'Coffee Rush Spanish item image' })).toHaveAttribute(
+      'src',
+      'https://images.example/cafe-barista.jpg'
+    );
+    expect(within(linkedItemSection!).getByRole('link', { name: 'Open BGG page' })).toHaveAttribute(
+      'href',
+      'https://boardgamegeek.com/boardgame/377061/coffee-rush'
+    );
+    expect(
+      within(linkedItemSection!).getByRole('button', { name: 'Generate Spanish item description' })
+    ).toBeEnabled();
+    expect(screen.getByRole('heading', { name: 'Taxonomy' })).toBeInTheDocument();
+    expect(screen.getByText('Estrategia')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Item Relationships' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Linked Store Items' })).toBeInTheDocument();
+
+    fireEvent.change(within(storeItemSection!).getByLabelText('Title'), { target: { value: 'Cafe Barista Deluxe' } });
+    await user.click(within(storeItemSection!).getByRole('button', { name: 'Save Store Item' }));
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(
+        ([requestInput, requestInit]) =>
+          pathOf(String(requestInput)) === '/discovery/listings/920' && requestInit?.method === 'PATCH'
+      );
+      const body = JSON.parse(String(request?.[1]?.body));
+      expect(body.title).toBe('Cafe Barista Deluxe');
+      expect(body.publisher).toBe('Korea Boardgames');
+      expect(body.listing_status).toBe('PENDING');
+    });
+
+    fireEvent.change(within(linkedItemSection!).getByLabelText('Canonical Name ES'), {
+      target: { value: 'Cafe Barista Edicion Deluxe' }
+    });
+    await user.click(within(linkedItemSection!).getByRole('button', { name: 'Save Item' }));
+    await waitFor(() => {
+      const request = fetchMock.mock.calls.find(
+        ([requestInput, requestInit]) => pathOf(String(requestInput)) === '/items/77' && requestInit?.method === 'PATCH'
+      );
+      const body = JSON.parse(String(request?.[1]?.body));
+      expect(body.canonical_name_es).toBe('Cafe Barista Edicion Deluxe');
+      expect(body.item_type).toBe('base_game');
+      expect(body.year_published).toBe('2023');
+    });
+
+    await user.click(within(storeItemSection!).getByRole('button', { name: 'Approve listing' }));
+    expect(await screen.findByText('Listing status: LISTED')).toBeInTheDocument();
+  });
 });
 
 function jsonResponse(data: unknown, status = 200, meta?: unknown) {

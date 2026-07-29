@@ -46,7 +46,7 @@ describe('OfferReviewPage', () => {
 
     render(<OfferReviewPage />);
 
-    expect(await screen.findByRole('link', { name: 'Cafe Barista' })).toHaveAttribute('href', '#listings?id=920');
+    expect(await screen.findByRole('link', { name: 'Cafe Barista' })).toHaveAttribute('href', '#offer-reviews?id=920');
     expect(screen.getByRole('link', { name: 'Coffee Rush (Cafe Barista)' })).toHaveAttribute('href', '#items?id=77');
     expect(screen.getByText('Store MX')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Listing status' })).toBeInTheDocument();

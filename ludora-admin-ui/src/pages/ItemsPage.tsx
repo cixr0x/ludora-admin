@@ -6,7 +6,15 @@ import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import SaveIcon from '@mui/icons-material/Save';
 import { Alert, Autocomplete, Box, Button, Chip, CircularProgress, IconButton, Link, MenuItem, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
 import { Fragment, type FormEvent, type MouseEvent, useEffect, useRef, useState } from 'react';
-import { adminApi, type AdminRecord, type ItemRelationshipInput, type ItemTaxonomy, type LocalCoverWorkflow } from '../api/client';
+import {
+  adminApi,
+  type AdminRecord,
+  type ItemRelationshipInput,
+  type ItemTaxonomy,
+  type LocalCoverWorkflow,
+  type PagedRows,
+  type TableQuery
+} from '../api/client';
 import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
@@ -14,6 +22,7 @@ import { useInfiniteServerRows, useServerTableState } from '../components/useSer
 
 type LoadState = 'loading' | 'ready' | 'error';
 type ViewMode = 'form' | 'table';
+type ItemDetailVariant = 'standard' | 'review';
 
 const emptyItemTaxonomy: ItemTaxonomy = {
   categories: [],
@@ -200,6 +209,29 @@ const itemDetailFields: ItemDetailField[] = [
   { key: 'created_at', label: 'Created At', readOnly: true },
   { key: 'updated_at', label: 'Updated At', readOnly: true }
 ];
+
+const itemReviewDetailFields = itemDetailFields.filter((detailField) =>
+  [
+    'canonical_name',
+    'normalized_name',
+    'canonical_name_es',
+    'normalized_name_es',
+    'bgg_id',
+    'description',
+    'description_es',
+    'image_url',
+    'image_url_es'
+  ].includes(detailField.key)
+);
+
+function emptyItemsPage(query: TableQuery): Promise<PagedRows<AdminRecord>> {
+  return Promise.resolve({
+    page: query.page ?? 0,
+    pageSize: query.pageSize ?? 0,
+    rows: [],
+    total: 0
+  });
+}
 
 const itemColumns: DataTableColumn<AdminRecord>[] = [
   {
@@ -572,11 +604,20 @@ function CoverWorkflowAction({
 }
 
 type ItemsPageProps = {
+  detailOnly?: boolean;
+  detailVariant?: ItemDetailVariant;
   onClearSelectedItemId?: () => void;
+  refreshToken?: number;
   selectedItemId?: string;
 };
 
-export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPageProps = {}) {
+export function ItemsPage({
+  detailOnly = false,
+  detailVariant = 'standard',
+  onClearSelectedItemId,
+  refreshToken = 0,
+  selectedItemId
+}: ItemsPageProps = {}) {
   const [detailState, setDetailState] = useState<LoadState>('ready');
   const [itemTaxonomy, setItemTaxonomy] = useState<ItemTaxonomy>(emptyItemTaxonomy);
   const [itemRelationships, setItemRelationships] = useState<AdminRecord[]>([]);
@@ -599,7 +640,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
   const table = useServerTableState('canonical_name');
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
     table,
-    adminApi.getItemsPage
+    detailOnly ? emptyItemsPage : adminApi.getItemsPage
   );
 
   useEffect(() => {
@@ -665,7 +706,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
     return () => {
       ignore = true;
     };
-  }, [selectedItemId]);
+  }, [refreshToken, selectedItemId]);
 
   async function handleSaveItem(input: AdminRecord) {
     if (!selectedItem) {
@@ -888,16 +929,18 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
 
   return (
     <Stack spacing={2}>
-      <Box>
-        <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
-          Items
-        </Typography>
-        <Typography color="text.secondary" variant="body2">
-          Curated catalog items available to the platform.
-        </Typography>
-      </Box>
+      {!detailOnly ? (
+        <Box>
+          <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
+            Items
+          </Typography>
+          <Typography color="text.secondary" variant="body2">
+            Curated catalog items available to the platform.
+          </Typography>
+        </Box>
+      ) : null}
 
-      {state === 'loading' && viewMode === 'table' ? (
+      {!detailOnly && state === 'loading' && viewMode === 'table' ? (
         <Stack alignItems="center" direction="row" spacing={1.5}>
           <CircularProgress size={18} />
           <Typography variant="body2">Loading items</Typography>
@@ -911,7 +954,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
         </Stack>
       ) : null}
 
-      {state === 'error' && viewMode === 'table' ? <Alert severity="error">Items could not be loaded.</Alert> : null}
+      {!detailOnly && state === 'error' && viewMode === 'table' ? <Alert severity="error">Items could not be loaded.</Alert> : null}
       {detailState === 'error' && viewMode === 'form' ? <Alert severity="error">Item could not be loaded.</Alert> : null}
       <FloatingSuccessAlert message={saveMessage} onClose={() => setSaveMessage('')} />
       <CoverFlatteningDialog
@@ -933,6 +976,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
 
       {detailState === 'ready' && viewMode === 'form' && selectedItem ? (
         <ItemForm
+          detailVariant={detailVariant}
           deletingRelationshipId={deletingRelationshipId}
           isAddingRelationship={isAddingRelationship}
           isGeneratingDescription={isGeneratingDescription}
@@ -977,7 +1021,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
         />
       ) : null}
 
-      {state === 'ready' && viewMode === 'table' ? (
+      {!detailOnly && state === 'ready' && viewMode === 'table' ? (
         <DataTable
           ariaLabel="Items"
           columns={itemColumns}
@@ -1017,6 +1061,7 @@ export function ItemsPage({ onClearSelectedItemId, selectedItemId }: ItemsPagePr
 }
 
 function ItemForm({
+  detailVariant,
   deletingRelationshipId,
   isAddingRelationship,
   isGeneratingDescription,
@@ -1042,6 +1087,7 @@ function ItemForm({
   startingCoverWorkflowId,
   startingItemCoverWorkflowId
 }: {
+  detailVariant: ItemDetailVariant;
   deletingRelationshipId: string;
   isAddingRelationship: boolean;
   isGeneratingDescription: boolean;
@@ -1071,11 +1117,12 @@ function ItemForm({
   const itemId = field(item, ['id'], '');
   const imageUrl = field(item, ['image_url'], '');
   const imageUrlEs = field(item, ['image_url_es'], '');
-  const bggUrl = field(item, ['bgg_url'], '');
   const bggId = textValue(item, 'bgg_id');
+  const bggUrl = field(item, ['bgg_url'], '') || (bggId ? `https://boardgamegeek.com/boardgame/${encodeURIComponent(bggId)}` : '');
   const bggAlternateNames = stringListValue(item, 'bgg_alternate_names');
   const canonicalNameEs = detailValue(item, 'canonical_name_es');
-  const formKey = [...itemDetailFields.map((detailField) => detailValue(item, detailField.key)), ...bggAlternateNames].join('\u001f');
+  const detailFields = detailVariant === 'review' ? itemReviewDetailFields : itemDetailFields;
+  const formKey = [...detailFields.map((detailField) => detailValue(item, detailField.key)), ...bggAlternateNames].join('\u001f');
   const formRef = useRef<HTMLFormElement>(null);
   const hasSourceDescriptions = Boolean(textValue(item, 'description') || firstLinkedStoreDescription(linkedStoreItems));
   const canGenerateDescription = hasSourceDescriptions && !isGeneratingDescription && !isSaving;
@@ -1085,7 +1132,7 @@ function ItemForm({
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    onSave(inputFromForm(new FormData(event.currentTarget)));
+    onSave(inputFromForm(new FormData(event.currentTarget), detailFields, detailVariant === 'review' ? item : undefined));
   }
 
   function handleGenerateDescription(event: MouseEvent<HTMLButtonElement>) {
@@ -1094,7 +1141,7 @@ function ItemForm({
       return;
     }
 
-    onGenerateSpanishDescription(inputFromForm(new FormData(form)));
+    onGenerateSpanishDescription(inputFromForm(new FormData(form), detailFields, detailVariant === 'review' ? item : undefined));
   }
 
   function handleGenerateSpanishNormalizedName(event: MouseEvent<HTMLButtonElement>) {
@@ -1125,49 +1172,55 @@ function ItemForm({
           <Stack alignItems="flex-start" direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
             <Box>
               <Typography variant="h6" sx={{ fontWeight: 700 }}>
-                Item Details
+                {detailVariant === 'review' ? 'Linked Item Details' : 'Item Details'}
               </Typography>
               <Typography color="text.secondary" variant="body2">
                 {title}
               </Typography>
             </Box>
             <Stack direction={{ sm: 'row', xs: 'column' }} spacing={1} sx={{ width: { sm: 'auto', xs: '100%' } }}>
-              <Tooltip title={canStartItemCoverWorkflow ? 'Start cover workflow from item image' : 'Requires an item image'}>
-                <Box component="span" sx={{ display: 'block', width: { sm: 'auto', xs: '100%' } }}>
-                  <Button
-                    aria-label={`Start cover workflow from item image for ${title}`}
-                    disabled={!canStartItemCoverWorkflow}
-                    startIcon={isStartingItemCoverWorkflow ? <CircularProgress size={18} /> : <ImageSearchIcon />}
-                    sx={{ width: { sm: 'auto', xs: '100%' } }}
-                    type="button"
-                    variant="outlined"
-                    onClick={() => onStartItemLocalCoverWorkflow(item)}
-                  >
-                    {isStartingItemCoverWorkflow ? 'Starting...' : 'Start cover workflow'}
-                  </Button>
-                </Box>
-              </Tooltip>
-              <Tooltip title={canFlattenItemCover ? 'Flatten an item cover image' : 'Requires an item image'}>
-                <Box component="span" sx={{ display: 'block', width: { sm: 'auto', xs: '100%' } }}>
-                  <Button
-                    aria-label={`Flatten cover for ${title}`}
-                    disabled={!canFlattenItemCover}
-                    startIcon={<AutoFixHighIcon />}
-                    sx={{ width: { sm: 'auto', xs: '100%' } }}
-                    type="button"
-                    variant="outlined"
-                    onClick={() => onStartItemCoverFlattening(item)}
-                  >
-                    Flatten cover
-                  </Button>
-                </Box>
-              </Tooltip>
+              {detailVariant === 'standard' ? (
+                <>
+                  <Tooltip title={canStartItemCoverWorkflow ? 'Start cover workflow from item image' : 'Requires an item image'}>
+                    <Box component="span" sx={{ display: 'block', width: { sm: 'auto', xs: '100%' } }}>
+                      <Button
+                        aria-label={`Start cover workflow from item image for ${title}`}
+                        disabled={!canStartItemCoverWorkflow}
+                        startIcon={isStartingItemCoverWorkflow ? <CircularProgress size={18} /> : <ImageSearchIcon />}
+                        sx={{ width: { sm: 'auto', xs: '100%' } }}
+                        type="button"
+                        variant="outlined"
+                        onClick={() => onStartItemLocalCoverWorkflow(item)}
+                      >
+                        {isStartingItemCoverWorkflow ? 'Starting...' : 'Start cover workflow'}
+                      </Button>
+                    </Box>
+                  </Tooltip>
+                  <Tooltip title={canFlattenItemCover ? 'Flatten an item cover image' : 'Requires an item image'}>
+                    <Box component="span" sx={{ display: 'block', width: { sm: 'auto', xs: '100%' } }}>
+                      <Button
+                        aria-label={`Flatten cover for ${title}`}
+                        disabled={!canFlattenItemCover}
+                        startIcon={<AutoFixHighIcon />}
+                        sx={{ width: { sm: 'auto', xs: '100%' } }}
+                        type="button"
+                        variant="outlined"
+                        onClick={() => onStartItemCoverFlattening(item)}
+                      >
+                        Flatten cover
+                      </Button>
+                    </Box>
+                  </Tooltip>
+                </>
+              ) : null}
               <Button disabled={isSaving} startIcon={<SaveIcon />} type="submit" variant="contained">
                 {isSaving ? 'Saving...' : 'Save Item'}
               </Button>
-              <Button startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
-                Back to Items
-              </Button>
+              {detailVariant === 'standard' ? (
+                <Button startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
+                  Back to Items
+                </Button>
+              ) : null}
             </Stack>
           </Stack>
 
@@ -1256,7 +1309,7 @@ function ItemForm({
               }
             }}
           >
-            {itemDetailFields.map((detailField) => (
+            {detailFields.map((detailField) => (
               <Fragment key={detailField.key}>
                 {detailField.key === 'description' ? (
                   <Box sx={{ gridColumn: { md: '1 / -1' } }}>
@@ -1607,10 +1660,16 @@ function isReciprocalRelationship(record: AdminRecord, nextRecord: AdminRecord) 
   return field(record, ['item_a_id'], '') === field(nextRecord, ['item_b_id'], '') && field(record, ['item_b_id'], '') === field(nextRecord, ['item_a_id'], '');
 }
 
-function inputFromForm(formData: FormData): AdminRecord {
+function inputFromForm(formData: FormData, detailFields = itemDetailFields, baseRecord?: AdminRecord): AdminRecord {
+  const displayedFieldKeys = new Set(detailFields.map((detailField) => detailField.key));
   return Object.fromEntries(
     itemDetailFields
       .filter((detailField) => !detailField.readOnly)
-      .map((detailField) => [detailField.key, String(formData.get(detailField.key) ?? '')])
+      .map((detailField) => [
+        detailField.key,
+        displayedFieldKeys.has(detailField.key)
+          ? String(formData.get(detailField.key) ?? '')
+          : detailValue(baseRecord ?? {}, detailField.key)
+      ])
   );
 }

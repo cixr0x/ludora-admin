@@ -152,7 +152,7 @@ function candidateNameLink(record: AdminRecord, onOpenItemSearch: (row: AdminRec
   const candidateId = field(record, ['candidate_id'], '');
   return (
     <Stack alignItems="center" direction="row" spacing={0.5}>
-      {internalLink(candidateName, candidateId ? `#listings?id=${encodeURIComponent(candidateId)}` : '')}
+      {internalLink(candidateName, candidateId ? `#offer-reviews?id=${encodeURIComponent(candidateId)}` : '')}
       <Tooltip title="Associate with an existing item">
         <IconButton
           aria-label={`Associate ${candidateName} with an existing item`}
