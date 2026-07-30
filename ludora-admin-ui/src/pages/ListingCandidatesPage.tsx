@@ -1834,7 +1834,6 @@ const reviewCoverFrameSx = {
   boxSizing: 'border-box',
   height: 'auto',
   overflow: 'hidden',
-  p: { sm: 1.5, xs: 1 },
   width: '100%'
 } as const;
 
@@ -1905,7 +1904,7 @@ function ReviewCoverComparison({
               style={reviewCoverFrameStyle}
               sx={{
                 ...reviewCoverFrameSx,
-                objectFit: 'contain',
+                objectFit: 'contain'
               }}
             />
           ) : (
@@ -1916,7 +1915,7 @@ function ReviewCoverComparison({
               style={reviewCoverFrameStyle}
               sx={{
                 ...reviewCoverFrameSx,
-                color: 'text.secondary',
+                color: 'text.secondary'
               }}
             >
               <Typography variant="body2">No cover</Typography>
