@@ -1444,6 +1444,55 @@ describe('ludora admin service', () => {
     expect(query.params).toEqual(['77', '12']);
   });
 
+  it('deletes a catalog item after unlinking and resetting all associated store items', async () => {
+    const row = {
+      canonical_name: 'Coffee Rush',
+      deleted_additional_link_count: 1,
+      id: 77,
+      reset_store_item_count: 2
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).delete('/items/77');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    expect(queries).toHaveLength(1);
+    const query = queries[0];
+    const sql = normalizeSql(query.sql);
+    expect(sql).toContain('associated_store_items as materialized');
+    expect(sql).toContain('join target_item on target_item.id = store_item.item_id');
+    expect(sql).toContain('select additional_item.store_item_id');
+    expect(sql).toContain('join target_item on target_item.id = additional_item.item_id');
+    expect(sql).toContain('update store_items store_item');
+    expect(sql).toContain('when store_item.item_id = $1 then null');
+    expect(sql).toContain("listing_status = 'pending'");
+    expect(sql).toContain('last_updated = now()');
+    expect(sql).toContain('delete from store_item_additional_items additional_item');
+    expect(sql).toContain('delete from items');
+    expect(sql).toContain('reset_store_item_count');
+    expect(sql).toContain('deleted_additional_link_count');
+    expect(sql).not.toContain('delete from store_items');
+    expect(query.params).toEqual([77]);
+  });
+
+  it('returns 404 when deleting an unknown catalog item', async () => {
+    const database: Database = {
+      query: async () => ({ rows: [] })
+    };
+
+    const response = await request(createApp({ database })).delete('/items/77');
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({ error: { message: 'Item not found' } });
+  });
+
   it('rejects self-referencing catalog item relationships', async () => {
     const database: Database = {
       query: async () => ({ rows: [] })

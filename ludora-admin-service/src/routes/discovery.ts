@@ -1325,6 +1325,73 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.delete('/items/:id', async (request, response, next) => {
+    try {
+      const itemId = integerPathParam(request.params.id);
+      const result = await database.query(
+        `
+        with target_item as materialized (
+          select id
+          from items
+          where id = $1
+        ),
+        associated_store_items as materialized (
+          select store_item.id as store_item_id
+          from store_items store_item
+          join target_item on target_item.id = store_item.item_id
+          union
+          select additional_item.store_item_id
+          from store_item_additional_items additional_item
+          join target_item on target_item.id = additional_item.item_id
+        ),
+        reset_store_items as (
+          update store_items store_item
+          set item_id = case
+                when store_item.item_id = $1 then null
+                else store_item.item_id
+              end,
+              listing_status = 'PENDING',
+              last_updated = now()
+          where store_item.id in (
+            select associated_store_items.store_item_id
+            from associated_store_items
+          )
+          returning store_item.id
+        ),
+        deleted_additional_links as (
+          delete from store_item_additional_items additional_item
+          using target_item
+          where additional_item.item_id = target_item.id
+            and (select count(*) from reset_store_items) >= 0
+          returning additional_item.store_item_id
+        ),
+        deleted_item as (
+          delete from items
+          using target_item
+          where items.id = target_item.id
+            and (select count(*) from reset_store_items) >= 0
+            and (select count(*) from deleted_additional_links) >= 0
+          returning items.*
+        )
+        select
+          deleted_item.*,
+          (select count(*)::integer from reset_store_items) as reset_store_item_count,
+          (select count(*)::integer from deleted_additional_links) as deleted_additional_link_count
+        from deleted_item
+        `,
+        [itemId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Item not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.patch('/items/:id', async (request, response, next) => {
     try {
       const input = parseItemInput(request.body);

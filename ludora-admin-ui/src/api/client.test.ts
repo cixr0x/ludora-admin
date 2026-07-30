@@ -594,6 +594,23 @@ describe('fetchRows', () => {
     });
   });
 
+  it('deletes catalog items with a DELETE request', async () => {
+    const item = { canonical_name: 'Coffee Rush', id: '77', reset_store_item_count: 2 };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: item }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.deleteItem('77')).resolves.toEqual(item);
+
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/items/77', {
+      method: 'DELETE'
+    });
+  });
+
   it('encodes table sort and filters in paged admin requests', async () => {
     const records = [{ canonical_domain: 'caravanagameshop.com', id: 'store-1' }];
     const { adminApi } = await importClient();

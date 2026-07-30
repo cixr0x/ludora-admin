@@ -601,6 +601,10 @@ export const adminApi = {
         method: 'DELETE'
       }
     ),
+  deleteItem: (id: string) =>
+    fetchData<AdminRecord>(`/items/${encodeURIComponent(id)}`, {
+      method: 'DELETE'
+    }),
   updateItem: (id: string, input: ItemInput) => sendJson<AdminRecord>(`/items/${encodeURIComponent(id)}`, 'PATCH', input),
   getListingCandidates: () => fetchRows('/discovery/listings'),
   generateDescription: (input: DescriptionGenerationInput) =>

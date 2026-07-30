@@ -1073,6 +1073,64 @@ describe('ItemsPage', () => {
 
     expect(await screen.findByRole('table', { name: 'Items' })).toBeInTheDocument();
   });
+
+  it('confirms catalog item deletion and returns to the refreshed items table', async () => {
+    const user = userEvent.setup();
+    const onClearSelectedItemId = vi.fn();
+    const item = {
+      canonical_name: 'Coffee Rush',
+      id: '77',
+      item_type: 'base_game',
+      normalized_name: 'coffee rush',
+      status: 'active'
+    };
+    let isDeleted = false;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/items' && !init?.method) {
+        return jsonResponse(isDeleted ? [] : [item]);
+      }
+      if (path === '/items/77' && init?.method === 'DELETE') {
+        isDeleted = true;
+        return jsonResponse({
+          ...item,
+          deleted_additional_link_count: 1,
+          reset_store_item_count: 2
+        });
+      }
+      if (path === '/items/77') {
+        return jsonResponse(item);
+      }
+      if (path === '/items/77/store-items' || path === '/items/77/relationships') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/taxonomy') {
+        return jsonResponse({
+          categories: [],
+          families: [],
+          mechanics: []
+        });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ItemsPage onClearSelectedItemId={onClearSelectedItemId} selectedItemId="77" />);
+
+    expect(await screen.findByRole('heading', { name: 'Item Details' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Delete Item' }));
+
+    const confirmation = screen.getByRole('dialog', { name: 'Delete Item' });
+    expect(within(confirmation).getByText(/returned to PENDING/i)).toBeInTheDocument();
+    expect(within(confirmation).getByText(/store items themselves will not be deleted/i)).toBeInTheDocument();
+    await user.click(within(confirmation).getByRole('button', { name: 'Delete Item' }));
+
+    expect(await screen.findByRole('table', { name: 'Items' })).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText('Coffee Rush')).not.toBeInTheDocument());
+    expect(onClearSelectedItemId).toHaveBeenCalledTimes(1);
+    expect(
+      fetchMock.mock.calls.some(([input, init]) => pathOf(String(input)) === '/items/77' && init?.method === 'DELETE')
+    ).toBe(true);
+  });
 });
 
 function pathOf(url: string) {

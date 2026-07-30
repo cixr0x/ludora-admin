@@ -4,7 +4,26 @@ import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import DeleteIcon from '@mui/icons-material/Delete';
 import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import SaveIcon from '@mui/icons-material/Save';
-import { Alert, Autocomplete, Box, Button, Chip, CircularProgress, IconButton, Link, MenuItem, Paper, Stack, TextField, Tooltip, Typography } from '@mui/material';
+import {
+  Alert,
+  Autocomplete,
+  Box,
+  Button,
+  Chip,
+  CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Link,
+  MenuItem,
+  Paper,
+  Stack,
+  TextField,
+  Tooltip,
+  Typography
+} from '@mui/material';
 import { Fragment, type FormEvent, type MouseEvent, useEffect, useRef, useState } from 'react';
 import {
   adminApi,
@@ -633,6 +652,7 @@ export function ItemsPage({
   const [localCoverWorkflow, setLocalCoverWorkflow] = useState<LocalCoverWorkflow | null>(null);
   const [localCoverWorkflowError, setLocalCoverWorkflowError] = useState('');
   const [relationshipError, setRelationshipError] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [saveMessage, setSaveMessage] = useState('');
@@ -656,6 +676,7 @@ export function ItemsPage({
       setDeletingRelationshipId('');
       setLocalCoverWorkflow(null);
       setLocalCoverWorkflowError('');
+      setIsDeleting(false);
       setSaveError('');
       setSaveMessage('');
       setStartingCoverWorkflowId('');
@@ -675,6 +696,7 @@ export function ItemsPage({
     setDeletingRelationshipId('');
     setLocalCoverWorkflow(null);
     setLocalCoverWorkflowError('');
+    setIsDeleting(false);
     setSaveError('');
     setSaveMessage('');
     setStartingCoverWorkflowId('');
@@ -901,6 +923,43 @@ export function ItemsPage({
     }
   }
 
+  async function handleDeleteItem() {
+    if (!selectedItem || isDeleting) {
+      return false;
+    }
+
+    const itemId = field(selectedItem, ['id'], '');
+    setIsDeleting(true);
+    setSaveError('');
+    setSaveMessage('');
+
+    try {
+      await adminApi.deleteItem(itemId);
+      setRows((currentRows) => currentRows.filter((row, index) => field(row, ['id'], String(index)) !== itemId));
+      setSelectedItem(null);
+      setDetailState('ready');
+      setItemTaxonomy(emptyItemTaxonomy);
+      setItemRelationships([]);
+      setLinkedStoreItems([]);
+      setRelatedState('ready');
+      setRelationshipError('');
+      setDeletingRelationshipId('');
+      setLocalCoverWorkflow(null);
+      setLocalCoverWorkflowError('');
+      setStartingCoverWorkflowId('');
+      setStartingItemCoverWorkflowId('');
+      setViewMode('table');
+      onClearSelectedItemId?.();
+      table.refresh();
+      return true;
+    } catch {
+      setSaveError('Item could not be deleted.');
+      return false;
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
   function handleStartStoreItemCoverFlattening(record: AdminRecord) {
     const storeItemId = field(record, ['id'], '');
     if (!storeItemId) {
@@ -982,6 +1041,7 @@ export function ItemsPage({
           detailVariant={detailVariant}
           deletingRelationshipId={deletingRelationshipId}
           isAddingRelationship={isAddingRelationship}
+          isDeleting={isDeleting}
           isGeneratingDescription={isGeneratingDescription}
           isSaving={isSaving}
           item={selectedItem}
@@ -1009,6 +1069,7 @@ export function ItemsPage({
             onClearSelectedItemId?.();
           }}
           onCreateRelationship={handleCreateRelationship}
+          onDelete={handleDeleteItem}
           onDeleteRelationship={handleDeleteRelationship}
           onGenerateSpanishDescription={handleGenerateSpanishDescription}
           onSave={handleSaveItem}
@@ -1067,6 +1128,7 @@ function ItemForm({
   detailVariant,
   deletingRelationshipId,
   isAddingRelationship,
+  isDeleting,
   isGeneratingDescription,
   isSaving,
   item,
@@ -1077,6 +1139,7 @@ function ItemForm({
   localCoverWorkflowError,
   onBack,
   onCreateRelationship,
+  onDelete,
   onDeleteRelationship,
   onGenerateSpanishDescription,
   onSave,
@@ -1093,6 +1156,7 @@ function ItemForm({
   detailVariant: ItemDetailVariant;
   deletingRelationshipId: string;
   isAddingRelationship: boolean;
+  isDeleting: boolean;
   isGeneratingDescription: boolean;
   isSaving: boolean;
   item: AdminRecord;
@@ -1103,6 +1167,7 @@ function ItemForm({
   localCoverWorkflowError: string;
   onBack: () => void;
   onCreateRelationship: (input: ItemRelationshipInput) => Promise<boolean>;
+  onDelete: () => Promise<boolean>;
   onDeleteRelationship: (record: AdminRecord) => void;
   onGenerateSpanishDescription: (input: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
@@ -1127,15 +1192,25 @@ function ItemForm({
   const detailFields = detailVariant === 'review' ? itemReviewDetailFields : itemDetailFields;
   const formKey = [...detailFields.map((detailField) => detailValue(item, detailField.key)), ...bggAlternateNames].join('\u001f');
   const formRef = useRef<HTMLFormElement>(null);
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
   const hasSourceDescriptions = Boolean(textValue(item, 'description') || firstLinkedStoreDescription(linkedStoreItems));
-  const canGenerateDescription = hasSourceDescriptions && !isGeneratingDescription && !isSaving;
+  const canGenerateDescription = hasSourceDescriptions && !isDeleting && !isGeneratingDescription && !isSaving;
   const isStartingItemCoverWorkflow = Boolean(itemId && itemId === startingItemCoverWorkflowId);
-  const canStartItemCoverWorkflow = Boolean(itemId && imageUrl && !isStartingItemCoverWorkflow);
-  const canFlattenItemCover = Boolean(itemId && (imageUrl || imageUrlEs));
+  const canStartItemCoverWorkflow = Boolean(itemId && imageUrl && !isDeleting && !isStartingItemCoverWorkflow);
+  const canFlattenItemCover = Boolean(itemId && !isDeleting && (imageUrl || imageUrlEs));
 
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (isDeleting) {
+      return;
+    }
     onSave(inputFromForm(new FormData(event.currentTarget), detailFields, detailVariant === 'review' ? item : undefined));
+  }
+
+  async function handleConfirmDelete() {
+    if (await onDelete()) {
+      setIsDeleteDialogOpen(false);
+    }
   }
 
   function handleGenerateDescription(event: MouseEvent<HTMLButtonElement>) {
@@ -1216,13 +1291,25 @@ function ItemForm({
                   </Tooltip>
                 </>
               ) : null}
-              <Button disabled={isSaving} startIcon={<SaveIcon />} type="submit" variant="contained">
+              <Button disabled={isDeleting || isSaving} startIcon={<SaveIcon />} type="submit" variant="contained">
                 {isSaving ? 'Saving...' : 'Save Item'}
               </Button>
               {detailVariant === 'standard' ? (
-                <Button startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
-                  Back to Items
-                </Button>
+                <>
+                  <Button disabled={isDeleting} startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
+                    Back to Items
+                  </Button>
+                  <Button
+                    color="error"
+                    disabled={isDeleting || isSaving}
+                    startIcon={isDeleting ? <CircularProgress color="inherit" size={18} /> : <DeleteIcon />}
+                    type="button"
+                    variant="outlined"
+                    onClick={() => setIsDeleteDialogOpen(true)}
+                  >
+                    {isDeleting ? 'Deleting...' : 'Delete Item'}
+                  </Button>
+                </>
               ) : null}
             </Stack>
           </Stack>
@@ -1383,7 +1470,7 @@ function ItemForm({
                       <span>
                         <IconButton
                           aria-label="Generate normalized Spanish name"
-                          disabled={isSaving}
+                          disabled={isDeleting || isSaving}
                           size="small"
                           sx={{ mt: 1, p: 0.75 }}
                           type="button"
@@ -1411,6 +1498,24 @@ function ItemForm({
           </Box>
         </Stack>
       </Paper>
+
+      <Dialog fullWidth maxWidth="sm" open={isDeleteDialogOpen} onClose={() => !isDeleting && setIsDeleteDialogOpen(false)}>
+        <DialogTitle>Delete Item</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Delete “{title}”? Every associated store item will be unlinked and returned to PENDING, and additional-item links
+            will be removed before this catalog item is permanently deleted. The store items themselves will not be deleted.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={isDeleting} type="button" onClick={() => setIsDeleteDialogOpen(false)}>
+            Cancel
+          </Button>
+          <Button color="error" disabled={isDeleting} type="button" variant="contained" onClick={handleConfirmDelete}>
+            {isDeleting ? 'Deleting...' : 'Delete Item'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <ItemRelations
         deletingRelationshipId={deletingRelationshipId}
