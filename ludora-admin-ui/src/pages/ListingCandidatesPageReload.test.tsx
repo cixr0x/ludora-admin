@@ -176,6 +176,93 @@ describe('ListingCandidatesPage review reload', () => {
     );
   });
 
+  it('starts translate-and-approve in the background and immediately opens the next pending review', async () => {
+    const onOpenCandidate = vi.fn();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === '/discovery/listings/920') {
+        return jsonResponse({
+          description: 'Run a coffee shop before the customers lose patience.',
+          id: '920',
+          image_url: 'https://store.example/cafe-barista.jpg',
+          item_id: 77,
+          listing_status: 'PENDING',
+          source_url: 'https://store.example/cafe-barista',
+          title: 'Cafe Barista'
+        });
+      }
+      if (path === '/discovery/listings') {
+        return jsonResponse([], { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items') {
+        return jsonResponse([]);
+      }
+      if (path === '/discovery/listings/920/translate-and-approve' && init?.method === 'POST') {
+        return jsonResponse({ candidate_id: 920, status: 'PROCESSING' }, undefined, 202);
+      }
+      if (path === '/admin/discovery/offer-reviews') {
+        return jsonResponse(
+          [
+            { candidate_id: '920', candidate_name: 'Cafe Barista' },
+            { candidate_id: '921', candidate_name: 'Cafe Barista Deluxe' }
+          ],
+          { page: 0, page_size: 2, total: 2 }
+        );
+      }
+      if (path === '/items/77') {
+        return jsonResponse({
+          canonical_name: 'Coffee Rush',
+          description: 'Complete customer orders in a busy coffee shop.',
+          description_es: '',
+          id: 77,
+          image_url: 'https://catalog.example/coffee-rush.jpg',
+          image_url_es: ''
+        });
+      }
+      if (path === '/items/77/relationships' || path === '/items/77/store-items') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/taxonomy') {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(
+      <ListingCandidatesPage
+        detailMode="review"
+        onOpenCandidate={onOpenCandidate}
+        selectedCandidateId="920"
+      />
+    );
+
+    expect(await screen.findByRole('button', { name: 'Approve listing' })).toBeDisabled();
+    const translateAndApprove = await screen.findByRole('button', { name: 'Translate and approve' });
+    expect(translateAndApprove).toBeEnabled();
+    fireEvent.click(translateAndApprove);
+
+    await waitFor(() => expect(onOpenCandidate).toHaveBeenCalledWith('921'));
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:4001/discovery/listings/920/translate-and-approve',
+      {
+        credentials: 'include',
+        method: 'POST'
+      }
+    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          new URL(String(input)).pathname === '/discovery/listings/920/listing-status' &&
+          init?.method === 'PATCH'
+      )
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input]) => new URL(String(input)).pathname === '/admin/description-generations'
+      )
+    ).toBe(false);
+  });
+
   it('reloads the review page after the linked item is saved', async () => {
     const reloadPage = vi.fn();
     let item: Record<string, unknown> = {
@@ -245,9 +332,9 @@ describe('ListingCandidatesPage review reload', () => {
   });
 });
 
-function jsonResponse(data: unknown, meta?: unknown) {
+function jsonResponse(data: unknown, meta?: unknown, status = 200) {
   return new Response(JSON.stringify({ data, meta }), {
     headers: { 'Content-Type': 'application/json' },
-    status: 200
+    status
   });
 }

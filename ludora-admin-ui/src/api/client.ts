@@ -185,6 +185,10 @@ export type TableQuery = {
 
 export type StoreCandidateStatus = 'ACCEPTED' | 'PENDING' | 'REJECTED';
 export type StoreItemListingStatus = 'LISTED' | 'PENDING' | 'REJECTED' | 'UNLISTED';
+export type StoreItemTranslateAndApproveResult = {
+  candidate_id: number;
+  status: 'ALREADY_PROCESSING' | 'PROCESSING';
+};
 
 export type StoreCandidateInput = {
   canonical_domain: string;
@@ -573,6 +577,13 @@ export const adminApi = {
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/listing-status`, 'PATCH', {
       listing_status: listingStatus
     }),
+  translateAndApproveItemCandidate: (id: string) =>
+    fetchData<StoreItemTranslateAndApproveResult>(
+      `/discovery/listings/${encodeURIComponent(id)}/translate-and-approve`,
+      {
+        method: 'POST'
+      }
+    ),
   updateItemCandidate: (id: string, input: ItemCandidateInput) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`, 'PATCH', input),
   getItem: (id: string) => fetchData<AdminRecord>(`/items/${encodeURIComponent(id)}`),

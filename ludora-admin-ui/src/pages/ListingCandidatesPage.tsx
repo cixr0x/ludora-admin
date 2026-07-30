@@ -521,6 +521,7 @@ export function ListingCandidatesPage({
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [preparingCoverFlatteningCandidateId, setPreparingCoverFlatteningCandidateId] = useState('');
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
+  const [startingTranslateAndApproveCandidateId, setStartingTranslateAndApproveCandidateId] = useState('');
   const [updatingListingStatusCandidateId, setUpdatingListingStatusCandidateId] = useState('');
   const [coverFlatteningRequest, setCoverFlatteningRequest] = useState<CoverFlatteningRequest | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
@@ -710,6 +711,7 @@ export function ListingCandidatesPage({
       setSelectedCandidate(null);
       setLinkedItemRefreshToken(0);
       setPreparingCoverFlatteningCandidateId('');
+      setStartingTranslateAndApproveCandidateId('');
       setUpdatingListingStatusCandidateId('');
       setViewMode('table');
       return;
@@ -723,6 +725,7 @@ export function ListingCandidatesPage({
     setSaveMessage('');
     setLinkedItemRefreshToken(0);
     setPreparingCoverFlatteningCandidateId('');
+    setStartingTranslateAndApproveCandidateId('');
     setUpdatingListingStatusCandidateId('');
     setViewMode('form');
 
@@ -838,6 +841,29 @@ export function ListingCandidatesPage({
     table.refresh();
   }
 
+  async function openNextPendingReview(currentCandidateId: string) {
+    if (detailMode !== 'review' || !onOpenCandidate) {
+      return;
+    }
+
+    const nextReviews = await adminApi.getOfferReviewsPage({
+      filters: { store_item_listing_status: 'PENDING' },
+      page: 0,
+      pageSize: 2,
+      sortColumnId: 'candidate_name',
+      sortDirection: 'asc'
+    });
+    const nextCandidateId = nextReviews.rows
+      .map((review) => field(review, ['candidate_id', 'store_item_id'], ''))
+      .find((candidateId) => candidateId && candidateId !== currentCandidateId);
+
+    if (nextCandidateId) {
+      onOpenCandidate(nextCandidateId);
+    } else {
+      onClearSelectedCandidateId?.();
+    }
+  }
+
   async function handleSetListingStatus(candidate: AdminRecord, listingStatus: StoreItemListingStatus) {
     const id = field(candidate, ['id'], '');
     if (!id) {
@@ -868,22 +894,7 @@ export function ListingCandidatesPage({
       table.refresh();
       if (detailMode === 'review' && listingStatus === 'LISTED' && onOpenCandidate) {
         try {
-          const nextReviews = await adminApi.getOfferReviewsPage({
-            filters: { store_item_listing_status: 'PENDING' },
-            page: 0,
-            pageSize: 2,
-            sortColumnId: 'candidate_name',
-            sortDirection: 'asc'
-          });
-          const nextCandidateId = nextReviews.rows
-            .map((review) => field(review, ['candidate_id', 'store_item_id'], ''))
-            .find((candidateId) => candidateId && candidateId !== id);
-
-          if (nextCandidateId) {
-            onOpenCandidate(nextCandidateId);
-          } else {
-            onClearSelectedCandidateId?.();
-          }
+          await openNextPendingReview(id);
         } catch {
           setSaveError('Store item listing was approved, but the next review could not be loaded.');
         }
@@ -892,6 +903,34 @@ export function ListingCandidatesPage({
       setSaveError('Store item listing status could not be saved.');
     } finally {
       setUpdatingListingStatusCandidateId('');
+    }
+  }
+
+  async function handleTranslateAndApprove(candidate: AdminRecord) {
+    const id = field(candidate, ['id'], '');
+    if (!id) {
+      return;
+    }
+
+    setSaveError('');
+    setSaveMessage('');
+    setStartingTranslateAndApproveCandidateId(id);
+
+    try {
+      await adminApi.translateAndApproveItemCandidate(id);
+    } catch {
+      setSaveError('Translation and approval job could not be started.');
+      setStartingTranslateAndApproveCandidateId('');
+      return;
+    }
+
+    table.refresh();
+    try {
+      await openNextPendingReview(id);
+    } catch {
+      setSaveError('Translation and approval started, but the next review could not be loaded.');
+    } finally {
+      setStartingTranslateAndApproveCandidateId('');
     }
   }
 
@@ -1157,12 +1196,14 @@ export function ListingCandidatesPage({
           onPrimaryItemAssociated={handlePrimaryItemAssociated}
           onSave={handleSaveCandidate}
           onSetListingStatus={handleSetListingStatus}
+          onTranslateAndApprove={handleTranslateAndApprove}
           onCreateItem={handleCreateItemFromCandidate}
           onStartCoverFlattening={handleStartCoverFlattening}
           onStartLocalCoverWorkflow={handleStartLocalCoverWorkflow}
           saveError={saveError}
           preparingCoverFlatteningCandidateId={preparingCoverFlatteningCandidateId}
           startingCoverWorkflowId={startingCoverWorkflowId}
+          startingTranslateAndApproveCandidateId={startingTranslateAndApproveCandidateId}
           updatingListingStatusCandidateId={updatingListingStatusCandidateId}
         />
       ) : null}
@@ -1219,11 +1260,13 @@ function ItemCandidateForm({
   onPrimaryItemAssociated,
   onSave,
   onSetListingStatus,
+  onTranslateAndApprove,
   onStartCoverFlattening,
   onStartLocalCoverWorkflow,
   preparingCoverFlatteningCandidateId,
   saveError,
   startingCoverWorkflowId,
+  startingTranslateAndApproveCandidateId,
   updatingListingStatusCandidateId
 }: {
   candidate: AdminRecord;
@@ -1244,11 +1287,13 @@ function ItemCandidateForm({
   onPrimaryItemAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
   onSetListingStatus: (candidate: AdminRecord, listingStatus: StoreItemListingStatus) => void;
+  onTranslateAndApprove: (candidate: AdminRecord) => void;
   onStartCoverFlattening: (candidate: AdminRecord) => void | Promise<void>;
   onStartLocalCoverWorkflow: (candidate: AdminRecord) => void;
   preparingCoverFlatteningCandidateId: string;
   saveError: string;
   startingCoverWorkflowId: string;
+  startingTranslateAndApproveCandidateId: string;
   updatingListingStatusCandidateId: string;
 }) {
   const title = field(candidate, ['title'], 'Item candidate');
@@ -1272,6 +1317,11 @@ function ItemCandidateForm({
   const [linkedItemPreview, setLinkedItemPreview] = useState<AdminRecord | null>(null);
   const [translationError, setTranslationError] = useState('');
   const hasGeneratedTranslation = Boolean(linkedItemPreview && field(linkedItemPreview, ['description_es'], '').trim());
+  const canGenerateTranslation = Boolean(
+    linkedItemPreview &&
+      field(linkedItemPreview, ['canonical_name_es', 'canonical_name'], '') &&
+      (field(linkedItemPreview, ['description'], '') || field(candidate, ['description'], ''))
+  );
 
   useEffect(() => {
     setBggDialogBggId(matchedBggId);
@@ -1313,6 +1363,8 @@ function ItemCandidateForm({
   );
   const isUpdatingListingStatus =
     Boolean(candidateIdValue) && candidateIdValue === updatingListingStatusCandidateId;
+  const isStartingTranslateAndApprove =
+    Boolean(candidateIdValue) && candidateIdValue === startingTranslateAndApproveCandidateId;
 
   async function handleConfirmBggDialog() {
     await onCreateItemFromBggId(bggDialogBggId);
@@ -1454,6 +1506,40 @@ function ItemCandidateForm({
               >
                 Approve listing
               </Button>
+              {!hasGeneratedTranslation ? (
+                <Tooltip
+                  title={
+                    canGenerateTranslation
+                      ? 'Generate the translation in the background and approve only when it succeeds'
+                      : 'Requires an item name and at least one source description'
+                  }
+                >
+                  <span>
+                    <Button
+                      color="success"
+                      disabled={
+                        !candidateIdValue ||
+                        !canGenerateTranslation ||
+                        isStartingTranslateAndApprove ||
+                        isUpdatingListingStatus ||
+                        listingStatus !== 'PENDING'
+                      }
+                      startIcon={
+                        isStartingTranslateAndApprove ? (
+                          <CircularProgress color="inherit" size={18} />
+                        ) : (
+                          <AutoFixHighIcon />
+                        )
+                      }
+                      type="button"
+                      variant="outlined"
+                      onClick={() => onTranslateAndApprove(candidate)}
+                    >
+                      {isStartingTranslateAndApprove ? 'Starting...' : 'Translate and approve'}
+                    </Button>
+                  </span>
+                </Tooltip>
+              ) : null}
               <Button
                 color="error"
                 disabled={!candidateIdValue || isUpdatingListingStatus || listingStatus === 'REJECTED'}
@@ -1524,11 +1610,7 @@ function ItemCandidateForm({
         {detailMode === 'review' ? (
           <>
             <ReviewCoverComparison
-              canGenerateTranslation={Boolean(
-                linkedItemPreview &&
-                  field(linkedItemPreview, ['canonical_name_es', 'canonical_name'], '') &&
-                  (field(linkedItemPreview, ['description'], '') || field(candidate, ['description'], ''))
-              )}
+              canGenerateTranslation={canGenerateTranslation}
               isGeneratingTranslation={isGeneratingTranslation}
               item={linkedItemPreview}
               itemId={itemId}

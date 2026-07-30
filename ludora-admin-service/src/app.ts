@@ -22,8 +22,10 @@ import {
   type ExternalCoverImageOptimizerRunner
 } from './routes/operations.js';
 import { createStoresRouter } from './routes/stores.js';
+import { createStoreItemReviewRouter } from './routes/storeItemReview.js';
 import { createTutorialCurationRouter } from './routes/tutorialCuration.js';
 import { createTranslationRouter } from './routes/translation.js';
+import { createStoreItemTranslateAndApproveWorkflow } from './storeItemReview/storeItemTranslateAndApproveWorkflow.js';
 import type { TranslationService } from './translation/translationService.js';
 import type { LocalCoverWorkflowManager } from './localCoverWorkflow.js';
 import type { ProductDetailsEnrichmentService } from './productDetailsExtraction/productDetailsExtractionService.js';
@@ -78,6 +80,13 @@ export function createApp({
   }
   app.use(createStoresRouter(database, storeProfileDetectionService));
   app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter, productDetailsEnrichmentService));
+  app.use(
+    createStoreItemReviewRouter(
+      descriptionGenerationService
+        ? createStoreItemTranslateAndApproveWorkflow(database, descriptionGenerationService)
+        : undefined
+    )
+  );
   app.use(createAmazonTitleExtractionRouter(amazonTitleExtractionService));
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
   app.use(createTranslationRouter(translationService));

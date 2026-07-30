@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import request from 'supertest';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createApp } from './app.js';
 import type { CoverFlatteningWorkflow, CoverFlatteningWorkflowManager } from './coverFlatteningWorkflow.js';
@@ -2016,6 +2016,81 @@ describe('ludora admin service', () => {
     expect(response.status).toBe(400);
     expect(response.body.error.message).toBe('listing_status must be PENDING, LISTED, UNLISTED, or REJECTED');
     expect(queries).toEqual([]);
+  });
+
+  it('starts a store item translate-and-approve job without waiting for description generation', async () => {
+    let resolveGeneration!: (result: {
+      descriptionEs: string;
+      metadata: Record<string, unknown>;
+      model: string;
+      promptVersion: string;
+    }) => void;
+    const generation = new Promise<{
+      descriptionEs: string;
+      metadata: Record<string, unknown>;
+      model: string;
+      promptVersion: string;
+    }>((resolve) => {
+      resolveGeneration = resolve;
+    });
+    const descriptionGenerationService: DescriptionGenerationService = {
+      generate: async () => generation
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        if (queries.length === 1) {
+          return {
+            rows: [
+              {
+                boardgame_name: 'Coffee Rush',
+                description_es: '',
+                item_description: 'Complete customer orders.',
+                item_id: 77,
+                listing_status: 'PENDING',
+                store_item_description: 'Run a busy coffee shop.'
+              }
+            ]
+          };
+        }
+        return { rows: [{ id: 920 }] };
+      }
+    };
+
+    const response = await request(createApp({ database, descriptionGenerationService })).post(
+      '/discovery/listings/920/translate-and-approve'
+    );
+
+    expect(response.status).toBe(202);
+    expect(response.body).toEqual({
+      data: {
+        candidate_id: 920,
+        status: 'PROCESSING'
+      }
+    });
+    expect(queries).toHaveLength(1);
+
+    resolveGeneration({
+      descriptionEs: 'Completa pedidos en una cafeteria concurrida.',
+      metadata: {},
+      model: 'test-model',
+      promptVersion: 'test-prompt'
+    });
+    await vi.waitFor(() => expect(queries).toHaveLength(2));
+  });
+
+  it('returns 503 when translate-and-approve is not configured', async () => {
+    const response = await request(createApp({ database: idleDatabase() })).post(
+      '/discovery/listings/920/translate-and-approve'
+    );
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: {
+        message: 'Description generation service is not configured'
+      }
+    });
   });
 
   it('creates a curated item and lists the store item from a discovery item candidate', async () => {
