@@ -1458,13 +1458,17 @@ describe('ListingCandidatesPage', () => {
     const coverComparison = within(storeItemSection!).getByRole('group', {
       name: 'Store item and linked item cover comparison'
     });
-    expect(within(coverComparison).getByRole('img', { name: 'Cafe Barista store item cover' })).toHaveAttribute(
-      'src',
-      'https://store.mx/cafe-barista.jpg'
-    );
-    expect(
-      await within(coverComparison).findByRole('img', { name: 'Coffee Rush (Cafe Barista) item cover' })
-    ).toHaveAttribute('src', 'https://images.example/cafe-barista.jpg');
+    const storeItemCover = within(coverComparison).getByRole('img', { name: 'Cafe Barista store item cover' });
+    expect(storeItemCover).toHaveAttribute('src', 'https://store.mx/cafe-barista.jpg');
+    expect(storeItemCover).toHaveStyle({ aspectRatio: '1 / 1' });
+    expect(storeItemCover).toHaveStyle({
+      backgroundImage: 'linear-gradient(135deg, #aeb7c2 0%, #d7dce1 52%, #9fa9b5 100%)'
+    });
+    const linkedItemCover = await within(coverComparison).findByRole('img', {
+      name: 'Coffee Rush (Cafe Barista) item cover'
+    });
+    expect(linkedItemCover).toHaveAttribute('src', 'https://images.example/cafe-barista.jpg');
+    expect(linkedItemCover).toHaveStyle({ aspectRatio: '1 / 1' });
     expect(within(coverComparison).getByLabelText('Store item name')).toHaveTextContent('Cafe Barista');
     expect(within(coverComparison).getByLabelText('Item name')).toHaveTextContent('Coffee Rush (Cafe Barista)');
     const translationStatus = within(coverComparison).getByRole('status', { name: 'Translation generated' });

@@ -1825,6 +1825,24 @@ function ItemCandidateForm({
   );
 }
 
+const reviewCoverFrameSx = {
+  backgroundColor: 'grey.300',
+  border: 1,
+  borderColor: 'grey.500',
+  borderRadius: 1.5,
+  boxShadow: 'inset 0 0 0 1px rgba(255, 255, 255, 0.35), 0 1px 3px rgba(15, 23, 42, 0.18)',
+  boxSizing: 'border-box',
+  height: 'auto',
+  overflow: 'hidden',
+  p: { sm: 1.5, xs: 1 },
+  width: '100%'
+} as const;
+
+const reviewCoverFrameStyle = {
+  aspectRatio: '1 / 1',
+  backgroundImage: 'linear-gradient(135deg, #aeb7c2 0%, #d7dce1 52%, #9fa9b5 100%)'
+} as const;
+
 function ReviewCoverComparison({
   canGenerateTranslation,
   isGeneratingTranslation,
@@ -1884,14 +1902,10 @@ function ReviewCoverComparison({
               alt={cover.alt}
               component="img"
               src={cover.imageUrl}
+              style={reviewCoverFrameStyle}
               sx={{
-                bgcolor: 'grey.100',
-                border: 1,
-                borderColor: 'divider',
-                borderRadius: 1,
-                height: { sm: 240, xs: 150 },
+                ...reviewCoverFrameSx,
                 objectFit: 'contain',
-                width: '100%'
               }}
             />
           ) : (
@@ -1899,14 +1913,10 @@ function ReviewCoverComparison({
               alignItems="center"
               display="flex"
               justifyContent="center"
+              style={reviewCoverFrameStyle}
               sx={{
-                bgcolor: 'grey.100',
-                border: 1,
-                borderColor: 'divider',
-                borderRadius: 1,
+                ...reviewCoverFrameSx,
                 color: 'text.secondary',
-                height: { sm: 240, xs: 150 },
-                width: '100%'
               }}
             >
               <Typography variant="body2">No cover</Typography>
