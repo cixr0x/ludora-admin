@@ -518,6 +518,7 @@ export function ListingCandidatesPage({
   const [saveMessage, setSaveMessage] = useState('');
   const [selectedBatchCandidateIds, setSelectedBatchCandidateIds] = useState<Set<string>>(() => new Set());
   const batchSelectionAnchorId = useRef<string | null>(null);
+  const translateAndApproveCandidateIds = useRef<Set<string>>(new Set());
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [preparingCoverFlatteningCandidateId, setPreparingCoverFlatteningCandidateId] = useState('');
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
@@ -849,13 +850,18 @@ export function ListingCandidatesPage({
     const nextReviews = await adminApi.getOfferReviewsPage({
       filters: { store_item_listing_status: 'PENDING' },
       page: 0,
-      pageSize: 2,
+      pageSize: translateAndApproveCandidateIds.current.size + 2,
       sortColumnId: 'candidate_name',
       sortDirection: 'asc'
     });
     const nextCandidateId = nextReviews.rows
       .map((review) => field(review, ['candidate_id', 'store_item_id'], ''))
-      .find((candidateId) => candidateId && candidateId !== currentCandidateId);
+      .find(
+        (candidateId) =>
+          candidateId &&
+          candidateId !== currentCandidateId &&
+          !translateAndApproveCandidateIds.current.has(candidateId)
+      );
 
     if (nextCandidateId) {
       onOpenCandidate(nextCandidateId);
@@ -918,6 +924,7 @@ export function ListingCandidatesPage({
 
     try {
       await adminApi.translateAndApproveItemCandidate(id);
+      translateAndApproveCandidateIds.current.add(id);
     } catch {
       setSaveError('Translation and approval job could not be started.');
       setStartingTranslateAndApproveCandidateId('');

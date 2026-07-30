@@ -176,59 +176,81 @@ describe('ListingCandidatesPage review reload', () => {
     );
   });
 
-  it('starts translate-and-approve in the background and immediately opens the next pending review', async () => {
+  it('skips prior translate-and-approve submissions while advancing through pending reviews', async () => {
     const onOpenCandidate = vi.fn();
+    const candidates: Record<string, Record<string, unknown>> = {
+      '920': {
+        description: 'Run a coffee shop before the customers lose patience.',
+        id: '920',
+        image_url: 'https://store.example/cafe-barista.jpg',
+        item_id: 77,
+        listing_status: 'PENDING',
+        source_url: 'https://store.example/cafe-barista',
+        title: 'Cafe Barista'
+      },
+      '921': {
+        description: 'Serve desserts before the cafe closes.',
+        id: '921',
+        image_url: 'https://store.example/cafe-barista-deluxe.jpg',
+        item_id: 78,
+        listing_status: 'PENDING',
+        source_url: 'https://store.example/cafe-barista-deluxe',
+        title: 'Cafe Barista Deluxe'
+      }
+    };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const path = new URL(String(input)).pathname;
-      if (path === '/discovery/listings/920') {
-        return jsonResponse({
-          description: 'Run a coffee shop before the customers lose patience.',
-          id: '920',
-          image_url: 'https://store.example/cafe-barista.jpg',
-          item_id: 77,
-          listing_status: 'PENDING',
-          source_url: 'https://store.example/cafe-barista',
-          title: 'Cafe Barista'
-        });
+      const candidateMatch = path.match(/^\/discovery\/listings\/(\d+)$/);
+      if (candidateMatch && candidates[candidateMatch[1]]) {
+        return jsonResponse(candidates[candidateMatch[1]]);
       }
       if (path === '/discovery/listings') {
         return jsonResponse([], { page: 0, page_size: 100, total: 0 });
       }
-      if (path === '/discovery/listings/920/additional-items') {
+      if (/^\/discovery\/listings\/(?:920|921)\/additional-items$/.test(path)) {
         return jsonResponse([]);
       }
-      if (path === '/discovery/listings/920/translate-and-approve' && init?.method === 'POST') {
-        return jsonResponse({ candidate_id: 920, status: 'PROCESSING' }, undefined, 202);
+      const translateAndApproveMatch = path.match(
+        /^\/discovery\/listings\/(920|921)\/translate-and-approve$/
+      );
+      if (translateAndApproveMatch && init?.method === 'POST') {
+        return jsonResponse(
+          { candidate_id: Number(translateAndApproveMatch[1]), status: 'PROCESSING' },
+          undefined,
+          202
+        );
       }
       if (path === '/admin/discovery/offer-reviews') {
         return jsonResponse(
           [
             { candidate_id: '920', candidate_name: 'Cafe Barista' },
-            { candidate_id: '921', candidate_name: 'Cafe Barista Deluxe' }
+            { candidate_id: '921', candidate_name: 'Cafe Barista Deluxe' },
+            { candidate_id: '922', candidate_name: 'Coffee Break' }
           ],
-          { page: 0, page_size: 2, total: 2 }
+          { page: 0, page_size: 4, total: 3 }
         );
       }
-      if (path === '/items/77') {
+      const itemMatch = path.match(/^\/items\/(77|78)$/);
+      if (itemMatch) {
         return jsonResponse({
-          canonical_name: 'Coffee Rush',
+          canonical_name: itemMatch[1] === '77' ? 'Coffee Rush' : 'Coffee Rush Deluxe',
           description: 'Complete customer orders in a busy coffee shop.',
           description_es: '',
-          id: 77,
+          id: Number(itemMatch[1]),
           image_url: 'https://catalog.example/coffee-rush.jpg',
           image_url_es: ''
         });
       }
-      if (path === '/items/77/relationships' || path === '/items/77/store-items') {
+      if (/^\/items\/(?:77|78)\/(?:relationships|store-items)$/.test(path)) {
         return jsonResponse([]);
       }
-      if (path === '/items/77/taxonomy') {
+      if (/^\/items\/(?:77|78)\/taxonomy$/.test(path)) {
         return jsonResponse({ categories: [], families: [], mechanics: [] });
       }
       throw new Error(`Unexpected request: ${String(input)}`);
     });
 
-    render(
+    const { rerender } = render(
       <ListingCandidatesPage
         detailMode="review"
         onOpenCandidate={onOpenCandidate}
@@ -249,6 +271,24 @@ describe('ListingCandidatesPage review reload', () => {
         method: 'POST'
       }
     );
+
+    onOpenCandidate.mockClear();
+    rerender(
+      <ListingCandidatesPage
+        detailMode="review"
+        onOpenCandidate={onOpenCandidate}
+        selectedCandidateId="921"
+      />
+    );
+    await waitFor(() => expect(screen.getByLabelText('Title')).toHaveValue('Cafe Barista Deluxe'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Translate and approve' }));
+
+    await waitFor(() => expect(onOpenCandidate).toHaveBeenCalledWith('922'));
+    const offerReviewPageSizes = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .filter((url) => url.pathname === '/admin/discovery/offer-reviews')
+      .map((url) => url.searchParams.get('page_size'));
+    expect(offerReviewPageSizes).toEqual(['3', '4']);
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>
