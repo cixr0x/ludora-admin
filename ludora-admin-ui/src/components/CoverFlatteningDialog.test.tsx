@@ -242,6 +242,10 @@ describe('CoverFlatteningDialog', () => {
     fireEvent.click(screen.getByLabelText('3:4', { selector: 'input' }));
     fireEvent.click(screen.getByLabelText('Vertical', { selector: 'input' }));
     expect(screen.getByText(/374 × 498 · ratio 0.750 · reviewer override/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('1:2 (0.5)', { selector: 'input' }));
+    expect(screen.getByText(/249 × 498 · ratio 0.500 · reviewer override/)).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('1:3 (0.33)', { selector: 'input' }));
+    expect(screen.getByText(/166 × 498 · ratio 0.333 · reviewer override/)).toBeInTheDocument();
     fireEvent.click(screen.getByLabelText('Spanish image', { selector: 'input' }));
     fireEvent.click(screen.getByRole('button', { name: 'Accept candidate' }));
 
@@ -254,7 +258,7 @@ describe('CoverFlatteningDialog', () => {
     expect(JSON.parse(String(startRequest?.[1]?.body))).toEqual({ item_id: '77', source_field: 'image_url_es' });
     const acceptRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/flatten-77/accept'));
     expect(JSON.parse(String(acceptRequest?.[1]?.body))).toMatchObject({
-      aspect_ratio: 0.75,
+      aspect_ratio: 1 / 3,
       trim_fraction: 0.001
     });
   });

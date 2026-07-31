@@ -505,6 +505,8 @@ export function CoverFlatteningDialog({
                   <FormControlLabel control={<Radio />} label="4:5" value="4:5" />
                   <FormControlLabel control={<Radio />} label="3:4" value="3:4" />
                   <FormControlLabel control={<Radio />} label="2:3" value="2:3" />
+                  <FormControlLabel control={<Radio />} label="1:2 (0.5)" value="1:2" />
+                  <FormControlLabel control={<Radio />} label="1:3 (0.33)" value="1:3" />
                   <FormControlLabel control={<Radio />} label="Custom" value="custom" />
                 </RadioGroup>
                 {aspectRatioChoice === 'custom' ? (
@@ -658,7 +660,7 @@ export function CoverFlatteningDialog({
   );
 }
 
-type AspectRatioChoice = 'auto' | 'square' | '4:5' | '3:4' | '2:3' | 'custom';
+type AspectRatioChoice = 'auto' | 'square' | '4:5' | '3:4' | '2:3' | '1:2' | '1:3' | 'custom';
 type AspectRatioOrientation = 'vertical' | 'horizontal';
 type CoverFlatteningMode = 'candidates' | 'manual';
 const MAX_TRIM_STEPS = 100;
@@ -670,6 +672,8 @@ function selectedAspectRatio(
   automaticRatio: number
 ): number | undefined {
   const presets: Record<Exclude<AspectRatioChoice, 'auto' | 'custom'>, number> = {
+    '1:2': 1 / 2,
+    '1:3': 1 / 3,
     '2:3': 2 / 3,
     '3:4': 3 / 4,
     '4:5': 4 / 5,

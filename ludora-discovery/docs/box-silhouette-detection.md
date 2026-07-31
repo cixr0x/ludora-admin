@@ -34,7 +34,7 @@ The overlay draws the inferred seam in magenta and shades the selected cover gre
 
 For a two-face outline, the front horizontal, vertical, and box-depth edge families provide three vanishing points. With square pixels and the image center as the principal-point approximation, every orthogonal vanishing-point pair independently estimates the camera focal length. The detector uses metric sizing only when all three estimates are positive, differ by no more than a factor of two, produce nearly orthogonal camera directions, and yield a stable null-space reconstruction. A valid reconstruction supplies the physical front width-to-height ratio and a confidence score.
 
-Store imagery is often composited or edited and may not describe one physically valid camera. In that case the vanishing estimates are rejected rather than forced, and sizing falls back to the edge-length estimate. The review dialog then provides `Automatic`, `Square`, `4:5`, `3:4`, `2:3`, and custom width-to-height choices. A reviewer override resizes the selected flattening before WebP optimization and upload; it does not change the detected corners.
+Store imagery is often composited or edited and may not describe one physically valid camera. In that case the vanishing estimates are rejected rather than forced, and sizing falls back to the edge-length estimate. The review dialog then provides `Automatic`, `Square`, `4:5`, `3:4`, `2:3`, `1:2`, `1:3`, and custom width-to-height choices. A reviewer override resizes the selected flattening before WebP optimization and upload; it does not change the detected corners.
 
 ## Three-Face Cover Constructions
 
