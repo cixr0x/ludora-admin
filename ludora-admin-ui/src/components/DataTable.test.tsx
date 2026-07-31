@@ -310,4 +310,28 @@ describe('DataTable', () => {
     await user.click(within(cards).getByRole('button', { name: 'Open record' }));
     expect(handleOpen).toHaveBeenCalledWith(rows[1]);
   });
+
+  it('opens mobile controls on the active filter instead of the first column', async () => {
+    useMobileViewport();
+    const user = userEvent.setup();
+
+    render(
+      <DataTable
+        ariaLabel="Stores"
+        columns={columns}
+        getRowKey={(row) => row.id}
+        rows={rows}
+        tableState={{
+          filters: { city: 'Mexico' },
+          sortColumnId: 'store',
+          sortDirection: 'asc'
+        }}
+      />
+    );
+
+    await user.click(screen.getByRole('button', { name: 'Filter and sort (1)' }));
+
+    expect(screen.getByLabelText('Filter field')).toHaveTextContent('City');
+    expect(screen.getByLabelText('Filter value')).toHaveValue('Mexico');
+  });
 });

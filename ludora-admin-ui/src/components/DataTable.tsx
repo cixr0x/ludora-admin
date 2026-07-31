@@ -109,7 +109,12 @@ export function DataTable<Row>({
   const [expandedMobileRows, setExpandedMobileRows] = useState<Set<string>>(() => new Set());
   const [mobileControlsOpen, setMobileControlsOpen] = useState(false);
   const [mobileFilterColumnId, setMobileFilterColumnId] = useState(
-    () => columns.find((column) => column.filterable !== false)?.id ?? ''
+    () =>
+      columns.find(
+        (column) => column.filterable !== false && tableState?.filters[column.id]?.trim()
+      )?.id ??
+      columns.find((column) => column.filterable !== false)?.id ??
+      ''
   );
   const { filters, sortColumnId, sortDirection } = currentTableState;
   const filterableColumns = columns.filter((column) => column.filterable !== false);

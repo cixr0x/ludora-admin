@@ -300,6 +300,73 @@ describe('OfferReviewPage', () => {
     expect(screen.getByLabelText('Filter Listing status')).toHaveValue('PENDING');
   });
 
+  it('shows and edits the active listing-status filter on mobile', async () => {
+    const originalMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      value: vi.fn().mockImplementation((query: string) => ({
+        addEventListener: vi.fn(),
+        addListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+        matches: query.includes('max-width'),
+        media: query,
+        onchange: null,
+        removeEventListener: vi.fn(),
+        removeListener: vi.fn()
+      })),
+      writable: true
+    });
+    const user = userEvent.setup();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              candidate_id: 920,
+              candidate_name: 'Cafe Barista',
+              item_id: 77,
+              item_name: 'Coffee Rush',
+              store_item_listing_status: 'PENDING'
+            }
+          ],
+          meta: { page: 0, page_size: 100, total: 1 }
+        }),
+        {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        }
+      )
+    );
+
+    try {
+      render(<OfferReviewPage />);
+
+      expect(await screen.findByRole('list', { name: 'Store item review cards' })).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: 'Filter and sort (1)' }));
+
+      expect(screen.getByLabelText('Filter field')).toHaveTextContent('Listing status');
+      const filterValue = screen.getByLabelText('Filter value');
+      expect(filterValue).toHaveValue('PENDING');
+
+      await user.clear(filterValue);
+      await user.type(filterValue, 'LISTED');
+
+      await waitFor(() => {
+        expect(
+          fetchMock.mock.calls.some(([input]) =>
+            String(input).includes('filter_store_item_listing_status=LISTED')
+          )
+        ).toBe(true);
+      });
+    } finally {
+      Object.defineProperty(window, 'matchMedia', {
+        configurable: true,
+        value: originalMatchMedia,
+        writable: true
+      });
+    }
+  });
+
   it('approves and rejects listing status from the review table', async () => {
     const user = userEvent.setup();
     let listingStatus = 'PENDING';
