@@ -829,6 +829,63 @@ describe('ludora admin service', () => {
     expect(sql).toContain('limit 200');
   });
 
+  it('imports a catalog item directly from a BGG ID', async () => {
+    const row = {
+      bgg_id: 377061,
+      bgg_thing_parsed_json: { alternateNames: ['Cafe Barista'] },
+      bgg_thing_raw_xml: '',
+      canonical_name: 'Coffee Rush',
+      id: 77,
+      item_type: 'base_game'
+    };
+    const importedBggIds: number[] = [];
+    const bggItemImporter = {
+      importBggId: async (bggId: number) => {
+        importedBggIds.push(bggId);
+        return 77;
+      }
+    };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ bggItemImporter, database }))
+      .post('/items/import-from-bgg')
+      .send({ bgg_id: '377061' });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      data: {
+        bgg_alternate_names: ['Cafe Barista'],
+        bgg_id: 377061,
+        canonical_name: 'Coffee Rush',
+        id: 77,
+        item_type: 'base_game'
+      }
+    });
+    expect(importedBggIds).toEqual([377061]);
+    expect(queries).toHaveLength(1);
+    expect(normalizeSql(queries[0].sql)).toContain('where id = $1');
+    expect(queries[0].params).toEqual([77]);
+  });
+
+  it('rejects direct BGG imports when the importer is not configured', async () => {
+    const database: Database = {
+      query: async () => ({ rows: [] })
+    };
+
+    const response = await request(createApp({ database }))
+      .post('/items/import-from-bgg')
+      .send({ bgg_id: '377061' });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: { message: 'BGG item importer is not configured' } });
+  });
+
   it('returns a catalog item by id', async () => {
     const row = {
       bgg_id: 377061,

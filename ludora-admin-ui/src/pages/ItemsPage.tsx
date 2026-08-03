@@ -649,6 +649,10 @@ export function ItemsPage({
   const [isAddingRelationship, setIsAddingRelationship] = useState(false);
   const [deletingRelationshipId, setDeletingRelationshipId] = useState('');
   const [isGeneratingDescription, setIsGeneratingDescription] = useState(false);
+  const [isBggImportDialogOpen, setIsBggImportDialogOpen] = useState(false);
+  const [isImportingBggItem, setIsImportingBggItem] = useState(false);
+  const [bggImportId, setBggImportId] = useState('');
+  const [bggImportError, setBggImportError] = useState('');
   const [localCoverWorkflow, setLocalCoverWorkflow] = useState<LocalCoverWorkflow | null>(null);
   const [localCoverWorkflowError, setLocalCoverWorkflowError] = useState('');
   const [relationshipError, setRelationshipError] = useState('');
@@ -989,18 +993,129 @@ export function ItemsPage({
     });
   }
 
+  async function handleImportBggItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const bggId = bggImportId.trim();
+    if (!/^\d+$/.test(bggId) || Number(bggId) <= 0) {
+      setBggImportError('BGG ID must be a positive integer.');
+      return;
+    }
+
+    setIsImportingBggItem(true);
+    setBggImportError('');
+    setSaveMessage('');
+
+    try {
+      const importedItem = await adminApi.importItemFromBggId(bggId);
+      const itemId = field(importedItem, ['id'], '');
+      if (!itemId) {
+        throw new Error('The imported item did not include an ID.');
+      }
+
+      setRows((currentRows) => upsertRecordById(currentRows, importedItem));
+      setSelectedItem(importedItem);
+      setDetailState('ready');
+      setViewMode('form');
+      setIsBggImportDialogOpen(false);
+      setBggImportId('');
+      setSaveMessage('Item imported from BGG.');
+      table.refresh();
+      await loadLinkedItemData(itemId);
+    } catch (error) {
+      setBggImportError(error instanceof Error ? error.message : 'Item could not be imported from BGG.');
+    } finally {
+      setIsImportingBggItem(false);
+    }
+  }
+
   return (
     <Stack spacing={2}>
       {!detailOnly ? (
-        <Box>
-          <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
-            Items
-          </Typography>
-          <Typography color="text.secondary" variant="body2">
-            Curated catalog items available to the platform.
-          </Typography>
-        </Box>
+        <Stack
+          alignItems={{ sm: 'center', xs: 'stretch' }}
+          direction={{ sm: 'row', xs: 'column' }}
+          justifyContent="space-between"
+          spacing={1.5}
+        >
+          <Box>
+            <Typography variant="h5" sx={{ fontSize: '1.25rem', fontWeight: 700 }}>
+              Items
+            </Typography>
+            <Typography color="text.secondary" variant="body2">
+              Curated catalog items available to the platform.
+            </Typography>
+          </Box>
+          {viewMode === 'table' ? (
+            <Button
+              disabled={isImportingBggItem}
+              startIcon={isImportingBggItem ? <CircularProgress size={18} /> : <AddIcon />}
+              type="button"
+              variant="contained"
+              onClick={() => {
+                setBggImportError('');
+                setIsBggImportDialogOpen(true);
+              }}
+            >
+              {isImportingBggItem ? 'Importing...' : 'Import item from BGG'}
+            </Button>
+          ) : null}
+        </Stack>
       ) : null}
+
+      <Dialog
+        fullWidth
+        maxWidth="xs"
+        open={isBggImportDialogOpen}
+        onClose={() => {
+          if (!isImportingBggItem) {
+            setIsBggImportDialogOpen(false);
+            setBggImportError('');
+          }
+        }}
+      >
+        <Box component="form" onSubmit={handleImportBggItem}>
+          <DialogTitle>Import Item from BGG</DialogTitle>
+          <DialogContent>
+            <Typography color="text.secondary" variant="body2" sx={{ mb: 1 }}>
+              Enter the BoardGameGeek ID. Existing catalog items with the same BGG ID may be refreshed.
+            </Typography>
+            {bggImportError ? <Alert severity="error" sx={{ mb: 1 }}>{bggImportError}</Alert> : null}
+            <TextField
+              autoFocus
+              disabled={isImportingBggItem}
+              fullWidth
+              inputProps={{ inputMode: 'numeric' }}
+              label="BGG ID"
+              margin="dense"
+              value={bggImportId}
+              onChange={(event) => {
+                setBggImportId(event.target.value);
+                setBggImportError('');
+              }}
+            />
+          </DialogContent>
+          <DialogActions>
+            <Button
+              disabled={isImportingBggItem}
+              type="button"
+              onClick={() => {
+                setIsBggImportDialogOpen(false);
+                setBggImportError('');
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={!bggImportId.trim() || isImportingBggItem}
+              startIcon={isImportingBggItem ? <CircularProgress color="inherit" size={18} /> : undefined}
+              type="submit"
+              variant="contained"
+            >
+              {isImportingBggItem ? 'Importing...' : 'Import Item'}
+            </Button>
+          </DialogActions>
+        </Box>
+      </Dialog>
 
       {!detailOnly && state === 'loading' && viewMode === 'table' ? (
         <Stack alignItems="center" direction="row" spacing={1.5}>

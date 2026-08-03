@@ -1062,6 +1062,46 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.post('/items/import-from-bgg', async (request, response, next) => {
+    try {
+      if (!bggItemImporter) {
+        throw httpError(503, 'BGG item importer is not configured');
+      }
+
+      const bggId = positiveIntegerBodyField(request.body, 'bgg_id');
+      const itemId = await bggItemImporter.importBggId(bggId);
+      if (!itemId) {
+        throw httpError(404, 'BGG item not found');
+      }
+
+      const result = await database.query(
+        `
+        select
+          item_record.*,
+          thing_cache.raw_xml as bgg_thing_raw_xml,
+          thing_cache.parsed_json as bgg_thing_parsed_json
+        from (
+          select ${itemSelect}
+          from items
+          where id = $1
+        ) item_record
+        left join bgg_thing_cache thing_cache
+          on thing_cache.bgg_id = item_record.bgg_id
+         and thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+        `,
+        [itemId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Imported item not found');
+      }
+
+      response.status(201).json({ data: itemDetailResponse(result.rows[0] as Record<string, unknown>) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/items/:id', async (request, response, next) => {
     try {
       const result = await database.query(

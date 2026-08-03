@@ -592,6 +592,10 @@ export const adminApi = {
   getItemStoreItems: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/store-items`),
   getItemTaxonomy: (id: string) => fetchData<ItemTaxonomy>(`/items/${encodeURIComponent(id)}/taxonomy`),
   getItemsPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/items', query), query),
+  importItemFromBggId: (bggId: string) =>
+    sendJson<AdminRecord>('/items/import-from-bgg', 'POST', {
+      bgg_id: bggId
+    }),
   createItemRelationship: (id: string, input: ItemRelationshipInput) =>
     sendJson<AdminRecord>(`/items/${encodeURIComponent(id)}/relationships`, 'POST', input),
   deleteItemRelationship: (itemId: string, relationshipId: string) =>

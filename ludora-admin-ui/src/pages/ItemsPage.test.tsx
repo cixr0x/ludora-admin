@@ -45,6 +45,53 @@ describe('ItemsPage', () => {
     expect(screen.getByText('7.37125')).toBeInTheDocument();
   });
 
+  it('imports a BGG item directly from the items list and opens its details', async () => {
+    const user = userEvent.setup();
+    const importedItem = {
+      bgg_id: 377061,
+      bgg_url: 'https://boardgamegeek.com/boardgame/377061/coffee-rush',
+      canonical_name: 'Coffee Rush',
+      id: '77',
+      item_type: 'base_game',
+      status: 'active'
+    };
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/import-from-bgg' && init?.method === 'POST') {
+        return jsonResponse(importedItem, 201);
+      }
+      if (path === '/items/77/store-items' || path === '/items/77/relationships') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/taxonomy') {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ItemsPage />);
+
+    await screen.findByRole('table', { name: 'Items' });
+    await user.click(screen.getByRole('button', { name: 'Import item from BGG' }));
+    const dialog = screen.getByRole('dialog', { name: 'Import Item from BGG' });
+    expect(within(dialog).getByRole('button', { name: 'Import Item' })).toBeDisabled();
+    await user.type(within(dialog).getByLabelText('BGG ID'), '377061');
+    await user.click(within(dialog).getByRole('button', { name: 'Import Item' }));
+
+    expect(await screen.findByRole('heading', { name: 'Item Details' })).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Coffee Rush')).toBeInTheDocument();
+    expect(await screen.findByText('Item imported from BGG.')).toBeInTheDocument();
+    expect(screen.queryByRole('dialog', { name: 'Import Item from BGG' })).not.toBeInTheDocument();
+
+    const postCall = fetchMock.mock.calls.find(
+      ([input, init]) => pathOf(String(input)) === '/items/import-from-bgg' && init?.method === 'POST'
+    );
+    expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({ bgg_id: '377061' });
+  });
+
   it('opens a form view from the item table and saves changes', async () => {
     const user = userEvent.setup();
     const item = {

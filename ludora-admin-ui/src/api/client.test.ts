@@ -1129,6 +1129,25 @@ describe('fetchRows', () => {
     });
   });
 
+  it('imports catalog items directly from BGG IDs with a JSON body', async () => {
+    const item = { bgg_id: 377061, canonical_name: 'Coffee Rush', id: 77 };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: item }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 201
+      })
+    );
+
+    await expect(adminApi.importItemFromBggId('377061')).resolves.toEqual(item);
+
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/items/import-from-bgg', {
+      body: JSON.stringify({ bgg_id: '377061' }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
   it('updates catalog items with a JSON body', async () => {
     const item = { canonical_name: 'Coffee Rush Updated', id: '377061' };
     const payload = {
