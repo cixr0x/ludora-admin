@@ -351,7 +351,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         sql, params = connection.cursor_instance.executions[0]
         self.assertIn("from stores", sql.casefold())
-        self.assertIn("where id in (%s, %s)", sql.casefold())
+        self.assertIn("where stores.id in (%s, %s)", sql.casefold())
+        self.assertIn("store_items.raw_payload::text ilike '%%shopify%%'", sql.casefold())
         self.assertEqual(params, [12, 34])
         self.assertEqual([store.store_id for store in stores], [12, 34])
         self.assertEqual(stores[0].store_name, "Alpha Games")

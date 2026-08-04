@@ -292,15 +292,29 @@ class DiscoveryRepository:
 
     def list_store_item_discovery_sources(self, *, store_ids: list[int] | None = None) -> list[StoreItemDiscoverySource]:
         sql = """
-            select id, name, website_url, platform
+            select
+                stores.id,
+                stores.name,
+                stores.website_url,
+                case
+                  when trim(coalesce(stores.platform, '')) = ''
+                    and exists (
+                      select 1
+                      from store_items
+                      where store_items.store_id = stores.id
+                        and store_items.raw_payload::text ilike '%%shopify%%'
+                    )
+                  then 'shopify'
+                  else lower(trim(coalesce(stores.platform, '')))
+                end as platform
             from stores
         """
         params: list[int] = []
         if store_ids:
             placeholders = ", ".join(["%s"] * len(store_ids))
-            sql += f"\n            where id in ({placeholders})"
+            sql += f"\n            where stores.id in ({placeholders})"
             params.extend(store_ids)
-        sql += "\n            order by canonical_domain asc"
+        sql += "\n            order by stores.canonical_domain asc"
 
         with self.connection.cursor() as cursor:
             cursor.execute(sql, params)
@@ -556,7 +570,13 @@ class DiscoveryRepository:
                         or store_items.update_lease_expires_at <= now()
                       )
                       and not (
-                        lower(coalesce(stores.platform, '')) = 'shopify'
+                        (
+                          lower(trim(coalesce(stores.platform, ''))) = 'shopify'
+                          or (
+                            trim(coalesce(stores.platform, '')) = ''
+                            and store_items.raw_payload::text ilike '%%shopify%%'
+                          )
+                        )
                         and coalesce(
                           (
                             select shopify_blocked_until
@@ -609,7 +629,12 @@ class DiscoveryRepository:
                 """
                 select
                     coalesce(stores.name, ''),
-                    lower(coalesce(stores.platform, '')),
+                    case
+                      when trim(coalesce(stores.platform, '')) = ''
+                        and store_items.raw_payload::text ilike '%%shopify%%'
+                      then 'shopify'
+                      else lower(trim(coalesce(stores.platform, '')))
+                    end,
                     store_items.consecutive_update_failures,
                     coalesce(
                       (
