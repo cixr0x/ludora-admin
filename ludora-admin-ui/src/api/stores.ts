@@ -4,7 +4,7 @@ const API_URL = import.meta.env.VITE_ADMIN_API_URL ?? 'http://127.0.0.1:4001';
 
 export type StoreProfileDetection = {
   ai_used: boolean;
-  profile: Omit<StoreInput, 'status'>;
+  profile: Omit<StoreInput, 'active' | 'status'>;
   unresolved_fields: string[];
 };
 

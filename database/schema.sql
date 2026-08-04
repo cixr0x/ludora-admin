@@ -490,6 +490,7 @@ create table if not exists stores (
     country text not null default 'Mexico',
     logo_url text not null default '',
     status text not null default 'draft',
+    active boolean not null default true,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );

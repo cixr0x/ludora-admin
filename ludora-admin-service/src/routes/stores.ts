@@ -4,6 +4,7 @@ import type { Database } from '../db.js';
 import type { StoreProfileDetectionService } from '../storeProfileDetection/storeProfileDetectionService.js';
 
 type StoreInput = {
+  active: boolean;
   canonical_domain: string;
   city: string;
   country: string;
@@ -19,7 +20,7 @@ type StoreInput = {
 
 const storeSelect = `
   id, name, canonical_domain, website_url, platform, instagram_url,
-  facebook_url, city, state, country, logo_url, status, created_at, updated_at
+  facebook_url, city, state, country, logo_url, status, active, created_at, updated_at
 `;
 
 export function createStoresRouter(
@@ -60,9 +61,10 @@ export function createStoresRouter(
           country,
           logo_url,
           status,
+          active,
           updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
         returning ${storeSelect}
         `,
         storeParams(input)
@@ -83,6 +85,7 @@ export function createStoresRouter(
 function parseStoreInput(body: unknown): StoreInput {
   const value = (body ?? {}) as Record<string, unknown>;
   const input: StoreInput = {
+    active: booleanField(value, 'active', true),
     canonical_domain: stringField(value, 'canonical_domain').toLowerCase().replace(/^www\./, ''),
     city: stringField(value, 'city'),
     country: stringField(value, 'country') || 'Mexico',
@@ -113,8 +116,24 @@ function storeParams(input: StoreInput): unknown[] {
     input.state,
     input.country,
     input.logo_url,
-    input.status
+    input.status,
+    input.active
   ];
+}
+
+function booleanField(value: Record<string, unknown>, key: string, defaultValue: boolean): boolean {
+  const field = value[key];
+  if (typeof field === 'boolean') {
+    return field;
+  }
+  if (typeof field === 'number') {
+    return field !== 0;
+  }
+  if (typeof field === 'string') {
+    const normalized = field.trim().toLowerCase();
+    return normalized === 'true' || normalized === '1' || normalized === 'on' || normalized === 'yes';
+  }
+  return defaultValue;
 }
 
 function stringField(value: Record<string, unknown>, key: string): string {

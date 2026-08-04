@@ -88,6 +88,12 @@ class SchemaTests(unittest.TestCase):
                 "store_item_update_trace_log_job_id_id_idx",
                 "store_item_update_trace_log_run_id_id_idx",
             ],
+            "20260804_001_store_active.sql": [
+                "alter table if exists stores add column if not exists active boolean",
+                "update stores set active = true where active is null",
+                "alter table if exists stores alter column active set default true",
+                "alter table if exists stores alter column active set not null",
+            ],
         }
 
         for filename, expected_snippets in expected_patches.items():
@@ -134,6 +140,12 @@ class SchemaTests(unittest.TestCase):
         ]:
             self.assertIn(f"create table if not exists {table_name}", schema.casefold())
 
+    def test_curated_stores_are_active_by_default(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+        stores_table = schema.split("create table if not exists stores", 1)[1].split(");", 1)[0]
+
+        self.assertIn("active boolean not null default true", stores_table)
+
     def test_discovery_store_candidates_matches_store_csv_shape(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()
         store_table = schema.split("create table if not exists discovery_store_candidates", 1)[1].split(");", 1)[0]
@@ -154,6 +166,8 @@ class SchemaTests(unittest.TestCase):
             "evidence",
         ]:
             self.assertIn(column_name, store_table)
+
+        self.assertNotIn("active boolean", store_table)
 
         self.assertIn("status text not null default 'pending'", store_table)
         self.assertIn("status in ('pending', 'accepted', 'rejected')", schema)

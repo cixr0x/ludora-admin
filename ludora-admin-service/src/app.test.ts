@@ -184,7 +184,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0] ?? '');
     expect(sql).toContain(
-      'select id, name, canonical_domain, website_url, platform, instagram_url, facebook_url, city, state, country, logo_url, status, created_at, updated_at'
+      'select id, name, canonical_domain, website_url, platform, instagram_url, facebook_url, city, state, country, logo_url, status, active, created_at, updated_at'
     );
     expect(sql).toContain('from stores');
     expect(sql).toContain('order by canonical_domain asc');
@@ -243,6 +243,7 @@ describe('ludora admin service', () => {
     };
 
     const response = await request(createApp({ database })).patch('/stores/12').send({
+      active: false,
       canonical_domain: 'example.mx',
       city: 'Ciudad de Mexico',
       country: 'Mexico',
@@ -261,7 +262,8 @@ describe('ludora admin service', () => {
     const query = queries[0];
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('update stores');
-    expect(sql).toContain('where id = $12');
+    expect(sql).toContain('active = $12');
+    expect(sql).toContain('where id = $13');
     expect(query.params).toEqual([
       'Example Updated',
       'example.mx',
@@ -274,6 +276,7 @@ describe('ludora admin service', () => {
       'Mexico',
       'https://example.mx/logo.png',
       'active',
+      false,
       '12'
     ]);
   });

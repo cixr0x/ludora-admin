@@ -8,8 +8,10 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Chip,
   CircularProgress,
+  FormControlLabel,
   Link,
   Paper,
   Stack,
@@ -26,6 +28,7 @@ import { useInfiniteServerRows, useServerTableState } from '../components/useSer
 type FormMode = 'create' | 'edit' | 'table';
 
 type StoreFormState = {
+  active: boolean;
   canonical_domain: string;
   city: string;
   country: string;
@@ -40,6 +43,7 @@ type StoreFormState = {
 };
 
 const emptyFormState: StoreFormState = {
+  active: true,
   canonical_domain: '',
   city: '',
   country: 'Mexico',
@@ -63,6 +67,20 @@ function optionalValueFor(record: AdminRecord, keys: string[]) {
   return value === undefined ? '' : String(value);
 }
 
+function booleanValueFor(record: AdminRecord, key: string, fallback = true) {
+  const value = record[key];
+  if (typeof value === 'boolean') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    return value !== 0;
+  }
+  if (typeof value === 'string') {
+    return ['true', '1', 'on', 'yes'].includes(value.trim().toLowerCase());
+  }
+  return fallback;
+}
+
 function withProtocol(value: string) {
   return /^https?:\/\//i.test(value) ? value : `https://${value}`;
 }
@@ -83,6 +101,7 @@ function linkHref(record: AdminRecord, key: string) {
 
 function formStateFromRecord(record: AdminRecord): StoreFormState {
   return {
+    active: booleanValueFor(record, 'active'),
     canonical_domain: optionalValueFor(record, ['canonical_domain']),
     city: optionalValueFor(record, ['city']),
     country: optionalValueFor(record, ['country']) || 'Mexico',
@@ -99,6 +118,7 @@ function formStateFromRecord(record: AdminRecord): StoreFormState {
 
 function inputFromForm(form: StoreFormState): StoreInput {
   return {
+    active: form.active,
     canonical_domain: form.canonical_domain.trim(),
     city: form.city.trim(),
     country: form.country.trim() || 'Mexico',
@@ -115,6 +135,19 @@ function inputFromForm(form: StoreFormState): StoreInput {
 
 function storeColumns(): DataTableColumn<AdminRecord>[] {
   return [
+    {
+      filterValue: (row) => String(booleanValueFor(row, 'active')),
+      id: 'active',
+      label: 'Active',
+      minWidth: 100,
+      render: (row) => {
+        const active = booleanValueFor(row, 'active');
+        return (
+          <Chip color={active ? 'success' : 'default'} label={active ? 'Active' : 'Inactive'} size="small" variant="outlined" />
+        );
+      },
+      sortValue: (row) => String(booleanValueFor(row, 'active'))
+    },
     {
       filterValue: (row) => valueFor(row, ['name']),
       id: 'name',
@@ -443,6 +476,17 @@ export function StoresPage() {
                   }
                 }}
               >
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={formState.active}
+                      onChange={(event) =>
+                        setFormState((current) => ({ ...current, active: event.target.checked }))
+                      }
+                    />
+                  }
+                  label="Active"
+                />
                 <TextField
                   fullWidth
                   label="Name"
@@ -576,7 +620,7 @@ export function StoresPage() {
           defaultSortColumnId="canonical_domain"
           getRowKey={(row, index) => valueFor(row, ['id'], String(index))}
           mobileActionLabel={(row) => `Edit ${valueFor(row, ['name'], 'store')}`}
-          minWidth={1580}
+          minWidth={1680}
           onRowDoubleClick={handleEditStore}
           serverSide
           tableState={table.tableState}

@@ -14,6 +14,7 @@ describe('StoresPage', () => {
         JSON.stringify({
           data: [
             {
+              active: false,
               canonical_domain: 'example.mx',
               city: 'Ciudad de Mexico',
               country: 'Mexico',
@@ -37,9 +38,10 @@ describe('StoresPage', () => {
 
     render(<StoresPage />);
 
-    for (const heading of ['Name', 'Domain', 'Website', 'Platform', 'City', 'State', 'Country', 'Logo', 'Status', 'Updated']) {
+    for (const heading of ['Active', 'Name', 'Domain', 'Website', 'Platform', 'City', 'State', 'Country', 'Logo', 'Status', 'Updated']) {
       expect(await screen.findByRole('columnheader', { name: heading })).toBeInTheDocument();
     }
+    expect(screen.getByText('Inactive')).toBeInTheDocument();
     expect(await screen.findByText('Example Juegos')).toBeInTheDocument();
     expect(screen.getByText('shopify')).toBeInTheDocument();
     expect(screen.getByText('CDMX')).toBeInTheDocument();
@@ -58,6 +60,7 @@ describe('StoresPage', () => {
       if (pathOf(url) === '/stores' && !init?.method) {
         return jsonResponse([
           {
+            active: true,
             canonical_domain: 'example.mx',
             city: 'Ciudad de Mexico',
             country: 'Mexico',
@@ -72,6 +75,7 @@ describe('StoresPage', () => {
       }
       if (url.endsWith('/stores/12') && init?.method === 'PATCH') {
         return jsonResponse({
+          active: false,
           canonical_domain: 'example.mx',
           city: 'Ciudad de Mexico',
             country: 'Mexico',
@@ -96,11 +100,13 @@ describe('StoresPage', () => {
     expect(screen.getByLabelText('Platform')).toHaveValue('amazon');
     await user.clear(screen.getByLabelText('Platform'));
     await user.type(screen.getByLabelText('Platform'), 'shopify');
+    await user.click(screen.getByRole('checkbox', { name: 'Active' }));
     await user.click(screen.getByRole('button', { name: 'Save Store' }));
 
     expect(await screen.findByText('Example Updated')).toBeInTheDocument();
     const patchCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/stores/12') && init?.method === 'PATCH');
     expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
+      active: false,
       name: 'Example Updated',
       platform: 'shopify',
       website_url: 'https://example.mx/'
@@ -110,6 +116,7 @@ describe('StoresPage', () => {
   it('detects website fields and creates a reviewed store', async () => {
     const user = userEvent.setup();
     const createdStore = {
+      active: true,
       canonical_domain: 'newstore.mx',
       city: 'Mérida',
       country: 'Mexico',
@@ -131,7 +138,7 @@ describe('StoresPage', () => {
       if (pathOf(url) === '/admin/store-profile-detections' && init?.method === 'POST') {
         return jsonResponse({
           ai_used: true,
-          profile: Object.fromEntries(Object.entries(createdStore).filter(([key]) => !['id', 'status'].includes(key))),
+          profile: Object.fromEntries(Object.entries(createdStore).filter(([key]) => !['active', 'id', 'status'].includes(key))),
           unresolved_fields: []
         });
       }
@@ -159,6 +166,7 @@ describe('StoresPage', () => {
       ([url, init]) => pathOf(String(url)) === '/stores' && init?.method === 'POST'
     );
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
+      active: true,
       canonical_domain: 'newstore.mx',
       name: 'New Store',
       platform: 'woocommerce',

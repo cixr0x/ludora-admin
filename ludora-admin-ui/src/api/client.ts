@@ -214,6 +214,7 @@ export type StoreCandidateInput = {
 };
 
 export type StoreInput = {
+  active: boolean;
   canonical_domain: string;
   city?: string;
   country?: string;

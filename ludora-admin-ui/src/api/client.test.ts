@@ -737,6 +737,7 @@ describe('fetchRows', () => {
   it('updates clean stores with a JSON body', async () => {
     const store = { id: '12', name: 'Updated Store' };
     const payload = {
+      active: false,
       canonical_domain: 'example.mx',
       name: 'Updated Store',
       status: 'active',

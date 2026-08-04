@@ -17,6 +17,7 @@ describe('stores routes', () => {
     };
 
     const response = await request(createApp({ database })).post('/stores').send({
+      active: false,
       canonical_domain: 'www.example.mx',
       city: 'Guadalajara',
       country: 'Mexico',
@@ -44,7 +45,8 @@ describe('stores routes', () => {
       'Jalisco',
       'Mexico',
       'https://example.mx/logo.png',
-      'active'
+      'active',
+      false
     ]);
   });
 

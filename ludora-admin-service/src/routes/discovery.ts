@@ -29,6 +29,7 @@ type StoreCandidateInput = {
 };
 
 type StoreInput = {
+  active: boolean;
   canonical_domain: string;
   city: string;
   country: string;
@@ -150,7 +151,7 @@ const storeCandidateSelect = `
 
 const storeSelect = `
   id, name, canonical_domain, website_url, platform, instagram_url,
-  facebook_url, city, state, country, logo_url, status, created_at, updated_at
+  facebook_url, city, state, country, logo_url, status, active, created_at, updated_at
 `;
 
 const itemCandidateSelect = `
@@ -557,6 +558,7 @@ const offerReviewSelect = `
 
 const cleanStoresTableConfig: TableQueryConfig = {
   columns: {
+    active: columnSql('active'),
     canonical_domain: columnSql('canonical_domain'),
     city: columnSql('city'),
     country: columnSql('country'),
@@ -856,8 +858,9 @@ export function createDiscoveryRouter(
             country = $9,
             logo_url = $10,
             status = $11,
+            active = $12,
             updated_at = now()
-        where id = $12
+        where id = $13
         returning ${storeSelect}
         `,
         [...storeParams(input), request.params.id]
@@ -2556,6 +2559,7 @@ function positiveIntegerBodyField(body: unknown, key: string): number {
 function parseStoreInput(body: unknown): StoreInput {
   const value = (body ?? {}) as Record<string, unknown>;
   const input: StoreInput = {
+    active: booleanField(value, 'active', true),
     canonical_domain: stringField(value, 'canonical_domain'),
     city: stringField(value, 'city'),
     country: stringField(value, 'country') || 'Mexico',
@@ -2588,7 +2592,8 @@ function storeParams(input: StoreInput): unknown[] {
     input.state,
     input.country,
     input.logo_url,
-    input.status
+    input.status,
+    input.active
   ];
 }
 
@@ -3008,7 +3013,7 @@ function listingStatusField(value: Record<string, unknown>, key: string): string
   return status;
 }
 
-function booleanField(value: Record<string, unknown>, key: string): boolean {
+function booleanField(value: Record<string, unknown>, key: string, defaultValue = false): boolean {
   const field = value[key];
   if (typeof field === 'boolean') {
     return field;
@@ -3020,7 +3025,7 @@ function booleanField(value: Record<string, unknown>, key: string): boolean {
     const normalized = field.trim().toLowerCase();
     return normalized === 'true' || normalized === '1' || normalized === 'on' || normalized === 'yes';
   }
-  return false;
+  return defaultValue;
 }
 
 function parseConfirmationSource(body: unknown): 'admin' | 'automated' {
