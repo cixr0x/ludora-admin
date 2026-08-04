@@ -4256,7 +4256,7 @@ describe('ludora admin service', () => {
           return { rows: [{ item_count: 9, overflow: false, staleness_hour: 0 }, { item_count: 8, overflow: true, staleness_hour: 72 }] };
         }
         if (normalizedSql.includes('group by attempts.store_id')) {
-          return { rows: [{ failures: 3, platform: 'shopify', rate_limited: 3, store_id: 12, store_name: 'Alpha' }] };
+          return { rows: [{ attempts: 40, failures: 3, platform: 'shopify', rate_limited: 3, store_id: 12, store_name: 'Alpha' }] };
         }
         return { rows: [{ id: 91, status: 'succeeded', store_item_id: 501, store_name: 'Alpha' }] };
       }
@@ -4268,7 +4268,7 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
-      failures_by_store: [{ failures: 3, platform: 'shopify', rate_limited: 3, store_id: 12, store_name: 'Alpha' }],
+      failures_by_store: [{ attempts: 40, failures: 3, platform: 'shopify', rate_limited: 3, store_id: 12, store_name: 'Alpha' }],
       histogram: [
         { item_count: 9, label: '0h', overflow: false, staleness_hour: 0 },
         { item_count: 8, label: '72h+', overflow: true, staleness_hour: 72 }
@@ -4287,6 +4287,41 @@ describe('ludora admin service', () => {
     });
     expect(queries).toHaveLength(5);
     expect(queries.find((query) => normalizeSql(query.sql).includes('generate_series'))?.params).toEqual([72]);
+    const failuresQuery = queries.find((query) => normalizeSql(query.sql).includes('group by attempts.store_id'));
+    expect(normalizeSql(failuresQuery?.sql ?? '')).toContain('count(*)::int as attempts');
+    expect(normalizeSql(failuresQuery?.sql ?? '')).toContain("having count(*) filter (where attempts.status in ('failed', 'lease_lost')) > 0");
+  });
+
+  it('lists failed continuous update attempts for a selected store and platform', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const rows = [{
+      error: 'HTTP 429: Too Many Requests',
+      http_status: 429,
+      id: 92,
+      platform: 'shopify',
+      status: 'failed',
+      store_id: 12,
+      store_item_id: 502,
+      store_item_title: 'Catan Junior',
+      store_name: 'Alpha'
+    }];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows };
+      }
+    };
+
+    const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
+      '/admin/operations/store-item-update-failures?store_id=12&platform=shopify&hours=24'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: rows });
+    expect(queries).toHaveLength(1);
+    expect(normalizeSql(queries[0].sql)).toContain("attempts.status in ('failed', 'lease_lost')");
+    expect(normalizeSql(queries[0].sql)).toContain('and attempts.platform = $3');
+    expect(queries[0].params).toEqual([12, 24, 'shopify']);
   });
 
   it('lists store item update changes for the store that owns the selected run', async () => {

@@ -5,6 +5,10 @@ import {
   Button,
   Chip,
   CircularProgress,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControl,
   InputLabel,
   Link,
@@ -31,6 +35,10 @@ export function StoreItemUpdateMonitorPage() {
   const [monitor, setMonitor] = useState<StoreItemUpdateMonitor | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [failureGroup, setFailureGroup] = useState<AdminRecord | null>(null);
+  const [failureAttempts, setFailureAttempts] = useState<AdminRecord[]>([]);
+  const [failureDetailsError, setFailureDetailsError] = useState('');
+  const [failureDetailsLoading, setFailureDetailsLoading] = useState(false);
 
   const loadMonitor = useCallback(async (showLoading = false) => {
     if (showLoading) {
@@ -51,6 +59,38 @@ export function StoreItemUpdateMonitorPage() {
     const timer = window.setInterval(() => void loadMonitor(), REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [loadMonitor]);
+
+  useEffect(() => {
+    if (!failureGroup) {
+      return;
+    }
+
+    let active = true;
+    setFailureAttempts([]);
+    setFailureDetailsError('');
+    setFailureDetailsLoading(true);
+    void adminApi.getStoreItemUpdateFailureAttempts(
+      recordText(failureGroup, 'store_id'),
+      optionalRecordText(failureGroup, 'platform'),
+      24
+    ).then((attempts) => {
+      if (active) {
+        setFailureAttempts(attempts);
+      }
+    }).catch((loadError) => {
+      if (active) {
+        setFailureDetailsError(loadError instanceof Error ? loadError.message : String(loadError));
+      }
+    }).finally(() => {
+      if (active) {
+        setFailureDetailsLoading(false);
+      }
+    });
+
+    return () => {
+      active = false;
+    };
+  }, [failureGroup]);
 
   if (loading && !monitor) {
     return (
@@ -156,18 +196,35 @@ export function StoreItemUpdateMonitorPage() {
           <TableContainer>
             <Table size="small">
               <TableHead>
-                <TableRow><TableCell>Store</TableCell><TableCell>Platform</TableCell><TableCell align="right">Failures</TableCell><TableCell align="right">429</TableCell></TableRow>
+                <TableRow>
+                  <TableCell>Store</TableCell>
+                  <TableCell>Platform</TableCell>
+                  <TableCell align="right">Attempts</TableCell>
+                  <TableCell align="right">Failures</TableCell>
+                  <TableCell align="right">429</TableCell>
+                  <TableCell align="right">Details</TableCell>
+                </TableRow>
               </TableHead>
               <TableBody>
                 {(monitor?.failures_by_store ?? []).map((row, index) => (
                   <TableRow key={`${recordText(row, 'store_id')}-${recordText(row, 'platform')}-${index}`}>
-                    <TableCell title={optionalRecordText(row, 'last_error')}>{recordText(row, 'store_name')}</TableCell>
+                    <TableCell>{recordText(row, 'store_name')}</TableCell>
                     <TableCell>{recordText(row, 'platform')}</TableCell>
+                    <TableCell align="right">{recordText(row, 'attempts', '0')}</TableCell>
                     <TableCell align="right">{recordText(row, 'failures', '0')}</TableCell>
                     <TableCell align="right">{recordText(row, 'rate_limited', '0')}</TableCell>
+                    <TableCell align="right">
+                      <Button
+                        aria-label={`View failed attempts for ${recordText(row, 'store_name')} (${recordText(row, 'platform')})`}
+                        onClick={() => setFailureGroup(row)}
+                        size="small"
+                      >
+                        View
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
-                {!monitor?.failures_by_store.length ? <EmptyRow columns={4} label="No failures in the last 24 hours" /> : null}
+                {!monitor?.failures_by_store.length ? <EmptyRow columns={6} label="No failures in the last 24 hours" /> : null}
               </TableBody>
             </Table>
           </TableContainer>
@@ -190,6 +247,47 @@ export function StoreItemUpdateMonitorPage() {
           </TableContainer>
         </Paper>
       </Box>
+
+      <Dialog
+        fullWidth
+        maxWidth="lg"
+        onClose={() => setFailureGroup(null)}
+        open={Boolean(failureGroup)}
+      >
+        <DialogTitle>
+          Failed attempts · {failureGroup ? recordText(failureGroup, 'store_name') : ''}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography color="text.secondary" sx={{ mb: 2 }} variant="body2">
+            {failureGroup ? recordText(failureGroup, 'platform') : ''} · latest failures in the last 24 hours, up to 100 attempts.
+          </Typography>
+          {failureDetailsLoading ? (
+            <Box sx={{ display: 'grid', minHeight: 180, placeItems: 'center' }}><CircularProgress /></Box>
+          ) : failureDetailsError ? (
+            <Alert severity="error">{failureDetailsError}</Alert>
+          ) : (
+            <TableContainer sx={{ maxHeight: 520 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>Started</TableCell>
+                    <TableCell>Item</TableCell>
+                    <TableCell>Status</TableCell>
+                    <TableCell align="right">HTTP</TableCell>
+                    <TableCell align="right">ms</TableCell>
+                    <TableCell>Error</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {failureAttempts.map((attempt) => <FailureAttemptRow key={recordText(attempt, 'id')} row={attempt} />)}
+                  {!failureAttempts.length ? <EmptyRow columns={6} label="No failed attempts found in the last 24 hours" /> : null}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DialogContent>
+        <DialogActions><Button onClick={() => setFailureGroup(null)}>Close</Button></DialogActions>
+      </Dialog>
     </Stack>
   );
 }
@@ -238,6 +336,28 @@ function AttemptRow({ row }: { row: AdminRecord }) {
       <TableCell>{recordText(row, 'store_name')}</TableCell>
       <TableCell><Chip color={color} label={status} size="small" variant="outlined" /></TableCell>
       <TableCell align="right">{recordText(row, 'duration_ms')}</TableCell>
+    </TableRow>
+  );
+}
+
+function FailureAttemptRow({ row }: { row: AdminRecord }) {
+  const itemId = recordText(row, 'store_item_id');
+  const sourceUrl = optionalRecordText(row, 'source_url');
+  return (
+    <TableRow hover>
+      <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(row.started_at)}</TableCell>
+      <TableCell>
+        <Stack spacing={0.25}>
+          <Link href={`#listings?id=${encodeURIComponent(itemId)}`}>{recordText(row, 'store_item_title', `#${itemId}`)}</Link>
+          {sourceUrl ? <Link href={sourceUrl} rel="noreferrer" target="_blank" variant="caption">Source page</Link> : null}
+        </Stack>
+      </TableCell>
+      <TableCell><Chip color="error" label={recordText(row, 'status')} size="small" variant="outlined" /></TableCell>
+      <TableCell align="right">{recordText(row, 'http_status')}</TableCell>
+      <TableCell align="right">{recordText(row, 'duration_ms')}</TableCell>
+      <TableCell sx={{ minWidth: 280, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+        <Typography color="error" variant="body2">{recordText(row, 'error')}</Typography>
+      </TableCell>
     </TableRow>
   );
 }

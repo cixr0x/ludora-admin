@@ -260,6 +260,38 @@ export function createOperationsRouter(
     }
   });
 
+  router.get('/admin/operations/store-item-update-failures', async (request, response, next) => {
+    try {
+      const storeId = positiveIntegerQueryField(request.query.store_id, 'store_id');
+      const hours = integerQueryField(request.query.hours, 24, 1, 168);
+      const hasPlatformFilter = Object.hasOwn(request.query, 'platform');
+      const platform = stringQueryField(request.query.platform).trim().toLowerCase();
+      const platformPredicate = hasPlatformFilter ? 'and attempts.platform = $3' : '';
+      const params: Array<number | string> = hasPlatformFilter ? [storeId, hours, platform] : [storeId, hours];
+      const result = await database.query(
+        `select
+           attempts.id, attempts.store_item_id, attempts.store_id,
+           coalesce(stores.name, 'Unknown store') as store_name,
+           store_items.title as store_item_title, store_items.source_url,
+           attempts.platform, attempts.status, attempts.http_status, attempts.error,
+           attempts.started_at, attempts.completed_at, attempts.duration_ms
+         from store_item_update_attempt_log attempts
+         join store_items on store_items.id = attempts.store_item_id
+         left join stores on stores.id = attempts.store_id
+         where attempts.store_id = $1
+           and attempts.started_at >= now() - make_interval(hours => $2)
+           and attempts.status in ('failed', 'lease_lost')
+           ${platformPredicate}
+         order by attempts.started_at desc
+         limit 100`,
+        params
+      );
+      response.json({ data: result.rows });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/admin/operations/store-item-update-jobs/:runId/changes', async (request, response, next) => {
     try {
       const runId = request.params.runId.trim();
@@ -536,15 +568,20 @@ async function loadStoreItemUpdateMonitor(database: Database, rangeHours: number
        attempts.store_id,
        coalesce(stores.name, 'Unknown store') as store_name,
        attempts.platform,
-       count(*)::int as failures,
+       count(*)::int as attempts,
+       count(*) filter (where attempts.status in ('failed', 'lease_lost'))::int as failures,
        count(*) filter (where attempts.http_status = 429)::int as rate_limited,
-       max(attempts.completed_at) as last_failure_at,
-       (array_agg(attempts.error order by attempts.completed_at desc))[1] as last_error
+       max(attempts.completed_at) filter (
+         where attempts.status in ('failed', 'lease_lost')
+       ) as last_failure_at,
+       (array_agg(attempts.error order by attempts.completed_at desc) filter (
+         where attempts.status in ('failed', 'lease_lost')
+       ))[1] as last_error
      from store_item_update_attempt_log attempts
      left join stores on stores.id = attempts.store_id
      where attempts.started_at >= now() - interval '24 hours'
-       and attempts.status in ('failed', 'lease_lost')
      group by attempts.store_id, stores.name, attempts.platform
+     having count(*) filter (where attempts.status in ('failed', 'lease_lost')) > 0
      order by failures desc, last_failure_at desc
      limit 12`
   );
@@ -825,6 +862,15 @@ function integerQueryField(value: unknown, fallback: number, min: number, max: n
 
 function positiveIntegerPathField(value: string, label: string): number {
   const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw httpError(400, `${label} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function positiveIntegerQueryField(value: unknown, label: string): number {
+  const rawValue = stringQueryField(value);
+  const parsed = Number(rawValue);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw httpError(400, `${label} must be a positive integer`);
   }

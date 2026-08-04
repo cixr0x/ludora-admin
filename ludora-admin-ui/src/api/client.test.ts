@@ -485,6 +485,23 @@ describe('fetchRows', () => {
     );
   });
 
+  it('loads failed continuous update attempts for a store and platform', async () => {
+    const records = [{ error: 'HTTP 429: Too Many Requests', id: 92, store_id: 12 }];
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: records }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getStoreItemUpdateFailureAttempts(12, 'shopify', 24)).resolves.toEqual(records);
+    expectFetch(
+      fetchMock,
+      'http://127.0.0.1:4001/admin/operations/store-item-update-failures?hours=24&platform=shopify&store_id=12'
+    );
+  });
+
   it('fetches paged catalog items with page metadata', async () => {
     const records = [{ canonical_name: 'Coffee Rush', id: '377061', item_type: 'base_game' }];
     const { adminApi } = await importClient();
