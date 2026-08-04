@@ -502,6 +502,23 @@ describe('fetchRows', () => {
     );
   });
 
+  it('loads the update monitor with a selected histogram store', async () => {
+    const monitor = { histogram_store_id: 12, store_statistics: [] };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: monitor }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.getStoreItemUpdateMonitor(72, 12)).resolves.toEqual(monitor);
+    expectFetch(
+      fetchMock,
+      'http://127.0.0.1:4001/admin/operations/store-item-update-monitor?hours=72&histogram_store_id=12'
+    );
+  });
+
   it('fetches paged catalog items with page metadata', async () => {
     const records = [{ canonical_name: 'Coffee Rush', id: '377061', item_type: 'base_game' }];
     const { adminApi } = await importClient();

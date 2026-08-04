@@ -4217,7 +4217,7 @@ describe('ludora admin service', () => {
     expect(countQuery?.params).toEqual(['%Alpha%']);
   });
 
-  it('returns continuous update worker health and hourly staleness monitoring data', async () => {
+  it('returns continuous update worker health and hourly staleness data for a selected store', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -4288,7 +4288,7 @@ describe('ludora admin service', () => {
     };
 
     const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
-      '/admin/operations/store-item-update-monitor?hours=72'
+      '/admin/operations/store-item-update-monitor?hours=72&histogram_store_id=12'
     );
 
     expect(response.status).toBe(200);
@@ -4297,6 +4297,7 @@ describe('ludora admin service', () => {
         { item_count: 9, label: '0h', overflow: false, staleness_hour: 0 },
         { item_count: 8, label: '72h+', overflow: true, staleness_hour: 72 }
       ],
+      histogram_store_id: 12,
       range_hours: 72,
       store_statistics: [
         {
@@ -4334,7 +4335,9 @@ describe('ludora admin service', () => {
       worker: { health: 'healthy', status: 'idle', worker_id: 'worker-1' }
     });
     expect(queries).toHaveLength(5);
-    expect(queries.find((query) => normalizeSql(query.sql).includes('generate_series'))?.params).toEqual([72]);
+    const histogramQuery = queries.find((query) => normalizeSql(query.sql).includes('generate_series'));
+    expect(histogramQuery?.params).toEqual([72, 12]);
+    expect(normalizeSql(histogramQuery?.sql ?? '')).toContain('store_items.store_id = $2::bigint');
     const storeStatisticsQuery = queries.find((query) => normalizeSql(query.sql).includes('from active_stores stores'));
     expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).toContain('where stores.active = true');
     expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).toContain('left join store_item_update_attempt_log attempts');

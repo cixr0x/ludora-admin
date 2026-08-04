@@ -12,6 +12,7 @@ const monitor: StoreItemUpdateMonitor = {
     { item_count: 2, label: '24h', overflow: false, staleness_hour: 24 },
     { item_count: 1, label: '48h+', overflow: true, staleness_hour: 48 }
   ],
+  histogram_store_id: null,
   range_hours: 48,
   recent_attempts: [{
     duration_ms: 820,
@@ -103,6 +104,8 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(screen.getByText('3 HTTP 429 responses')).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Store item staleness histogram' })).toBeInTheDocument();
     expect(screen.getByLabelText('24h: 2 items')).toBeInTheDocument();
+    expect(screen.getByText('All stores')).toBeInTheDocument();
+    expect(screen.getByText(/Showing all active stores/)).toBeInTheDocument();
     expect(screen.getAllByText('Alpha')).toHaveLength(2);
     expect(screen.getByText('Beta')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Store update statistics · last 24h' })).toBeInTheDocument();
@@ -115,6 +118,12 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(await screen.findByText('HTTP 429: Too Many Requests')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catan Junior' })).toHaveAttribute('href', '#listings?id=502');
     expect(adminApi.getStoreItemUpdateFailureAttempts).toHaveBeenCalledWith('12', 24);
-    await waitFor(() => expect(adminApi.getStoreItemUpdateMonitor).toHaveBeenCalledWith(48));
+    await waitFor(() => expect(adminApi.getStoreItemUpdateMonitor).toHaveBeenCalledWith(48, undefined));
+
+    await userEvent.click(screen.getByLabelText('Histogram store'));
+    await userEvent.click(screen.getByRole('option', { name: 'Alpha' }));
+
+    await waitFor(() => expect(adminApi.getStoreItemUpdateMonitor).toHaveBeenCalledWith(48, 12));
+    expect(screen.getByText(/Showing Alpha/)).toBeInTheDocument();
   });
 });

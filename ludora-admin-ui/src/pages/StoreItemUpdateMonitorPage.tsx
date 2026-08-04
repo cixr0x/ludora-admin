@@ -32,6 +32,7 @@ const RANGE_OPTIONS = [24, 48, 72, 168];
 
 export function StoreItemUpdateMonitorPage() {
   const [hours, setHours] = useState(48);
+  const [histogramStoreId, setHistogramStoreId] = useState<number | ''>('');
   const [monitor, setMonitor] = useState<StoreItemUpdateMonitor | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -45,14 +46,14 @@ export function StoreItemUpdateMonitorPage() {
       setLoading(true);
     }
     try {
-      setMonitor(await adminApi.getStoreItemUpdateMonitor(hours));
+      setMonitor(await adminApi.getStoreItemUpdateMonitor(hours, histogramStoreId || undefined));
       setError('');
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
       setLoading(false);
     }
-  }, [hours]);
+  }, [histogramStoreId, hours]);
 
   useEffect(() => {
     void loadMonitor(true);
@@ -104,6 +105,12 @@ export function StoreItemUpdateMonitorPage() {
   const workerHealth = worker ? recordText(worker, 'health') : 'not started';
   const shopifyBlockedUntil = worker ? optionalRecordText(worker, 'shopify_blocked_until') : '';
   const shopifyIsBlocked = worker?.shopify_is_blocked === true;
+  const histogramStores = [...(monitor?.store_statistics ?? [])].sort((left, right) =>
+    recordText(left, 'store_name').localeCompare(recordText(right, 'store_name'))
+  );
+  const selectedHistogramStore = histogramStores.find(
+    (store) => numberRecordField(store, 'store_id') === histogramStoreId
+  );
   const metrics = summary
     ? [
         { label: 'Eligible items', value: formatInteger(summary.eligible_items), note: 'Active stores and listed confirmed items' },
@@ -177,12 +184,33 @@ export function StoreItemUpdateMonitorPage() {
           <Box>
             <Typography variant="h6">Product staleness by hour</Typography>
             <Typography color="text.secondary" variant="body2">
-              Time since each eligible store item was last successfully refreshed. Items at 24 hours or more are highlighted.
+              Time since each eligible store item was last successfully refreshed. Items at 24 hours or more are highlighted.{' '}
+              {selectedHistogramStore
+                ? `Showing ${recordText(selectedHistogramStore, 'store_name')}.`
+                : 'Showing all active stores.'}
             </Typography>
           </Box>
-          <Typography color="text.secondary" variant="caption">
-            Updated {monitor ? formatDate(monitor.generated_at) : '-'}
-          </Typography>
+          <Stack alignItems={{ sm: 'flex-end' }} spacing={0.75}>
+            <FormControl size="small" sx={{ minWidth: 220 }}>
+              <InputLabel id="histogram-store-label" shrink>Histogram store</InputLabel>
+              <Select
+                displayEmpty
+                label="Histogram store"
+                labelId="histogram-store-label"
+                onChange={(event) => setHistogramStoreId(event.target.value ? Number(event.target.value) : '')}
+                value={histogramStoreId}
+              >
+                <MenuItem value="">All stores</MenuItem>
+                {histogramStores.map((store) => {
+                  const storeId = numberRecordField(store, 'store_id');
+                  return <MenuItem key={storeId} value={storeId}>{recordText(store, 'store_name')}</MenuItem>;
+                })}
+              </Select>
+            </FormControl>
+            <Typography color="text.secondary" variant="caption">
+              Updated {monitor ? formatDate(monitor.generated_at) : '-'}
+            </Typography>
+          </Stack>
         </Stack>
         <StalenessHistogram buckets={monitor?.histogram ?? []} />
       </Paper>

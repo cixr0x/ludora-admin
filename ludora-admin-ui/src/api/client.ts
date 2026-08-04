@@ -78,6 +78,7 @@ export type StoreItemUpdateMonitor = {
     overflow: boolean;
     staleness_hour: number;
   }>;
+  histogram_store_id: number | null;
   range_hours: number;
   recent_attempts: AdminRecord[];
   summary: StoreItemUpdateMonitorSummary;
@@ -679,10 +680,13 @@ export const adminApi = {
     fetchData<StoreItemUpdateJobLog>(
       `/admin/operations/store-item-update-jobs/${encodeURIComponent(runId)}/log?after_id=${encodeURIComponent(afterId)}`
     ),
-  getStoreItemUpdateMonitor: (hours = 48) =>
-    fetchData<StoreItemUpdateMonitor>(
-      `/admin/operations/store-item-update-monitor?hours=${encodeURIComponent(hours)}`
-    ),
+  getStoreItemUpdateMonitor: (hours = 48, histogramStoreId?: string | number) => {
+    const params = new URLSearchParams({ hours: String(hours) });
+    if (histogramStoreId !== undefined && histogramStoreId !== '') {
+      params.set('histogram_store_id', String(histogramStoreId));
+    }
+    return fetchData<StoreItemUpdateMonitor>(`/admin/operations/store-item-update-monitor?${params.toString()}`);
+  },
   getStoreItemUpdateFailureAttempts: (storeId: string | number, hours = 24) => {
     const params = new URLSearchParams({
       hours: String(hours),

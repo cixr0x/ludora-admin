@@ -254,7 +254,10 @@ export function createOperationsRouter(
   router.get('/admin/operations/store-item-update-monitor', async (request, response, next) => {
     try {
       const rangeHours = integerQueryField(request.query.hours, 48, 24, 168);
-      response.json({ data: await loadStoreItemUpdateMonitor(database, rangeHours) });
+      const histogramStoreId = Object.hasOwn(request.query, 'histogram_store_id')
+        ? positiveIntegerQueryField(request.query.histogram_store_id, 'histogram_store_id')
+        : null;
+      response.json({ data: await loadStoreItemUpdateMonitor(database, rangeHours, histogramStoreId) });
     } catch (error) {
       next(error);
     }
@@ -467,7 +470,11 @@ export function createOperationsRouter(
   return router;
 }
 
-async function loadStoreItemUpdateMonitor(database: Database, rangeHours: number) {
+async function loadStoreItemUpdateMonitor(
+  database: Database,
+  rangeHours: number,
+  histogramStoreId: number | null
+) {
   const workerResult = await database.query(
     `select
        worker.worker_name, worker.worker_id, worker.status, worker.poll_seconds,
@@ -540,6 +547,7 @@ async function loadStoreItemUpdateMonitor(database: Database, rangeHours: number
        from store_items
        join stores on stores.id = store_items.store_id
        where stores.active = true
+         and ($2::bigint is null or store_items.store_id = $2::bigint)
          and store_items.is_boardgame = true
          and store_items.is_boardgame_confirmed = true
          and store_items.item_id is not null
@@ -560,7 +568,7 @@ async function loadStoreItemUpdateMonitor(database: Database, rangeHours: number
      from eligible
      where staleness_hour >= $1
      order by staleness_hour`,
-    [rangeHours]
+    [rangeHours, histogramStoreId]
   );
 
   const storeStatisticsResult = await database.query(
@@ -657,6 +665,7 @@ async function loadStoreItemUpdateMonitor(database: Database, rangeHours: number
         staleness_hour: stalenessHour
       };
     }),
+    histogram_store_id: histogramStoreId,
     range_hours: rangeHours,
     recent_attempts: recentAttemptsResult.rows,
     summary: {
