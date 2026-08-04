@@ -16,6 +16,7 @@ from ludora.product_detail_extraction import extract_product_detail_candidate
 from ludora.sitemap_discovery import _looks_like_site_protection_challenge, discover_product_urls_from_sitemaps
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import (
+    DEFAULT_FETCH_MAX_ATTEMPTS,
     TRANSIENT_FETCH_STATUS_CODES,
     FetchResult,
     HostThrottleWait,
@@ -30,6 +31,8 @@ RequestHeadersProvider = Callable[[str], Mapping[str, str]]
 STORE_UPDATE_MIN_INTERVAL_SECONDS = 2.0
 STORE_UPDATE_JITTER_SECONDS = 1.0
 STORE_UPDATE_FALLBACK_COOLDOWN_SECONDS = 30.0
+AMAZON_UPDATE_STATIC_FETCH_ATTEMPTS = 1
+AMAZON_UPDATE_BROWSER_FETCH_ATTEMPTS = 2
 ASCII_LIGATURE_TRANSLATION = str.maketrans({"æ": "ae", "œ": "oe", "ß": "ss"})
 GENERIC_TITLE_MATCH_TOKENS = {
     "base",
@@ -702,6 +705,12 @@ def refresh_confirmed_store_item_candidate(
         cancellation_token=cancellation_token,
         before_request=before_request,
         request_headers_provider=request_headers_provider,
+        static_fetch_max_attempts=(
+            AMAZON_UPDATE_STATIC_FETCH_ATTEMPTS
+            if platform.strip().casefold() in AMAZON_STORE_PLATFORMS
+            else DEFAULT_FETCH_MAX_ATTEMPTS
+        ),
+        amazon_browser_fetch_max_attempts=AMAZON_UPDATE_BROWSER_FETCH_ATTEMPTS,
     )
     raise_if_cancelled(cancellation_token)
     _prepare_refreshed_titles(
@@ -750,11 +759,14 @@ def _fetch_detail_candidate(
     cancellation_token: CancellationToken | None = None,
     before_request: Callable[[str], None] | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
+    static_fetch_max_attempts: int = DEFAULT_FETCH_MAX_ATTEMPTS,
+    amazon_browser_fetch_max_attempts: int = 1,
 ) -> DiscoveryItemCandidateRecord:
     trace = trace_logger or NullTraceLogger()
     amazon_detail_request = platform.strip().casefold() in AMAZON_STORE_PLATFORMS
     store_item_update_request = detect_removed
     amazon_detail_validation_failed = False
+    amazon_browser_failure: dict[str, object] | None = None
     fetched_detail = _fetch_static_product_detail(
         listing_candidate.source_url,
         detect_removed=detect_removed,
@@ -773,6 +785,7 @@ def _fetch_detail_candidate(
         before_request=before_request,
         immediate_return_status_codes={429} if store_item_update_request else (),
         request_headers_provider=request_headers_provider,
+        max_attempts=static_fetch_max_attempts,
     )
     _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
     last_failure_status_code = (
@@ -820,9 +833,29 @@ def _fetch_detail_candidate(
             store_id=listing_candidate.store_id,
             store_item_id=listing_candidate.store_item_id,
         )
-        if before_request is not None:
-            before_request(listing_candidate.source_url)
-        fetched_detail = browser_fetcher(listing_candidate.source_url)
+        if amazon_detail_request:
+            fetched_detail, amazon_browser_failure = _fetch_amazon_update_detail_with_browser(
+                listing_candidate.source_url,
+                browser_fetcher,
+                before_request=before_request,
+                max_attempts=amazon_browser_fetch_max_attempts,
+                store_id=listing_candidate.store_id,
+                store_item_id=listing_candidate.store_item_id,
+                trace=trace,
+                trace_event=(
+                    "item_update.item.browser_fetch.invalid"
+                    if detect_removed
+                    else "inventory.candidate.browser_fetch.invalid"
+                ),
+            )
+            amazon_detail_validation_failed = fetched_detail is None
+            browser_status = amazon_browser_failure.get("status_code") if amazon_browser_failure else None
+            if isinstance(browser_status, int) and browser_status >= 400:
+                last_failure_status_code = browser_status
+        else:
+            if before_request is not None:
+                before_request(listing_candidate.source_url)
+            fetched_detail = browser_fetcher(listing_candidate.source_url)
         _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
         if fetched_detail is not None and fetched_detail.status_code >= 400:
             last_failure_status_code = fetched_detail.status_code
@@ -841,14 +874,6 @@ def _fetch_detail_candidate(
             fetched_detail = None
         if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
             fetched_detail = None
-        if fetched_detail is not None and amazon_detail_request and not _validate_amazon_detail_fetch(
-            fetched_detail,
-            listing_candidate.source_url,
-            fetch_method="browser",
-            trace=trace,
-        ):
-            fetched_detail = None
-            amazon_detail_validation_failed = True
         if fetched_detail is not None:
             trace.log(
                 "item_update.item.browser_fetch.completed"
@@ -873,13 +898,24 @@ def _fetch_detail_candidate(
 
     if static_fetch_failed and fetched_detail is None:
         status_suffix = f" (HTTP {last_failure_status_code})" if last_failure_status_code is not None else ""
+        browser_failure_suffix = (
+            f"; {_format_amazon_browser_failure(amazon_browser_failure)}"
+            if amazon_browser_failure
+            else ""
+        )
         if last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES or amazon_detail_validation_failed:
             raise TransientProductFetchError(
-                f"Failed to fetch product detail page: {listing_candidate.source_url}{status_suffix}",
+                (
+                    f"Failed to fetch product detail page: {listing_candidate.source_url}"
+                    f"{status_suffix}{browser_failure_suffix}"
+                ),
                 retry_after_seconds=last_failure_retry_after_seconds,
                 status_code=last_failure_status_code,
             )
-        raise RuntimeError(f"Failed to fetch product detail page: {listing_candidate.source_url}{status_suffix}")
+        raise RuntimeError(
+            f"Failed to fetch product detail page: {listing_candidate.source_url}"
+            f"{status_suffix}{browser_failure_suffix}"
+        )
 
     if detail_candidate is None:
         listing_candidate.source_listing_url = source_listing_url
@@ -943,6 +979,107 @@ def _validate_amazon_detail_fetch(
     return False
 
 
+def _fetch_amazon_update_detail_with_browser(
+    source_url: str,
+    browser_fetcher: Callable[[str], FetchResult | None],
+    *,
+    before_request: Callable[[str], None] | None,
+    max_attempts: int,
+    store_id: int | None,
+    store_item_id: int | None,
+    trace: TraceLogger,
+    trace_event: str,
+) -> tuple[FetchResult | None, dict[str, object] | None]:
+    from ludora.amazon_discovery import (
+        _amazon_detail_page_diagnostics,
+        _asin_from_url,
+        _reset_amazon_browser_context,
+    )
+
+    attempts = max(1, max_attempts)
+    expected_asin = _asin_from_url(source_url)
+    last_diagnostics: dict[str, object] | None = None
+    for attempt in range(1, attempts + 1):
+        if before_request is not None:
+            before_request(source_url)
+        fetched_detail = browser_fetcher(source_url)
+        if fetched_detail is None:
+            fetcher_owner = getattr(browser_fetcher, "__self__", browser_fetcher)
+            browser_failure = getattr(fetcher_owner, "last_failure", None)
+            last_diagnostics = {
+                "error": str((browser_failure or {}).get("error") or "No response was returned"),
+                "error_type": str((browser_failure or {}).get("error_type") or "NoResponse"),
+                "expected_asin": expected_asin,
+                "expected_asin_present": False,
+                "final_url": str((browser_failure or {}).get("final_url") or ""),
+                "page_title": "",
+                "product_title_present": False,
+                "reason": "fetch_failed",
+                "status_code": None,
+            }
+        else:
+            if fetched_detail.status_code in {404, 410, 429}:
+                return fetched_detail, None
+            diagnostics = _amazon_detail_page_diagnostics(
+                fetched_detail,
+                expected_asin=expected_asin,
+            )
+            if diagnostics["valid"]:
+                return fetched_detail, None
+            last_diagnostics = {
+                key: value
+                for key, value in diagnostics.items()
+                if key != "valid"
+            }
+            last_diagnostics["html_bytes"] = len((fetched_detail.text or "").encode("utf-8"))
+
+        will_retry = attempt < attempts
+        trace.log(
+            trace_event,
+            attempt=attempt,
+            max_attempts=attempts,
+            source_url=source_url,
+            store_id=store_id,
+            store_item_id=store_item_id,
+            will_retry=will_retry,
+            **last_diagnostics,
+        )
+        if will_retry:
+            _reset_amazon_browser_context(
+                browser_fetcher,
+                attempt=attempt,
+                source_url=source_url,
+                store_id=store_id,
+                trace=trace,
+                trace_event_prefix=trace_event.removesuffix(".invalid"),
+            )
+
+    return None, last_diagnostics
+
+
+def _format_amazon_browser_failure(diagnostics: Mapping[str, object]) -> str:
+    details = [f"browser fallback {diagnostics.get('reason') or 'failed'}"]
+    status_code = diagnostics.get("status_code")
+    if status_code is not None:
+        details.append(f"status={status_code}")
+    html_bytes = diagnostics.get("html_bytes")
+    if html_bytes is not None:
+        details.append(f"html_bytes={html_bytes}")
+    error = str(diagnostics.get("error") or "").strip()
+    error_type = str(diagnostics.get("error_type") or "").strip()
+    if error:
+        details.append(f"error={error_type + ': ' if error_type else ''}{error}")
+    page_title = str(diagnostics.get("page_title") or "").strip()
+    if page_title:
+        details.append(f"page_title={page_title}")
+    if diagnostics.get("expected_asin_present") is False:
+        details.append("expected_asin_present=false")
+    final_url = str(diagnostics.get("final_url") or "").strip()
+    if final_url:
+        details.append(f"final_url={final_url}")
+    return "; ".join(details)
+
+
 def _extract_refresh_detail_candidate(
     *,
     fetched_detail: FetchResult,
@@ -981,6 +1118,7 @@ def _fetch_static_product_detail(
     before_request: Callable[[str], None] | None = None,
     immediate_return_status_codes: Collection[int] = (),
     request_headers_provider: RequestHeadersProvider | None = None,
+    max_attempts: int = DEFAULT_FETCH_MAX_ATTEMPTS,
 ) -> FetchResult | None:
     resolved_trace_fields = {"fetch_method": "static", **dict(trace_fields or {})}
 
@@ -1005,6 +1143,7 @@ def _fetch_static_product_detail(
         trace_fields=resolved_trace_fields,
         cancellation_token=cancellation_token,
         ambiguous_failure_attempts=2 if detect_removed else 1,
+        max_attempts=max_attempts,
         trace_attempts=detect_removed,
         immediate_return_status_codes=immediate_return_status_codes,
     )

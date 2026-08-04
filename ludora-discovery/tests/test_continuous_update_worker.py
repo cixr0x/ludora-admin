@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.continuous_update_worker import _process_claim
+from ludora.continuous_update_worker import _ContextTraceLogger, _process_claim
 from ludora.database import ClaimedStoreItemUpdate, ItemCandidateUpsertResult
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import TransientProductFetchError
@@ -39,6 +39,19 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
         )
         self.now = datetime(2026, 8, 4, 18, 0, tzinfo=timezone.utc)
 
+    def test_context_trace_logger_adds_update_attempt_fields(self):
+        delegate = Mock()
+        trace = _ContextTraceLogger(delegate, store_item_id=501, update_attempt_id=91)
+
+        trace.log("browser_fetch.failed", error="net::ERR_FAILED")
+
+        delegate.log.assert_called_once_with(
+            "browser_fetch.failed",
+            error="net::ERR_FAILED",
+            store_item_id=501,
+            update_attempt_id=91,
+        )
+
     def test_success_schedules_item_22_hours_ahead_and_completes_lease(self):
         repository = Mock()
         repository.complete_claimed_store_item_update.return_value = ItemCandidateUpsertResult(
@@ -49,9 +62,13 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             changed=True,
         )
         refreshed = DiscoveryItemCandidateRecord(**self.record.__dict__)
+        trace_logger = Mock()
 
         with (
-            patch("ludora.continuous_update_worker.refresh_confirmed_store_item_candidate", return_value=refreshed),
+            patch(
+                "ludora.continuous_update_worker.refresh_confirmed_store_item_candidate",
+                return_value=refreshed,
+            ) as patch_refresh,
             patch("ludora.continuous_update_worker._utc_now", return_value=self.now),
             patch("ludora.continuous_update_worker.random.uniform", return_value=22.0),
         ):
@@ -64,12 +81,17 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
                 request_headers_provider=Mock(),
                 run_id="continuous:test",
                 throttle=Mock(),
+                trace_logger=trace_logger,
                 worker_id="worker-1",
             )
 
         kwargs = repository.complete_claimed_store_item_update.call_args.kwargs
         self.assertEqual(kwargs["next_update_at"], self.now + timedelta(hours=22))
         self.assertEqual(kwargs["lease_token"], self.claim.lease_token)
+        self.assertIs(
+            patch_refresh.call_args.kwargs["trace_logger"],
+            trace_logger,
+        )
         repository.fail_claimed_store_item_update.assert_not_called()
 
     def test_first_shopify_429_pauses_shopify_and_reschedules_item_for_15_minutes(self):

@@ -16,6 +16,7 @@ from ludora.product_crawler import (
     _should_retry_detail_with_browser,
     _significant_text_tokens,
     crawl_store_product_details,
+    refresh_confirmed_store_item_candidate,
     update_confirmed_store_item_details,
 )
 from ludora.webfetch import FetchResult, PerHostRequestThrottle
@@ -1070,6 +1071,117 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].price_source, "amazon_detail")
         self.assertEqual(len(repository.update_change_log_calls), 1)
         self.assertTrue(repository.update_change_log_calls[0][4])
+
+    def test_continuous_amazon_refresh_prefers_two_browser_attempts_after_one_static_failure(self):
+        source_url = "https://www.amazon.com.mx/dp/B0D36CJG5N"
+        generic_shell_html = """
+        <html><head><title>Amazon.com.mx</title></head><body></body></html>
+        """
+        product_html = """
+        <html><head><title>Mi Villano Favorito 4</title></head><body>
+          <span id="productTitle">Mi Villano Favorito 4</span>
+          <span class="a-offscreen">$399.00</span>
+          <div id="availability">Disponible</div>
+          <input id="add-to-cart-button" type="submit" value="Agregar al carrito">
+          <div>ASIN: B0D36CJG5N</div>
+        </body></html>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=15694,
+            store_id=12,
+            source_url=source_url,
+            title="Mi Villano Favorito 4",
+            original_title="Mi Villano Favorito 4",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+
+        class BrowserFetcher:
+            def __init__(self):
+                self.fetches = []
+                self.reset_count = 0
+
+            def fetch(self, url):
+                self.fetches.append(url)
+                html = generic_shell_html if len(self.fetches) == 1 else product_html
+                return FetchResult(url=url, text=html)
+
+            def reset_context(self):
+                self.reset_count += 1
+
+        browser = BrowserFetcher()
+        trace = FakeTraceLogger()
+        requests = []
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=source_url, text="", status_code=500),
+        ) as fetch_html:
+            refreshed = refresh_confirmed_store_item_candidate(
+                existing_record,
+                platform="amazon",
+                browser_fetcher=browser.fetch,
+                before_request=requests.append,
+                trace_logger=trace,
+            )
+
+        fetch_html.assert_called_once()
+        self.assertEqual(browser.fetches, [source_url, source_url])
+        self.assertEqual(browser.reset_count, 1)
+        self.assertEqual(requests, [source_url, source_url, source_url])
+        self.assertEqual(refreshed.price, "399.00")
+        invalid = next(fields for event, fields in trace.events if event == "item_update.item.browser_fetch.invalid")
+        self.assertEqual(invalid["reason"], "missing_product_title")
+        self.assertTrue(invalid["will_retry"])
+        self.assertIn("item_update.item.browser_fetch.context_reset.completed", [event for event, _ in trace.events])
+
+    def test_continuous_amazon_refresh_error_includes_browser_page_diagnostics(self):
+        source_url = "https://www.amazon.com.mx/dp/B0D36CJG5N"
+        generic_shell_html = """
+        <html><head><title>Amazon.com.mx</title></head><body></body></html>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_item_id=15694,
+            store_id=12,
+            source_url=source_url,
+            title="Mi Villano Favorito 4",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+
+        class BrowserFetcher:
+            def __init__(self):
+                self.fetches = []
+                self.reset_count = 0
+
+            def fetch(self, url):
+                self.fetches.append(url)
+                return FetchResult(url=url, text=generic_shell_html)
+
+            def reset_context(self):
+                self.reset_count += 1
+
+        browser = BrowserFetcher()
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=source_url, text="", status_code=500),
+        ) as fetch_html:
+            with self.assertRaisesRegex(
+                TransientProductFetchError,
+                r"HTTP 500.*browser fallback missing_product_title.*status=200.*page_title=Amazon.com.mx",
+            ):
+                refresh_confirmed_store_item_candidate(
+                    existing_record,
+                    platform="amazon_brand",
+                    browser_fetcher=browser.fetch,
+                )
+
+        fetch_html.assert_called_once()
+        self.assertEqual(browser.fetches, [source_url, source_url])
+        self.assertEqual(browser.reset_count, 1)
 
     def test_update_changed_amazon_original_title_uses_transformer_for_same_asin(self):
         source_url = "https://www.amazon.com.mx/dp/B08LRDKF6V"

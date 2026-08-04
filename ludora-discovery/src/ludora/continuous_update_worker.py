@@ -27,6 +27,7 @@ from ludora.product_crawler import (
     TransientProductFetchError,
     refresh_confirmed_store_item_candidate,
 )
+from ludora.trace import TraceLogger, create_item_update_trace_logger
 from ludora.webfetch import PerHostRequestThrottle
 
 
@@ -35,6 +36,15 @@ SUCCESS_MIN_HOURS = 21.0
 SUCCESS_MAX_HOURS = 23.0
 ITEM_FAILURE_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 SHOPIFY_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
+
+
+class _ContextTraceLogger:
+    def __init__(self, delegate: TraceLogger, **context: object) -> None:
+        self.delegate = delegate
+        self.context = context
+
+    def log(self, event: str, **fields: object) -> None:
+        self.delegate.log(event, **{**self.context, **fields})
 
 
 def run_continuous_update_worker(
@@ -118,9 +128,10 @@ def _run_worker_session(
             poll_seconds=poll_seconds,
         )
         job_id = repository.start_store_item_update_log(run_id=run_id)
+        trace_logger = create_item_update_trace_logger(connection, run_id=run_id, job_id=job_id)
         browser_fetcher = None
         if browser_fetch_enabled:
-            browser_session = BrowserTextFetcher()
+            browser_session = BrowserTextFetcher(trace_logger=trace_logger)
             browser_fetcher = browser_session.__enter__().fetch
         _log(
             "worker.session.started",
@@ -151,17 +162,31 @@ def _run_worker_session(
                     worker_id=worker_id,
                 )
                 continue
-            _process_claim(
-                browser_fetcher=browser_fetcher,
-                claim=claim,
-                item_title_extractor=item_title_extractor,
-                job_id=job_id,
-                repository=repository,
-                request_headers_provider=request_headers_provider,
-                run_id=run_id,
-                throttle=throttle,
-                worker_id=worker_id,
+            attempt_trace_logger = _ContextTraceLogger(
+                trace_logger,
+                platform=claim.platform,
+                store_id=claim.record.store_id,
+                store_item_id=claim.record.store_item_id,
+                update_attempt_id=claim.attempt_id,
             )
+            if browser_session is not None:
+                browser_session.trace_logger = attempt_trace_logger
+            try:
+                _process_claim(
+                    browser_fetcher=browser_fetcher,
+                    claim=claim,
+                    item_title_extractor=item_title_extractor,
+                    job_id=job_id,
+                    repository=repository,
+                    request_headers_provider=request_headers_provider,
+                    run_id=run_id,
+                    throttle=throttle,
+                    trace_logger=attempt_trace_logger,
+                    worker_id=worker_id,
+                )
+            finally:
+                if browser_session is not None:
+                    browser_session.trace_logger = trace_logger
 
         repository.mark_continuous_update_worker_stopped(worker_name=WORKER_NAME, worker_id=worker_id)
         repository.complete_store_item_update_log(
@@ -197,6 +222,7 @@ def _process_claim(
     request_headers_provider,
     run_id: str,
     throttle: PerHostRequestThrottle,
+    trace_logger: TraceLogger | None = None,
     worker_id: str,
 ) -> None:
     store_item_id = claim.record.store_item_id
@@ -215,6 +241,7 @@ def _process_claim(
             item_title_extractor=item_title_extractor,
             before_request=lambda url: throttle.wait_before_request(url),
             request_headers_provider=request_headers_provider if claim.platform == "shopify" else None,
+            trace_logger=trace_logger,
         )
         result = repository.complete_claimed_store_item_update(
             claim.record,

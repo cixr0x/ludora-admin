@@ -53,6 +53,7 @@ class BrowserTextFetcher:
         self._browser_version = None
         self._playwright_error = Exception
         self._playwright_timeout_error = Exception
+        self.last_failure: dict[str, object] | None = None
 
     def __enter__(self) -> BrowserTextFetcher:
         try:
@@ -118,14 +119,19 @@ class BrowserTextFetcher:
             self._playwright.stop()
 
     def fetch(self, url: str) -> FetchResult | None:
-        page = self._context.new_page() if self._context is not None else self._page
-        close_page_after_fetch = self._context is not None
-        if page is None:
+        if self._context is None and self._page is None:
             raise BrowserFetchUnavailable("Browser fetcher has not been started.")
 
-        amazon_resource_counts = _configure_lightweight_amazon_page(page, url)
-        amazon_detail_request = _is_amazon_product_detail_url(url)
+        self.last_failure = None
+        page = None
+        close_page_after_fetch = self._context is not None
+        amazon_resource_counts = None
         try:
+            page = self._context.new_page() if self._context is not None else self._page
+            if page is None:
+                raise BrowserFetchUnavailable("Browser fetcher has not been started.")
+            amazon_resource_counts = _configure_lightweight_amazon_page(page, url)
+            amazon_detail_request = _is_amazon_product_detail_url(url)
             response = _navigate_past_reload_challenge(page, url, timeout_ms=self.timeout_ms)
             if response is None:
                 return FetchResult(url=page.url, text=page.content())
@@ -172,19 +178,30 @@ class BrowserTextFetcher:
             OSError,
             ValueError,
         ) as exc:
+            failure = {
+                "error": str(exc),
+                "error_type": type(exc).__name__,
+                "final_url": getattr(page, "url", ""),
+                "timeout_ms": self.timeout_ms,
+                "url": url,
+            }
+            self.last_failure = failure
             if self.trace_logger is not None:
-                self.trace_logger.log(
-                    "browser_fetch.failed",
-                    error=str(exc),
-                    error_type=type(exc).__name__,
-                    final_url=getattr(page, "url", ""),
-                    timeout_ms=self.timeout_ms,
-                    url=url,
-                )
+                self.trace_logger.log("browser_fetch.failed", **failure)
             return None
         finally:
-            if close_page_after_fetch:
-                page.close()
+            if close_page_after_fetch and page is not None:
+                try:
+                    page.close()
+                except self._playwright_error as exc:
+                    if self.trace_logger is not None:
+                        self.trace_logger.log(
+                            "browser_fetch.page_close.failed",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            final_url=getattr(page, "url", ""),
+                            url=url,
+                        )
             if amazon_resource_counts and self.trace_logger is not None:
                 self.trace_logger.log(
                     "browser_fetch.amazon_resources.blocked",

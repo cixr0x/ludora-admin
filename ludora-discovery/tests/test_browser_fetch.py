@@ -381,6 +381,16 @@ class BrowserFetchTests(unittest.TestCase):
         result = fetcher.fetch("https://example.mx/products/catan")
 
         self.assertIsNone(result)
+        self.assertEqual(
+            fetcher.last_failure,
+            {
+                "error": "net::ERR_FAILED at https://example.mx/products/catan",
+                "error_type": "RuntimeError",
+                "final_url": "chrome-error://chromewebdata/",
+                "timeout_ms": 12_345,
+                "url": "https://example.mx/products/catan",
+            },
+        )
         trace_logger.log.assert_called_once_with(
             "browser_fetch.failed",
             error="net::ERR_FAILED at https://example.mx/products/catan",
@@ -388,6 +398,30 @@ class BrowserFetchTests(unittest.TestCase):
             final_url="chrome-error://chromewebdata/",
             timeout_ms=12_345,
             url="https://example.mx/products/catan",
+        )
+
+    def test_fetch_captures_context_new_page_failure(self):
+        class FailingContext:
+            def new_page(self):
+                raise RuntimeError("BrowserContext.new_page: Target page, context or browser has been closed")
+
+        trace_logger = Mock()
+        fetcher = BrowserTextFetcher(timeout_ms=8_000, trace_logger=trace_logger)
+        fetcher._context = FailingContext()
+        fetcher._playwright_error = RuntimeError
+
+        result = fetcher.fetch("https://www.amazon.com.mx/dp/B08QYJ37RJ")
+
+        self.assertIsNone(result)
+        self.assertEqual(fetcher.last_failure["error_type"], "RuntimeError")
+        self.assertIn("Target page, context or browser has been closed", fetcher.last_failure["error"])
+        trace_logger.log.assert_called_once_with(
+            "browser_fetch.failed",
+            error="BrowserContext.new_page: Target page, context or browser has been closed",
+            error_type="RuntimeError",
+            final_url="",
+            timeout_ms=8_000,
+            url="https://www.amazon.com.mx/dp/B08QYJ37RJ",
         )
 
     def test_fetch_inspects_rendered_html_without_reading_navigation_response_body(self):
