@@ -11,6 +11,7 @@ from typing import Literal
 
 from ludora.admin_matching import AdminItemMatcher
 from ludora.admin_title_extraction import AdminAmazonTitleExtractor
+from ludora.admin_web_bot_auth import AdminWebBotAuthHeadersProvider
 from ludora.ai_item_classification import OpenAIItemClassifier
 from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
 from ludora.collector import collect_stores
@@ -25,6 +26,7 @@ from ludora.config import (
     resolve_internal_api_token,
     resolve_openai_base_url,
     resolve_openai_api_key,
+    resolve_web_bot_auth_enabled,
 )
 from ludora.database import DiscoveryRepository, connect_database
 from ludora.embeddings import OpenAIEmbeddingClient, build_item_embedding_text, source_text_hash
@@ -224,6 +226,15 @@ def run_item_discovery(
             browser_sitemap_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
             admin_api_url = resolve_admin_api_url(env=current_env, dotenv_path=env_file)
             internal_api_token = resolve_internal_api_token(env=current_env, dotenv_path=env_file)
+            web_bot_auth_enabled = resolve_web_bot_auth_enabled(env=current_env, dotenv_path=env_file)
+            web_bot_auth_headers_provider = (
+                AdminWebBotAuthHeadersProvider(
+                    admin_api_url,
+                    internal_api_token=internal_api_token,
+                ).headers_for
+                if web_bot_auth_enabled
+                else None
+            )
             item_classifier = _resolve_item_classifier(current_env, env_file)
             trace_logger.log(
                 "item_discovery.config.resolved",
@@ -233,6 +244,7 @@ def run_item_discovery(
                 item_classifier=getattr(item_classifier, "__qualname__", type(item_classifier).__name__),
                 platform=platform,
                 store_id=store_id,
+                web_bot_auth_enabled=web_bot_auth_enabled,
             )
             tracking_repository = _StoreItemDiscoveryTrackingRepository(repository, resolved_run_id)
             admin_item_matcher = AdminItemMatcher(
@@ -262,6 +274,7 @@ def run_item_discovery(
                 item_classifier=item_classifier,
                 item_processor=item_processor,
                 item_title_extractor=item_title_extractor,
+                request_headers_provider=web_bot_auth_headers_provider,
                 trace_logger=trace_logger,
                 **collect_kwargs,
             )
@@ -522,6 +535,15 @@ def run_item_update(
     browser_fetch_enabled = resolve_browser_fetch_enabled(env=current_env, dotenv_path=env_file)
     admin_api_url = resolve_admin_api_url(env=current_env, dotenv_path=env_file)
     internal_api_token = resolve_internal_api_token(env=current_env, dotenv_path=env_file)
+    web_bot_auth_enabled = resolve_web_bot_auth_enabled(env=current_env, dotenv_path=env_file)
+    web_bot_auth_headers_provider = (
+        AdminWebBotAuthHeadersProvider(
+            admin_api_url,
+            internal_api_token=internal_api_token,
+        ).headers_for
+        if web_bot_auth_enabled
+        else None
+    )
     item_title_extractor = AdminAmazonTitleExtractor(
         admin_api_url,
         internal_api_token=internal_api_token,
@@ -547,6 +569,7 @@ def run_item_update(
             job_id=job_id,
             message="Store item update started",
             selected_store_ids=store_ids or [],
+            web_bot_auth_enabled=web_bot_auth_enabled,
         )
         update_kwargs = {}
         if cancellation_token is not None:
@@ -559,6 +582,7 @@ def run_item_update(
                 run_id=resolved_run_id,
                 store_ids=store_ids,
                 item_title_extractor=item_title_extractor,
+                request_headers_provider=web_bot_auth_headers_provider,
                 trace_logger=trace_logger,
                 **update_kwargs,
             )

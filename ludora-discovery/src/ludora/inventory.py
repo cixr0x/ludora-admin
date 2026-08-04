@@ -10,6 +10,7 @@ from ludora.amazon_discovery import crawl_amazon_brand_inventory, crawl_amazon_s
 from ludora.product_crawler import (
     ItemCandidateProcessor,
     ItemClassifier,
+    RequestHeadersProvider,
     crawl_store_product_details,
     update_confirmed_store_item_details,
 )
@@ -61,6 +62,7 @@ def collect_store_inventory(
     cancellation_token: CancellationToken | None = None,
     platform: str = "",
     store_name: str = "",
+    request_headers_provider: RequestHeadersProvider | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     normalized_platform = platform.strip().casefold()
     browser_fetch_enabled = browser_sitemap_fetch_enabled or normalized_platform in BROWSER_FETCH_REQUIRED_PLATFORMS
@@ -109,6 +111,7 @@ def collect_store_inventory(
         browser_sitemap_fetch_enabled=browser_fetch_enabled,
         item_classifier=item_classifier,
         item_processor=item_processor,
+        request_headers_provider=request_headers_provider if normalized_platform == "shopify" else None,
         trace_logger=trace_logger,
         cancellation_token=cancellation_token,
     )
@@ -124,6 +127,7 @@ def update_confirmed_store_items(
     store_ids: list[int] | None = None,
     item_title_extractor: Callable[[DiscoveryItemCandidateRecord], str] | None = None,
     trace_logger: TraceLogger | None = None,
+    request_headers_provider: RequestHeadersProvider | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
         repository,
@@ -134,5 +138,6 @@ def update_confirmed_store_items(
         run_id=run_id,
         store_ids=store_ids,
         item_title_extractor=item_title_extractor,
+        request_headers_provider=request_headers_provider,
         trace_logger=trace_logger,
     )

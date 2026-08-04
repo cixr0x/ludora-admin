@@ -169,6 +169,19 @@ def resolve_browser_fetch_enabled(
     return _is_truthy(dotenv_value)
 
 
+def resolve_web_bot_auth_enabled(
+    env: Mapping[str, str] | None = None,
+    dotenv_path: str | Path = ".env",
+) -> bool:
+    current_env = env if env is not None else os.environ
+    env_value = current_env.get("LUDORA_WEB_BOT_AUTH_ENABLED", "").strip()
+    if env_value:
+        return _is_truthy(env_value)
+
+    dotenv_value = load_dotenv_values(dotenv_path).get("LUDORA_WEB_BOT_AUTH_ENABLED", "").strip()
+    return _is_truthy(dotenv_value)
+
+
 def resolve_admin_api_url(
     env: Mapping[str, str] | None = None,
     dotenv_path: str | Path = ".env",

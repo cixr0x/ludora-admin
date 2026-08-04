@@ -31,6 +31,11 @@ export type Config = {
   port: number;
   databaseUrl?: string;
   corsOrigin: string[];
+  webBotAuth: {
+    contactEmail: string;
+    identityOrigin: string;
+    privateJwkPath?: string;
+  };
   discoveryRunner: {
     apiUrl: string;
     envFile: string;
@@ -62,6 +67,7 @@ export function loadConfig(): Config {
     port,
     databaseUrl: process.env.LUDORA_DATABASE_URL,
     corsOrigin: readCorsOrigins(),
+    webBotAuth: readWebBotAuthConfig(),
     discoveryRunner: readDiscoveryRunnerConfig()
   };
 }
@@ -131,6 +137,17 @@ function readLocalCoverWorkflowConfig(): Config['localCoverWorkflow'] {
     s3Prefix: process.env.LUDORA_COVER_S3_PREFIX ?? 'boardgame',
     s3Region: process.env.LUDORA_COVER_S3_REGION ?? process.env.AWS_REGION ?? process.env.AWS_DEFAULT_REGION ?? 'us-east-2',
     workDir: process.env.LUDORA_COVER_WORK_DIR ?? 'C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame'
+  };
+}
+
+function readWebBotAuthConfig(): Config['webBotAuth'] {
+  return {
+    contactEmail: readEnvWithDefault('LUDORA_WEB_BOT_AUTH_CONTACT_EMAIL', 'robertorojasmo@gmail.com'),
+    identityOrigin: readEnvWithDefault(
+      'LUDORA_WEB_BOT_AUTH_IDENTITY_ORIGIN',
+      'https://admin.ludora.bobbycrimson.com'
+    ),
+    privateJwkPath: readOptionalEnv('LUDORA_WEB_BOT_AUTH_PRIVATE_JWK_PATH')
   };
 }
 

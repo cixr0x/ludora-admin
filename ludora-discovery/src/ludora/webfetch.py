@@ -118,14 +118,21 @@ def fetch_html(
     url: str,
     timeout: int = 20,
     *,
+    headers: Mapping[str, str] | None = None,
     include_http_error_status: bool = False,
 ) -> FetchResult | None:
+    request_headers = {
+        "Accept": "text/html,application/xhtml+xml",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        "User-Agent": (
+            "LudoraStoreCollector/1.0 "
+            "(+https://admin.ludora.bobbycrimson.com/crawler)"
+        ),
+    }
+    request_headers.update(headers or {})
     request = Request(
         url,
-        headers={
-            "Accept": "text/html,application/xhtml+xml",
-            "User-Agent": "LudoraStoreCollector/0.1 (+https://example.local/ludora)",
-        },
+        headers=request_headers,
         method="GET",
     )
     try:

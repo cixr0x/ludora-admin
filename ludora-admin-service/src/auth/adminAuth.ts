@@ -102,6 +102,16 @@ export function requireAdminAuth(options: AdminAuthOptions) {
   };
 }
 
+export function requireInternalApiAuth(options: AdminAuthOptions) {
+  return (request: Request, response: Response, next: NextFunction) => {
+    if (!verifyInternalApiToken(request, options)) {
+      response.status(401).json({ error: { message: 'Internal authentication required' } });
+      return;
+    }
+    next();
+  };
+}
+
 function verifyInternalApiToken(request: Request, options: AdminAuthOptions): boolean {
   const expectedToken = options.internalApiToken?.trim();
   if (!expectedToken) {

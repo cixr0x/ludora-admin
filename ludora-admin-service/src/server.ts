@@ -28,9 +28,17 @@ import { createOpenAiStoreProfileDetectionClient } from './storeProfileDetection
 import { createStoreProfileDetectionService } from './storeProfileDetection/storeProfileDetectionService.js';
 import { createOpenAiTranslationClient } from './translation/openAiTranslationClient.js';
 import { createTranslationService } from './translation/translationService.js';
+import { createWebBotAuthService } from './webBotAuth/webBotAuthService.js';
 
 const config = loadConfig();
 const internalApiToken = config.internalApiToken ?? randomBytes(32).toString('hex');
+const webBotAuthService = config.webBotAuth.privateJwkPath
+  ? await createWebBotAuthService({
+      contactEmail: config.webBotAuth.contactEmail,
+      identityOrigin: config.webBotAuth.identityOrigin,
+      privateJwkPath: config.webBotAuth.privateJwkPath
+    })
+  : undefined;
 
 if (!config.databaseUrl) {
   throw new Error('LUDORA_DATABASE_URL is required');
@@ -125,7 +133,8 @@ const app = createApp({
   operationsClient,
   productDetailsEnrichmentService,
   storeProfileDetectionService,
-  translationService
+  translationService,
+  webBotAuthService
 });
 
 const server = app.listen(config.port, config.host, () => {

@@ -115,6 +115,10 @@ LUDORA_DISCOVERY_PACKAGE_DIR=/opt/ludora/ludora-admin/ludora-discovery
 LUDORA_DISCOVERY_PYTHON=/opt/ludora/ludora-admin/ludora-discovery/.venv/bin/python
 LUDORA_DISCOVERY_ENV_FILE=/opt/ludora/ludora-admin/ludora-discovery/.env
 LUDORA_COVER_FLATTENING_WORK_DIR=/tmp/ludora-cover-flattening
+LUDORA_WEB_BOT_AUTH_ENABLED=true
+LUDORA_WEB_BOT_AUTH_IDENTITY_ORIGIN=https://admin.ludora.bobbycrimson.com
+LUDORA_WEB_BOT_AUTH_CONTACT_EMAIL=robertorojasmo@gmail.com
+LUDORA_WEB_BOT_AUTH_PRIVATE_JWK_PATH=/etc/ludora/web-bot-auth/private-key.jwk
 ```
 
 The production UI file contains:
@@ -128,6 +132,47 @@ or incomplete product responses are retried with a rendered browser page:
 
 ```dotenv
 LUDORA_BROWSER_FETCH_ENABLED=true
+```
+
+### Web Bot Auth identity and signing key
+
+Shopify storefront requests are signed with the public bot identity
+`https://admin.ludora.bobbycrimson.com`. The public key directory and crawler
+information page are served by admin-service through exact nginx routes. The
+private Ed25519 JWK lives only on the VM and must never be copied into the
+repository or printed in deployment output.
+
+Create the key once on the VM without replacing an existing key:
+
+```bash
+sudo install -d -o robertorojas87 -g robertorojas87 -m 0700 /etc/ludora/web-bot-auth
+sudo -u robertorojas87 node --input-type=module <<'NODE'
+import { generateKeyPairSync } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+
+const keyPath = '/etc/ludora/web-bot-auth/private-key.jwk';
+const { privateKey } = generateKeyPairSync('ed25519');
+writeFileSync(keyPath, `${JSON.stringify(privateKey.export({ format: 'jwk' }))}\n`, {
+  encoding: 'utf8',
+  flag: 'wx',
+  mode: 0o600
+});
+NODE
+```
+
+Install the repository-owned nginx locations inside the HTTPS server block:
+
+```nginx
+include /etc/nginx/snippets/ludora-admin-web-bot-auth.conf;
+```
+
+The source snippet is `ops/nginx/ludora-admin-web-bot-auth.conf`. Install it as
+`/etc/nginx/snippets/ludora-admin-web-bot-auth.conf`, validate with
+`sudo nginx -t`, and reload nginx. The exact public paths are:
+
+```text
+https://admin.ludora.bobbycrimson.com/.well-known/http-message-signatures-directory
+https://admin.ludora.bobbycrimson.com/crawler
 ```
 
 `codexapi` does not require a repository `.env` in production. Its non-secret runtime settings live in its systemd unit.

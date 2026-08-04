@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import html
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from http.client import HTTPException
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -29,11 +29,18 @@ def discover_product_urls_from_sitemaps(
     fetcher: Callable[[str], FetchResult | None] | None = None,
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
     browser_fallback_enabled: bool = False,
+    request_headers_provider: Callable[[str], Mapping[str, str]] | None = None,
     limit: int | None = None,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> list[str]:
-    fetch = fetcher or (lambda url: fetch_sitemap_text(url, include_http_error_status=True))
+    fetch = fetcher or (
+        lambda url: fetch_sitemap_text(
+            url,
+            headers=request_headers_provider(url) if request_headers_provider is not None else None,
+            include_http_error_status=True,
+        )
+    )
     browser_fetch = browser_fetcher
     if browser_fallback_enabled and browser_fetch is None:
         from ludora.browser_fetch import fetch_sitemap_text_with_browser
@@ -96,19 +103,21 @@ def fetch_sitemap_text(
     url: str,
     timeout: int = 20,
     *,
+    headers: Mapping[str, str] | None = None,
     include_http_error_status: bool = False,
 ) -> FetchResult | None:
+    request_headers = {
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        "User-Agent": (
+            "LudoraStoreCollector/1.0 "
+            "(+https://admin.ludora.bobbycrimson.com/crawler)"
+        ),
+    }
+    request_headers.update(headers or {})
     request = Request(
         url,
-        headers={
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/125.0.0.0 Safari/537.36"
-            ),
-        },
+        headers=request_headers,
         method="GET",
     )
     try:

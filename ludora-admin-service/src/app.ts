@@ -3,7 +3,7 @@ import express, { type ErrorRequestHandler, type Express } from 'express';
 
 import type { AmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
 import type { AdminAuthOptions } from './auth/adminAuth.js';
-import { requireAdminAuth } from './auth/adminAuth.js';
+import { requireAdminAuth, requireInternalApiAuth } from './auth/adminAuth.js';
 import type { BggItemImporter } from './bgg/bggItemImporter.js';
 import type { DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
@@ -25,11 +25,13 @@ import { createStoresRouter } from './routes/stores.js';
 import { createStoreItemReviewRouter } from './routes/storeItemReview.js';
 import { createTutorialCurationRouter } from './routes/tutorialCuration.js';
 import { createTranslationRouter } from './routes/translation.js';
+import { createPublicWebBotAuthRouter, createWebBotAuthSigningRouter } from './routes/webBotAuth.js';
 import { createStoreItemTranslateAndApproveWorkflow } from './storeItemReview/storeItemTranslateAndApproveWorkflow.js';
 import type { TranslationService } from './translation/translationService.js';
 import type { LocalCoverWorkflowManager } from './localCoverWorkflow.js';
 import type { ProductDetailsEnrichmentService } from './productDetailsExtraction/productDetailsExtractionService.js';
 import type { StoreProfileDetectionService } from './storeProfileDetection/storeProfileDetectionService.js';
+import type { WebBotAuthService } from './webBotAuth/webBotAuthService.js';
 
 type HttpError = Error & {
   status?: number;
@@ -51,6 +53,7 @@ type CreateAppOptions = {
   productDetailsEnrichmentService?: ProductDetailsEnrichmentService;
   storeProfileDetectionService?: StoreProfileDetectionService;
   translationService?: TranslationService;
+  webBotAuthService?: WebBotAuthService;
 };
 
 export function createApp({
@@ -67,13 +70,17 @@ export function createApp({
   operationsClient,
   productDetailsEnrichmentService,
   storeProfileDetectionService,
-  translationService
+  translationService,
+  webBotAuthService
 }: CreateAppOptions): Express {
   const app = express();
 
   app.use(cors({ credentials: Boolean(adminAuth), origin: corsOrigin }));
   app.use(express.json());
   app.use(createHealthRouter());
+  if (webBotAuthService) {
+    app.use(createPublicWebBotAuthRouter(webBotAuthService));
+  }
   if (adminAuth) {
     app.use(createAuthRouter(adminAuth));
     app.use(requireAdminAuth(adminAuth));
@@ -91,6 +98,13 @@ export function createApp({
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
   app.use(createTranslationRouter(translationService));
   app.use(createTutorialCurationRouter(database));
+  if (webBotAuthService && adminAuth) {
+    app.use(
+      '/admin/web-bot-auth/signatures',
+      requireInternalApiAuth(adminAuth),
+      createWebBotAuthSigningRouter(webBotAuthService)
+    );
+  }
   if (coverFlatteningWorkflowManager) {
     app.use(createCoverFlatteningWorkflowRouter(coverFlatteningWorkflowManager));
   }

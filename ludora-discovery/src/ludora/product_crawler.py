@@ -26,6 +26,7 @@ from ludora.webfetch import (
 
 
 AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
+RequestHeadersProvider = Callable[[str], Mapping[str, str]]
 STORE_UPDATE_MIN_INTERVAL_SECONDS = 2.0
 STORE_UPDATE_JITTER_SECONDS = 1.0
 STORE_UPDATE_FALLBACK_COOLDOWN_SECONDS = 30.0
@@ -161,6 +162,7 @@ def crawl_store_product_details(
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
+    request_headers_provider: RequestHeadersProvider | None = None,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
@@ -187,6 +189,7 @@ def crawl_store_product_details(
             browser_fetcher=browser_fetcher,
             browser_fallback_enabled=use_browser_fetch,
             limit=limit,
+            request_headers_provider=request_headers_provider,
             trace_logger=trace,
             cancellation_token=cancellation_token,
         )
@@ -211,7 +214,11 @@ def crawl_store_product_details(
             trace.log("inventory.listing_fetch.start", source_url=store_url, store_id=store_id)
             fetched_listing = fetch_with_transient_retries(
                 store_url,
-                lambda url: fetch_html(url, include_http_error_status=True),
+                lambda url: fetch_html(
+                    url,
+                    headers=request_headers_provider(url) if request_headers_provider is not None else None,
+                    include_http_error_status=True,
+                ),
                 trace_event="inventory.listing_fetch.http_error",
                 trace_logger=trace,
                 trace_fields={"fetch_method": "static", "store_id": store_id},
@@ -252,6 +259,7 @@ def crawl_store_product_details(
             browser_fetcher=browser_fetcher if use_browser_fetch else None,
             item_classifier=item_classifier,
             item_processor=item_processor,
+            request_headers_provider=request_headers_provider,
             trace_logger=trace,
             cancellation_token=cancellation_token,
         )
@@ -271,6 +279,7 @@ def crawl_listing_candidates(
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
     item_candidate_enricher: ItemCandidateEnricher | None = None,
+    request_headers_provider: RequestHeadersProvider | None = None,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
@@ -304,6 +313,7 @@ def crawl_listing_candidates(
                 listing_candidate=listing_candidate,
                 source_listing_url=listing_candidate.source_listing_url or source_listing_url,
                 browser_fetcher=browser_fetcher,
+                request_headers_provider=request_headers_provider,
                 trace_logger=trace,
                 cancellation_token=cancellation_token,
             )
@@ -381,6 +391,7 @@ def update_confirmed_store_item_details(
     item_title_extractor: ItemTitleExtractor | None = None,
     trace_logger: TraceLogger | None = None,
     request_throttle: PerHostRequestThrottle | None = None,
+    request_headers_provider: RequestHeadersProvider | None = None,
 ) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
@@ -493,6 +504,9 @@ def update_confirmed_store_item_details(
                     ),
                 )
                 try:
+                    item_request_headers_provider = (
+                        request_headers_provider if platform == "shopify" else None
+                    )
                     refreshed_record = _fetch_detail_candidate(
                         listing_candidate=existing_record,
                         source_listing_url=existing_record.source_listing_url or existing_record.source_url,
@@ -502,6 +516,7 @@ def update_confirmed_store_item_details(
                         trace_logger=trace,
                         cancellation_token=cancellation_token,
                         before_request=request_waiter,
+                        request_headers_provider=item_request_headers_provider,
                     )
                 except TransientProductFetchError as exc:
                     if exc.status_code == 429:
@@ -699,6 +714,7 @@ def _fetch_detail_candidate(
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
     before_request: Callable[[str], None] | None = None,
+    request_headers_provider: RequestHeadersProvider | None = None,
 ) -> DiscoveryItemCandidateRecord:
     trace = trace_logger or NullTraceLogger()
     amazon_detail_request = platform.strip().casefold() in AMAZON_STORE_PLATFORMS
@@ -721,6 +737,7 @@ def _fetch_detail_candidate(
         cancellation_token=cancellation_token,
         before_request=before_request,
         immediate_return_status_codes={429} if store_item_update_request else (),
+        request_headers_provider=request_headers_provider,
     )
     _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
     last_failure_status_code = (
@@ -928,13 +945,18 @@ def _fetch_static_product_detail(
     cancellation_token: CancellationToken | None = None,
     before_request: Callable[[str], None] | None = None,
     immediate_return_status_codes: Collection[int] = (),
+    request_headers_provider: RequestHeadersProvider | None = None,
 ) -> FetchResult | None:
     resolved_trace_fields = {"fetch_method": "static", **dict(trace_fields or {})}
 
     def fetch_detail(url: str) -> FetchResult | None:
         if before_request is not None:
             before_request(url)
-        return fetch_html(url, include_http_error_status=True)
+        return fetch_html(
+            url,
+            headers=request_headers_provider(url) if request_headers_provider is not None else None,
+            include_http_error_status=True,
+        )
 
     return fetch_with_transient_retries(
         source_url,
