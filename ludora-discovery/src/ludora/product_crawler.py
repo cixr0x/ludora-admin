@@ -13,6 +13,17 @@ from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import extract_listing_candidates
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_detail_extraction import extract_product_detail_candidate
+from ludora.shopify_storefront import (
+    extract_shopify_storefront_candidate,
+    fetch_shopify_storefront_product,
+    parse_shopify_storefront_payload,
+    shopify_graphql_error_messages,
+    shopify_graphql_errors,
+    shopify_graphql_is_throttled,
+    shopify_product_from_payload,
+    shopify_product_handle,
+    shopify_storefront_endpoint,
+)
 from ludora.sitemap_discovery import _looks_like_site_protection_challenge, discover_product_urls_from_sitemaps
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import (
@@ -27,7 +38,13 @@ from ludora.webfetch import (
 
 
 AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
-RequestHeadersProvider = Callable[[str], Mapping[str, str]]
+
+
+class RequestHeadersProvider(Protocol):
+    def __call__(self, target_url: str, method: str = "GET") -> Mapping[str, str]:
+        ...
+
+
 STORE_UPDATE_MIN_INTERVAL_SECONDS = 2.0
 STORE_UPDATE_JITTER_SECONDS = 1.0
 STORE_UPDATE_FALLBACK_COOLDOWN_SECONDS = 30.0
@@ -695,23 +712,34 @@ def refresh_confirmed_store_item_candidate(
 ) -> DiscoveryItemCandidateRecord:
     """Fetch and normalize one confirmed store item without persisting it."""
 
-    refreshed_record = _fetch_detail_candidate(
-        listing_candidate=existing_record,
-        source_listing_url=existing_record.source_listing_url or existing_record.source_url,
-        platform=platform,
-        browser_fetcher=browser_fetcher,
-        detect_removed=True,
-        trace_logger=trace_logger,
-        cancellation_token=cancellation_token,
-        before_request=before_request,
-        request_headers_provider=request_headers_provider,
-        static_fetch_max_attempts=(
-            AMAZON_UPDATE_STATIC_FETCH_ATTEMPTS
-            if platform.strip().casefold() in AMAZON_STORE_PLATFORMS
-            else DEFAULT_FETCH_MAX_ATTEMPTS
-        ),
-        amazon_browser_fetch_max_attempts=AMAZON_UPDATE_BROWSER_FETCH_ATTEMPTS,
-    )
+    normalized_platform = platform.strip().casefold()
+    if normalized_platform == "shopify":
+        refreshed_record = _fetch_shopify_storefront_candidate(
+            existing_record,
+            source_listing_url=existing_record.source_listing_url or existing_record.source_url,
+            cancellation_token=cancellation_token,
+            trace_logger=trace_logger,
+            before_request=before_request,
+            request_headers_provider=request_headers_provider,
+        )
+    else:
+        refreshed_record = _fetch_detail_candidate(
+            listing_candidate=existing_record,
+            source_listing_url=existing_record.source_listing_url or existing_record.source_url,
+            platform=platform,
+            browser_fetcher=browser_fetcher,
+            detect_removed=True,
+            trace_logger=trace_logger,
+            cancellation_token=cancellation_token,
+            before_request=before_request,
+            request_headers_provider=request_headers_provider,
+            static_fetch_max_attempts=(
+                AMAZON_UPDATE_STATIC_FETCH_ATTEMPTS
+                if normalized_platform in AMAZON_STORE_PLATFORMS
+                else DEFAULT_FETCH_MAX_ATTEMPTS
+            ),
+            amazon_browser_fetch_max_attempts=AMAZON_UPDATE_BROWSER_FETCH_ATTEMPTS,
+        )
     raise_if_cancelled(cancellation_token)
     _prepare_refreshed_titles(
         existing_record,
@@ -721,6 +749,243 @@ def refresh_confirmed_store_item_candidate(
     )
     _preserve_confirmed_item_state(refreshed_record, existing_record)
     return refreshed_record
+
+
+def _fetch_shopify_storefront_candidate(
+    existing_record: DiscoveryItemCandidateRecord,
+    *,
+    source_listing_url: str,
+    cancellation_token: CancellationToken | None,
+    trace_logger: TraceLogger | None,
+    before_request: Callable[[str], None] | None,
+    request_headers_provider: RequestHeadersProvider | None,
+) -> DiscoveryItemCandidateRecord:
+    trace = trace_logger or NullTraceLogger()
+    try:
+        endpoint = shopify_storefront_endpoint(existing_record.source_url)
+        handle = shopify_product_handle(existing_record.source_url)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Invalid Shopify product URL {existing_record.source_url}: {exc}"
+        ) from exc
+
+    trace_fields: dict[str, object] = {
+        "fetch_method": "shopify_storefront_graphql",
+        "graphql_endpoint": endpoint,
+        "product_handle": handle,
+        "store_id": existing_record.store_id,
+        "store_item_id": existing_record.store_item_id,
+        "store_item_title": existing_record.title,
+    }
+    trace.log(
+        "item_update.item.shopify_graphql.started",
+        **trace_fields,
+        message="Fetching confirmed Shopify product through Storefront GraphQL",
+        source_url=existing_record.source_url,
+    )
+
+    last_fetch: FetchResult | None = None
+
+    def fetch_product(_: str) -> FetchResult:
+        nonlocal last_fetch
+        if before_request is not None:
+            before_request(endpoint)
+        last_fetch = fetch_shopify_storefront_product(
+            existing_record.source_url,
+            request_headers_provider=request_headers_provider,
+        )
+        return last_fetch
+
+    fetched = fetch_with_transient_retries(
+        endpoint,
+        fetch_product,
+        trace_event="item_update.item.shopify_graphql.http_error",
+        trace_logger=trace,
+        trace_fields=trace_fields,
+        cancellation_token=cancellation_token,
+        ambiguous_failure_attempts=DEFAULT_FETCH_MAX_ATTEMPTS,
+        max_attempts=DEFAULT_FETCH_MAX_ATTEMPTS,
+        trace_attempts=True,
+        immediate_return_status_codes={429},
+    )
+    raise_if_cancelled(cancellation_token)
+
+    if fetched is None:
+        error = last_fetch.error if last_fetch is not None and last_fetch.error else "No response was returned"
+        error_type = (
+            last_fetch.error_type
+            if last_fetch is not None and last_fetch.error_type
+            else "NoResponse"
+        )
+        message = (
+            "Shopify Storefront GraphQL request failed after "
+            f"{DEFAULT_FETCH_MAX_ATTEMPTS} attempts for {existing_record.source_url}: "
+            f"{error_type}: {error}"
+        )
+        trace.log(
+            "item_update.item.shopify_graphql.failed",
+            **trace_fields,
+            error=error,
+            error_type=error_type,
+            message=message,
+            source_url=existing_record.source_url,
+        )
+        raise TransientProductFetchError(message)
+
+    if fetched.status_code >= 400:
+        response_excerpt = _shopify_response_excerpt(fetched.text)
+        details = f"; response: {response_excerpt}" if response_excerpt else ""
+        message = (
+            f"Shopify Storefront GraphQL returned HTTP {fetched.status_code} "
+            f"for {existing_record.source_url}{details}"
+        )
+        trace.log(
+            "item_update.item.shopify_graphql.failed",
+            **trace_fields,
+            error=message,
+            message=message,
+            response_excerpt=response_excerpt,
+            retry_after_seconds=fetched.retry_after_seconds,
+            source_url=existing_record.source_url,
+            status_code=fetched.status_code,
+        )
+        if fetched.status_code in TRANSIENT_FETCH_STATUS_CODES:
+            raise TransientProductFetchError(
+                message,
+                retry_after_seconds=fetched.retry_after_seconds,
+                status_code=fetched.status_code,
+            )
+        raise RuntimeError(message)
+
+    try:
+        payload = parse_shopify_storefront_payload(fetched.text)
+    except ValueError as exc:
+        message = f"Invalid Shopify Storefront GraphQL response for {existing_record.source_url}: {exc}"
+        trace.log(
+            "item_update.item.shopify_graphql.failed",
+            **trace_fields,
+            error=str(exc),
+            error_type=type(exc).__name__,
+            message=message,
+            response_excerpt=_shopify_response_excerpt(fetched.text),
+            source_url=existing_record.source_url,
+            status_code=fetched.status_code,
+        )
+        raise TransientProductFetchError(message, status_code=fetched.status_code) from exc
+
+    graphql_errors = shopify_graphql_errors(payload)
+    if graphql_errors:
+        error_messages = shopify_graphql_error_messages(graphql_errors)
+        error_summary = "; ".join(error_messages)
+        throttled = shopify_graphql_is_throttled(graphql_errors)
+        message = (
+            f"Shopify Storefront GraphQL returned errors for {existing_record.source_url}: "
+            f"{error_summary}"
+        )
+        trace.log(
+            "item_update.item.shopify_graphql.failed",
+            **trace_fields,
+            error=error_summary,
+            error_count=len(graphql_errors),
+            graphql_errors=error_messages,
+            message=message,
+            source_url=existing_record.source_url,
+            status_code=fetched.status_code,
+            throttled=throttled,
+        )
+        if throttled:
+            raise TransientProductFetchError(message, status_code=429)
+        raise RuntimeError(message)
+
+    product = shopify_product_from_payload(payload)
+    if product is None:
+        message = (
+            "Shopify Storefront GraphQL did not return a published product for "
+            f"handle {handle}: {existing_record.source_url}"
+        )
+        trace.log(
+            "item_update.item.shopify_graphql.not_found",
+            **trace_fields,
+            message=message,
+            source_url=existing_record.source_url,
+            status_code=fetched.status_code,
+        )
+        raise ProductPageRemovedError(message)
+
+    try:
+        refreshed_record = extract_shopify_storefront_candidate(
+            product,
+            product_url=existing_record.source_url,
+            source_listing_url=source_listing_url,
+            store_id=existing_record.store_id,
+        )
+    except ValueError as exc:
+        message = f"Failed to normalize Shopify Storefront GraphQL product {handle}: {exc}"
+        trace.log(
+            "item_update.item.shopify_graphql.failed",
+            **trace_fields,
+            error=str(exc),
+            error_type=type(exc).__name__,
+            message=message,
+            source_url=existing_record.source_url,
+            status_code=fetched.status_code,
+        )
+        raise RuntimeError(message) from exc
+
+    refreshed_record = _apply_listing_fallbacks(refreshed_record, existing_record)
+    _preserve_shopify_unavailable_metadata(refreshed_record, existing_record)
+    trace.log(
+        "item_update.item.shopify_graphql.completed",
+        **trace_fields,
+        availability=refreshed_record.availability,
+        currency=refreshed_record.currency,
+        final_url=fetched.url,
+        message="Confirmed Shopify product refreshed through Storefront GraphQL",
+        price=refreshed_record.price,
+        product_gid=str(product.get("id") or ""),
+        source_url=existing_record.source_url,
+        status_code=fetched.status_code,
+    )
+    return refreshed_record
+
+
+def _shopify_response_excerpt(value: str, *, limit: int = 500) -> str:
+    normalized = " ".join(value.split())
+    return normalized if len(normalized) <= limit else f"{normalized[:limit]}..."
+
+
+def _preserve_shopify_unavailable_metadata(
+    refreshed_record: DiscoveryItemCandidateRecord,
+    existing_record: DiscoveryItemCandidateRecord,
+) -> None:
+    for field_name in (
+        "publisher",
+        "description",
+        "language",
+        "language_source",
+        "language_evidence",
+        "image_url",
+        "store_sku",
+    ):
+        if not getattr(refreshed_record, field_name):
+            setattr(refreshed_record, field_name, getattr(existing_record, field_name))
+
+    if refreshed_record.item_type == "unknown":
+        refreshed_record.item_type = existing_record.item_type
+    for field_name in (
+        "min_players",
+        "max_players",
+        "min_minutes",
+        "max_minutes",
+        "min_age",
+    ):
+        if getattr(refreshed_record, field_name) is None:
+            setattr(refreshed_record, field_name, getattr(existing_record, field_name))
+
+    refreshed_record.raw_payload = {
+        **existing_record.raw_payload,
+        **refreshed_record.raw_payload,
+    }
 
 
 def _wait_for_store_update_request(
