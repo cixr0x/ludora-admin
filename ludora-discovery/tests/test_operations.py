@@ -508,6 +508,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             run_id=ANY,
             store_ids=[12, 34],
             item_title_extractor=ANY,
+            request_headers_provider=None,
             trace_logger=ANY,
         )
         repository.start_store_item_update_log.assert_called_once()

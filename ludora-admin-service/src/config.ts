@@ -31,6 +31,11 @@ export type Config = {
   port: number;
   databaseUrl?: string;
   corsOrigin: string[];
+  continuousItemUpdateWorker: {
+    enabled: boolean;
+    leaseSeconds: number;
+    pollSeconds: number;
+  };
   webBotAuth: {
     contactEmail: string;
     identityOrigin: string;
@@ -67,9 +72,47 @@ export function loadConfig(): Config {
     port,
     databaseUrl: process.env.LUDORA_DATABASE_URL,
     corsOrigin: readCorsOrigins(),
+    continuousItemUpdateWorker: readContinuousItemUpdateWorkerConfig(),
     webBotAuth: readWebBotAuthConfig(),
     discoveryRunner: readDiscoveryRunnerConfig()
   };
+}
+
+function readContinuousItemUpdateWorkerConfig(): Config['continuousItemUpdateWorker'] {
+  return {
+    enabled: readBooleanEnv(
+      'LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED',
+      process.env.NODE_ENV === 'production'
+    ),
+    leaseSeconds: readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', 300),
+    pollSeconds: readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', 5)
+  };
+}
+
+function readBooleanEnv(key: string, defaultValue: boolean): boolean {
+  const rawValue = readOptionalEnv(key);
+  if (!rawValue) {
+    return defaultValue;
+  }
+  if (rawValue.toLowerCase() === 'true') {
+    return true;
+  }
+  if (rawValue.toLowerCase() === 'false') {
+    return false;
+  }
+  throw new Error(`${key} must be true or false`);
+}
+
+function readPositiveNumberEnv(key: string, defaultValue: number): number {
+  const rawValue = readOptionalEnv(key);
+  if (!rawValue) {
+    return defaultValue;
+  }
+  const value = Number(rawValue);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${key} must be a positive number`);
+  }
+  return value;
 }
 
 function readOptionalEnv(key: string): string | undefined {

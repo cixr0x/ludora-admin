@@ -8,6 +8,7 @@ import { createOpenAiAmazonTitleExtractionClient } from './amazonTitleExtraction
 import { createBggClient } from './bgg/bggClient.js';
 import { createCachedBggClient } from './bgg/cachedBggClient.js';
 import { createBggItemImporter } from './bgg/bggItemImporter.js';
+import { createContinuousItemUpdateWorkerManager } from './continuousItemUpdateWorkerManager.js';
 import { createDescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import {
   createCoverFlatteningWorkflowManager,
@@ -104,6 +105,18 @@ const operationsClient =
 const shutdownOperationsClient = localOperationsClient
   ? () => localOperationsClient.shutdown()
   : async () => undefined;
+const continuousItemUpdateWorkerManager =
+  config.continuousItemUpdateWorker.enabled && config.discoveryRunner.mode === 'local'
+    ? createContinuousItemUpdateWorkerManager({
+        adminApiUrl: `http://127.0.0.1:${config.port}`,
+        envFile: config.discoveryRunner.envFile,
+        internalApiToken,
+        leaseSeconds: config.continuousItemUpdateWorker.leaseSeconds,
+        packageDir: config.discoveryRunner.packageDir,
+        pollSeconds: config.continuousItemUpdateWorker.pollSeconds,
+        pythonExecutable: config.discoveryRunner.pythonExecutable
+      })
+    : undefined;
 const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   database,
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
@@ -139,6 +152,7 @@ const app = createApp({
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`ludora-admin-service listening on ${config.host}:${config.port}`);
+  continuousItemUpdateWorkerManager?.start();
 });
 
 let isShuttingDown = false;
@@ -158,6 +172,7 @@ async function shutdown(): Promise<void> {
     });
   });
   try {
+    await continuousItemUpdateWorkerManager?.shutdown();
     await shutdownOperationsClient();
     await closeServer;
     process.exit(0);

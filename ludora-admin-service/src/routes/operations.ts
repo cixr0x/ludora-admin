@@ -251,6 +251,15 @@ export function createOperationsRouter(
     }
   });
 
+  router.get('/admin/operations/store-item-update-monitor', async (request, response, next) => {
+    try {
+      const rangeHours = integerQueryField(request.query.hours, 48, 24, 168);
+      response.json({ data: await loadStoreItemUpdateMonitor(database, rangeHours) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/admin/operations/store-item-update-jobs/:runId/changes', async (request, response, next) => {
     try {
       const runId = request.params.runId.trim();
@@ -424,6 +433,199 @@ export function createOperationsRouter(
   });
 
   return router;
+}
+
+async function loadStoreItemUpdateMonitor(database: Database, rangeHours: number) {
+  const workerResult = await database.query(
+    `select
+       worker.worker_name, worker.worker_id, worker.status, worker.poll_seconds,
+       worker.heartbeat_at, worker.started_at, worker.current_store_item_id,
+       current_item.update_lease_expires_at as current_lease_expires_at,
+       worker.last_attempt_at, worker.last_success_at, worker.last_failure_at,
+       worker.last_error, worker.shopify_blocked_until,
+       worker.shopify_consecutive_429s, worker.updated_at
+     from store_item_update_worker_state worker
+     left join store_items current_item on current_item.id = worker.current_store_item_id
+     where worker.worker_name = 'continuous'`
+  );
+  const workerRow = workerResult.rows[0] as Record<string, unknown> | undefined;
+  const pollSeconds = workerRow ? numberField(workerRow, 'poll_seconds') || 5 : 5;
+
+  const summaryResult = await database.query(
+    `with eligible as (
+       select store_items.*
+       from store_items
+       join stores on stores.id = store_items.store_id
+       where stores.active = true
+         and store_items.is_boardgame = true
+         and store_items.is_boardgame_confirmed = true
+         and store_items.item_id is not null
+         and store_items.source_url <> ''
+         and store_items.listing_status = 'LISTED'
+         and store_items.store_active = true
+     )
+     select
+       count(*)::int as eligible_items,
+       count(*) filter (where next_update_at <= now())::int as due_items,
+       count(*) filter (where refreshed_date >= now() - interval '24 hours')::int as fresh_items,
+       count(*) filter (where refreshed_date < now() - interval '24 hours')::int as stale_items,
+       count(*) filter (
+         where update_lease_token is not null and update_lease_expires_at > now()
+       )::int as leased_items,
+       coalesce(max(extract(epoch from (now() - refreshed_date)) / 3600), 0)::float8 as oldest_staleness_hours,
+       coalesce(max(extract(epoch from (now() - next_update_at)) / 3600)
+         filter (where next_update_at <= now()), 0)::float8 as oldest_due_hours,
+       min(next_update_at) as next_due_at,
+       (select count(*)::int
+        from store_item_update_attempt_log
+        where started_at >= now() - interval '24 hours') as attempts_24h,
+       (select count(*)::int
+        from store_item_update_attempt_log
+        where started_at >= now() - interval '24 hours'
+          and status in ('succeeded', 'deactivated')) as successes_24h,
+       (select count(*)::int
+        from store_item_update_attempt_log
+        where started_at >= now() - interval '24 hours'
+          and status in ('failed', 'lease_lost')) as failures_24h,
+       (select count(*)::int
+        from store_item_update_attempt_log
+        where started_at >= now() - interval '24 hours'
+          and http_status = 429) as rate_limited_24h
+     from eligible`
+  );
+  const summaryRow = (summaryResult.rows[0] ?? {}) as Record<string, unknown>;
+  const eligibleItems = numberField(summaryRow, 'eligible_items');
+  const freshItems = numberField(summaryRow, 'fresh_items');
+  const successes24h = numberField(summaryRow, 'successes_24h');
+  const failures24h = numberField(summaryRow, 'failures_24h');
+  const completed24h = successes24h + failures24h;
+  const dailyCapacity = 86_400 / pollSeconds;
+  const projectedDailyDemand = eligibleItems * (24 / 22);
+
+  const histogramResult = await database.query(
+    `with eligible as (
+       select greatest(0, floor(extract(epoch from (now() - store_items.refreshed_date)) / 3600))::int as staleness_hour
+       from store_items
+       join stores on stores.id = store_items.store_id
+       where stores.active = true
+         and store_items.is_boardgame = true
+         and store_items.is_boardgame_confirmed = true
+         and store_items.item_id is not null
+         and store_items.source_url <> ''
+         and store_items.listing_status = 'LISTED'
+         and store_items.store_active = true
+     ), hourly as (
+       select staleness_hour, count(*)::int as item_count
+       from eligible
+       where staleness_hour < $1
+       group by staleness_hour
+     )
+     select hours.hour as staleness_hour, coalesce(hourly.item_count, 0)::int as item_count, false as overflow
+     from generate_series(0, $1 - 1) hours(hour)
+     left join hourly on hourly.staleness_hour = hours.hour
+     union all
+     select $1, count(*)::int, true
+     from eligible
+     where staleness_hour >= $1
+     order by staleness_hour`,
+    [rangeHours]
+  );
+
+  const failuresResult = await database.query(
+    `select
+       attempts.store_id,
+       coalesce(stores.name, 'Unknown store') as store_name,
+       attempts.platform,
+       count(*)::int as failures,
+       count(*) filter (where attempts.http_status = 429)::int as rate_limited,
+       max(attempts.completed_at) as last_failure_at,
+       (array_agg(attempts.error order by attempts.completed_at desc))[1] as last_error
+     from store_item_update_attempt_log attempts
+     left join stores on stores.id = attempts.store_id
+     where attempts.started_at >= now() - interval '24 hours'
+       and attempts.status in ('failed', 'lease_lost')
+     group by attempts.store_id, stores.name, attempts.platform
+     order by failures desc, last_failure_at desc
+     limit 12`
+  );
+
+  const recentAttemptsResult = await database.query(
+    `select
+       attempts.id, attempts.store_item_id, attempts.store_id,
+       coalesce(stores.name, 'Unknown store') as store_name,
+       store_items.title as store_item_title, attempts.platform, attempts.status,
+       attempts.changed, attempts.http_status, attempts.error, attempts.started_at,
+       attempts.completed_at, attempts.duration_ms
+     from store_item_update_attempt_log attempts
+     join store_items on store_items.id = attempts.store_item_id
+     left join stores on stores.id = attempts.store_id
+     order by attempts.started_at desc
+     limit 25`
+  );
+
+  return {
+    failures_by_store: failuresResult.rows,
+    generated_at: new Date().toISOString(),
+    histogram: histogramResult.rows.map((row) => {
+      const record = row as Record<string, unknown>;
+      const stalenessHour = numberField(record, 'staleness_hour');
+      return {
+        item_count: numberField(record, 'item_count'),
+        label: record.overflow ? `${stalenessHour}h+` : `${stalenessHour}h`,
+        overflow: Boolean(record.overflow),
+        staleness_hour: stalenessHour
+      };
+    }),
+    range_hours: rangeHours,
+    recent_attempts: recentAttemptsResult.rows,
+    summary: {
+      attempts_24h: numberField(summaryRow, 'attempts_24h'),
+      daily_capacity: Math.floor(dailyCapacity),
+      due_items: numberField(summaryRow, 'due_items'),
+      eligible_items: eligibleItems,
+      failures_24h: failures24h,
+      fresh_items: freshItems,
+      fresh_percent: eligibleItems > 0 ? (freshItems / eligibleItems) * 100 : 100,
+      leased_items: numberField(summaryRow, 'leased_items'),
+      next_due_at: summaryRow.next_due_at ?? null,
+      oldest_due_hours: numberField(summaryRow, 'oldest_due_hours'),
+      oldest_staleness_hours: numberField(summaryRow, 'oldest_staleness_hours'),
+      projected_daily_demand: projectedDailyDemand,
+      projected_utilization_percent: dailyCapacity > 0 ? (projectedDailyDemand / dailyCapacity) * 100 : 0,
+      rate_limited_24h: numberField(summaryRow, 'rate_limited_24h'),
+      stale_items: numberField(summaryRow, 'stale_items'),
+      success_rate_percent: completed24h > 0 ? (successes24h / completed24h) * 100 : 100,
+      successes_24h: successes24h
+    },
+    worker: workerRow
+      ? {
+          ...workerRow,
+          health: workerHealth(workerRow, pollSeconds),
+          shopify_is_blocked: isFutureDate(workerRow.shopify_blocked_until)
+        }
+      : null
+  };
+}
+
+function workerHealth(worker: Record<string, unknown>, pollSeconds: number): 'healthy' | 'stale' | 'stopped' {
+  if (worker.status === 'stopped') {
+    return 'stopped';
+  }
+  if (worker.status === 'error') {
+    return 'stale';
+  }
+  const heartbeatAt = new Date(String(worker.heartbeat_at ?? '')).getTime();
+  const maximumAgeMs = Math.max(30, pollSeconds * 3) * 1_000;
+  const activeLease = worker.status === 'running' && isFutureDate(worker.current_lease_expires_at);
+  return activeLease || (Number.isFinite(heartbeatAt) && Date.now() - heartbeatAt <= maximumAgeMs) ? 'healthy' : 'stale';
+}
+
+function isFutureDate(value: unknown): boolean {
+  if (!value) {
+    return false;
+  }
+  const timestamp = new Date(String(value)).getTime();
+  return Number.isFinite(timestamp) && timestamp > Date.now();
 }
 
 function parseEmbeddingRefreshMode(body: unknown): 'full' | 'missing' {

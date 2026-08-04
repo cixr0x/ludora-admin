@@ -96,6 +96,17 @@ class StoreItemDiscoverySource:
     platform: str
 
 
+@dataclass(frozen=True)
+class ClaimedStoreItemUpdate:
+    attempt_id: int
+    consecutive_failures: int
+    lease_token: str
+    platform: str
+    record: DiscoveryItemCandidateRecord
+    shopify_consecutive_429s: int
+    store_name: str
+
+
 STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS = (
     "original_title",
     "title",
@@ -388,6 +399,602 @@ class DiscoveryRepository:
             )
         self.connection.commit()
 
+    def try_acquire_store_item_update_coordinator_lock(self) -> bool:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "select pg_try_advisory_lock(hashtext(%s))",
+                ("ludora:store-item-update-coordinator",),
+            )
+            row = cursor.fetchone()
+        return bool(row and row[0])
+
+    def mark_continuous_update_worker_started(
+        self,
+        *,
+        worker_name: str,
+        worker_id: str,
+        poll_seconds: float,
+    ) -> datetime | None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into store_item_update_worker_state (
+                    worker_name,
+                    worker_id,
+                    status,
+                    poll_seconds,
+                    heartbeat_at,
+                    started_at,
+                    current_store_item_id,
+                    last_error,
+                    updated_at
+                )
+                values (%s, %s, 'starting', %s, now(), now(), null, '', now())
+                on conflict (worker_name) do update set
+                    worker_id = excluded.worker_id,
+                    status = excluded.status,
+                    poll_seconds = excluded.poll_seconds,
+                    heartbeat_at = excluded.heartbeat_at,
+                    started_at = excluded.started_at,
+                    current_store_item_id = null,
+                    last_error = '',
+                    updated_at = excluded.updated_at
+                returning shopify_blocked_until
+                """,
+                (worker_name, worker_id, poll_seconds),
+            )
+            row = cursor.fetchone()
+        self.connection.commit()
+        return row[0] if row else None
+
+    def recover_interrupted_continuous_updates(self) -> None:
+        recovery_error = "Continuous update worker restarted before the attempt completed"
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                with interrupted as (
+                    update store_item_update_attempt_log
+                    set status = 'lease_lost',
+                        changed = false,
+                        error = %s,
+                        completed_at = now(),
+                        duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
+                    where status = 'running'
+                    returning store_item_id, lease_token
+                )
+                update store_items
+                set next_update_at = least(next_update_at, now() + interval '1 minute'),
+                    update_lease_token = null,
+                    update_lease_expires_at = null,
+                    consecutive_update_failures = consecutive_update_failures + 1,
+                    last_update_error = %s
+                from interrupted
+                where store_items.id = interrupted.store_item_id
+                  and store_items.update_lease_token = interrupted.lease_token
+                """,
+                (recovery_error, recovery_error),
+            )
+            cursor.execute(
+                """
+                update job_store_item_update_log
+                set status = 'failed',
+                    error = %s,
+                    completed_at = now(),
+                    updated_at = now()
+                where status = 'running'
+                  and run_id like 'continuous:%%'
+                """,
+                (recovery_error,),
+            )
+        self.connection.commit()
+
+    def heartbeat_continuous_update_worker(
+        self,
+        *,
+        worker_name: str,
+        worker_id: str,
+        status: str = "idle",
+        error: str = "",
+    ) -> None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update store_item_update_worker_state
+                set status = %s,
+                    heartbeat_at = now(),
+                    current_store_item_id = null,
+                    last_error = %s,
+                    updated_at = now()
+                where worker_name = %s
+                  and worker_id = %s
+                """,
+                (status, error, worker_name, worker_id),
+            )
+        self.connection.commit()
+
+    def mark_continuous_update_worker_stopped(self, *, worker_name: str, worker_id: str) -> None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update store_item_update_worker_state
+                set status = 'stopped',
+                    heartbeat_at = now(),
+                    current_store_item_id = null,
+                    updated_at = now()
+                where worker_name = %s
+                  and worker_id = %s
+                """,
+                (worker_name, worker_id),
+            )
+        self.connection.commit()
+
+    def claim_due_store_item_update(
+        self,
+        *,
+        worker_name: str,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+    ) -> ClaimedStoreItemUpdate | None:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                with due_window as materialized (
+                    select store_items.id
+                    from store_items
+                    join stores on stores.id = store_items.store_id
+                    where stores.active = true
+                      and store_items.is_boardgame = true
+                      and store_items.is_boardgame_confirmed = true
+                      and store_items.item_id is not null
+                      and store_items.source_url <> ''
+                      and store_items.listing_status = 'LISTED'
+                      and store_items.store_active = true
+                      and store_items.next_update_at <= now()
+                      and (
+                        store_items.update_lease_token is null
+                        or store_items.update_lease_expires_at <= now()
+                      )
+                      and not (
+                        lower(coalesce(stores.platform, '')) = 'shopify'
+                        and coalesce(
+                          (
+                            select shopify_blocked_until
+                            from store_item_update_worker_state
+                            where store_item_update_worker_state.worker_name = %s
+                          ),
+                          '-infinity'::timestamptz
+                        ) > now()
+                      )
+                    order by store_items.next_update_at, store_items.id
+                    limit 256
+                ), candidate as (
+                    select store_items.id
+                    from store_items
+                    join due_window on due_window.id = store_items.id
+                    order by random()
+                    for update of store_items skip locked
+                    limit 1
+                )
+                update store_items
+                set update_lease_token = %s::uuid,
+                    update_lease_expires_at = now() + make_interval(secs => %s),
+                    last_update_attempt_at = now()
+                from candidate
+                where store_items.id = candidate.id
+                returning store_items.id
+                """,
+                (worker_name, lease_token, lease_seconds),
+            )
+            claimed_row = cursor.fetchone()
+            if not claimed_row:
+                self.connection.commit()
+                return None
+
+            store_item_id = int(claimed_row[0])
+            cursor.execute(
+                f"""
+                select {_item_candidate_select_columns()}
+                from store_items
+                where id = %s
+                """,
+                (store_item_id,),
+            )
+            record_row = cursor.fetchone()
+            if not record_row:
+                self.connection.rollback()
+                return None
+            record = _item_candidate_from_row(record_row)
+            cursor.execute(
+                """
+                select
+                    coalesce(stores.name, ''),
+                    lower(coalesce(stores.platform, '')),
+                    store_items.consecutive_update_failures,
+                    coalesce(
+                      (
+                        select shopify_consecutive_429s
+                        from store_item_update_worker_state
+                        where worker_name = %s
+                      ),
+                      0
+                    )
+                from store_items
+                join stores on stores.id = store_items.store_id
+                where store_items.id = %s
+                """,
+                (worker_name, store_item_id),
+            )
+            store_row = cursor.fetchone()
+            store_name = _text(store_row[0]) if store_row else ""
+            platform = _text(store_row[1]).casefold() if store_row else ""
+            cursor.execute(
+                """
+                insert into store_item_update_attempt_log (
+                    store_item_id,
+                    store_id,
+                    worker_id,
+                    lease_token,
+                    platform,
+                    status
+                )
+                values (%s, %s, %s, %s::uuid, %s, 'running')
+                returning id
+                """,
+                (store_item_id, record.store_id, worker_id, lease_token, platform),
+            )
+            attempt_row = cursor.fetchone()
+            cursor.execute(
+                """
+                update store_item_update_worker_state
+                set status = 'running',
+                    heartbeat_at = now(),
+                    current_store_item_id = %s,
+                    last_attempt_at = now(),
+                    last_error = '',
+                    updated_at = now()
+                where worker_name = %s
+                  and worker_id = %s
+                """,
+                (store_item_id, worker_name, worker_id),
+            )
+        self.connection.commit()
+        return ClaimedStoreItemUpdate(
+            attempt_id=int(attempt_row[0]) if attempt_row else 0,
+            consecutive_failures=int(store_row[2]) if store_row else 0,
+            lease_token=lease_token,
+            platform=platform,
+            record=record,
+            shopify_consecutive_429s=int(store_row[3]) if store_row else 0,
+            store_name=store_name or f"Store {record.store_id}",
+        )
+
+    def complete_claimed_store_item_update(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        refreshed_record: DiscoveryItemCandidateRecord,
+        *,
+        attempt_id: int,
+        job_id: int,
+        lease_token: str,
+        next_update_at: datetime,
+        run_id: str,
+        worker_id: str,
+        worker_name: str,
+        platform: str,
+    ) -> ItemCandidateUpsertResult:
+        store_item_id = existing_record.store_item_id or refreshed_record.store_item_id
+        if store_item_id is None:
+            raise ValueError("store item id is required to complete a claimed update")
+        refreshed_record.store_item_id = store_item_id
+        data = refreshed_record.to_db_dict()
+        changes = _item_update_changes(existing_record, refreshed_record)
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update store_items
+                set original_title = %s,
+                    title = %s,
+                    raw_price = %s,
+                    price = %s,
+                    price_source = %s,
+                    currency = %s,
+                    availability = %s,
+                    availability_source = %s,
+                    last_seen_at = now(),
+                    refreshed_date = now(),
+                    next_update_at = %s,
+                    update_lease_token = null,
+                    update_lease_expires_at = null,
+                    consecutive_update_failures = 0,
+                    last_update_error = ''
+                where id = %s
+                  and update_lease_token = %s::uuid
+                returning id
+                """,
+                (
+                    *self._item_candidate_price_availability_params(data, include_title=True),
+                    next_update_at,
+                    store_item_id,
+                    lease_token,
+                ),
+            )
+            claimed_row = cursor.fetchone()
+            if not claimed_row:
+                self._mark_attempt_lease_lost(cursor, attempt_id, worker_name, worker_id)
+                self.connection.commit()
+                raise RuntimeError(f"Store item {store_item_id} update lease was lost")
+            for field_name, old_value, new_value in changes:
+                cursor.execute(
+                    """
+                    insert into store_item_update_change_log (
+                        job_id, run_id, store_item_id, field_name, old_value, new_value
+                    )
+                    values (%s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                    """,
+                    (
+                        job_id,
+                        run_id,
+                        store_item_id,
+                        field_name,
+                        _jsonb_log_value(old_value),
+                        _jsonb_log_value(new_value),
+                    ),
+                )
+            cursor.execute(
+                """
+                update store_item_update_attempt_log
+                set status = 'succeeded',
+                    changed = %s,
+                    completed_at = now(),
+                    duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
+                where id = %s
+                """,
+                (bool(changes), attempt_id),
+            )
+            cursor.execute(
+                """
+                update store_item_update_worker_state
+                set status = 'idle',
+                    heartbeat_at = now(),
+                    current_store_item_id = null,
+                    last_success_at = now(),
+                    last_error = '',
+                    shopify_blocked_until = case when %s = 'shopify' then null else shopify_blocked_until end,
+                    shopify_consecutive_429s = case when %s = 'shopify' then 0 else shopify_consecutive_429s end,
+                    updated_at = now()
+                where worker_name = %s
+                  and worker_id = %s
+                """,
+                (platform, platform, worker_name, worker_id),
+            )
+            cursor.execute(
+                """
+                update job_store_item_update_log
+                set scanned_items = scanned_items + 1,
+                    updated_items = updated_items + %s,
+                    updated_at = now()
+                where id = %s
+                """,
+                (1 if changes else 0, job_id),
+            )
+        self.connection.commit()
+        return ItemCandidateUpsertResult(
+            candidate_id=store_item_id,
+            listing_status=refreshed_record.listing_status,
+            item_id=refreshed_record.item_id,
+            should_process=False,
+            changed=bool(changes),
+        )
+
+    def deactivate_claimed_store_item_update(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        *,
+        attempt_id: int,
+        job_id: int,
+        lease_token: str,
+        run_id: str,
+        worker_id: str,
+        worker_name: str,
+    ) -> None:
+        store_item_id = existing_record.store_item_id
+        if store_item_id is None:
+            raise ValueError("store item id is required to deactivate a claimed update")
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update store_items
+                set store_active = false,
+                    refreshed_date = now(),
+                    update_lease_token = null,
+                    update_lease_expires_at = null,
+                    consecutive_update_failures = 0,
+                    last_update_error = ''
+                where id = %s
+                  and update_lease_token = %s::uuid
+                  and store_active = true
+                returning id
+                """,
+                (store_item_id, lease_token),
+            )
+            if not cursor.fetchone():
+                self._mark_attempt_lease_lost(cursor, attempt_id, worker_name, worker_id)
+                self.connection.commit()
+                raise RuntimeError(f"Store item {store_item_id} update lease was lost")
+            cursor.execute(
+                """
+                insert into store_item_update_change_log (
+                    job_id, run_id, store_item_id, field_name, old_value, new_value
+                )
+                values (%s, %s, %s, 'store_active', 'true'::jsonb, 'false'::jsonb)
+                """,
+                (job_id, run_id, store_item_id),
+            )
+            cursor.execute(
+                """
+                update store_item_update_attempt_log
+                set status = 'deactivated',
+                    changed = true,
+                    completed_at = now(),
+                    duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
+                where id = %s
+                """,
+                (attempt_id,),
+            )
+            cursor.execute(
+                """
+                update store_item_update_worker_state
+                set status = 'idle',
+                    heartbeat_at = now(),
+                    current_store_item_id = null,
+                    last_success_at = now(),
+                    last_error = '',
+                    updated_at = now()
+                where worker_name = %s
+                  and worker_id = %s
+                """,
+                (worker_name, worker_id),
+            )
+            cursor.execute(
+                """
+                update job_store_item_update_log
+                set scanned_items = scanned_items + 1,
+                    updated_items = updated_items + 1,
+                    updated_at = now()
+                where id = %s
+                """,
+                (job_id,),
+            )
+        self.connection.commit()
+
+    def fail_claimed_store_item_update(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        *,
+        attempt_id: int,
+        error: str,
+        http_status: int | None,
+        lease_token: str,
+        next_update_at: datetime,
+        shopify_blocked_until: datetime | None,
+        worker_id: str,
+        worker_name: str,
+        job_id: int,
+        platform: str,
+    ) -> None:
+        store_item_id = existing_record.store_item_id
+        if store_item_id is None:
+            raise ValueError("store item id is required to fail a claimed update")
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                update store_items
+                set next_update_at = %s,
+                    update_lease_token = null,
+                    update_lease_expires_at = null,
+                    consecutive_update_failures = consecutive_update_failures + 1,
+                    last_update_error = %s
+                where id = %s
+                  and update_lease_token = %s::uuid
+                returning id
+                """,
+                (next_update_at, error, store_item_id, lease_token),
+            )
+            if not cursor.fetchone():
+                self._mark_attempt_lease_lost(cursor, attempt_id, worker_name, worker_id)
+                self.connection.commit()
+                return
+            cursor.execute(
+                """
+                update store_item_update_attempt_log
+                set status = 'failed',
+                    changed = false,
+                    http_status = %s,
+                    error = %s,
+                    completed_at = now(),
+                    duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
+                where id = %s
+                """,
+                (http_status, error, attempt_id),
+            )
+            cursor.execute(
+                """
+                update store_item_update_worker_state
+                set status = 'idle',
+                    heartbeat_at = now(),
+                    current_store_item_id = null,
+                    last_failure_at = now(),
+                    last_error = %s,
+                    shopify_blocked_until = case
+                      when %s = 'shopify' and %s = 429 then %s
+                      else shopify_blocked_until
+                    end,
+                    shopify_consecutive_429s = case
+                      when %s = 'shopify' and %s = 429 then shopify_consecutive_429s + 1
+                      else shopify_consecutive_429s
+                    end,
+                    updated_at = now()
+                where worker_name = %s
+                  and worker_id = %s
+                """,
+                (
+                    error,
+                    platform,
+                    http_status,
+                    shopify_blocked_until,
+                    platform,
+                    http_status,
+                    worker_name,
+                    worker_id,
+                ),
+            )
+            cursor.execute(
+                """
+                update job_store_item_update_log
+                set scanned_items = scanned_items + 1,
+                    updated_at = now()
+                where id = %s
+                """,
+                (job_id,),
+            )
+        self.connection.commit()
+
+    def _mark_attempt_lease_lost(
+        self,
+        cursor: Any,
+        attempt_id: int,
+        worker_name: str,
+        worker_id: str,
+    ) -> None:
+        cursor.execute(
+            """
+            update store_item_update_attempt_log
+            set status = 'lease_lost',
+                changed = false,
+                error = 'Update lease expired or was replaced before persistence',
+                completed_at = now(),
+                duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
+            where id = %s
+            """,
+            (attempt_id,),
+        )
+        cursor.execute(
+            """
+            update store_item_update_worker_state
+            set status = 'idle',
+                heartbeat_at = now(),
+                current_store_item_id = null,
+                last_failure_at = now(),
+                last_error = 'Update lease expired or was replaced before persistence',
+                updated_at = now()
+            where worker_name = %s
+              and worker_id = %s
+            """,
+            (worker_name, worker_id),
+        )
+
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> ItemCandidateUpsertResult:
         data = record.to_db_dict()
         with self.connection.cursor() as cursor:
@@ -668,21 +1275,27 @@ class DiscoveryRepository:
         store_ids: list[int] | None = None,
     ) -> list[DiscoveryItemCandidateRecord]:
         sql = f"""
-            select {_item_candidate_select_columns()}
+            select {_qualified_item_candidate_select_columns('store_items')}
             from store_items
-            where is_boardgame = true
-              and is_boardgame_confirmed = true
-              and item_id is not null
-              and source_url <> ''
-              and listing_status = 'LISTED'
-              and store_active = true
+            join stores on stores.id = store_items.store_id
+            where stores.active = true
+              and store_items.is_boardgame = true
+              and store_items.is_boardgame_confirmed = true
+              and store_items.item_id is not null
+              and store_items.source_url <> ''
+              and store_items.listing_status = 'LISTED'
+              and store_items.store_active = true
+              and (
+                store_items.update_lease_token is null
+                or store_items.update_lease_expires_at <= now()
+              )
         """
         params: list[object] = []
         if store_ids:
             placeholders = ", ".join(["%s"] * len(store_ids))
-            sql += f"\n              and store_id in ({placeholders})"
+            sql += f"\n              and store_items.store_id in ({placeholders})"
             params.extend(store_ids)
-        sql += "\n            order by refreshed_date asc nulls first, id asc"
+        sql += "\n            order by store_items.refreshed_date asc nulls first, store_items.id asc"
         if limit is not None:
             sql += "\nlimit %s"
             params.append(limit)
@@ -989,7 +1602,10 @@ def _update_item_candidate_price_availability_sql(*, include_title: bool = True)
         availability = %s,
         availability_source = %s,
         last_seen_at = now(),
-        refreshed_date = now()
+        refreshed_date = now(),
+        next_update_at = now() + interval '22 hours',
+        consecutive_update_failures = 0,
+        last_update_error = ''
     where id = %s
     """
 
@@ -1039,6 +1655,11 @@ def _item_candidate_select_columns() -> str:
         processing_error,
         id
     """
+
+
+def _qualified_item_candidate_select_columns(table_name: str) -> str:
+    columns = [column.strip() for column in _item_candidate_select_columns().split(",") if column.strip()]
+    return ",\n        ".join(f"{table_name}.{column}" for column in columns)
 
 
 def _item_candidate_from_row(row: Any) -> DiscoveryItemCandidateRecord:

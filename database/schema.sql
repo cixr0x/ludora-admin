@@ -129,6 +129,12 @@ create table if not exists store_items (
     last_seen_at timestamptz not null default now(),
     last_updated timestamptz not null default now(),
     refreshed_date timestamptz not null default now(),
+    next_update_at timestamptz not null default now(),
+    update_lease_token uuid,
+    update_lease_expires_at timestamptz,
+    consecutive_update_failures integer not null default 0,
+    last_update_attempt_at timestamptz,
+    last_update_error text not null default '',
     unique (store_id, source_url)
 );
 
@@ -139,6 +145,16 @@ alter table if exists store_items add column if not exists refreshed_date timest
 update store_items set refreshed_date = last_updated where refreshed_date is null;
 alter table if exists store_items alter column refreshed_date set default now();
 alter table if exists store_items alter column refreshed_date set not null;
+
+alter table if exists store_items add column if not exists next_update_at timestamptz;
+update store_items set next_update_at = least(now(), refreshed_date + interval '22 hours') where next_update_at is null;
+alter table if exists store_items alter column next_update_at set default now();
+alter table if exists store_items alter column next_update_at set not null;
+alter table if exists store_items add column if not exists update_lease_token uuid;
+alter table if exists store_items add column if not exists update_lease_expires_at timestamptz;
+alter table if exists store_items add column if not exists consecutive_update_failures integer not null default 0;
+alter table if exists store_items add column if not exists last_update_attempt_at timestamptz;
+alter table if exists store_items add column if not exists last_update_error text not null default '';
 
 alter table if exists store_items add column if not exists store_active boolean;
 update store_items set store_active = true where store_active is null;
@@ -153,6 +169,19 @@ on store_items (item_id);
 
 create index if not exists store_items_refreshed_date_idx
 on store_items (refreshed_date, id);
+
+create index if not exists store_items_next_update_at_idx
+on store_items (next_update_at, id)
+where is_boardgame = true
+  and is_boardgame_confirmed = true
+  and item_id is not null
+  and source_url <> ''
+  and listing_status = 'LISTED'
+  and store_active = true;
+
+create index if not exists store_items_update_lease_expires_at_idx
+on store_items (update_lease_expires_at)
+where update_lease_token is not null;
 
 create table if not exists store_item_click_stats (
     store_item_id bigint not null,
@@ -276,6 +305,51 @@ on store_item_update_change_log (run_id);
 
 create index if not exists store_item_update_change_log_store_item_created_idx
 on store_item_update_change_log (store_item_id, created_at desc);
+
+create table if not exists store_item_update_attempt_log (
+    id bigserial primary key,
+    store_item_id bigint not null references store_items(id) on delete cascade,
+    store_id bigint,
+    worker_id text not null,
+    lease_token uuid not null,
+    platform text not null default '',
+    status text not null default 'running'
+        check (status in ('running', 'succeeded', 'failed', 'deactivated', 'lease_lost')),
+    changed boolean,
+    http_status integer,
+    error text not null default '',
+    started_at timestamptz not null default now(),
+    completed_at timestamptz,
+    duration_ms integer,
+    created_at timestamptz not null default now()
+);
+
+create index if not exists store_item_update_attempt_log_started_at_idx
+on store_item_update_attempt_log (started_at desc);
+
+create index if not exists store_item_update_attempt_log_status_started_at_idx
+on store_item_update_attempt_log (status, started_at desc);
+
+create index if not exists store_item_update_attempt_log_store_started_at_idx
+on store_item_update_attempt_log (store_id, started_at desc);
+
+create table if not exists store_item_update_worker_state (
+    worker_name text primary key,
+    worker_id text not null,
+    status text not null
+        check (status in ('starting', 'idle', 'running', 'stopped', 'error')),
+    poll_seconds numeric(8, 2) not null,
+    heartbeat_at timestamptz not null default now(),
+    started_at timestamptz not null default now(),
+    current_store_item_id bigint references store_items(id) on delete set null,
+    last_attempt_at timestamptz,
+    last_success_at timestamptz,
+    last_failure_at timestamptz,
+    last_error text not null default '',
+    shopify_blocked_until timestamptz,
+    shopify_consecutive_429s integer not null default 0,
+    updated_at timestamptz not null default now()
+);
 
 alter table if exists store_items add column if not exists source_listing_url text not null default '';
 alter table if exists store_items add column if not exists image_url text not null default '';
@@ -494,6 +568,21 @@ create table if not exists stores (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
+
+do $$
+begin
+    if to_regclass('store_item_update_attempt_log') is not null
+       and not exists (
+           select 1
+           from pg_constraint
+           where conrelid = 'store_item_update_attempt_log'::regclass
+             and conname = 'store_item_update_attempt_log_store_id_fkey'
+       ) then
+        alter table store_item_update_attempt_log
+        add constraint store_item_update_attempt_log_store_id_fkey
+        foreign key (store_id) references stores(id) on delete set null;
+    end if;
+end $$;
 
 alter table if exists stores add column if not exists platform text not null default '';
 

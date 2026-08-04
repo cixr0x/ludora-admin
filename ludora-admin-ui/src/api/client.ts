@@ -49,6 +49,41 @@ export type StoreItemUpdateHistory = {
   job: AdminRecord;
 };
 
+export type StoreItemUpdateMonitorSummary = {
+  attempts_24h: number;
+  daily_capacity: number;
+  due_items: number;
+  eligible_items: number;
+  failures_24h: number;
+  fresh_items: number;
+  fresh_percent: number;
+  leased_items: number;
+  next_due_at: string | null;
+  oldest_due_hours: number;
+  oldest_staleness_hours: number;
+  projected_daily_demand: number;
+  projected_utilization_percent: number;
+  rate_limited_24h: number;
+  stale_items: number;
+  success_rate_percent: number;
+  successes_24h: number;
+};
+
+export type StoreItemUpdateMonitor = {
+  failures_by_store: AdminRecord[];
+  generated_at: string;
+  histogram: Array<{
+    item_count: number;
+    label: string;
+    overflow: boolean;
+    staleness_hour: number;
+  }>;
+  range_hours: number;
+  recent_attempts: AdminRecord[];
+  summary: StoreItemUpdateMonitorSummary;
+  worker: (AdminRecord & { health: 'healthy' | 'stale' | 'stopped' }) | null;
+};
+
 export type AdminIdentity = {
   username: string;
 };
@@ -643,6 +678,10 @@ export const adminApi = {
   getStoreItemUpdateJobLog: (runId: string, afterId = 0) =>
     fetchData<StoreItemUpdateJobLog>(
       `/admin/operations/store-item-update-jobs/${encodeURIComponent(runId)}/log?after_id=${encodeURIComponent(afterId)}`
+    ),
+  getStoreItemUpdateMonitor: (hours = 48) =>
+    fetchData<StoreItemUpdateMonitor>(
+      `/admin/operations/store-item-update-monitor?hours=${encodeURIComponent(hours)}`
     ),
   getLatestStoreDiscoveryRun: () => fetchData<StoreDiscoveryRun | null>('/admin/operations/store-discovery-runs/latest'),
   getCurrentLocalCoverWorkflow: () => fetchData<LocalCoverWorkflow | null>('/admin/local-cover-workflows/current'),

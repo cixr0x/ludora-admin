@@ -200,6 +200,34 @@ describe('loadConfig', () => {
     expect(loadConfig().internalApiToken).toBe('internal-test-token');
   });
 
+  it('keeps the continuous updater off outside production and loads explicit cadence settings', () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED', undefined);
+    expect(loadConfig().continuousItemUpdateWorker.enabled).toBe(false);
+
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED', 'true');
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', '5');
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', '300');
+    expect(loadConfig().continuousItemUpdateWorker).toEqual({
+      enabled: true,
+      leaseSeconds: 300,
+      pollSeconds: 5
+    });
+  });
+
+  it('enables the continuous updater by default in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED', undefined);
+
+    expect(loadConfig().continuousItemUpdateWorker.enabled).toBe(true);
+  });
+
+  it.each(['0', '-1', 'not-a-number'])('rejects invalid continuous updater poll seconds %s', (value) => {
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', value);
+
+    expect(() => loadConfig()).toThrow('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS must be a positive number');
+  });
+
   it('loads local cover workflow defaults and overrides', () => {
     vi.stubEnv('LUDORA_COVER_WORK_DIR', 'D:\\covers');
     vi.stubEnv('LUDORA_COVER_S3_BUCKET', 'custom-bucket');

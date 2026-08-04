@@ -114,12 +114,23 @@ LUDORA_DISCOVERY_RUNNER=local
 LUDORA_DISCOVERY_PACKAGE_DIR=/opt/ludora/ludora-admin/ludora-discovery
 LUDORA_DISCOVERY_PYTHON=/opt/ludora/ludora-admin/ludora-discovery/.venv/bin/python
 LUDORA_DISCOVERY_ENV_FILE=/opt/ludora/ludora-admin/ludora-discovery/.env
+LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED=true
+LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS=5
+LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS=300
 LUDORA_COVER_FLATTENING_WORK_DIR=/tmp/ludora-cover-flattening
 LUDORA_WEB_BOT_AUTH_ENABLED=true
 LUDORA_WEB_BOT_AUTH_IDENTITY_ORIGIN=https://admin.ludora.bobbycrimson.com
 LUDORA_WEB_BOT_AUTH_CONTACT_EMAIL=robertorojasmo@gmail.com
 LUDORA_WEB_BOT_AUTH_PRIVATE_JWK_PATH=/etc/ludora/web-bot-auth/private-key.jwk
 ```
+
+The continuous updater is a supervised Python child of admin-service. It claims
+one due item at a time, uses a five-minute expiring lease, and schedules a
+successful item 21–23 hours into the future. The worker uses a PostgreSQL
+advisory lock, so a manual batch update cannot run concurrently and double the
+store request rate. Its heartbeat, leases, attempts, Shopify cooldown, and
+hourly staleness distribution are available under **Operations > Update
+Monitor**.
 
 The production UI file contains:
 

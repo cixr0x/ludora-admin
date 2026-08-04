@@ -15,6 +15,7 @@ import { ReviewTasksPage } from './pages/ReviewTasksPage';
 import { StoreCandidatesPage } from './pages/StoreCandidatesPage';
 import { StoreItemDiscoveryLogPage } from './pages/StoreItemDiscoveryLogPage';
 import { StoreItemUpdateHistoryPage } from './pages/StoreItemUpdateHistoryPage';
+import { StoreItemUpdateMonitorPage } from './pages/StoreItemUpdateMonitorPage';
 import { StoresPage } from './pages/StoresPage';
 
 const theme = createTheme({
@@ -50,6 +51,7 @@ const adminSections: AdminSection[] = [
   'operations-store-discovery',
   'operations-store-item-discovery',
   'operations-store-item-update',
+  'operations-store-item-update-monitor',
   'operations-item-embeddings',
   'operations-image-optimization',
   'items',
@@ -147,6 +149,8 @@ function renderSection(
       ) : (
         <OperationsPage operation="item_update" />
       );
+    case 'operations-store-item-update-monitor':
+      return <StoreItemUpdateMonitorPage />;
     case 'operations-item-embeddings':
       return <OperationsPage operation="item_embeddings" />;
     case 'operations-image-optimization':

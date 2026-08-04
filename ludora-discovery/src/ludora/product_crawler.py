@@ -679,6 +679,41 @@ def _persist_store_item_update_progress(
     )
 
 
+def refresh_confirmed_store_item_candidate(
+    existing_record: DiscoveryItemCandidateRecord,
+    *,
+    platform: str,
+    browser_fetcher: Callable[[str], FetchResult | None] | None = None,
+    cancellation_token: CancellationToken | None = None,
+    item_title_extractor: ItemTitleExtractor | None = None,
+    trace_logger: TraceLogger | None = None,
+    before_request: Callable[[str], None] | None = None,
+    request_headers_provider: RequestHeadersProvider | None = None,
+) -> DiscoveryItemCandidateRecord:
+    """Fetch and normalize one confirmed store item without persisting it."""
+
+    refreshed_record = _fetch_detail_candidate(
+        listing_candidate=existing_record,
+        source_listing_url=existing_record.source_listing_url or existing_record.source_url,
+        platform=platform,
+        browser_fetcher=browser_fetcher,
+        detect_removed=True,
+        trace_logger=trace_logger,
+        cancellation_token=cancellation_token,
+        before_request=before_request,
+        request_headers_provider=request_headers_provider,
+    )
+    raise_if_cancelled(cancellation_token)
+    _prepare_refreshed_titles(
+        existing_record,
+        refreshed_record,
+        platform=platform,
+        item_title_extractor=item_title_extractor,
+    )
+    _preserve_confirmed_item_state(refreshed_record, existing_record)
+    return refreshed_record
+
+
 def _wait_for_store_update_request(
     throttle: PerHostRequestThrottle,
     source_url: str,

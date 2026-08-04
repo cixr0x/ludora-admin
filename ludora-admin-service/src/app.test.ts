@@ -4217,6 +4217,78 @@ describe('ludora admin service', () => {
     expect(countQuery?.params).toEqual(['%Alpha%']);
   });
 
+  it('returns continuous update worker health and hourly staleness monitoring data', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        const normalizedSql = normalizeSql(sql);
+        if (normalizedSql.includes('from store_item_update_worker_state')) {
+          return {
+            rows: [{
+              heartbeat_at: new Date().toISOString(),
+              poll_seconds: 5,
+              shopify_blocked_until: null,
+              status: 'idle',
+              worker_id: 'worker-1',
+              worker_name: 'continuous'
+            }]
+          };
+        }
+        if (normalizedSql.includes('count(*)::int as eligible_items')) {
+          return {
+            rows: [{
+              attempts_24h: 110,
+              due_items: 12,
+              eligible_items: 100,
+              failures_24h: 10,
+              fresh_items: 92,
+              leased_items: 1,
+              oldest_due_hours: 2.5,
+              oldest_staleness_hours: 29,
+              rate_limited_24h: 3,
+              stale_items: 8,
+              successes_24h: 100
+            }]
+          };
+        }
+        if (normalizedSql.includes('generate_series')) {
+          return { rows: [{ item_count: 9, overflow: false, staleness_hour: 0 }, { item_count: 8, overflow: true, staleness_hour: 72 }] };
+        }
+        if (normalizedSql.includes('group by attempts.store_id')) {
+          return { rows: [{ failures: 3, platform: 'shopify', rate_limited: 3, store_id: 12, store_name: 'Alpha' }] };
+        }
+        return { rows: [{ id: 91, status: 'succeeded', store_item_id: 501, store_name: 'Alpha' }] };
+      }
+    };
+
+    const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
+      '/admin/operations/store-item-update-monitor?hours=72'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      failures_by_store: [{ failures: 3, platform: 'shopify', rate_limited: 3, store_id: 12, store_name: 'Alpha' }],
+      histogram: [
+        { item_count: 9, label: '0h', overflow: false, staleness_hour: 0 },
+        { item_count: 8, label: '72h+', overflow: true, staleness_hour: 72 }
+      ],
+      range_hours: 72,
+      summary: {
+        daily_capacity: 17280,
+        due_items: 12,
+        eligible_items: 100,
+        failures_24h: 10,
+        fresh_percent: 92,
+        rate_limited_24h: 3,
+        successes_24h: 100
+      },
+      worker: { health: 'healthy', status: 'idle', worker_id: 'worker-1' }
+    });
+    expect(queries).toHaveLength(5);
+    expect(queries.find((query) => normalizeSql(query.sql).includes('generate_series'))?.params).toEqual([72]);
+  });
+
   it('lists store item update changes for the store that owns the selected run', async () => {
     const job = {
       completed_at: null,

@@ -555,6 +555,8 @@ def run_item_update(
     job_store_id = store_ids[0] if store_ids is not None and len(store_ids) == 1 else None
     try:
         repository = DiscoveryRepository(connection)
+        if not repository.try_acquire_store_item_update_coordinator_lock():
+            raise RuntimeError("The continuous store item update worker is active")
         job_id = repository.start_store_item_update_log(run_id=resolved_run_id, store_id=job_store_id)
         try:
             trace_connection = connect_database(database_url)

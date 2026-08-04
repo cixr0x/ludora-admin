@@ -8,6 +8,7 @@ import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
 import LogoutIcon from '@mui/icons-material/Logout';
 import MenuIcon from '@mui/icons-material/Menu';
+import QueryStatsIcon from '@mui/icons-material/QueryStats';
 import StorefrontIcon from '@mui/icons-material/Storefront';
 import TravelExploreIcon from '@mui/icons-material/TravelExplore';
 import UpdateIcon from '@mui/icons-material/Update';
@@ -40,6 +41,7 @@ export type AdminSection =
   | 'operations-store-discovery'
   | 'operations-store-item-discovery'
   | 'operations-store-item-update'
+  | 'operations-store-item-update-monitor'
   | 'operations-item-embeddings'
   | 'operations-image-optimization'
   | 'items'
@@ -71,6 +73,7 @@ const navigationItems: NavigationItem[] = [
       { id: 'operations-store-discovery', label: 'Store Discovery', icon: <TravelExploreIcon fontSize="small" /> },
       { id: 'operations-store-item-discovery', label: 'Store Item Discovery', icon: <Inventory2Icon fontSize="small" /> },
       { id: 'operations-store-item-update', label: 'Store Item Update', icon: <UpdateIcon fontSize="small" /> },
+      { id: 'operations-store-item-update-monitor', label: 'Update Monitor', icon: <QueryStatsIcon fontSize="small" /> },
       { id: 'operations-item-embeddings', label: 'Item Embeddings', icon: <AutoAwesomeIcon fontSize="small" /> },
       { id: 'operations-image-optimization', label: 'Image Optimization', icon: <ImageSearchIcon fontSize="small" /> }
     ]

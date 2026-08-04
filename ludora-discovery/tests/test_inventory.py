@@ -175,11 +175,13 @@ class InventoryTests(unittest.TestCase):
             browser_fetcher=None,
             browser_fallback_enabled=False,
             limit=None,
+            request_headers_provider=None,
             trace_logger=ANY,
             cancellation_token=None,
         )
         fetch_html.assert_called_once_with(
             "https://example.mx/products/catan",
+            headers=None,
             include_http_error_status=True,
         )
         self.assertEqual(len(records), 1)
@@ -475,6 +477,7 @@ class InventoryTests(unittest.TestCase):
             browser_fetcher=fake_browser_fetcher,
             browser_fallback_enabled=True,
             limit=None,
+            request_headers_provider=None,
             trace_logger=ANY,
             cancellation_token=None,
         )
@@ -866,6 +869,7 @@ class InventoryTests(unittest.TestCase):
 
         fetch_html.assert_called_once_with(
             "https://example.mx/products/catan",
+            headers=None,
             include_http_error_status=True,
         )
         self.assertEqual(repository.confirmed_items_limit, 25)
@@ -1204,7 +1208,8 @@ class InventoryTests(unittest.TestCase):
         attempts_by_url = {candidate.source_url: 0 for candidate in candidates}
         fetch_order = []
 
-        def fetch_detail(url, include_http_error_status=False):
+        def fetch_detail(url, headers=None, include_http_error_status=False):
+            self.assertIsNone(headers)
             self.assertTrue(include_http_error_status)
             attempts_by_url[url] += 1
             fetch_order.append(url)
@@ -1324,7 +1329,8 @@ class InventoryTests(unittest.TestCase):
             waiter=wait,
         )
 
-        def fetch_detail(url, include_http_error_status=False):
+        def fetch_detail(url, headers=None, include_http_error_status=False):
+            self.assertIsNone(headers)
             self.assertTrue(include_http_error_status)
             fetch_order.append(url)
             attempts_by_url[url] += 1
@@ -1406,7 +1412,8 @@ class InventoryTests(unittest.TestCase):
         repository = FakeRepository(confirmed_items=candidates)
         fetch_order = []
 
-        def fetch_detail(url, include_http_error_status=False):
+        def fetch_detail(url, headers=None, include_http_error_status=False):
+            self.assertIsNone(headers)
             self.assertTrue(include_http_error_status)
             fetch_order.append(url)
             if url != candidates[2].source_url:
