@@ -563,27 +563,71 @@ async function loadStoreItemUpdateMonitor(database: Database, rangeHours: number
     [rangeHours]
   );
 
-  const failuresResult = await database.query(
-    `select
-       attempts.store_id,
-       coalesce(stores.name, 'Unknown store') as store_name,
-       attempts.platform,
-       count(*)::int as attempts,
-       count(*) filter (where attempts.status in ('failed', 'lease_lost'))::int as failures,
-       count(*) filter (where attempts.http_status = 429)::int as rate_limited,
+  const storeStatisticsResult = await database.query(
+    `with active_stores as (
+       select
+         stores.id,
+         stores.name,
+         coalesce(
+           nullif(lower(trim(stores.platform)), ''),
+           case when exists (
+             select 1
+             from store_items platform_items
+             where platform_items.store_id = stores.id
+               and platform_items.raw_payload::text ilike '%shopify%'
+           ) then 'shopify' end,
+           'unknown'
+         ) as platform
+       from stores
+       where stores.active = true
+     ), eligible_items as (
+       select store_items.store_id, count(*)::int as item_count
+       from store_items
+       where store_items.is_boardgame = true
+         and store_items.is_boardgame_confirmed = true
+         and store_items.item_id is not null
+         and store_items.source_url <> ''
+         and store_items.listing_status = 'LISTED'
+         and store_items.store_active = true
+       group by store_items.store_id
+     )
+     select
+       stores.id as store_id,
+       stores.name as store_name,
+       stores.platform,
+       coalesce(eligible_items.item_count, 0)::int as eligible_items,
+       count(attempts.id)::int as attempts,
+       count(attempts.id) filter (
+         where attempts.status in ('succeeded', 'deactivated')
+       )::int as successes,
+       count(attempts.id) filter (
+         where attempts.status in ('failed', 'lease_lost')
+       )::int as failures,
+       count(attempts.id) filter (where attempts.http_status = 429)::int as rate_limited,
+       case when count(attempts.id) filter (
+         where attempts.status in ('succeeded', 'deactivated', 'failed', 'lease_lost')
+       ) > 0 then round(
+         100.0 * count(attempts.id) filter (
+           where attempts.status in ('succeeded', 'deactivated')
+         ) / count(attempts.id) filter (
+           where attempts.status in ('succeeded', 'deactivated', 'failed', 'lease_lost')
+         ),
+         1
+       )::float8 else 0::float8 end as success_rate_percent,
+       max(attempts.started_at) as last_attempt_at,
        max(attempts.completed_at) filter (
          where attempts.status in ('failed', 'lease_lost')
        ) as last_failure_at,
        (array_agg(attempts.error order by attempts.completed_at desc) filter (
          where attempts.status in ('failed', 'lease_lost')
        ))[1] as last_error
-     from store_item_update_attempt_log attempts
-     left join stores on stores.id = attempts.store_id
-     where attempts.started_at >= now() - interval '24 hours'
-     group by attempts.store_id, stores.name, attempts.platform
-     having count(*) filter (where attempts.status in ('failed', 'lease_lost')) > 0
-     order by failures desc, last_failure_at desc
-     limit 12`
+     from active_stores stores
+     left join eligible_items on eligible_items.store_id = stores.id
+     left join store_item_update_attempt_log attempts
+       on attempts.store_id = stores.id
+      and attempts.started_at >= now() - interval '24 hours'
+     group by stores.id, stores.name, stores.platform, eligible_items.item_count
+     order by failures desc, attempts desc, stores.name asc`
   );
 
   const recentAttemptsResult = await database.query(
@@ -601,7 +645,7 @@ async function loadStoreItemUpdateMonitor(database: Database, rangeHours: number
   );
 
   return {
-    failures_by_store: failuresResult.rows,
+    store_statistics: storeStatisticsResult.rows,
     generated_at: new Date().toISOString(),
     histogram: histogramResult.rows.map((row) => {
       const record = row as Record<string, unknown>;

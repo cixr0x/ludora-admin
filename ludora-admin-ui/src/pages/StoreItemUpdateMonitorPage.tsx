@@ -71,7 +71,6 @@ export function StoreItemUpdateMonitorPage() {
     setFailureDetailsLoading(true);
     void adminApi.getStoreItemUpdateFailureAttempts(
       recordText(failureGroup, 'store_id'),
-      optionalRecordText(failureGroup, 'platform'),
       24
     ).then((attempts) => {
       if (active) {
@@ -188,43 +187,56 @@ export function StoreItemUpdateMonitorPage() {
         <StalenessHistogram buckets={monitor?.histogram ?? []} />
       </Paper>
 
-      <Box sx={{ display: 'grid', gap: 3, gridTemplateColumns: { lg: 'minmax(0, 1fr) minmax(0, 1.5fr)' } }}>
+      <Stack spacing={3}>
         <Paper sx={{ overflow: 'hidden' }} variant="outlined">
           <Box sx={{ p: 2 }}>
-            <Typography variant="h6">Failures by store · last 24h</Typography>
+            <Typography variant="h6">Store update statistics · last 24h</Typography>
+            <Typography color="text.secondary" variant="body2">
+              All {monitor?.store_statistics.length ?? 0} active stores, including stores with no attempts or no failures during the period.
+            </Typography>
           </Box>
-          <TableContainer>
-            <Table size="small">
+          <TableContainer sx={{ maxHeight: 520 }}>
+            <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow>
                   <TableCell>Store</TableCell>
                   <TableCell>Platform</TableCell>
+                  <TableCell align="right">Products</TableCell>
                   <TableCell align="right">Attempts</TableCell>
+                  <TableCell align="right">Successes</TableCell>
                   <TableCell align="right">Failures</TableCell>
+                  <TableCell>Success rate</TableCell>
                   <TableCell align="right">429</TableCell>
+                  <TableCell>Latest attempt</TableCell>
                   <TableCell align="right">Details</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
-                {(monitor?.failures_by_store ?? []).map((row, index) => (
-                  <TableRow key={`${recordText(row, 'store_id')}-${recordText(row, 'platform')}-${index}`}>
+                {(monitor?.store_statistics ?? []).map((row) => (
+                  <TableRow key={recordText(row, 'store_id')}>
                     <TableCell>{recordText(row, 'store_name')}</TableCell>
                     <TableCell>{recordText(row, 'platform')}</TableCell>
+                    <TableCell align="right">{recordText(row, 'eligible_items', '0')}</TableCell>
                     <TableCell align="right">{recordText(row, 'attempts', '0')}</TableCell>
+                    <TableCell align="right">{recordText(row, 'successes', '0')}</TableCell>
                     <TableCell align="right">{recordText(row, 'failures', '0')}</TableCell>
+                    <TableCell><StoreSuccessRate row={row} /></TableCell>
                     <TableCell align="right">{recordText(row, 'rate_limited', '0')}</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(row.last_attempt_at)}</TableCell>
                     <TableCell align="right">
-                      <Button
-                        aria-label={`View failed attempts for ${recordText(row, 'store_name')} (${recordText(row, 'platform')})`}
-                        onClick={() => setFailureGroup(row)}
-                        size="small"
-                      >
-                        View
-                      </Button>
+                      {numberRecordField(row, 'failures') > 0 ? (
+                        <Button
+                          aria-label={`View failed attempts for ${recordText(row, 'store_name')} (${recordText(row, 'platform')})`}
+                          onClick={() => setFailureGroup(row)}
+                          size="small"
+                        >
+                          View
+                        </Button>
+                      ) : <Typography color="text.secondary">—</Typography>}
                     </TableCell>
                   </TableRow>
                 ))}
-                {!monitor?.failures_by_store.length ? <EmptyRow columns={6} label="No failures in the last 24 hours" /> : null}
+                {!monitor?.store_statistics.length ? <EmptyRow columns={10} label="No active stores" /> : null}
               </TableBody>
             </Table>
           </TableContainer>
@@ -246,7 +258,7 @@ export function StoreItemUpdateMonitorPage() {
             </Table>
           </TableContainer>
         </Paper>
-      </Box>
+      </Stack>
 
       <Dialog
         fullWidth
@@ -340,6 +352,16 @@ function AttemptRow({ row }: { row: AdminRecord }) {
   );
 }
 
+function StoreSuccessRate({ row }: { row: AdminRecord }) {
+  const completed = numberRecordField(row, 'successes') + numberRecordField(row, 'failures');
+  if (completed === 0) {
+    return <Chip label="No data" size="small" variant="outlined" />;
+  }
+  const rate = numberRecordField(row, 'success_rate_percent');
+  const color = rate >= 95 ? 'success' : rate >= 80 ? 'warning' : 'error';
+  return <Chip color={color} label={`${rate.toFixed(1)}%`} size="small" variant="outlined" />;
+}
+
 function FailureAttemptRow({ row }: { row: AdminRecord }) {
   const itemId = recordText(row, 'store_item_id');
   const sourceUrl = optionalRecordText(row, 'source_url');
@@ -373,6 +395,11 @@ function optionalRecordText(record: AdminRecord, key: string): string {
 
 function recordText(record: AdminRecord, key: string, fallback = '-') {
   return optionalRecordText(record, key) || fallback;
+}
+
+function numberRecordField(record: AdminRecord, key: string): number {
+  const value = Number(record[key]);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function formatDate(value: unknown): string {

@@ -4255,8 +4255,33 @@ describe('ludora admin service', () => {
         if (normalizedSql.includes('generate_series')) {
           return { rows: [{ item_count: 9, overflow: false, staleness_hour: 0 }, { item_count: 8, overflow: true, staleness_hour: 72 }] };
         }
-        if (normalizedSql.includes('group by attempts.store_id')) {
-          return { rows: [{ attempts: 40, failures: 3, platform: 'shopify', rate_limited: 3, store_id: 12, store_name: 'Alpha' }] };
+        if (normalizedSql.includes('from active_stores stores')) {
+          return {
+            rows: [
+              {
+                attempts: 40,
+                eligible_items: 120,
+                failures: 3,
+                platform: 'shopify',
+                rate_limited: 3,
+                store_id: 12,
+                store_name: 'Alpha',
+                success_rate_percent: 92.5,
+                successes: 37
+              },
+              {
+                attempts: 0,
+                eligible_items: 45,
+                failures: 0,
+                platform: 'woocommerce',
+                rate_limited: 0,
+                store_id: 13,
+                store_name: 'Beta',
+                success_rate_percent: 0,
+                successes: 0
+              }
+            ]
+          };
         }
         return { rows: [{ id: 91, status: 'succeeded', store_item_id: 501, store_name: 'Alpha' }] };
       }
@@ -4268,12 +4293,35 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
-      failures_by_store: [{ attempts: 40, failures: 3, platform: 'shopify', rate_limited: 3, store_id: 12, store_name: 'Alpha' }],
       histogram: [
         { item_count: 9, label: '0h', overflow: false, staleness_hour: 0 },
         { item_count: 8, label: '72h+', overflow: true, staleness_hour: 72 }
       ],
       range_hours: 72,
+      store_statistics: [
+        {
+          attempts: 40,
+          eligible_items: 120,
+          failures: 3,
+          platform: 'shopify',
+          rate_limited: 3,
+          store_id: 12,
+          store_name: 'Alpha',
+          success_rate_percent: 92.5,
+          successes: 37
+        },
+        {
+          attempts: 0,
+          eligible_items: 45,
+          failures: 0,
+          platform: 'woocommerce',
+          rate_limited: 0,
+          store_id: 13,
+          store_name: 'Beta',
+          success_rate_percent: 0,
+          successes: 0
+        }
+      ],
       summary: {
         daily_capacity: 17280,
         due_items: 12,
@@ -4287,9 +4335,11 @@ describe('ludora admin service', () => {
     });
     expect(queries).toHaveLength(5);
     expect(queries.find((query) => normalizeSql(query.sql).includes('generate_series'))?.params).toEqual([72]);
-    const failuresQuery = queries.find((query) => normalizeSql(query.sql).includes('group by attempts.store_id'));
-    expect(normalizeSql(failuresQuery?.sql ?? '')).toContain('count(*)::int as attempts');
-    expect(normalizeSql(failuresQuery?.sql ?? '')).toContain("having count(*) filter (where attempts.status in ('failed', 'lease_lost')) > 0");
+    const storeStatisticsQuery = queries.find((query) => normalizeSql(query.sql).includes('from active_stores stores'));
+    expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).toContain('where stores.active = true');
+    expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).toContain('left join store_item_update_attempt_log attempts');
+    expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).not.toContain('having count(*)');
+    expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).not.toContain('limit 12');
   });
 
   it('lists failed continuous update attempts for a selected store and platform', async () => {

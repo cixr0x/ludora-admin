@@ -485,7 +485,7 @@ describe('fetchRows', () => {
     );
   });
 
-  it('loads failed continuous update attempts for a store and platform', async () => {
+  it('loads failed continuous update attempts for a store', async () => {
     const records = [{ error: 'HTTP 429: Too Many Requests', id: 92, store_id: 12 }];
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
@@ -495,10 +495,10 @@ describe('fetchRows', () => {
       })
     );
 
-    await expect(adminApi.getStoreItemUpdateFailureAttempts(12, 'shopify', 24)).resolves.toEqual(records);
+    await expect(adminApi.getStoreItemUpdateFailureAttempts(12, 24)).resolves.toEqual(records);
     expectFetch(
       fetchMock,
-      'http://127.0.0.1:4001/admin/operations/store-item-update-failures?hours=24&platform=shopify&store_id=12'
+      'http://127.0.0.1:4001/admin/operations/store-item-update-failures?hours=24&store_id=12'
     );
   });
 

@@ -70,7 +70,7 @@ export type StoreItemUpdateMonitorSummary = {
 };
 
 export type StoreItemUpdateMonitor = {
-  failures_by_store: AdminRecord[];
+  store_statistics: AdminRecord[];
   generated_at: string;
   histogram: Array<{
     item_count: number;
@@ -683,10 +683,9 @@ export const adminApi = {
     fetchData<StoreItemUpdateMonitor>(
       `/admin/operations/store-item-update-monitor?hours=${encodeURIComponent(hours)}`
     ),
-  getStoreItemUpdateFailureAttempts: (storeId: string | number, platform: string, hours = 24) => {
+  getStoreItemUpdateFailureAttempts: (storeId: string | number, hours = 24) => {
     const params = new URLSearchParams({
       hours: String(hours),
-      platform,
       store_id: String(storeId)
     });
     return fetchRows<AdminRecord>(`/admin/operations/store-item-update-failures?${params.toString()}`);
