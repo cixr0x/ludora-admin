@@ -175,6 +175,15 @@ export type ExternalCoverImageOptimizationResult = {
   };
 };
 
+export type ExternalCoverImageOptimizationRun = {
+  completed_at: string | null;
+  error: string | null;
+  id: string;
+  result: ExternalCoverImageOptimizationResult | null;
+  started_at: string;
+  status: 'completed' | 'failed' | 'running';
+};
+
 export type TableQuery = {
   filters?: Record<string, string>;
   page: number;
@@ -708,8 +717,14 @@ export const adminApi = {
     fetchData<StoreDiscoveryRun>('/admin/operations/store-discovery-runs', {
       method: 'POST'
     }),
-  optimizeExternalCoverImages: () =>
-    fetchData<ExternalCoverImageOptimizationResult>('/admin/operations/external-cover-image-optimizations', {
+  getLatestExternalCoverImageOptimizationRun: () =>
+    fetchData<ExternalCoverImageOptimizationRun | null>('/admin/operations/external-cover-image-optimizations/latest'),
+  getExternalCoverImageOptimizationRun: (runId: string) =>
+    fetchData<ExternalCoverImageOptimizationRun>(
+      `/admin/operations/external-cover-image-optimizations/${encodeURIComponent(runId)}`
+    ),
+  startExternalCoverImageOptimization: () =>
+    fetchData<ExternalCoverImageOptimizationRun>('/admin/operations/external-cover-image-optimizations', {
       method: 'POST'
     }),
   cancelStoreDiscoveryRun: (runId: string) =>

@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
@@ -21,6 +23,17 @@ type TableQueryConfig = {
 
 export type ExternalCoverImageOptimizerRunner = {
   run(options: ExternalCoverImageOptimizerOptions): Promise<ExternalCoverImageOptimizerResult>;
+};
+
+export type ExternalCoverImageOptimizationRunStatus = 'completed' | 'failed' | 'running';
+
+export type ExternalCoverImageOptimizationRun = {
+  completed_at: string | null;
+  error: string | null;
+  id: string;
+  result: ExternalCoverImageOptimizerResult | null;
+  started_at: string;
+  status: ExternalCoverImageOptimizationRunStatus;
 };
 
 const MAX_LOG_CHUNK_ROWS = 1_000;
@@ -126,6 +139,7 @@ export function createOperationsRouter(
   externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner
 ): Router {
   const router = Router();
+  let latestExternalCoverImageOptimizationRun: ExternalCoverImageOptimizationRun | null = null;
 
   router.post('/admin/operations/store-discovery-runs', async (_request, response, next) => {
     try {
@@ -346,13 +360,64 @@ export function createOperationsRouter(
     }
   });
 
-  router.post('/admin/operations/external-cover-image-optimizations', async (_request, response, next) => {
+  router.get('/admin/operations/external-cover-image-optimizations/latest', (_request, response, next) => {
     try {
       if (!externalCoverImageOptimizer) {
         throw httpError(404, 'External cover image optimizer is not configured');
       }
-      const result = await externalCoverImageOptimizer.run({ apply: true });
-      response.status(202).json({ data: result });
+      response.json({ data: latestExternalCoverImageOptimizationRun });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/admin/operations/external-cover-image-optimizations/:runId', (request, response, next) => {
+    try {
+      if (!externalCoverImageOptimizer) {
+        throw httpError(404, 'External cover image optimizer is not configured');
+      }
+      if (!latestExternalCoverImageOptimizationRun || latestExternalCoverImageOptimizationRun.id !== request.params.runId) {
+        throw httpError(404, 'Cover image optimization run not found');
+      }
+      response.json({ data: latestExternalCoverImageOptimizationRun });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/admin/operations/external-cover-image-optimizations', (_request, response, next) => {
+    try {
+      if (!externalCoverImageOptimizer) {
+        throw httpError(404, 'External cover image optimizer is not configured');
+      }
+      if (latestExternalCoverImageOptimizationRun?.status === 'running') {
+        throw httpError(409, 'Cover image optimization is already running');
+      }
+
+      const run: ExternalCoverImageOptimizationRun = {
+        completed_at: null,
+        error: null,
+        id: randomUUID(),
+        result: null,
+        started_at: new Date().toISOString(),
+        status: 'running'
+      };
+      latestExternalCoverImageOptimizationRun = run;
+
+      void Promise.resolve()
+        .then(() => externalCoverImageOptimizer.run({ apply: true }))
+        .then((result) => {
+          run.completed_at = new Date().toISOString();
+          run.result = result;
+          run.status = 'completed';
+        })
+        .catch((error: unknown) => {
+          run.completed_at = new Date().toISOString();
+          run.error = error instanceof Error ? error.message : String(error);
+          run.status = 'failed';
+        });
+
+      response.status(202).json({ data: run });
     } catch (error) {
       next(error);
     }

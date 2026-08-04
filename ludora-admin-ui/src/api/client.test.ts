@@ -137,50 +137,36 @@ describe('fetchRows', () => {
     });
   });
 
-  it('runs external cover image optimization with a POST request', async () => {
-    const result = {
-      failures: [],
-      optimized: [
-        {
-          applied: true,
-          field: 'image_url',
-          itemId: 77,
-          newName: '77-coffeerush.en.webp',
-          optimizedSizeBytes: 84210,
-          originalSizeBytes: 180000,
-          publicUrl: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/77-coffeerush.en.webp',
-          s3Key: 'boardgame/77-coffeerush.en.webp',
-          sourceName: 'coffee.jpg',
-          sourceUrl: 'https://cf.geekdo-images.com/coffee.jpg'
-        }
-      ],
-      skipped: [],
-      summary: {
-        downloadedImages: 1,
-        failedImages: 0,
-        imageFields: 2,
-        itemsScanned: 1,
-        optimizedImages: 1,
-        skippedBlank: 0,
-        skippedManaged: 0,
-        skippedWithinLimit: 1,
-        updatedRows: 1,
-        uploadedImages: 1
-      }
+  it('starts and polls external cover image optimization runs', async () => {
+    const run = {
+      completed_at: null,
+      error: null,
+      id: 'optimization-1',
+      result: null,
+      started_at: '2026-08-04T02:45:00Z',
+      status: 'running'
     };
     const { adminApi } = await importClient();
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
-      new Response(JSON.stringify({ data: result }), {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ data: run }), {
         headers: { 'Content-Type': 'application/json' },
         status: 202
       })
     );
 
-    await expect(adminApi.optimizeExternalCoverImages()).resolves.toEqual(result);
+    await expect(adminApi.startExternalCoverImageOptimization()).resolves.toEqual(run);
+    await expect(adminApi.getLatestExternalCoverImageOptimizationRun()).resolves.toEqual(run);
+    await expect(adminApi.getExternalCoverImageOptimizationRun(run.id)).resolves.toEqual(run);
 
-    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/operations/external-cover-image-optimizations', {
+    expectFetchNth(fetchMock, 1, 'http://127.0.0.1:4001/admin/operations/external-cover-image-optimizations', {
       method: 'POST'
     });
+    expectFetchNth(fetchMock, 2, 'http://127.0.0.1:4001/admin/operations/external-cover-image-optimizations/latest');
+    expectFetchNth(
+      fetchMock,
+      3,
+      'http://127.0.0.1:4001/admin/operations/external-cover-image-optimizations/optimization-1'
+    );
   });
 
   it('rejects with the backend error message when an admin request fails', async () => {

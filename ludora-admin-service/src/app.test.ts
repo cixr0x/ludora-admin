@@ -4590,7 +4590,7 @@ describe('ludora admin service', () => {
     expect(calls).toEqual(['full']);
   });
 
-  it('runs external cover image optimization with apply enabled', async () => {
+  it('starts external cover image optimization asynchronously and exposes its status', async () => {
     const result = {
       failures: [
         {
@@ -4628,25 +4628,80 @@ describe('ludora admin service', () => {
         uploadedImages: 1
       }
     };
-    const calls: unknown[] = [];
+    let resolveOptimization!: (value: typeof result) => void;
+    const optimizationPromise = new Promise<typeof result>((resolve) => {
+      resolveOptimization = resolve;
+    });
     const externalCoverImageOptimizer = {
-      run: async (options: unknown) => {
-        calls.push(options);
-        return result;
-      }
+      run: vi.fn(() => optimizationPromise)
     };
+    const app = createApp({
+      database: idleDatabase(),
+      externalCoverImageOptimizer,
+      operationsClient: idleOperationsClient()
+    });
 
-    const response = await request(
-      createApp({
-        database: idleDatabase(),
-        externalCoverImageOptimizer,
-        operationsClient: idleOperationsClient()
-      })
-    ).post('/admin/operations/external-cover-image-optimizations');
+    const response = await request(app).post('/admin/operations/external-cover-image-optimizations');
 
     expect(response.status).toBe(202);
-    expect(response.body).toEqual({ data: result });
-    expect(calls).toEqual([{ apply: true }]);
+    expect(response.body.data).toMatchObject({
+      completed_at: null,
+      error: null,
+      result: null,
+      status: 'running'
+    });
+    expect(response.body.data.id).toEqual(expect.any(String));
+    expect(response.body.data.started_at).toEqual(expect.any(String));
+    expect(externalCoverImageOptimizer.run).toHaveBeenCalledWith({ apply: true });
+
+    const duplicateResponse = await request(app).post('/admin/operations/external-cover-image-optimizations');
+    expect(duplicateResponse.status).toBe(409);
+    expect(duplicateResponse.body).toEqual({ error: { message: 'Cover image optimization is already running' } });
+
+    const runningResponse = await request(app).get(
+      `/admin/operations/external-cover-image-optimizations/${response.body.data.id}`
+    );
+    expect(runningResponse.status).toBe(200);
+    expect(runningResponse.body.data.status).toBe('running');
+
+    resolveOptimization(result);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const completedResponse = await request(app).get('/admin/operations/external-cover-image-optimizations/latest');
+    expect(completedResponse.status).toBe(200);
+    expect(completedResponse.body.data).toMatchObject({
+      error: null,
+      id: response.body.data.id,
+      result,
+      status: 'completed'
+    });
+    expect(completedResponse.body.data.completed_at).toEqual(expect.any(String));
+  });
+
+  it('records an external cover image optimization failure for polling clients', async () => {
+    const app = createApp({
+      database: idleDatabase(),
+      externalCoverImageOptimizer: {
+        run: async () => {
+          throw new Error('S3 upload failed');
+        }
+      },
+      operationsClient: idleOperationsClient()
+    });
+
+    const response = await request(app).post('/admin/operations/external-cover-image-optimizations');
+    expect(response.status).toBe(202);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    const statusResponse = await request(app).get('/admin/operations/external-cover-image-optimizations/latest');
+    expect(statusResponse.status).toBe(200);
+    expect(statusResponse.body.data).toMatchObject({
+      error: 'S3 upload failed',
+      id: response.body.data.id,
+      result: null,
+      status: 'failed'
+    });
+    expect(statusResponse.body.data.completed_at).toEqual(expect.any(String));
   });
 
   it('returns 404 when starting item discovery for a missing clean store', async () => {

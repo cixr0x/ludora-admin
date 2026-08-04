@@ -475,7 +475,7 @@ describe('App', () => {
       if (url.pathname === '/admin/auth/me') {
         return jsonResponse({ username: 'admin' });
       }
-      if (url.pathname === '/admin/operations/store-discovery-runs/latest') {
+      if (url.pathname === '/admin/operations/external-cover-image-optimizations/latest') {
         return jsonResponse(null);
       }
       throw new Error(`Unexpected request: ${url.toString()}`);

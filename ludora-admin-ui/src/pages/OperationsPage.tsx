@@ -19,6 +19,7 @@ import { useEffect, useState } from 'react';
 import {
   adminApi,
   type AdminRecord,
+  type ExternalCoverImageOptimizationRun,
   type ExternalCoverImageOptimizationResult,
   type FailedCoverImage,
   type ItemDiscoveryRunScope,
@@ -630,7 +631,7 @@ function ImageOptimizationFailure({ failure }: { failure: FailedCoverImage }) {
 }
 
 export function OperationsPage({ operation = 'store_discovery' }: { operation?: OperationPageMode }) {
-  const [imageOptimizationResult, setImageOptimizationResult] = useState<ExternalCoverImageOptimizationResult | null>(null);
+  const [imageOptimizationRun, setImageOptimizationRun] = useState<ExternalCoverImageOptimizationRun | null>(null);
   const [run, setRun] = useState<StoreDiscoveryRun | null>(null);
   const [loadState, setLoadState] = useState<LoadState>('loading');
   const [embeddingRefreshMode, setEmbeddingRefreshMode] = useState<'full' | 'missing'>('missing');
@@ -648,26 +649,47 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
 
   useEffect(() => {
     let ignore = false;
+    setLoadState('loading');
+    setError('');
 
-    adminApi
-      .getLatestStoreDiscoveryRun()
-      .then((latestRun) => {
-        if (!ignore) {
-          setRun(latestRun);
-          setLoadState('ready');
-        }
-      })
-      .catch(() => {
-        if (!ignore) {
-          setError('Operations status could not be loaded.');
-          setLoadState('error');
-        }
-      });
+    if (operation === 'image_optimization') {
+      setRun(null);
+      adminApi
+        .getLatestExternalCoverImageOptimizationRun()
+        .then((latestRun) => {
+          if (!ignore) {
+            setImageOptimizationRun(latestRun);
+            setLoadState('ready');
+          }
+        })
+        .catch(() => {
+          if (!ignore) {
+            setError('Image optimization status could not be loaded.');
+            setLoadState('error');
+          }
+        });
+    } else {
+      setImageOptimizationRun(null);
+      adminApi
+        .getLatestStoreDiscoveryRun()
+        .then((latestRun) => {
+          if (!ignore) {
+            setRun(latestRun);
+            setLoadState('ready');
+          }
+        })
+        .catch(() => {
+          if (!ignore) {
+            setError('Operations status could not be loaded.');
+            setLoadState('error');
+          }
+        });
+    }
 
     return () => {
       ignore = true;
     };
-  }, []);
+  }, [operation]);
 
   useEffect(() => {
     if (operation !== 'item_discovery' && operation !== 'item_update') {
@@ -724,7 +746,30 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
     return () => window.clearInterval(timer);
   }, [operation, run?.status]);
 
+  useEffect(() => {
+    if (operation !== 'image_optimization' || imageOptimizationRun?.status !== 'running') {
+      return undefined;
+    }
+
+    const runId = imageOptimizationRun.id;
+    const timer = window.setInterval(() => {
+      adminApi
+        .getExternalCoverImageOptimizationRun(runId)
+        .then((updatedRun) => {
+          setImageOptimizationRun(updatedRun);
+          setError('');
+        })
+        .catch(() => {
+          setError('Image optimization status could not be refreshed.');
+        });
+    }, 3000);
+
+    return () => window.clearInterval(timer);
+  }, [imageOptimizationRun?.id, imageOptimizationRun?.status, operation]);
+
   const runIsActive = run?.status === 'running' || run?.status === 'cancelling';
+  const imageOptimizationRunIsActive = imageOptimizationRun?.status === 'running';
+  const imageOptimizationResult = imageOptimizationRun?.result ?? null;
 
   async function handleStartStoreDiscovery() {
     setStartingOperation('store_discovery');
@@ -757,14 +802,13 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
 
   async function handleOptimizeExternalCoverImages() {
     setStartingOperation('image_optimization');
-    setImageOptimizationResult(null);
     setError('');
     try {
-      const result = await adminApi.optimizeExternalCoverImages();
-      setImageOptimizationResult(result);
+      const startedRun = await adminApi.startExternalCoverImageOptimization();
+      setImageOptimizationRun(startedRun);
       setLoadState('ready');
-    } catch {
-      setError('Cover image optimization could not be started.');
+    } catch (startError) {
+      setError(startError instanceof Error ? startError.message : 'Cover image optimization could not be started.');
     } finally {
       setStartingOperation('');
     }
@@ -1168,9 +1212,9 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
               </Typography>
             </Box>
             <Button
-              disabled={Boolean(startingOperation) || runIsActive}
+              disabled={loadState !== 'ready' || Boolean(startingOperation) || imageOptimizationRunIsActive}
               startIcon={
-                startingOperation === 'image_optimization' || runIsActive ? (
+                startingOperation === 'image_optimization' || imageOptimizationRunIsActive ? (
                   <CircularProgress color="inherit" size={16} />
                 ) : (
                   <PlayArrowIcon />
@@ -1184,6 +1228,18 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
             </Button>
           </Stack>
         </Paper>
+      ) : null}
+
+      {imageOptimizationRun?.status === 'running' ? (
+        <Alert severity="info">Cover image optimization is running. Status will refresh automatically.</Alert>
+      ) : null}
+
+      {imageOptimizationRun?.status === 'completed' ? (
+        <Alert severity="success">Cover image optimization completed successfully.</Alert>
+      ) : null}
+
+      {imageOptimizationRun?.status === 'failed' ? (
+        <Alert severity="error">{imageOptimizationRun.error || 'Cover image optimization failed.'}</Alert>
       ) : null}
 
       {imageOptimizationResult ? <ImageOptimizationSummary result={imageOptimizationResult} /> : null}
