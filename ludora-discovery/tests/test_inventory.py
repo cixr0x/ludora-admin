@@ -414,6 +414,34 @@ class InventoryTests(unittest.TestCase):
             ("https://www.catitogames.com/", 16, repository),
         )
 
+    def test_collect_store_inventory_routes_amukiri_domain_to_custom_crawler(self):
+        repository = FakeRepository()
+        expected_records = [
+            DiscoveryItemCandidateRecord(
+                store_id=12,
+                source_url="https://amukiri.mx/detalles/product/el-frutal",
+                title="El Frutal",
+            )
+        ]
+
+        with patch("ludora.inventory.crawl_amukiri_inventory", return_value=expected_records) as amukiri_crawler, patch(
+            "ludora.inventory.crawl_store_product_details"
+        ) as generic_crawler:
+            records = collect_store_inventory(
+                "https://amukiri.mx/",
+                12,
+                repository,
+                platform="custom",
+            )
+
+        self.assertEqual(records, expected_records)
+        generic_crawler.assert_not_called()
+        amukiri_crawler.assert_called_once()
+        self.assertEqual(
+            amukiri_crawler.call_args.args[:3],
+            ("https://amukiri.mx/", 12, repository),
+        )
+
     def test_collect_store_inventory_enables_browser_fetch_for_godaddy_platform(self):
         repository = FakeRepository()
 

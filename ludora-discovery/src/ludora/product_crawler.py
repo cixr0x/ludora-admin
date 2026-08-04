@@ -143,6 +143,10 @@ ItemCandidateEnricher = Callable[
     [DiscoveryItemCandidateRecord, DiscoveryItemCandidateRecord],
     DiscoveryItemCandidateRecord,
 ]
+ItemDetailExtractor = Callable[
+    [str, str, int | None, str],
+    DiscoveryItemCandidateRecord | None,
+]
 
 
 class ProductPageRemovedError(RuntimeError):
@@ -299,6 +303,7 @@ def crawl_listing_candidates(
     item_classifier: ItemClassifier = apply_item_classification,
     item_processor: ItemCandidateProcessor | None = None,
     item_candidate_enricher: ItemCandidateEnricher | None = None,
+    item_detail_extractor: ItemDetailExtractor | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
@@ -333,6 +338,7 @@ def crawl_listing_candidates(
                 listing_candidate=listing_candidate,
                 source_listing_url=listing_candidate.source_listing_url or source_listing_url,
                 browser_fetcher=browser_fetcher,
+                item_detail_extractor=item_detail_extractor,
                 request_headers_provider=request_headers_provider,
                 trace_logger=trace,
                 cancellation_token=cancellation_token,
@@ -1019,6 +1025,7 @@ def _fetch_detail_candidate(
     source_listing_url: str,
     platform: str = "",
     browser_fetcher: Callable[[str], FetchResult | None] | None = None,
+    item_detail_extractor: ItemDetailExtractor | None = None,
     detect_removed: bool = False,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
@@ -1077,11 +1084,12 @@ def _fetch_detail_candidate(
         amazon_detail_validation_failed = True
 
     detail_candidate = (
-        _extract_refresh_detail_candidate(
+        _extract_fetched_detail_candidate(
             fetched_detail=fetched_detail,
             listing_candidate=listing_candidate,
             source_listing_url=source_listing_url,
             platform=platform,
+            item_detail_extractor=item_detail_extractor,
         )
         if fetched_detail is not None
         else None
@@ -1151,11 +1159,12 @@ def _fetch_detail_candidate(
                 store_id=listing_candidate.store_id,
                 store_item_id=listing_candidate.store_item_id,
             )
-            browser_detail_candidate = _extract_refresh_detail_candidate(
+            browser_detail_candidate = _extract_fetched_detail_candidate(
                 fetched_detail=fetched_detail,
                 listing_candidate=listing_candidate,
                 source_listing_url=source_listing_url,
                 platform=platform,
+                item_detail_extractor=item_detail_extractor,
             )
             if browser_detail_candidate is not None:
                 detail_candidate = browser_detail_candidate
@@ -1370,6 +1379,29 @@ def _extract_refresh_detail_candidate(
         product_url=fetched_detail.url,
         store_id=listing_candidate.store_id,
         source_listing_url=source_listing_url,
+    )
+
+
+def _extract_fetched_detail_candidate(
+    *,
+    fetched_detail: FetchResult,
+    listing_candidate: DiscoveryItemCandidateRecord,
+    source_listing_url: str,
+    platform: str,
+    item_detail_extractor: ItemDetailExtractor | None,
+) -> DiscoveryItemCandidateRecord | None:
+    if item_detail_extractor is not None:
+        return item_detail_extractor(
+            fetched_detail.text,
+            fetched_detail.url,
+            listing_candidate.store_id,
+            source_listing_url,
+        )
+    return _extract_refresh_detail_candidate(
+        fetched_detail=fetched_detail,
+        listing_candidate=listing_candidate,
+        source_listing_url=source_listing_url,
+        platform=platform,
     )
 
 

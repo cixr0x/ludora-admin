@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
+from ludora.amukiri_discovery import crawl_amukiri_inventory, is_amukiri_store_url
 from ludora.cancellation import CancellationToken
 from ludora.catito_discovery import crawl_catito_inventory, is_catito_store_url
 from ludora.models import DiscoveryItemCandidateRecord
@@ -88,6 +89,17 @@ def collect_store_inventory(
             item_classifier=item_classifier,
             item_processor=item_processor,
             item_title_extractor=item_title_extractor,
+            trace_logger=trace_logger,
+            cancellation_token=cancellation_token,
+        )
+    if is_amukiri_store_url(store_url):
+        return crawl_amukiri_inventory(
+            store_url,
+            store_id,
+            repository,
+            limit=limit,
+            item_classifier=item_classifier,
+            item_processor=item_processor,
             trace_logger=trace_logger,
             cancellation_token=cancellation_token,
         )
