@@ -11,7 +11,13 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.database import DiscoveryRepository, ItemSearchEmbeddingSource, TutorialLinkUpsertResult, connect_database
+from ludora.database import (
+    DiscoveryRepository,
+    ItemSearchEmbeddingSource,
+    TutorialLinkUpsertResult,
+    _insert_item_candidate_sql,
+    connect_database,
+)
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
 
 
@@ -154,13 +160,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
             attempt_id=91,
             job_id=17,
             lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
-            next_update_at=datetime(2026, 8, 5, 16, 0, tzinfo=timezone.utc),
             run_id="continuous:test",
             worker_id="worker-1",
             worker_name="continuous",
             platform="woocommerce",
         )
 
+        completion_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
+        self.assertIn("next_update_at = null", completion_sql)
         cooldown_updates = [
             (sql, params)
             for sql, params in connection.cursor_instance.executions
@@ -171,6 +178,20 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("blocked_until = null", " ".join(sql.casefold().split()))
         self.assertIn("consecutive_429s = 0", " ".join(sql.casefold().split()))
         self.assertEqual(params, ("continuous", "woocommerce"))
+
+    def test_new_item_candidates_do_not_assign_an_update_schedule(self):
+        insert_sql = " ".join(_insert_item_candidate_sql().casefold().split())
+
+        self.assertNotIn("next_update_at", insert_sql)
+
+    def test_interrupted_updates_are_explicitly_requeued_when_unscheduled(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+
+        repository.recover_interrupted_continuous_updates()
+
+        recovery_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
+        self.assertIn("next_update_at = coalesce(next_update_at, now() + interval '1 minute')", recovery_sql)
 
     def test_woocommerce_429_upserts_platform_cooldown_with_failed_item(self):
         connection = FakeConnection(fetchone_rows=[(501,)])
@@ -651,6 +672,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertNotIn("image_url = %s", update_sql.casefold())
         self.assertIn("refreshed_date = now()", update_sql.casefold())
         self.assertNotIn("last_updated = now()", update_sql.casefold())
+        self.assertIn("next_update_at = null", update_sql.casefold())
         self.assertEqual(update_params[-1], 56)
         self.assertEqual(len(change_entries), 8)
         self.assertEqual(connection.commits, 1)
