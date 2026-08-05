@@ -9,13 +9,27 @@ export type Database = {
   close?(): Promise<void>;
 };
 
-export function createDatabase(databaseUrl: string): Database {
+export type SessionDatabase = Database & {
+  withSession<T>(operation: (session: Database) => Promise<T>): Promise<T>;
+};
+
+export function createDatabase(databaseUrl: string): SessionDatabase {
   const pool = new pg.Pool(databaseConfig(databaseUrl));
+  const toQueryResult = (result: pg.QueryResult): QueryResult => ({ rows: result.rows });
 
   return {
     async query(text: string, params?: unknown[]): Promise<QueryResult> {
-      const result = await pool.query(text, params);
-      return { rows: result.rows };
+      return toQueryResult(await pool.query(text, params));
+    },
+    async withSession<T>(operation: (session: Database) => Promise<T>): Promise<T> {
+      const client = await pool.connect();
+      try {
+        return await operation({
+          query: async (text, params) => toQueryResult(await client.query(text, params))
+        });
+      } finally {
+        client.release();
+      }
     },
     close: () => pool.end()
   };
