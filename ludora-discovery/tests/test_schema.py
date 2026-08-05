@@ -19,6 +19,28 @@ def patches_path() -> Path:
 
 
 class SchemaTests(unittest.TestCase):
+    def test_daily_update_schedule_patch_is_sequential_and_nullable(self):
+        patches = patches_path()
+        patch_names = sorted(path.name for path in patches.glob("*.sql"))
+        self.assertLess(
+            patch_names.index("20260804_004_randomize_listed_store_item_update_schedule.sql"),
+            patch_names.index("20260804_005_daily_store_item_update_scheduling.sql"),
+        )
+
+        patch = (patches / "20260804_005_daily_store_item_update_scheduling.sql").read_text(
+            encoding="utf-8"
+        ).casefold()
+        self.assertIn("alter column next_update_at drop not null", patch)
+        self.assertIn("alter column next_update_at drop default", patch)
+        self.assertIn("create table if not exists store_item_update_schedule_runs", patch)
+        self.assertIn("where trigger = 'automatic'", patch)
+
+    def test_store_item_schedule_snapshot_matches_patch(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+        self.assertIn("next_update_at timestamptz", schema)
+        self.assertNotIn("next_update_at timestamptz not null default now()", schema)
+        self.assertIn("create table if not exists store_item_update_schedule_runs", schema)
+
     def test_database_changes_are_available_as_incremental_patches(self):
         patches = patches_path()
 
