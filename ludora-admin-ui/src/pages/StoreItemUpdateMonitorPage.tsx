@@ -41,6 +41,9 @@ export function StoreItemUpdateMonitorPage() {
   const [failureDetailsError, setFailureDetailsError] = useState('');
   const [failureDetailsLoading, setFailureDetailsLoading] = useState(false);
   const [controlLoading, setControlLoading] = useState(false);
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [scheduleSuccess, setScheduleSuccess] = useState('');
 
   const loadMonitor = useCallback(async (showLoading = false) => {
     if (showLoading) {
@@ -69,6 +72,20 @@ export function StoreItemUpdateMonitorPage() {
       setError(controlError instanceof Error ? controlError.message : String(controlError));
     } finally {
       setControlLoading(false);
+    }
+  }, [loadMonitor]);
+
+  const runSchedule = useCallback(async () => {
+    setScheduleLoading(true);
+    try {
+      const run = await adminApi.runStoreItemUpdateSchedule();
+      setScheduleSuccess(`Scheduled ${formatInteger(run.scheduled_item_count)} items across ${formatInteger(run.scheduled_store_count)} stores.`);
+      setScheduleDialogOpen(false);
+      await loadMonitor();
+    } catch (scheduleError) {
+      setError(scheduleError instanceof Error ? scheduleError.message : String(scheduleError));
+    } finally {
+      setScheduleLoading(false);
     }
   }, [loadMonitor]);
 
@@ -130,6 +147,8 @@ export function StoreItemUpdateMonitorPage() {
   const selectedHistogramStore = histogramStores.find(
     (store) => numberRecordField(store, 'store_id') === histogramStoreId
   );
+  const latestScheduleRun = monitor?.latest_schedule_run;
+  const latestAutomaticScheduleRun = monitor?.latest_automatic_schedule_run;
   const metrics = summary
     ? [
         { label: 'Eligible items', value: formatInteger(summary.eligible_items), note: 'Active stores and listed confirmed items' },
@@ -138,8 +157,10 @@ export function StoreItemUpdateMonitorPage() {
         { label: 'Oldest staleness', value: formatHours(summary.oldest_staleness_hours), note: `Oldest overdue: ${formatHours(summary.oldest_due_hours)}` },
         { label: 'Successful / 24h', value: formatInteger(summary.successes_24h), note: `${summary.success_rate_percent.toFixed(1)}% success rate` },
         { label: 'Failed / 24h', value: formatInteger(summary.failures_24h), note: `${formatInteger(summary.rate_limited_24h)} HTTP 429 responses` },
-        { label: 'Projected demand', value: formatInteger(summary.projected_daily_demand), note: 'Attempts/day at a 22h mean interval' },
-        { label: 'Cadence capacity', value: formatInteger(summary.daily_capacity), note: `${summary.projected_utilization_percent.toFixed(1)}% projected utilization` }
+        { label: 'Scheduled items', value: formatInteger(summary.scheduled_items), note: `Across the ${summary.schedule_window_hours}-hour window` },
+        { label: 'Scheduled later', value: formatInteger(summary.scheduled_later_items), note: 'Scheduled after the current due queue' },
+        { label: 'Unscheduled items', value: formatInteger(summary.unscheduled_items), note: 'Eligible items without a scheduled refresh' },
+        { label: 'Schedule capacity', value: formatInteger(summary.schedule_window_capacity), note: `${summary.schedule_utilization_percent.toFixed(1)}% schedule utilization` }
       ]
     : [];
 
@@ -153,6 +174,17 @@ export function StoreItemUpdateMonitorPage() {
           </Typography>
         </Box>
         <Stack direction="row" spacing={1}>
+          <Button
+            disabled={scheduleLoading}
+            onClick={() => {
+              setError('');
+              setScheduleSuccess('');
+              setScheduleDialogOpen(true);
+            }}
+            variant="contained"
+          >
+            Redistribute update schedule
+          </Button>
           {controlStatus === 'paused' ? (
             <Button
               disabled={controlLoading}
@@ -193,6 +225,7 @@ export function StoreItemUpdateMonitorPage() {
       </Stack>
 
       {error ? <Alert severity="error">{error}</Alert> : null}
+      {scheduleSuccess ? <Alert severity="success">{scheduleSuccess}</Alert> : null}
       <Alert severity={workerHealth === 'healthy' ? 'success' : workerHealth === 'stale' ? 'error' : 'warning'}>
         <Stack alignItems={{ sm: 'center' }} direction={{ xs: 'column', sm: 'row' }} spacing={1}>
           <Typography variant="body2">
@@ -214,6 +247,33 @@ export function StoreItemUpdateMonitorPage() {
           )}
         </Stack>
       </Alert>
+
+      <Paper sx={{ p: 2 }} variant="outlined">
+        <Typography variant="h6">Update schedule</Typography>
+        <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
+          {latestScheduleRun
+            ? `Latest schedule: ${latestScheduleRun.trigger} ${latestScheduleRun.status}. Window ${formatDate(latestScheduleRun.window_start)} to ${formatDate(latestScheduleRun.window_end)}.`
+            : 'No schedule run has been recorded yet.'}
+        </Typography>
+        <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
+          {latestAutomaticScheduleRun
+            ? `Latest automatic schedule: ${latestAutomaticScheduleRun.trigger} ${latestAutomaticScheduleRun.status}. Window ${formatDate(latestAutomaticScheduleRun.window_start)} to ${formatDate(latestAutomaticScheduleRun.window_end)}.`
+            : 'No completed automatic schedule run has been recorded yet.'}
+        </Typography>
+        {summary ? (
+          <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
+            {formatInteger(summary.scheduled_items)} scheduled items across a {summary.schedule_window_hours}-hour scheduling window; {formatInteger(summary.unscheduled_items)} unscheduled.
+          </Typography>
+        ) : null}
+      </Paper>
+
+      {summary && summary.schedule_utilization_percent >= 90 ? (
+        <Alert severity="warning">
+          {summary.schedule_utilization_percent >= 100
+            ? `Schedule capacity is fully utilized or exceeded at ${summary.schedule_utilization_percent.toFixed(1)}% of the ${summary.schedule_window_hours}-hour window.`
+            : `Schedule utilization is at ${summary.schedule_utilization_percent.toFixed(1)}% of the ${summary.schedule_window_hours}-hour window.`}
+        </Alert>
+      ) : null}
 
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
         {metrics.map((metric) => (
@@ -373,6 +433,28 @@ export function StoreItemUpdateMonitorPage() {
           )}
         </DialogContent>
         <DialogActions><Button onClick={() => setFailureGroup(null)}>Close</Button></DialogActions>
+      </Dialog>
+
+      <Dialog
+        onClose={() => {
+          if (!scheduleLoading) {
+            setScheduleDialogOpen(false);
+          }
+        }}
+        open={scheduleDialogOpen}
+      >
+        <DialogTitle>Redistribute update schedule?</DialogTitle>
+        <DialogContent>
+          <Typography>
+            This reschedules every eligible item over a new 20-hour window, including products already updated today and failures in backoff.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={scheduleLoading} onClick={() => setScheduleDialogOpen(false)}>Cancel</Button>
+          <Button disabled={scheduleLoading} onClick={() => void runSchedule()} variant="contained">
+            {scheduleLoading ? 'Redistributing schedule' : 'Confirm redistribution'}
+          </Button>
+        </DialogActions>
       </Dialog>
     </Stack>
   );

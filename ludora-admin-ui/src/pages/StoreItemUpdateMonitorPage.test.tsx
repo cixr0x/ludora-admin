@@ -5,6 +5,20 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { adminApi, type StoreItemUpdateMonitor } from '../api/client';
 import { StoreItemUpdateMonitorPage } from './StoreItemUpdateMonitorPage';
 
+const completedManualScheduleRun = {
+  automatic_schedule_date: null,
+  completed_at: '2026-08-05T10:00:01.000Z',
+  error_detail: '',
+  id: 9,
+  scheduled_item_count: 100,
+  scheduled_store_count: 4,
+  started_at: '2026-08-05T10:00:00.000Z',
+  status: 'COMPLETED' as const,
+  trigger: 'MANUAL' as const,
+  window_end: '2026-08-06T06:00:00.000Z',
+  window_start: '2026-08-05T10:00:00.000Z'
+};
+
 const monitor: StoreItemUpdateMonitor = {
   control_status: 'running',
   generated_at: '2026-08-04T18:00:00Z',
@@ -14,6 +28,13 @@ const monitor: StoreItemUpdateMonitor = {
     { item_count: 1, label: '48h+', overflow: true, staleness_hour: 48 }
   ],
   histogram_store_id: null,
+  latest_automatic_schedule_run: {
+    ...completedManualScheduleRun,
+    automatic_schedule_date: '2026-08-04',
+    id: 8,
+    trigger: 'AUTOMATIC'
+  },
+  latest_schedule_run: completedManualScheduleRun,
   platform_cooldowns: [
     {
       active: false,
@@ -79,9 +100,15 @@ const monitor: StoreItemUpdateMonitor = {
     projected_daily_demand: 109,
     projected_utilization_percent: 0.63,
     rate_limited_24h: 3,
+    scheduled_items: 96,
+    scheduled_later_items: 84,
+    schedule_utilization_percent: 100,
+    schedule_window_capacity: 14400,
+    schedule_window_hours: 20,
     stale_items: 8,
     success_rate_percent: 90.9,
-    successes_24h: 100
+    successes_24h: 100,
+    unscheduled_items: 4
   },
   worker: {
     health: 'healthy',
@@ -115,8 +142,15 @@ describe('StoreItemUpdateMonitorPage', () => {
     render(<StoreItemUpdateMonitorPage />);
 
     expect(await screen.findByRole('heading', { name: 'Store Item Update Monitor' })).toBeInTheDocument();
-    expect(screen.getByText('17,280')).toBeInTheDocument();
+    expect(screen.getByText('14,400')).toBeInTheDocument();
     expect(screen.getByText('3 HTTP 429 responses')).toBeInTheDocument();
+    expect(screen.getByText('96')).toBeInTheDocument();
+    expect(screen.getByText('Scheduled later')).toBeInTheDocument();
+    expect(screen.getByText('4')).toBeInTheDocument();
+    expect(screen.getByText(/Latest schedule: MANUAL COMPLETED/)).toBeInTheDocument();
+    expect(screen.getByText(/Latest automatic schedule: AUTOMATIC COMPLETED/)).toBeInTheDocument();
+    expect(screen.getByText(/20-hour scheduling window/)).toBeInTheDocument();
+    expect(screen.getByText(/Schedule capacity is fully utilized or exceeded/)).toBeInTheDocument();
     expect(screen.getByText(/WooCommerce paused until/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pause automatic updates' })).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Store item staleness histogram' })).toBeInTheDocument();
@@ -188,5 +222,72 @@ describe('StoreItemUpdateMonitorPage', () => {
 
     expect(await screen.findByText('Pause failed')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Store Item Update Monitor' })).toBeInTheDocument();
+  });
+
+  it('warns when schedule utilization reaches 90 percent', async () => {
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue({
+      ...monitor,
+      summary: { ...monitor.summary, schedule_utilization_percent: 90 }
+    });
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    expect(await screen.findByText(/Schedule utilization is at 90.0% of the 20-hour window/)).toBeInTheDocument();
+  });
+
+  it('confirms redistribution, refreshes the monitor, and reports scheduled volume', async () => {
+    const getMonitor = vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue(monitor);
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+    const runSchedule = vi.spyOn(adminApi, 'runStoreItemUpdateSchedule').mockResolvedValue(completedManualScheduleRun);
+    const user = userEvent.setup();
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Redistribute update schedule' }));
+    expect(screen.getByText(/including products already updated today and failures in backoff/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Confirm redistribution' }));
+
+    await waitFor(() => expect(runSchedule).toHaveBeenCalledOnce());
+    await waitFor(() => expect(getMonitor).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText(/Scheduled 100 items across 4 stores/i)).toBeInTheDocument();
+  });
+
+  it('disables schedule confirmation while redistribution is pending', async () => {
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue(monitor);
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+    let resolveSchedule: (value: typeof completedManualScheduleRun) => void;
+    const runSchedule = vi.spyOn(adminApi, 'runStoreItemUpdateSchedule').mockReturnValue(
+      new Promise((resolve) => { resolveSchedule = resolve; })
+    );
+    const user = userEvent.setup();
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Redistribute update schedule' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm redistribution' }));
+
+    await waitFor(() => expect(runSchedule).toHaveBeenCalledOnce());
+    expect(screen.getByRole('button', { name: 'Redistributing schedule' })).toBeDisabled();
+    resolveSchedule!(completedManualScheduleRun);
+    await screen.findByText(/Scheduled 100 items across 4 stores/i);
+  });
+
+  it('retains the monitor page when schedule redistribution conflicts', async () => {
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue(monitor);
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+    vi.spyOn(adminApi, 'runStoreItemUpdateSchedule').mockRejectedValue(
+      new Error('A store item update schedule run is already in progress')
+    );
+    const user = userEvent.setup();
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Redistribute update schedule' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm redistribution' }));
+
+    expect(await screen.findByText('A store item update schedule run is already in progress')).toBeInTheDocument();
+    expect(screen.getByText('Store Item Update Monitor', { selector: 'h4' })).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 });

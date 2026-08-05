@@ -64,9 +64,29 @@ export type StoreItemUpdateMonitorSummary = {
   projected_daily_demand: number;
   projected_utilization_percent: number;
   rate_limited_24h: number;
+  scheduled_items: number;
+  scheduled_later_items: number;
+  schedule_utilization_percent: number;
+  schedule_window_capacity: number;
+  schedule_window_hours: number;
   stale_items: number;
   success_rate_percent: number;
   successes_24h: number;
+  unscheduled_items: number;
+};
+
+export type StoreItemUpdateScheduleRun = {
+  automatic_schedule_date: string | null;
+  completed_at: string | null;
+  error_detail: string;
+  id: number;
+  scheduled_item_count: number;
+  scheduled_store_count: number;
+  started_at: string;
+  status: 'RUNNING' | 'COMPLETED' | 'FAILED';
+  trigger: 'AUTOMATIC' | 'MANUAL';
+  window_end: string;
+  window_start: string;
 };
 
 export type ContinuousItemUpdateControlStatus = 'paused' | 'running' | 'stopping' | 'unavailable';
@@ -89,6 +109,8 @@ export type StoreItemUpdateMonitor = {
     staleness_hour: number;
   }>;
   histogram_store_id: number | null;
+  latest_automatic_schedule_run: StoreItemUpdateScheduleRun | null;
+  latest_schedule_run: StoreItemUpdateScheduleRun | null;
   platform_cooldowns: StoreItemUpdatePlatformCooldown[];
   range_hours: number;
   recent_attempts: AdminRecord[];
@@ -698,6 +720,12 @@ export const adminApi = {
     }
     return fetchData<StoreItemUpdateMonitor>(`/admin/operations/store-item-update-monitor?${params.toString()}`);
   },
+  runStoreItemUpdateSchedule: () =>
+    sendJson<StoreItemUpdateScheduleRun>(
+      '/admin/operations/store-item-update-schedule/run',
+      'POST',
+      {}
+    ),
   pauseContinuousStoreItemUpdates: () =>
     sendJson<{ status: ContinuousItemUpdateControlStatus }>(
       '/admin/operations/store-item-update-worker/pause',

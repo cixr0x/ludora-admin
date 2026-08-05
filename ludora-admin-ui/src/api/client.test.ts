@@ -519,6 +519,39 @@ describe('fetchRows', () => {
     );
   });
 
+  it('runs the daily store item schedule operation', async () => {
+    const run = {
+      automatic_schedule_date: null,
+      completed_at: '2026-08-05T10:00:01.000Z',
+      error_detail: '',
+      id: 9,
+      scheduled_item_count: 100,
+      scheduled_store_count: 4,
+      started_at: '2026-08-05T10:00:00.000Z',
+      status: 'COMPLETED',
+      trigger: 'MANUAL',
+      window_end: '2026-08-06T06:00:00.000Z',
+      window_start: '2026-08-05T10:00:00.000Z'
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: run }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.runStoreItemUpdateSchedule()).resolves.toMatchObject({
+      status: 'COMPLETED',
+      trigger: 'MANUAL'
+    });
+    expectFetch(
+      fetchMock,
+      'http://127.0.0.1:4001/admin/operations/store-item-update-schedule/run',
+      { body: '{}', headers: { 'Content-Type': 'application/json' }, method: 'POST' }
+    );
+  });
+
   it('pauses and resumes continuous store item updates', async () => {
     const { adminApi } = await importClient();
     const fetchMock = vi.spyOn(globalThis, 'fetch')
