@@ -63,8 +63,10 @@ export function createStoreItemUpdateScheduleManager(options: {
 
     const tickPromise = Promise.resolve()
       .then(() => options.scheduleService.runAutomatic(tickNow, localDate))
-      .then(() => {
-        completedAutomaticDate = localDate;
+      .then((result) => {
+        if (result.status === 'COMPLETED') {
+          completedAutomaticDate = localDate;
+        }
       })
       .catch((error: unknown) => {
         console.error('[store-item-update-schedule] automatic run failed', error);

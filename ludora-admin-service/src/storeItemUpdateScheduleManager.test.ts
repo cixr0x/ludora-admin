@@ -96,6 +96,21 @@ describe('store item update schedule manager', () => {
     await manager.shutdown();
   });
 
+  it('retries a fulfilled non-completed automatic response on a later tick', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(AFTER_SCHEDULE);
+    const scheduleService = new FakeScheduleService();
+    scheduleService.queueAutomaticResponse(Promise.resolve(runningAutomaticRun()));
+    const manager = createStoreItemUpdateScheduleManager({ scheduleService, tickMs: 60_000 });
+
+    manager.start();
+    await vi.runAllTicks();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(scheduleService.automaticCalls).toHaveLength(2);
+    await manager.shutdown();
+  });
+
   it('logs a failed automatic call and retries it on a later tick', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(AFTER_SCHEDULE);
@@ -193,6 +208,14 @@ function completedManualRun(): StoreItemUpdateScheduleRun {
     ...completedAutomaticRun(),
     trigger: 'MANUAL',
     automatic_schedule_date: null
+  };
+}
+
+function runningAutomaticRun(): StoreItemUpdateScheduleRun {
+  return {
+    ...completedAutomaticRun(),
+    status: 'RUNNING',
+    completed_at: null
   };
 }
 
