@@ -110,6 +110,7 @@ export type StoreItemUpdateMonitor = {
   }>;
   histogram_store_id: number | null;
   latest_automatic_schedule_run: StoreItemUpdateScheduleRun | null;
+  latest_schedule_attempt: StoreItemUpdateScheduleRun | null;
   latest_schedule_run: StoreItemUpdateScheduleRun | null;
   platform_cooldowns: StoreItemUpdatePlatformCooldown[];
   range_hours: number;

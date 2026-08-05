@@ -4,6 +4,7 @@ import type {
   StoreItemUpdateScheduleRun,
   StoreItemUpdateScheduleService
 } from './storeItemUpdateScheduleService.js';
+import { StoreItemUpdateScheduleConflictError } from './storeItemUpdateScheduleService.js';
 import {
   createStoreItemUpdateScheduleManager,
   mexicoCityScheduleDate
@@ -13,8 +14,8 @@ const AUTOMATIC_DATE = '2026-08-05';
 const AFTER_SCHEDULE = new Date('2026-08-05T09:01:00.000Z');
 
 class FakeScheduleService implements StoreItemUpdateScheduleService {
-  automaticCalls: Array<{ now: Date; localDate: string }> = [];
-  manualCalls: Date[] = [];
+  automaticCalls = 0;
+  manualCalls = 0;
   maximumConcurrentAutomaticCalls = 0;
   private activeAutomaticCalls = 0;
   private automaticResponses: Array<Promise<StoreItemUpdateScheduleRun>> = [];
@@ -23,8 +24,8 @@ class FakeScheduleService implements StoreItemUpdateScheduleService {
     this.automaticResponses.push(response);
   }
 
-  async runAutomatic(now: Date, localDate: string): Promise<StoreItemUpdateScheduleRun> {
-    this.automaticCalls.push({ now, localDate });
+  async runAutomatic(): Promise<StoreItemUpdateScheduleRun | null> {
+    this.automaticCalls += 1;
     this.activeAutomaticCalls += 1;
     this.maximumConcurrentAutomaticCalls = Math.max(this.maximumConcurrentAutomaticCalls, this.activeAutomaticCalls);
     try {
@@ -34,8 +35,8 @@ class FakeScheduleService implements StoreItemUpdateScheduleService {
     }
   }
 
-  async runManual(now: Date): Promise<StoreItemUpdateScheduleRun> {
-    this.manualCalls.push(now);
+  async runManual(): Promise<StoreItemUpdateScheduleRun> {
+    this.manualCalls += 1;
     return completedManualRun();
   }
 }
@@ -65,7 +66,7 @@ describe('store item update schedule manager', () => {
     manager.start();
     await vi.runAllTicks();
 
-    expect(scheduleService.automaticCalls).toEqual([]);
+    expect(scheduleService.automaticCalls).toBe(0);
     await manager.shutdown();
   });
 
@@ -78,7 +79,7 @@ describe('store item update schedule manager', () => {
     manager.start();
     await vi.runAllTicks();
 
-    expect(scheduleService.automaticCalls).toEqual([{ now: AFTER_SCHEDULE, localDate: AUTOMATIC_DATE }]);
+    expect(scheduleService.automaticCalls).toBe(1);
     await manager.shutdown();
   });
 
@@ -92,7 +93,7 @@ describe('store item update schedule manager', () => {
     await vi.runAllTicks();
     await vi.advanceTimersByTimeAsync(120_000);
 
-    expect(scheduleService.automaticCalls).toHaveLength(1);
+    expect(scheduleService.automaticCalls).toBe(1);
     await manager.shutdown();
   });
 
@@ -107,7 +108,7 @@ describe('store item update schedule manager', () => {
     await vi.runAllTicks();
     await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(scheduleService.automaticCalls).toHaveLength(2);
+    expect(scheduleService.automaticCalls).toBe(2);
     await manager.shutdown();
   });
 
@@ -125,7 +126,7 @@ describe('store item update schedule manager', () => {
     await vi.advanceTimersByTimeAsync(60_000);
 
     expect(error).toHaveBeenCalledWith('[store-item-update-schedule] automatic run failed', failure);
-    expect(scheduleService.automaticCalls).toHaveLength(2);
+    expect(scheduleService.automaticCalls).toBe(2);
     await manager.shutdown();
   });
 
@@ -142,13 +143,13 @@ describe('store item update schedule manager', () => {
     await vi.advanceTimersByTimeAsync(120_000);
 
     expect(scheduleService.maximumConcurrentAutomaticCalls).toBe(1);
-    expect(scheduleService.automaticCalls).toHaveLength(1);
+    expect(scheduleService.automaticCalls).toBe(1);
     deferred.resolve(completedAutomaticRun());
     await vi.runAllTicks();
     await manager.shutdown();
   });
 
-  it('delegates a manual run with the actual clock time', async () => {
+  it('delegates a manual run to the service clock boundary', async () => {
     vi.useFakeTimers();
     const now = new Date('2026-08-05T17:42:00.000Z');
     vi.setSystemTime(now);
@@ -158,7 +159,7 @@ describe('store item update schedule manager', () => {
     const result = await manager.runManual();
 
     expect(result).toMatchObject({ trigger: 'MANUAL', status: 'COMPLETED' });
-    expect(scheduleService.manualCalls).toEqual([now]);
+    expect(scheduleService.manualCalls).toBe(1);
     await manager.shutdown();
   });
 
@@ -183,15 +184,48 @@ describe('store item update schedule manager', () => {
     await shutdown;
     await vi.advanceTimersByTimeAsync(120_000);
 
-    expect(scheduleService.automaticCalls).toHaveLength(1);
+    expect(scheduleService.automaticCalls).toBe(1);
+  });
+
+  it('quietly retries expected automatic advisory-lock contention', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(AFTER_SCHEDULE);
+    const scheduleService = new FakeScheduleService();
+    scheduleService.queueAutomaticResponse(Promise.reject(new StoreItemUpdateScheduleConflictError()));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const manager = createStoreItemUpdateScheduleManager({ scheduleService, tickMs: 60_000 });
+
+    manager.start();
+    await vi.runAllTicks();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(scheduleService.automaticCalls).toBe(2);
+    expect(error).not.toHaveBeenCalled();
+    await manager.shutdown();
+  });
+
+  it('caches the completed execution date returned after a Mexico City rollover', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-06T05:59:00.000Z'));
+    const scheduleService = new FakeScheduleService();
+    scheduleService.queueAutomaticResponse(Promise.resolve(completedAutomaticRun('2026-08-06')));
+    const manager = createStoreItemUpdateScheduleManager({ scheduleService, tickMs: 60_000 });
+
+    manager.start();
+    await vi.runAllTicks();
+    vi.setSystemTime(new Date('2026-08-06T09:02:00.000Z'));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(scheduleService.automaticCalls).toBe(1);
+    await manager.shutdown();
   });
 });
 
-function completedAutomaticRun(): StoreItemUpdateScheduleRun {
+function completedAutomaticRun(automaticScheduleDate = AUTOMATIC_DATE): StoreItemUpdateScheduleRun {
   return {
     id: 1,
     trigger: 'AUTOMATIC',
-    automatic_schedule_date: AUTOMATIC_DATE,
+    automatic_schedule_date: automaticScheduleDate,
     status: 'COMPLETED',
     window_start: '2026-08-05T09:01:00.000Z',
     window_end: '2026-08-06T05:01:00.000Z',

@@ -2,41 +2,20 @@ import type {
   StoreItemUpdateScheduleRun,
   StoreItemUpdateScheduleService
 } from './storeItemUpdateScheduleService.js';
+import {
+  mexicoCityScheduleDate,
+  StoreItemUpdateScheduleConflictError
+} from './storeItemUpdateScheduleService.js';
 
-const SCHEDULE_TIME_ZONE = 'America/Mexico_City';
-const SCHEDULE_START_HOUR = 3;
+export { mexicoCityScheduleDate } from './storeItemUpdateScheduleService.js';
+
 const DEFAULT_TICK_MS = 60_000;
-
-const mexicoCityTimeFormatter = new Intl.DateTimeFormat('en-CA', {
-  timeZone: SCHEDULE_TIME_ZONE,
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  hourCycle: 'h23'
-});
 
 export type StoreItemUpdateScheduleManager = {
   runManual(): Promise<StoreItemUpdateScheduleRun>;
   shutdown(): Promise<void>;
   start(): void;
 };
-
-export function mexicoCityScheduleDate(now: Date): string | null {
-  const parts = Object.fromEntries(
-    mexicoCityTimeFormatter
-      .formatToParts(now)
-      .filter((part) => part.type !== 'literal')
-      .map((part) => [part.type, part.value])
-  );
-  const hour = Number(parts.hour);
-
-  if (hour < SCHEDULE_START_HOUR) {
-    return null;
-  }
-
-  return `${parts.year}-${parts.month}-${parts.day}`;
-}
 
 export function createStoreItemUpdateScheduleManager(options: {
   now?: () => Date;
@@ -62,14 +41,16 @@ export function createStoreItemUpdateScheduleManager(options: {
     }
 
     const tickPromise = Promise.resolve()
-      .then(() => options.scheduleService.runAutomatic(tickNow, localDate))
+      .then(() => options.scheduleService.runAutomatic())
       .then((result) => {
-        if (result.status === 'COMPLETED') {
-          completedAutomaticDate = localDate;
+        if (result?.status === 'COMPLETED' && result.automatic_schedule_date) {
+          completedAutomaticDate = result.automatic_schedule_date;
         }
       })
       .catch((error: unknown) => {
-        console.error('[store-item-update-schedule] automatic run failed', error);
+        if (!(error instanceof StoreItemUpdateScheduleConflictError)) {
+          console.error('[store-item-update-schedule] automatic run failed', error);
+        }
       })
       .finally(() => {
         if (activeTick === tickPromise) {
@@ -81,7 +62,7 @@ export function createStoreItemUpdateScheduleManager(options: {
   };
 
   return {
-    runManual: () => options.scheduleService.runManual(now()),
+    runManual: () => options.scheduleService.runManual(),
     start: () => {
       if (isShuttingDown || interval) {
         return;

@@ -44,6 +44,7 @@ const monitor: StoreItemUpdateMonitor = {
     id: 8,
     trigger: 'AUTOMATIC'
   },
+  latest_schedule_attempt: completedManualScheduleRun,
   latest_schedule_run: completedManualScheduleRun,
   platform_cooldowns: [
     {
@@ -157,8 +158,10 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(screen.getByText('96')).toBeInTheDocument();
     expect(screen.getByText('Scheduled later')).toBeInTheDocument();
     expect(screen.getByText('4')).toBeInTheDocument();
-    expect(screen.getByText(/Latest schedule: MANUAL COMPLETED/)).toBeInTheDocument();
+    expect(screen.getByText(/Applied schedule: MANUAL COMPLETED/)).toBeInTheDocument();
+    expect(screen.getByText(/Latest schedule attempt: MANUAL COMPLETED/)).toBeInTheDocument();
     expect(screen.getByText(/Latest automatic schedule: AUTOMATIC COMPLETED/)).toBeInTheDocument();
+    expect(screen.getByText(/Applied schedule:.*8\/5\/2026, 4:00:00 AM America\/Mexico_City/)).toBeInTheDocument();
     expect(screen.getByText(/20-hour scheduling window/)).toBeInTheDocument();
     expect(screen.getByText(/Schedule capacity is fully utilized or exceeded/)).toBeInTheDocument();
     expect(screen.getByText(/WooCommerce paused until/)).toBeInTheDocument();
@@ -260,8 +263,43 @@ describe('StoreItemUpdateMonitorPage', () => {
 
     await waitFor(() => expect(runSchedule).toHaveBeenCalledOnce());
     await waitFor(() => expect(getMonitor).toHaveBeenCalledTimes(2));
-    expect(await screen.findByText(/Scheduled 100 items across 4 stores/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Scheduled 100 items across 4 stores.*Applied window.*America\/Mexico_City/i)).toBeInTheDocument();
   });
+
+  it.each([
+    ['FAILED', 'distribution failed after lock acquisition'],
+    ['RUNNING', '']
+  ] as const)(
+    'keeps the completed manual window visible when the latest attempt is %s',
+    async (status, errorDetail) => {
+      vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue({
+        ...monitor,
+        latest_schedule_attempt: {
+          ...completedManualScheduleRun,
+          completed_at: status === 'FAILED' ? '2026-08-05T11:00:01.000Z' : null,
+          error_detail: errorDetail,
+          id: 10,
+          scheduled_item_count: 0,
+          scheduled_store_count: 0,
+          started_at: '2026-08-05T11:00:00.000Z',
+          status,
+          window_end: '2026-08-06T07:00:00.000Z',
+          window_start: '2026-08-05T11:00:00.000Z'
+        }
+      });
+      vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+
+      render(<StoreItemUpdateMonitorPage />);
+
+      expect(await screen.findByText(/Applied schedule: MANUAL COMPLETED/)).toBeInTheDocument();
+      expect(screen.getByText(new RegExp(`Latest schedule attempt: MANUAL ${status}`))).toBeInTheDocument();
+      if (status === 'FAILED') {
+        expect(screen.getByText(new RegExp(errorDetail))).toBeInTheDocument();
+      } else {
+        expect(screen.queryByText(errorDetail || 'distribution failed after lock acquisition')).not.toBeInTheDocument();
+      }
+    }
+  );
 
   it('disables schedule confirmation while redistribution is pending', async () => {
     vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue(monitor);

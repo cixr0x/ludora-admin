@@ -615,8 +615,13 @@ async function loadStoreItemUpdateMonitor(
     `select
        (select row_to_json(latest_run) from (
          select * from store_item_update_schedule_runs
-         order by started_at desc, id desc limit 1
+         where status = 'COMPLETED'
+         order by completed_at desc, id desc limit 1
        ) latest_run) as latest_schedule_run,
+       (select row_to_json(latest_attempt) from (
+         select * from store_item_update_schedule_runs
+         order by started_at desc, id desc limit 1
+       ) latest_attempt) as latest_schedule_attempt,
        (select row_to_json(latest_automatic) from (
          select * from store_item_update_schedule_runs
          where trigger = 'AUTOMATIC' and status = 'COMPLETED'
@@ -752,6 +757,7 @@ async function loadStoreItemUpdateMonitor(
     }),
     histogram_store_id: histogramStoreId,
     latest_automatic_schedule_run: scheduleRunsRow.latest_automatic_schedule_run ?? null,
+    latest_schedule_attempt: scheduleRunsRow.latest_schedule_attempt ?? null,
     latest_schedule_run: scheduleRunsRow.latest_schedule_run ?? null,
     platform_cooldowns: platformCooldownsResult.rows,
     range_hours: rangeHours,

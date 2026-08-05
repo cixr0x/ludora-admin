@@ -4281,9 +4281,80 @@ describe('ludora admin service', () => {
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
       latest_automatic_schedule_run: null,
+      latest_schedule_attempt: null,
       latest_schedule_run: null
     });
   });
+
+  it.each(['FAILED', 'RUNNING'] as const)(
+    'keeps the completed manual schedule as the applied window when the latest attempt is %s',
+    async (attemptStatus) => {
+      const queries: Array<{ params?: unknown[]; sql: string }> = [];
+      const completedSchedule = {
+        automatic_schedule_date: null,
+        completed_at: '2026-08-05T10:00:01.123Z',
+        error_detail: '',
+        id: 9,
+        scheduled_item_count: 100,
+        scheduled_store_count: 4,
+        started_at: '2026-08-05T10:00:00.123Z',
+        status: 'COMPLETED',
+        trigger: 'MANUAL',
+        window_end: '2026-08-06T06:00:00.123Z',
+        window_start: '2026-08-05T10:00:00.123Z'
+      };
+      const latestAttempt = {
+        ...completedSchedule,
+        completed_at: attemptStatus === 'FAILED' ? '2026-08-05T11:00:01.456Z' : null,
+        error_detail: attemptStatus === 'FAILED' ? 'distribution failed after lock acquisition' : '',
+        id: 10,
+        scheduled_item_count: 0,
+        scheduled_store_count: 0,
+        started_at: '2026-08-05T11:00:00.456Z',
+        status: attemptStatus,
+        window_end: '2026-08-06T07:00:00.456Z',
+        window_start: '2026-08-05T11:00:00.456Z'
+      };
+      const database: Database = {
+        query: async (sql, params) => {
+          queries.push({ params, sql });
+          if (normalizeSql(sql).includes('from store_item_update_schedule_runs')) {
+            return {
+              rows: [{
+                latest_automatic_schedule_run: null,
+                latest_schedule_attempt: latestAttempt,
+                latest_schedule_run: completedSchedule
+              }]
+            };
+          }
+          return { rows: [] };
+        }
+      };
+
+      const response = await request(createApp({
+        database,
+        operationsClient: idleOperationsClient()
+      })).get('/admin/operations/store-item-update-monitor');
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.latest_schedule_run).toMatchObject({
+        id: 9,
+        status: 'COMPLETED',
+        trigger: 'MANUAL'
+      });
+      expect(response.body.data.latest_schedule_attempt).toMatchObject({
+        error_detail: latestAttempt.error_detail,
+        id: 10,
+        status: attemptStatus
+      });
+      const scheduleQuery = normalizeSql(queries.find((query) =>
+        normalizeSql(query.sql).includes('from store_item_update_schedule_runs')
+      )?.sql ?? '');
+      expect(scheduleQuery).toContain("where status = 'completed'");
+      expect(scheduleQuery).toContain('order by completed_at desc, id desc limit 1');
+      expect(scheduleQuery).toContain('as latest_schedule_attempt');
+    }
+  );
 
   it('returns continuous update worker health and hourly staleness data for a selected store', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
@@ -4338,6 +4409,19 @@ describe('ludora admin service', () => {
                 trigger: 'AUTOMATIC',
                 window_end: '2026-08-04T23:00:00.000Z',
                 window_start: '2026-08-04T03:00:00.000Z'
+              },
+              latest_schedule_attempt: {
+                automatic_schedule_date: null,
+                completed_at: '2026-08-05T10:00:01.000Z',
+                error_detail: '',
+                id: 9,
+                scheduled_item_count: 100,
+                scheduled_store_count: 4,
+                started_at: '2026-08-05T10:00:00.000Z',
+                status: 'COMPLETED',
+                trigger: 'MANUAL',
+                window_end: '2026-08-06T06:00:00.000Z',
+                window_start: '2026-08-05T10:00:00.000Z'
               },
               latest_schedule_run: {
                 automatic_schedule_date: null,
@@ -4424,6 +4508,11 @@ describe('ludora admin service', () => {
         id: 8,
         status: 'COMPLETED',
         trigger: 'AUTOMATIC'
+      },
+      latest_schedule_attempt: {
+        id: 9,
+        status: 'COMPLETED',
+        trigger: 'MANUAL'
       },
       latest_schedule_run: {
         automatic_schedule_date: null,

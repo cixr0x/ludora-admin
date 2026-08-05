@@ -29,6 +29,17 @@ import { adminApi, type AdminRecord, type StoreItemUpdateMonitor } from '../api/
 
 const REFRESH_INTERVAL_MS = 15_000;
 const RANGE_OPTIONS = [24, 48, 72, 168];
+const SCHEDULE_TIME_ZONE = 'America/Mexico_City';
+const scheduleTimeFormatter = new Intl.DateTimeFormat('en-US', {
+  timeZone: SCHEDULE_TIME_ZONE,
+  year: 'numeric',
+  month: 'numeric',
+  day: 'numeric',
+  hour: 'numeric',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: true
+});
 
 export function StoreItemUpdateMonitorPage() {
   const [hours, setHours] = useState(48);
@@ -92,7 +103,10 @@ export function StoreItemUpdateMonitorPage() {
     setScheduleLoading(true);
     try {
       const run = await adminApi.runStoreItemUpdateSchedule();
-      setScheduleSuccess(`Scheduled ${formatInteger(run.scheduled_item_count)} items across ${formatInteger(run.scheduled_store_count)} stores.`);
+      setScheduleSuccess(
+        `Scheduled ${formatInteger(run.scheduled_item_count)} items across ${formatInteger(run.scheduled_store_count)} stores. `
+        + `Applied window ${formatScheduleDate(run.window_start)} to ${formatScheduleDate(run.window_end)}.`
+      );
       setScheduleDialogOpen(false);
       await loadMonitor();
     } catch (scheduleError) {
@@ -161,6 +175,7 @@ export function StoreItemUpdateMonitorPage() {
     (store) => numberRecordField(store, 'store_id') === histogramStoreId
   );
   const latestScheduleRun = monitor?.latest_schedule_run;
+  const latestScheduleAttempt = monitor?.latest_schedule_attempt;
   const latestAutomaticScheduleRun = monitor?.latest_automatic_schedule_run;
   const metrics = summary
     ? [
@@ -265,14 +280,24 @@ export function StoreItemUpdateMonitorPage() {
         <Typography variant="h6">Update schedule</Typography>
         <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
           {latestScheduleRun
-            ? `Latest schedule: ${latestScheduleRun.trigger} ${latestScheduleRun.status}. Window ${formatDate(latestScheduleRun.window_start)} to ${formatDate(latestScheduleRun.window_end)}.`
-            : 'No schedule run has been recorded yet.'}
+            ? `Applied schedule: ${latestScheduleRun.trigger} ${latestScheduleRun.status}. Window ${formatScheduleDate(latestScheduleRun.window_start)} to ${formatScheduleDate(latestScheduleRun.window_end)}.`
+            : 'No completed schedule has been applied yet.'}
+        </Typography>
+        <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
+          {latestScheduleAttempt
+            ? `Latest schedule attempt: ${latestScheduleAttempt.trigger} ${latestScheduleAttempt.status}. Started ${formatScheduleDate(latestScheduleAttempt.started_at)}${latestScheduleAttempt.completed_at ? `; completed ${formatScheduleDate(latestScheduleAttempt.completed_at)}` : ''}.`
+            : 'No schedule attempt has been recorded yet.'}
         </Typography>
         <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
           {latestAutomaticScheduleRun
-            ? `Latest automatic schedule: ${latestAutomaticScheduleRun.trigger} ${latestAutomaticScheduleRun.status}. Window ${formatDate(latestAutomaticScheduleRun.window_start)} to ${formatDate(latestAutomaticScheduleRun.window_end)}.`
+            ? `Latest automatic schedule: ${latestAutomaticScheduleRun.trigger} ${latestAutomaticScheduleRun.status}. Window ${formatScheduleDate(latestAutomaticScheduleRun.window_start)} to ${formatScheduleDate(latestAutomaticScheduleRun.window_end)}.`
             : 'No completed automatic schedule run has been recorded yet.'}
         </Typography>
+        {latestScheduleAttempt?.status === 'FAILED' && latestScheduleAttempt.error_detail ? (
+          <Alert severity="error" sx={{ mt: 1.5 }}>
+            Latest schedule attempt failed: {latestScheduleAttempt.error_detail.slice(0, 2000)}
+          </Alert>
+        ) : null}
         {summary ? (
           <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
             {formatInteger(summary.scheduled_items)} scheduled items across a {summary.schedule_window_hours}-hour scheduling window; {formatInteger(summary.unscheduled_items)} unscheduled.
@@ -582,6 +607,23 @@ function formatDate(value: unknown): string {
   }
   const date = new Date(String(value));
   return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+}
+
+function formatScheduleDate(value: unknown): string {
+  if (!value) {
+    return '-';
+  }
+  const date = new Date(String(value));
+  if (Number.isNaN(date.getTime())) {
+    return `${String(value)} ${SCHEDULE_TIME_ZONE}`;
+  }
+  const parts = Object.fromEntries(
+    scheduleTimeFormatter
+      .formatToParts(date)
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value])
+  );
+  return `${parts.month}/${parts.day}/${parts.year}, ${parts.hour}:${parts.minute}:${parts.second} ${parts.dayPeriod} ${SCHEDULE_TIME_ZONE}`;
 }
 
 function formatInteger(value: number): string {

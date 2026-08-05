@@ -25,12 +25,23 @@ export class StoreItemUpdateScheduleConflictError extends Error {
 }
 
 export type StoreItemUpdateScheduleService = {
-  runAutomatic(now: Date, localDate: string): Promise<StoreItemUpdateScheduleRun>;
-  runManual(now: Date): Promise<StoreItemUpdateScheduleRun>;
+  runAutomatic(): Promise<StoreItemUpdateScheduleRun | null>;
+  runManual(): Promise<StoreItemUpdateScheduleRun>;
 };
 
 const DEFAULT_ADVISORY_LOCK_KEY = 20_260_805;
 const DEFAULT_WINDOW_HOURS = 20;
+const SCHEDULE_START_HOUR = 3;
+const SCHEDULE_TIME_ZONE = 'America/Mexico_City';
+
+const mexicoCityTimeFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: SCHEDULE_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  hourCycle: 'h23'
+});
 
 const RUN_COLUMNS = `
   id,
@@ -50,11 +61,7 @@ const DISTRIBUTE_STORE_ITEMS_SQL = `
 with eligible as materialized (
   select
     store_items.id,
-    store_items.store_id,
-    row_number() over (
-      partition by store_items.store_id order by random()
-    ) - 1 as random_rank,
-    count(*) over (partition by store_items.store_id) as store_item_count
+    store_items.store_id
   from store_items
   join stores on stores.id = store_items.store_id
   where stores.active = true
@@ -68,18 +75,34 @@ with eligible as materialized (
       store_items.update_lease_token is null
       or store_items.update_lease_expires_at <= now()
     )
+    and (
+      store_items.last_update_attempt_at is null
+      or store_items.last_update_attempt_at < $1::timestamptz
+    )
+  order by store_items.id
+  for update of store_items skip locked
+), ranked as materialized (
+  select
+    store_items.id,
+    store_items.store_id,
+    row_number() over (
+      partition by store_items.store_id order by random()
+    ) - 1 as random_rank,
+    count(*) over (partition by store_items.store_id) as store_item_count
+  from store_items
+  join eligible on eligible.id = store_items.id
 ), store_phases as materialized (
   select store_id, random() as phase
-  from eligible
+  from ranked
   group by store_id
 ), scheduled as (
   update store_items
   set next_update_at = $1::timestamptz
     + (($2::timestamptz - $1::timestamptz)
-      * ((eligible.random_rank + store_phases.phase) / eligible.store_item_count))
-  from eligible
-  join store_phases on store_phases.store_id = eligible.store_id
-  where store_items.id = eligible.id
+      * ((ranked.random_rank + store_phases.phase) / ranked.store_item_count))
+  from ranked
+  join store_phases on store_phases.store_id = ranked.store_id
+  where store_items.id = ranked.id
   returning store_items.id, store_items.store_id
 )
 select count(*)::int as scheduled_item_count,
@@ -89,21 +112,28 @@ from scheduled
 
 export function createStoreItemUpdateScheduleService(
   database: SessionDatabase,
-  options: { advisoryLockKey?: number; windowHours?: number } = {}
+  options: { advisoryLockKey?: number; now?: () => Date; windowHours?: number } = {}
 ): StoreItemUpdateScheduleService {
   const advisoryLockKey = options.advisoryLockKey ?? DEFAULT_ADVISORY_LOCK_KEY;
+  const now = options.now ?? (() => new Date());
   const windowHours = options.windowHours ?? DEFAULT_WINDOW_HOURS;
 
   const run = async (
-    trigger: StoreItemUpdateScheduleTrigger,
-    now: Date,
-    automaticScheduleDate: string | null
-  ): Promise<StoreItemUpdateScheduleRun> =>
+    trigger: StoreItemUpdateScheduleTrigger
+  ): Promise<StoreItemUpdateScheduleRun | null> =>
     database.withSession(async (session) => {
       try {
         const lockResult = await session.query('select pg_try_advisory_lock($1) as acquired', [advisoryLockKey]);
         if (!Boolean(asRecord(lockResult.rows[0]).acquired)) {
           throw new StoreItemUpdateScheduleConflictError();
+        }
+
+        const executionTime = now();
+        const automaticScheduleDate = trigger === 'AUTOMATIC'
+          ? mexicoCityScheduleDate(executionTime)
+          : null;
+        if (trigger === 'AUTOMATIC' && automaticScheduleDate === null) {
+          return null;
         }
 
         if (trigger === 'AUTOMATIC') {
@@ -120,7 +150,7 @@ export function createStoreItemUpdateScheduleService(
           }
         }
 
-        const windowStart = new Date(now);
+        const windowStart = new Date(executionTime);
         const windowEnd = new Date(windowStart.getTime() + windowHours * 60 * 60 * 1000);
         const runningRun = await createRunningRun(
           session,
@@ -139,7 +169,7 @@ export function createStoreItemUpdateScheduleService(
              set status = 'COMPLETED',
                  scheduled_item_count = $1,
                  scheduled_store_count = $2,
-                 completed_at = now(),
+                 completed_at = clock_timestamp(),
                  error_detail = ''
              where id = $3
              returning ${RUN_COLUMNS}`,
@@ -158,8 +188,14 @@ export function createStoreItemUpdateScheduleService(
     });
 
   return {
-    runAutomatic: (now, localDate) => run('AUTOMATIC', now, localDate),
-    runManual: (now) => run('MANUAL', now, null)
+    runAutomatic: () => run('AUTOMATIC'),
+    runManual: async () => {
+      const result = await run('MANUAL');
+      if (result === null) {
+        throw new Error('Manual schedule unexpectedly returned no run');
+      }
+      return result;
+    }
   };
 }
 
@@ -175,7 +211,7 @@ async function recordFailureWithoutMasking(session: Database, runId: number, err
     await session.query(
       `update store_item_update_schedule_runs
        set status = 'FAILED',
-           completed_at = now(),
+           completed_at = clock_timestamp(),
            error_detail = $1
        where id = $2
        returning ${RUN_COLUMNS}`,
@@ -253,16 +289,47 @@ function normalizeRun(value: unknown): StoreItemUpdateScheduleRun {
   return {
     id: Number(row.id),
     trigger: row.trigger as StoreItemUpdateScheduleTrigger,
-    automatic_schedule_date: row.automatic_schedule_date === null ? null : String(row.automatic_schedule_date),
+    automatic_schedule_date: row.automatic_schedule_date === null
+      ? null
+      : normalizeDateOnly(row.automatic_schedule_date),
     status: row.status as StoreItemUpdateScheduleStatus,
-    window_start: new Date(String(row.window_start)).toISOString(),
-    window_end: new Date(String(row.window_end)).toISOString(),
+    window_start: normalizeTimestamp(row.window_start),
+    window_end: normalizeTimestamp(row.window_end),
     scheduled_item_count: Number(row.scheduled_item_count),
     scheduled_store_count: Number(row.scheduled_store_count),
-    started_at: new Date(String(row.started_at)).toISOString(),
-    completed_at: row.completed_at === null ? null : new Date(String(row.completed_at)).toISOString(),
+    started_at: normalizeTimestamp(row.started_at),
+    completed_at: row.completed_at === null ? null : normalizeTimestamp(row.completed_at),
     error_detail: String(row.error_detail)
   };
+}
+
+export function mexicoCityScheduleDate(now: Date): string | null {
+  const parts = Object.fromEntries(
+    mexicoCityTimeFormatter
+      .formatToParts(now)
+      .filter((part) => part.type !== 'literal')
+      .map((part) => [part.type, part.value])
+  );
+  if (Number(parts.hour) < SCHEDULE_START_HOUR) {
+    return null;
+  }
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function normalizeDateOnly(value: unknown): string {
+  if (value instanceof Date) {
+    return [
+      value.getFullYear().toString().padStart(4, '0'),
+      (value.getMonth() + 1).toString().padStart(2, '0'),
+      value.getDate().toString().padStart(2, '0')
+    ].join('-');
+  }
+  const text = String(value);
+  return /^\d{4}-\d{2}-\d{2}/.exec(text)?.[0] ?? text;
+}
+
+function normalizeTimestamp(value: unknown): string {
+  return (value instanceof Date ? value : new Date(String(value))).toISOString();
 }
 
 function firstRow(result: QueryResult): unknown {

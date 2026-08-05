@@ -11,7 +11,7 @@ type RecordedQuery = {
   params?: unknown[];
 };
 
-type QueuedResponse = unknown[] | Error;
+type QueuedResponse = unknown[] | Error | (() => unknown[] | Error);
 
 class FakeSessionDatabase implements SessionDatabase {
   readonly queries: RecordedQuery[] = [];
@@ -32,7 +32,8 @@ class FakeSessionDatabase implements SessionDatabase {
       },
       query: async (sql, params) => {
         this.queries.push({ sql, params });
-        const response = this.responses.shift();
+        const queuedResponse = this.responses.shift();
+        const response = typeof queuedResponse === 'function' ? queuedResponse() : queuedResponse;
         if (response === undefined) {
           throw new Error(`Unexpected query: ${normalizeSql(sql)}`);
         }
@@ -56,9 +57,9 @@ describe('store item update schedule service', () => {
       [],
       [{ pg_advisory_unlock: true }]
     ]);
-    const service = createStoreItemUpdateScheduleService(database, { advisoryLockKey: 7842 });
+    const service = createScheduleService(database, { advisoryLockKey: 7842 });
 
-    const result = await service.runManual(new Date('2026-08-05T15:00:00.000Z'));
+    const result = await service.runManual();
 
     expect(result.window_start).toBe('2026-08-05T15:00:00.000Z');
     expect(result.window_end).toBe('2026-08-06T11:00:00.000Z');
@@ -79,7 +80,7 @@ describe('store item update schedule service', () => {
     ]);
     expect(distributionSql).toContain('row_number() over ( partition by store_items.store_id order by random() )');
     expect(distributionSql).toContain('count(*) over (partition by store_items.store_id)');
-    expect(distributionSql).toContain('(eligible.random_rank + store_phases.phase)');
+    expect(distributionSql).toContain('(ranked.random_rank + store_phases.phase)');
     expect(distributionSql).toContain('stores.active = true');
     expect(distributionSql).toContain('store_items.store_active = true');
     expect(distributionSql).toContain('store_items.is_boardgame = true');
@@ -89,8 +90,15 @@ describe('store item update schedule service', () => {
     expect(distributionSql).toContain("store_items.listing_status = 'listed'");
     expect(distributionSql).toContain('store_items.update_lease_token is null');
     expect(distributionSql).toContain('store_items.update_lease_expires_at <= now()');
+    expect(distributionSql).toContain('order by store_items.id');
+    expect(distributionSql).toContain('for update of store_items skip locked');
+    expect(distributionSql).toContain('store_items.last_update_attempt_at < $1::timestamptz');
     expect(distributionSql).not.toContain('platform_cooldown');
     expect(distributionSql).not.toContain('failure_count');
+    const completionSql = normalizeSql(database.queries.find((query) =>
+      normalizeSql(query.sql).includes("set status = 'completed'")
+    )?.sql ?? '');
+    expect(completionSql).toContain('completed_at = clock_timestamp()');
     expect(database.queries.map((query) => normalizeSql(query.sql))).toEqual([
       'select pg_try_advisory_lock($1) as acquired',
       expect.stringMatching(/^insert into store_item_update_schedule_runs/),
@@ -116,14 +124,14 @@ describe('store item update schedule service', () => {
       ],
       [{ pg_advisory_unlock: true }]
     ]);
-    const service = createStoreItemUpdateScheduleService(database);
+    const service = createScheduleService(database, { now: () => new Date('2026-08-05T09:01:00.000Z') });
 
-    const run = await service.runAutomatic(new Date('2026-08-05T09:01:00.000Z'), '2026-08-05');
+    const run = await service.runAutomatic();
 
-    expect(run.status).toBe('COMPLETED');
-    expect(run.id).toBe(52);
-    expect(run.scheduled_item_count).toBe(27);
-    expect(run.automatic_schedule_date).toBe('2026-08-05');
+    expect(run?.status).toBe('COMPLETED');
+    expect(run?.id).toBe(52);
+    expect(run?.scheduled_item_count).toBe(27);
+    expect(run?.automatic_schedule_date).toBe('2026-08-05');
     const distributionQueries = database.queries.filter((query) =>
       normalizeSql(query.sql).startsWith('with eligible as materialized')
     );
@@ -133,9 +141,9 @@ describe('store item update schedule service', () => {
 
   it('throws a conflict when the schedule advisory lock is busy', async () => {
     const database = new FakeSessionDatabase([[{ acquired: false }], [{ pg_advisory_unlock: false }]]);
-    const service = createStoreItemUpdateScheduleService(database, { advisoryLockKey: 9988 });
+    const service = createScheduleService(database, { advisoryLockKey: 9988 });
 
-    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).rejects.toBeInstanceOf(
+    await expect(service.runManual()).rejects.toBeInstanceOf(
       StoreItemUpdateScheduleConflictError
     );
 
@@ -157,9 +165,9 @@ describe('store item update schedule service', () => {
       [failedRun({ id: '63' })],
       [{ pg_advisory_unlock: true }]
     ]);
-    const service = createStoreItemUpdateScheduleService(database);
+    const service = createScheduleService(database);
 
-    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).rejects.toThrow('distribution failed');
+    await expect(service.runManual()).rejects.toThrow('distribution failed');
 
     const commands = database.queries.map((query) => normalizeSql(query.sql));
     expect(commands).toContain('rollback');
@@ -169,6 +177,7 @@ describe('store item update schedule service', () => {
     });
     expect(String(failureQuery?.params?.[0])).toHaveLength(2000);
     expect(failureQuery?.params?.[1]).toBe(63);
+    expect(normalizeSql(failureQuery?.sql ?? '')).toContain('completed_at = clock_timestamp()');
     expect(commands.at(-1)).toBe('select pg_advisory_unlock($1)');
   });
 
@@ -191,9 +200,9 @@ describe('store item update schedule service', () => {
       [failedRun({ id: '64' })],
       [{ pg_advisory_unlock: true }]
     ]);
-    const service = createStoreItemUpdateScheduleService(database);
+    const service = createScheduleService(database);
 
-    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).rejects.toThrow(error);
+    await expect(service.runManual()).rejects.toThrow(error);
 
     const commands = database.queries.map((query) => normalizeSql(query.sql));
     expect(commands).not.toContain('commit');
@@ -214,9 +223,9 @@ describe('store item update schedule service', () => {
       new Error('rollback cleanup failed'),
       [{ pg_advisory_unlock: true }]
     ]);
-    const service = createStoreItemUpdateScheduleService(database);
+    const service = createScheduleService(database);
 
-    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).rejects.toThrow('distribution failed');
+    await expect(service.runManual()).rejects.toThrow('distribution failed');
 
     expect(database.closeCalls).toBe(1);
     expect(normalizeSql(database.queries.at(-1)?.sql ?? '')).toBe('select pg_advisory_unlock($1)');
@@ -232,9 +241,9 @@ describe('store item update schedule service', () => {
       new Error('failure recording failed'),
       [{ pg_advisory_unlock: true }]
     ]);
-    const service = createStoreItemUpdateScheduleService(database);
+    const service = createScheduleService(database);
 
-    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).rejects.toThrow('distribution failed');
+    await expect(service.runManual()).rejects.toThrow('distribution failed');
 
     expect(database.closeCalls).toBe(1);
     expect(normalizeSql(database.queries.at(-1)?.sql ?? '')).toBe('select pg_advisory_unlock($1)');
@@ -250,9 +259,9 @@ describe('store item update schedule service', () => {
       [],
       new Error('unlock failed')
     ]);
-    const service = createStoreItemUpdateScheduleService(database);
+    const service = createScheduleService(database);
 
-    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).resolves.toMatchObject({
+    await expect(service.runManual()).resolves.toMatchObject({
       id: 67,
       status: 'COMPLETED'
     });
@@ -288,12 +297,12 @@ describe('store item update schedule service', () => {
         [],
         [{ pg_advisory_unlock: true }]
       ]);
-      const service = createStoreItemUpdateScheduleService(database);
+      const service = createScheduleService(database, { now: () => new Date('2026-08-05T09:01:00.000Z') });
 
-      const run = await service.runAutomatic(new Date('2026-08-05T09:01:00.000Z'), '2026-08-05');
+      const run = await service.runAutomatic();
 
-      expect(run.id).toBe(74);
-      expect(run.status).toBe('COMPLETED');
+      expect(run?.id).toBe(74);
+      expect(run?.status).toBe('COMPLETED');
       const resetQuery = database.queries.find((query) =>
         normalizeSql(query.sql).startsWith('insert into store_item_update_schedule_runs')
       );
@@ -304,7 +313,138 @@ describe('store item update schedule service', () => {
       expect(resetQuery?.params?.[0]).toBe('2026-08-05');
     }
   );
+
+  it('samples the execution clock only after the advisory lock is acquired', async () => {
+    let currentTime = new Date('2026-08-05T15:00:00.000Z');
+    const delayedTime = new Date('2026-08-05T16:30:00.250Z');
+    const database = new FakeSessionDatabase([
+      () => {
+        currentTime = delayedTime;
+        return [{ acquired: true }];
+      },
+      [runningRun({
+        id: '81',
+        started_at: delayedTime,
+        window_start: delayedTime,
+        window_end: '2026-08-06T12:30:00.250Z'
+      })],
+      [],
+      [{ scheduled_item_count: '2', scheduled_store_count: '1' }],
+      [completedRun({
+        id: '81',
+        started_at: delayedTime,
+        window_start: delayedTime,
+        window_end: '2026-08-06T12:30:00.250Z'
+      })],
+      [],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createScheduleService(database, { now: () => currentTime });
+
+    const result = await service.runManual();
+
+    expect(result.window_start).toBe('2026-08-05T16:30:00.250Z');
+    expect(database.queries.find((query) =>
+      normalizeSql(query.sql).startsWith('insert into store_item_update_schedule_runs')
+    )?.params).toEqual([
+      delayedTime,
+      new Date('2026-08-06T12:30:00.250Z')
+    ]);
+  });
+
+  it('uses the Mexico City execution date after a delayed automatic lock crosses into the next schedule day', async () => {
+    let currentTime = new Date('2026-08-06T05:59:00.000Z');
+    const executionTime = new Date('2026-08-06T09:01:00.125Z');
+    const database = new FakeSessionDatabase([
+      () => {
+        currentTime = executionTime;
+        return [{ acquired: true }];
+      },
+      [],
+      [runningRun({
+        id: '82',
+        trigger: 'AUTOMATIC',
+        automatic_schedule_date: '2026-08-06',
+        started_at: executionTime,
+        window_start: executionTime,
+        window_end: '2026-08-07T05:01:00.125Z'
+      })],
+      [],
+      [{ scheduled_item_count: '2', scheduled_store_count: '1' }],
+      [completedRun({
+        id: '82',
+        trigger: 'AUTOMATIC',
+        automatic_schedule_date: '2026-08-06',
+        started_at: executionTime,
+        window_start: executionTime,
+        window_end: '2026-08-07T05:01:00.125Z'
+      })],
+      [],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createScheduleService(database, { now: () => currentTime });
+
+    const result = await service.runAutomatic();
+
+    expect(result?.automatic_schedule_date).toBe('2026-08-06');
+    expect(result?.window_start).toBe('2026-08-06T09:01:00.125Z');
+    const automaticRunQuery = database.queries.find((query) =>
+      normalizeSql(query.sql).startsWith('insert into store_item_update_schedule_runs')
+    );
+    expect(automaticRunQuery?.params?.[0]).toBe('2026-08-06');
+  });
+
+  it('does not start the next automatic schedule before 3am after a midnight rollover', async () => {
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createScheduleService(database, { now: () => new Date('2026-08-06T06:01:00.000Z') });
+
+    await expect(service.runAutomatic()).resolves.toBeNull();
+
+    expect(database.queries.some((query) =>
+      normalizeSql(query.sql).includes('insert into store_item_update_schedule_runs')
+    )).toBe(false);
+  });
+
+  it('normalizes native pg Date values without losing date-only or timestamp precision', async () => {
+    const automaticDate = new Date(2026, 7, 5);
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [completedRun({
+        automatic_schedule_date: automaticDate,
+        completed_at: new Date('2026-08-05T15:00:01.789Z'),
+        started_at: new Date('2026-08-05T15:00:00.123Z'),
+        trigger: 'AUTOMATIC',
+        window_end: new Date('2026-08-06T11:00:00.456Z'),
+        window_start: new Date('2026-08-05T15:00:00.123Z')
+      })],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createScheduleService(database, { now: () => new Date('2026-08-05T15:00:00.000Z') });
+
+    const result = await service.runAutomatic();
+
+    expect(result).toMatchObject({
+      automatic_schedule_date: '2026-08-05',
+      completed_at: '2026-08-05T15:00:01.789Z',
+      started_at: '2026-08-05T15:00:00.123Z',
+      window_end: '2026-08-06T11:00:00.456Z',
+      window_start: '2026-08-05T15:00:00.123Z'
+    });
+  });
 });
+
+function createScheduleService(
+  database: SessionDatabase,
+  options: { advisoryLockKey?: number; now?: () => Date; windowHours?: number } = {}
+) {
+  return createStoreItemUpdateScheduleService(database, {
+    now: options.now ?? (() => new Date('2026-08-05T15:00:00.000Z')),
+    ...options
+  });
+}
 
 function runningRun(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
