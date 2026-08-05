@@ -32,6 +32,7 @@ Both trigger paths provide the execution time as `window_start`; `window_end` is
 The scheduling transaction selects the same store items that the continuous worker is allowed to refresh:
 
 - the owning store is active;
+- the store item itself is active;
 - the item is a confirmed board-game listing;
 - it is linked to a catalog item;
 - it has a usable source URL;
