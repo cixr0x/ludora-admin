@@ -19,6 +19,8 @@ import type {
   ContinuousItemUpdateWorkerControlStatus,
   ContinuousItemUpdateWorkerManager
 } from './continuousItemUpdateWorkerManager.js';
+import type { StoreItemUpdateScheduleManager } from './storeItemUpdateScheduleManager.js';
+import { StoreItemUpdateScheduleConflictError } from './storeItemUpdateScheduleService.js';
 
 describe('ludora admin service', () => {
   const normalizeSql = (sql: string): string => sql.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -4221,6 +4223,139 @@ describe('ludora admin service', () => {
     expect(countQuery?.params).toEqual(['%Alpha%']);
   });
 
+  it('runs the same store item scheduler from the admin endpoint', async () => {
+    const scheduleManager = idleStoreItemUpdateScheduleManager();
+    const app = createApp({
+      database: idleDatabase(),
+      operationsClient: idleOperationsClient(),
+      storeItemUpdateScheduleManager: scheduleManager
+    });
+
+    const response = await request(app)
+      .post('/admin/operations/store-item-update-schedule/run')
+      .send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      trigger: 'MANUAL',
+      scheduled_item_count: 100,
+      scheduled_store_count: 4,
+      status: 'COMPLETED'
+    });
+    expect(scheduleManager.runManual).toHaveBeenCalledOnce();
+  });
+
+  it('returns 409 when a store item update schedule is already running', async () => {
+    const scheduleManager = idleStoreItemUpdateScheduleManager();
+    vi.mocked(scheduleManager.runManual).mockRejectedValue(new StoreItemUpdateScheduleConflictError());
+    const app = createApp({
+      database: idleDatabase(),
+      operationsClient: idleOperationsClient(),
+      storeItemUpdateScheduleManager: scheduleManager
+    });
+
+    const response = await request(app).post('/admin/operations/store-item-update-schedule/run').send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({
+      error: { message: 'A store item update schedule run is already in progress' }
+    });
+  });
+
+  it('rejects manual store item update scheduling when the scheduler is unavailable', async () => {
+    const response = await request(createApp({
+      database: idleDatabase(),
+      operationsClient: idleOperationsClient()
+    })).post('/admin/operations/store-item-update-schedule/run').send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: { message: 'Store item update scheduling is not configured' } });
+  });
+
+  it('returns null schedule runs when the store item update monitor has no run history', async () => {
+    const response = await request(createApp({
+      database: idleDatabase(),
+      operationsClient: idleOperationsClient()
+    })).get('/admin/operations/store-item-update-monitor');
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      latest_automatic_schedule_run: null,
+      latest_schedule_attempt: null,
+      latest_schedule_run: null
+    });
+  });
+
+  it.each(['FAILED', 'RUNNING'] as const)(
+    'keeps the completed manual schedule as the applied window when the latest attempt is %s',
+    async (attemptStatus) => {
+      const queries: Array<{ params?: unknown[]; sql: string }> = [];
+      const completedSchedule = {
+        automatic_schedule_date: null,
+        completed_at: '2026-08-05T10:00:01.123Z',
+        error_detail: '',
+        id: 9,
+        scheduled_item_count: 100,
+        scheduled_store_count: 4,
+        started_at: '2026-08-05T10:00:00.123Z',
+        status: 'COMPLETED',
+        trigger: 'MANUAL',
+        window_end: '2026-08-06T06:00:00.123Z',
+        window_start: '2026-08-05T10:00:00.123Z'
+      };
+      const latestAttempt = {
+        ...completedSchedule,
+        completed_at: attemptStatus === 'FAILED' ? '2026-08-05T11:00:01.456Z' : null,
+        error_detail: attemptStatus === 'FAILED' ? 'distribution failed after lock acquisition' : '',
+        id: 10,
+        scheduled_item_count: 0,
+        scheduled_store_count: 0,
+        started_at: '2026-08-05T11:00:00.456Z',
+        status: attemptStatus,
+        window_end: '2026-08-06T07:00:00.456Z',
+        window_start: '2026-08-05T11:00:00.456Z'
+      };
+      const database: Database = {
+        query: async (sql, params) => {
+          queries.push({ params, sql });
+          if (normalizeSql(sql).includes('from store_item_update_schedule_runs')) {
+            return {
+              rows: [{
+                latest_automatic_schedule_run: null,
+                latest_schedule_attempt: latestAttempt,
+                latest_schedule_run: completedSchedule
+              }]
+            };
+          }
+          return { rows: [] };
+        }
+      };
+
+      const response = await request(createApp({
+        database,
+        operationsClient: idleOperationsClient()
+      })).get('/admin/operations/store-item-update-monitor');
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.latest_schedule_run).toMatchObject({
+        id: 9,
+        status: 'COMPLETED',
+        trigger: 'MANUAL'
+      });
+      expect(response.body.data.latest_schedule_attempt).toMatchObject({
+        error_detail: latestAttempt.error_detail,
+        id: 10,
+        status: attemptStatus
+      });
+      const scheduleQuery = normalizeSql(queries.find((query) =>
+        normalizeSql(query.sql).includes('from store_item_update_schedule_runs')
+      )?.sql ?? '');
+      expect(scheduleQuery).toContain("where status = 'completed'");
+      expect(scheduleQuery).toContain('order by completed_at desc, id desc limit 1');
+      expect(scheduleQuery).toContain('as latest_schedule_attempt');
+    }
+  );
+
   it('returns continuous update worker health and hourly staleness data for a selected store', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
@@ -4251,8 +4386,56 @@ describe('ludora admin service', () => {
               oldest_due_hours: 2.5,
               oldest_staleness_hours: 29,
               rate_limited_24h: 3,
+              scheduled_items: 96,
+              scheduled_later_items: 84,
               stale_items: 8,
-              successes_24h: 100
+              successes_24h: 100,
+              unscheduled_items: 4
+            }]
+          };
+        }
+        if (normalizedSql.includes('from store_item_update_schedule_runs')) {
+          return {
+            rows: [{
+              latest_automatic_schedule_run: {
+                automatic_schedule_date: '2026-08-04',
+                completed_at: '2026-08-04T03:00:01.000Z',
+                error_detail: '',
+                id: 8,
+                scheduled_item_count: 98,
+                scheduled_store_count: 4,
+                started_at: '2026-08-04T03:00:00.000Z',
+                status: 'COMPLETED',
+                trigger: 'AUTOMATIC',
+                window_end: '2026-08-04T23:00:00.000Z',
+                window_start: '2026-08-04T03:00:00.000Z'
+              },
+              latest_schedule_attempt: {
+                automatic_schedule_date: null,
+                completed_at: '2026-08-05T10:00:01.000Z',
+                error_detail: '',
+                id: 9,
+                scheduled_item_count: 100,
+                scheduled_store_count: 4,
+                started_at: '2026-08-05T10:00:00.000Z',
+                status: 'COMPLETED',
+                trigger: 'MANUAL',
+                window_end: '2026-08-06T06:00:00.000Z',
+                window_start: '2026-08-05T10:00:00.000Z'
+              },
+              latest_schedule_run: {
+                automatic_schedule_date: null,
+                completed_at: '2026-08-05T10:00:01.000Z',
+                error_detail: '',
+                id: 9,
+                scheduled_item_count: 100,
+                scheduled_store_count: 4,
+                started_at: '2026-08-05T10:00:00.000Z',
+                status: 'COMPLETED',
+                trigger: 'MANUAL',
+                window_end: '2026-08-06T06:00:00.000Z',
+                window_start: '2026-08-05T10:00:00.000Z'
+              }
             }]
           };
         }
@@ -4320,6 +4503,23 @@ describe('ludora admin service', () => {
         { item_count: 8, label: '72h+', overflow: true, staleness_hour: 72 }
       ],
       histogram_store_id: 12,
+      latest_automatic_schedule_run: {
+        automatic_schedule_date: '2026-08-04',
+        id: 8,
+        status: 'COMPLETED',
+        trigger: 'AUTOMATIC'
+      },
+      latest_schedule_attempt: {
+        id: 9,
+        status: 'COMPLETED',
+        trigger: 'MANUAL'
+      },
+      latest_schedule_run: {
+        automatic_schedule_date: null,
+        id: 9,
+        status: 'COMPLETED',
+        trigger: 'MANUAL'
+      },
       platform_cooldowns: [
         {
           active: true,
@@ -4359,12 +4559,19 @@ describe('ludora admin service', () => {
         eligible_items: 100,
         failures_24h: 10,
         fresh_percent: 92,
+        projected_daily_demand: 100,
         rate_limited_24h: 3,
+        scheduled_items: 96,
+        scheduled_later_items: 84,
+        schedule_utilization_percent: 100 / 144,
+        schedule_window_capacity: 14400,
+        schedule_window_hours: 20,
+        unscheduled_items: 4,
         successes_24h: 100
       },
       worker: { health: 'healthy', status: 'idle', worker_id: 'worker-1' }
     });
-    expect(queries).toHaveLength(6);
+    expect(queries).toHaveLength(7);
     const histogramQuery = queries.find((query) => normalizeSql(query.sql).includes('generate_series'));
     expect(histogramQuery?.params).toEqual([72, 12]);
     expect(normalizeSql(histogramQuery?.sql ?? '')).toContain('store_items.store_id = $2::bigint');
@@ -5266,6 +5473,26 @@ function idleContinuousItemUpdateWorkerManager(
     getStatus: vi.fn(() => status),
     pause: vi.fn(() => 'stopping'),
     resume: vi.fn(() => 'running'),
+    shutdown: vi.fn(async () => undefined),
+    start: vi.fn()
+  };
+}
+
+function idleStoreItemUpdateScheduleManager(): StoreItemUpdateScheduleManager {
+  return {
+    runManual: vi.fn(async () => ({
+      automatic_schedule_date: null,
+      completed_at: '2026-08-05T10:00:01.000Z',
+      error_detail: '',
+      id: 9,
+      scheduled_item_count: 100,
+      scheduled_store_count: 4,
+      started_at: '2026-08-05T10:00:00.000Z',
+      status: 'COMPLETED',
+      trigger: 'MANUAL',
+      window_end: '2026-08-06T06:00:00.000Z',
+      window_start: '2026-08-05T10:00:00.000Z'
+    })),
     shutdown: vi.fn(async () => undefined),
     start: vi.fn()
   };

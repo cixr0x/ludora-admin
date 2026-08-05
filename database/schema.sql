@@ -129,7 +129,7 @@ create table if not exists store_items (
     last_seen_at timestamptz not null default now(),
     last_updated timestamptz not null default now(),
     refreshed_date timestamptz not null default now(),
-    next_update_at timestamptz not null default now(),
+    next_update_at timestamptz,
     update_lease_token uuid,
     update_lease_expires_at timestamptz,
     consecutive_update_failures integer not null default 0,
@@ -148,8 +148,6 @@ alter table if exists store_items alter column refreshed_date set not null;
 
 alter table if exists store_items add column if not exists next_update_at timestamptz;
 update store_items set next_update_at = least(now(), refreshed_date + interval '22 hours') where next_update_at is null;
-alter table if exists store_items alter column next_update_at set default now();
-alter table if exists store_items alter column next_update_at set not null;
 alter table if exists store_items add column if not exists update_lease_token uuid;
 alter table if exists store_items add column if not exists update_lease_expires_at timestamptz;
 alter table if exists store_items add column if not exists consecutive_update_failures integer not null default 0;
@@ -182,6 +180,32 @@ where is_boardgame = true
 create index if not exists store_items_update_lease_expires_at_idx
 on store_items (update_lease_expires_at)
 where update_lease_token is not null;
+
+create table if not exists store_item_update_schedule_runs (
+    id bigserial primary key,
+    trigger text not null check (trigger in ('AUTOMATIC', 'MANUAL')),
+    automatic_schedule_date date,
+    status text not null check (status in ('RUNNING', 'COMPLETED', 'FAILED')),
+    window_start timestamptz not null,
+    window_end timestamptz not null,
+    scheduled_item_count integer not null default 0 check (scheduled_item_count >= 0),
+    scheduled_store_count integer not null default 0 check (scheduled_store_count >= 0),
+    started_at timestamptz not null default now(),
+    completed_at timestamptz,
+    error_detail text not null default '',
+    check (window_end > window_start),
+    check (
+      (trigger = 'AUTOMATIC' and automatic_schedule_date is not null)
+      or (trigger = 'MANUAL' and automatic_schedule_date is null)
+    )
+);
+
+create unique index if not exists store_item_update_schedule_runs_automatic_date_uidx
+on store_item_update_schedule_runs (automatic_schedule_date)
+where trigger = 'AUTOMATIC';
+
+create index if not exists store_item_update_schedule_runs_started_at_idx
+on store_item_update_schedule_runs (started_at desc, id desc);
 
 create table if not exists store_item_click_stats (
     store_item_id bigint not null,

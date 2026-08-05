@@ -32,8 +32,6 @@ from ludora.webfetch import PerHostRequestThrottle
 
 
 WORKER_NAME = "continuous"
-SUCCESS_MIN_HOURS = 21.0
-SUCCESS_MAX_HOURS = 23.0
 ITEM_FAILURE_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 PLATFORM_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
@@ -250,7 +248,6 @@ def _process_claim(
             attempt_id=claim.attempt_id,
             job_id=job_id,
             lease_token=claim.lease_token,
-            next_update_at=_utc_now() + timedelta(hours=random.uniform(SUCCESS_MIN_HOURS, SUCCESS_MAX_HOURS)),
             run_id=run_id,
             worker_id=worker_id,
             worker_name=WORKER_NAME,

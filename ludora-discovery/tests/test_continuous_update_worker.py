@@ -53,7 +53,7 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             update_attempt_id=91,
         )
 
-    def test_success_schedules_item_22_hours_ahead_and_completes_lease(self):
+    def test_success_clears_due_time_and_completes_lease(self):
         repository = Mock()
         repository.complete_claimed_store_item_update.return_value = ItemCandidateUpsertResult(
             candidate_id=501,
@@ -70,8 +70,6 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
                 "ludora.continuous_update_worker.refresh_confirmed_store_item_candidate",
                 return_value=refreshed,
             ) as patch_refresh,
-            patch("ludora.continuous_update_worker._utc_now", return_value=self.now),
-            patch("ludora.continuous_update_worker.random.uniform", return_value=22.0),
         ):
             _process_claim(
                 browser_fetcher=None,
@@ -87,7 +85,7 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             )
 
         kwargs = repository.complete_claimed_store_item_update.call_args.kwargs
-        self.assertEqual(kwargs["next_update_at"], self.now + timedelta(hours=22))
+        self.assertNotIn("next_update_at", kwargs)
         self.assertEqual(kwargs["lease_token"], self.claim.lease_token)
         self.assertIs(
             patch_refresh.call_args.kwargs["trace_logger"],

@@ -32,6 +32,7 @@ import type { TranslationService } from './translation/translationService.js';
 import type { LocalCoverWorkflowManager } from './localCoverWorkflow.js';
 import type { ProductDetailsEnrichmentService } from './productDetailsExtraction/productDetailsExtractionService.js';
 import type { StoreProfileDetectionService } from './storeProfileDetection/storeProfileDetectionService.js';
+import type { StoreItemUpdateScheduleManager } from './storeItemUpdateScheduleManager.js';
 import type { WebBotAuthService } from './webBotAuth/webBotAuthService.js';
 
 type HttpError = Error & {
@@ -54,6 +55,7 @@ type CreateAppOptions = {
   operationsClient?: DiscoveryOperationsClient;
   productDetailsEnrichmentService?: ProductDetailsEnrichmentService;
   storeProfileDetectionService?: StoreProfileDetectionService;
+  storeItemUpdateScheduleManager?: StoreItemUpdateScheduleManager;
   translationService?: TranslationService;
   webBotAuthService?: WebBotAuthService;
 };
@@ -73,6 +75,7 @@ export function createApp({
   operationsClient,
   productDetailsEnrichmentService,
   storeProfileDetectionService,
+  storeItemUpdateScheduleManager,
   translationService,
   webBotAuthService
 }: CreateAppOptions): Express {
@@ -120,7 +123,8 @@ export function createApp({
         operationsClient,
         database,
         externalCoverImageOptimizer,
-        continuousItemUpdateWorkerManager
+        continuousItemUpdateWorkerManager,
+        storeItemUpdateScheduleManager
       )
     );
   }

@@ -478,7 +478,8 @@ class DiscoveryRepository:
                     returning store_item_id, lease_token
                 )
                 update store_items
-                set next_update_at = least(next_update_at, now() + interval '1 minute'),
+                set next_update_at = coalesce(next_update_at, now() + interval '1 minute'),
+                    last_update_attempt_at = clock_timestamp(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = consecutive_update_failures + 1,
@@ -699,7 +700,6 @@ class DiscoveryRepository:
         attempt_id: int,
         job_id: int,
         lease_token: str,
-        next_update_at: datetime,
         run_id: str,
         worker_id: str,
         worker_name: str,
@@ -726,7 +726,8 @@ class DiscoveryRepository:
                     availability_source = %s,
                     last_seen_at = now(),
                     refreshed_date = now(),
-                    next_update_at = %s,
+                    next_update_at = null,
+                    last_update_attempt_at = clock_timestamp(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = 0,
@@ -737,7 +738,6 @@ class DiscoveryRepository:
                 """,
                 (
                     *self._item_candidate_price_availability_params(data, include_title=True),
-                    next_update_at,
                     store_item_id,
                     lease_token,
                 ),
@@ -926,6 +926,7 @@ class DiscoveryRepository:
                 """
                 update store_items
                 set next_update_at = %s,
+                    last_update_attempt_at = clock_timestamp(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = consecutive_update_failures + 1,
@@ -1662,7 +1663,7 @@ def _update_item_candidate_price_availability_sql(*, include_title: bool = True)
         availability_source = %s,
         last_seen_at = now(),
         refreshed_date = now(),
-        next_update_at = now() + interval '22 hours',
+        next_update_at = null,
         consecutive_update_failures = 0,
         last_update_error = ''
     where id = %s
