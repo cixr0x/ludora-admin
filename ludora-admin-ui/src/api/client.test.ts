@@ -519,6 +519,46 @@ describe('fetchRows', () => {
     );
   });
 
+  it('pauses and resumes continuous store item updates', async () => {
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { status: 'stopping' } }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        })
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: { status: 'running' } }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 200
+        })
+      );
+
+    await expect(adminApi.pauseContinuousStoreItemUpdates()).resolves.toEqual({ status: 'stopping' });
+    await expect(adminApi.resumeContinuousStoreItemUpdates()).resolves.toEqual({ status: 'running' });
+    expectFetchNth(
+      fetchMock,
+      1,
+      'http://127.0.0.1:4001/admin/operations/store-item-update-worker/pause',
+      {
+        body: '{}',
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST'
+      }
+    );
+    expectFetchNth(
+      fetchMock,
+      2,
+      'http://127.0.0.1:4001/admin/operations/store-item-update-worker/resume',
+      {
+        body: '{}',
+        headers: { 'Content-Type': 'application/json' },
+        method: 'POST'
+      }
+    );
+  });
+
   it('fetches paged catalog items with page metadata', async () => {
     const records = [{ canonical_name: 'Coffee Rush', id: '377061', item_type: 'base_game' }];
     const { adminApi } = await importClient();

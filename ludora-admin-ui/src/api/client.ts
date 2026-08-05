@@ -69,7 +69,17 @@ export type StoreItemUpdateMonitorSummary = {
   successes_24h: number;
 };
 
+export type ContinuousItemUpdateControlStatus = 'paused' | 'running' | 'stopping' | 'unavailable';
+
+export type StoreItemUpdatePlatformCooldown = {
+  active: boolean;
+  blocked_until: string | null;
+  consecutive_429s: number;
+  platform: 'shopify' | 'woocommerce';
+};
+
 export type StoreItemUpdateMonitor = {
+  control_status: ContinuousItemUpdateControlStatus;
   store_statistics: AdminRecord[];
   generated_at: string;
   histogram: Array<{
@@ -79,6 +89,7 @@ export type StoreItemUpdateMonitor = {
     staleness_hour: number;
   }>;
   histogram_store_id: number | null;
+  platform_cooldowns: StoreItemUpdatePlatformCooldown[];
   range_hours: number;
   recent_attempts: AdminRecord[];
   summary: StoreItemUpdateMonitorSummary;
@@ -687,6 +698,18 @@ export const adminApi = {
     }
     return fetchData<StoreItemUpdateMonitor>(`/admin/operations/store-item-update-monitor?${params.toString()}`);
   },
+  pauseContinuousStoreItemUpdates: () =>
+    sendJson<{ status: ContinuousItemUpdateControlStatus }>(
+      '/admin/operations/store-item-update-worker/pause',
+      'POST',
+      {}
+    ),
+  resumeContinuousStoreItemUpdates: () =>
+    sendJson<{ status: ContinuousItemUpdateControlStatus }>(
+      '/admin/operations/store-item-update-worker/resume',
+      'POST',
+      {}
+    ),
   getStoreItemUpdateFailureAttempts: (storeId: string | number, hours = 24) => {
     const params = new URLSearchParams({
       hours: String(hours),

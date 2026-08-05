@@ -40,6 +40,7 @@ export function StoreItemUpdateMonitorPage() {
   const [failureAttempts, setFailureAttempts] = useState<AdminRecord[]>([]);
   const [failureDetailsError, setFailureDetailsError] = useState('');
   const [failureDetailsLoading, setFailureDetailsLoading] = useState(false);
+  const [controlLoading, setControlLoading] = useState(false);
 
   const loadMonitor = useCallback(async (showLoading = false) => {
     if (showLoading) {
@@ -54,6 +55,22 @@ export function StoreItemUpdateMonitorPage() {
       setLoading(false);
     }
   }, [histogramStoreId, hours]);
+
+  const updateWorkerControl = useCallback(async (action: 'pause' | 'resume') => {
+    setControlLoading(true);
+    try {
+      if (action === 'pause') {
+        await adminApi.pauseContinuousStoreItemUpdates();
+      } else {
+        await adminApi.resumeContinuousStoreItemUpdates();
+      }
+      await loadMonitor();
+    } catch (controlError) {
+      setError(controlError instanceof Error ? controlError.message : String(controlError));
+    } finally {
+      setControlLoading(false);
+    }
+  }, [loadMonitor]);
 
   useEffect(() => {
     void loadMonitor(true);
@@ -103,8 +120,10 @@ export function StoreItemUpdateMonitorPage() {
   const summary = monitor?.summary;
   const worker = monitor?.worker;
   const workerHealth = worker ? recordText(worker, 'health') : 'not started';
-  const shopifyBlockedUntil = worker ? optionalRecordText(worker, 'shopify_blocked_until') : '';
-  const shopifyIsBlocked = worker?.shopify_is_blocked === true;
+  const controlStatus = monitor?.control_status ?? 'unavailable';
+  const activePlatformCooldowns = (monitor?.platform_cooldowns ?? []).filter(
+    (cooldown) => cooldown.active && cooldown.blocked_until
+  );
   const histogramStores = [...(monitor?.store_statistics ?? [])].sort((left, right) =>
     recordText(left, 'store_name').localeCompare(recordText(right, 'store_name'))
   );
@@ -134,6 +153,26 @@ export function StoreItemUpdateMonitorPage() {
           </Typography>
         </Box>
         <Stack direction="row" spacing={1}>
+          {controlStatus === 'paused' ? (
+            <Button
+              disabled={controlLoading}
+              onClick={() => void updateWorkerControl('resume')}
+              variant="contained"
+            >
+              Resume automatic updates
+            </Button>
+          ) : controlStatus === 'stopping' ? (
+            <Button disabled variant="contained">Stopping automatic updates</Button>
+          ) : controlStatus === 'running' ? (
+            <Button
+              color="warning"
+              disabled={controlLoading}
+              onClick={() => void updateWorkerControl('pause')}
+              variant="contained"
+            >
+              Pause automatic updates
+            </Button>
+          ) : null}
           <FormControl size="small" sx={{ minWidth: 130 }}>
             <InputLabel id="staleness-range-label">Histogram</InputLabel>
             <Select
@@ -159,12 +198,19 @@ export function StoreItemUpdateMonitorPage() {
           <Typography variant="body2">
             Worker: {workerHealth}. {worker ? `Last heartbeat ${formatDate(worker.heartbeat_at)}.` : 'No heartbeat has been recorded.'}
           </Typography>
-          {!worker ? (
-            <Chip color="default" label="Shopify claim state unavailable" size="small" variant="outlined" />
-          ) : shopifyIsBlocked && shopifyBlockedUntil ? (
-            <Chip color="warning" label={`Shopify paused until ${formatDate(shopifyBlockedUntil)}`} size="small" />
+          {!monitor ? (
+            <Chip color="default" label="Platform cooldown state unavailable" size="small" variant="outlined" />
+          ) : activePlatformCooldowns.length ? (
+            activePlatformCooldowns.map((cooldown) => (
+              <Chip
+                color="warning"
+                key={cooldown.platform}
+                label={`${formatPlatform(cooldown.platform)} paused until ${formatDate(cooldown.blocked_until)}`}
+                size="small"
+              />
+            ))
           ) : (
-            <Chip color="success" label="Shopify claims enabled" size="small" variant="outlined" />
+            <Chip color="success" label="Platform claims enabled" size="small" variant="outlined" />
           )}
         </Stack>
       </Alert>
@@ -444,4 +490,11 @@ function formatInteger(value: number): string {
 
 function formatHours(value: number): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)}h`;
+}
+
+function formatPlatform(platform: string): string {
+  if (platform === 'woocommerce') {
+    return 'WooCommerce';
+  }
+  return platform ? `${platform[0].toUpperCase()}${platform.slice(1)}` : 'Unknown platform';
 }

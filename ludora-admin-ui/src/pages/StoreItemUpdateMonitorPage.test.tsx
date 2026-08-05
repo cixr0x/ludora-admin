@@ -6,6 +6,7 @@ import { adminApi, type StoreItemUpdateMonitor } from '../api/client';
 import { StoreItemUpdateMonitorPage } from './StoreItemUpdateMonitorPage';
 
 const monitor: StoreItemUpdateMonitor = {
+  control_status: 'running',
   generated_at: '2026-08-04T18:00:00Z',
   histogram: [
     { item_count: 6, label: '0h', overflow: false, staleness_hour: 0 },
@@ -13,6 +14,20 @@ const monitor: StoreItemUpdateMonitor = {
     { item_count: 1, label: '48h+', overflow: true, staleness_hour: 48 }
   ],
   histogram_store_id: null,
+  platform_cooldowns: [
+    {
+      active: false,
+      blocked_until: null,
+      consecutive_429s: 0,
+      platform: 'shopify'
+    },
+    {
+      active: true,
+      blocked_until: '2026-08-04T19:00:00Z',
+      consecutive_429s: 2,
+      platform: 'woocommerce'
+    }
+  ],
   range_hours: 48,
   recent_attempts: [{
     duration_ms: 820,
@@ -102,6 +117,8 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(await screen.findByRole('heading', { name: 'Store Item Update Monitor' })).toBeInTheDocument();
     expect(screen.getByText('17,280')).toBeInTheDocument();
     expect(screen.getByText('3 HTTP 429 responses')).toBeInTheDocument();
+    expect(screen.getByText(/WooCommerce paused until/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause automatic updates' })).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Store item staleness histogram' })).toBeInTheDocument();
     expect(screen.getByLabelText('24h: 2 items')).toBeInTheDocument();
     expect(screen.getByText('All stores')).toBeInTheDocument();
@@ -125,5 +142,51 @@ describe('StoreItemUpdateMonitorPage', () => {
 
     await waitFor(() => expect(adminApi.getStoreItemUpdateMonitor).toHaveBeenCalledWith(48, 12));
     expect(screen.getByText(/Showing Alpha/)).toBeInTheDocument();
+  });
+
+  it('pauses the automatic updater and refreshes monitor state', async () => {
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue(monitor);
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+    const pause = vi.spyOn(adminApi, 'pauseContinuousStoreItemUpdates').mockResolvedValue({ status: 'stopping' });
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Pause automatic updates' }));
+
+    await waitFor(() => expect(pause).toHaveBeenCalledOnce());
+    await waitFor(() => expect(adminApi.getStoreItemUpdateMonitor).toHaveBeenCalledTimes(2));
+  });
+
+  it('renders stopping and paused controls and resumes the updater', async () => {
+    const getMonitor = vi.spyOn(adminApi, 'getStoreItemUpdateMonitor')
+      .mockResolvedValueOnce({ ...monitor, control_status: 'stopping' })
+      .mockResolvedValue({ ...monitor, control_status: 'paused' });
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+    const resume = vi.spyOn(adminApi, 'resumeContinuousStoreItemUpdates').mockResolvedValue({ status: 'running' });
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    const stopping = await screen.findByRole('button', { name: 'Stopping automatic updates' });
+    expect(stopping).toBeDisabled();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+    const resumeButton = await screen.findByRole('button', { name: 'Resume automatic updates' });
+    await userEvent.click(resumeButton);
+
+    await waitFor(() => expect(resume).toHaveBeenCalledOnce());
+    expect(getMonitor).toHaveBeenCalledTimes(3);
+  });
+
+  it('keeps the monitor visible when a pause request fails', async () => {
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue(monitor);
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+    vi.spyOn(adminApi, 'pauseContinuousStoreItemUpdates').mockRejectedValue(new Error('Pause failed'));
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    await userEvent.click(await screen.findByRole('button', { name: 'Pause automatic updates' }));
+
+    expect(await screen.findByText('Pause failed')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Store Item Update Monitor' })).toBeInTheDocument();
   });
 });
