@@ -15,6 +15,7 @@ type QueuedResponse = unknown[] | Error;
 
 class FakeSessionDatabase implements SessionDatabase {
   readonly queries: RecordedQuery[] = [];
+  closeCalls = 0;
   sessionCount = 0;
 
   constructor(private readonly responses: QueuedResponse[]) {}
@@ -26,6 +27,9 @@ class FakeSessionDatabase implements SessionDatabase {
   async withSession<T>(operation: (session: Database) => Promise<T>): Promise<T> {
     this.sessionCount += 1;
     return operation({
+      close: async () => {
+        this.closeCalls += 1;
+      },
       query: async (sql, params) => {
         this.queries.push({ sql, params });
         const response = this.responses.shift();
@@ -166,6 +170,94 @@ describe('store item update schedule service', () => {
     expect(String(failureQuery?.params?.[0])).toHaveLength(2000);
     expect(failureQuery?.params?.[1]).toBe(63);
     expect(commands.at(-1)).toBe('select pg_advisory_unlock($1)');
+  });
+
+  it.each([
+    ['missing', [], 'Schedule query returned no row', 'Error: Schedule query returned no row'],
+    [
+      'malformed',
+      [completedRun({ window_end: 'not-a-timestamp' })],
+      'Invalid time value',
+      'RangeError: Invalid time value'
+    ]
+  ])('validates a %s completed row before committing the distribution', async (_case, completedRows, error, detail) => {
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [runningRun({ id: '64' })],
+      [],
+      [{ scheduled_item_count: '12', scheduled_store_count: '3' }],
+      completedRows,
+      [],
+      [failedRun({ id: '64' })],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createStoreItemUpdateScheduleService(database);
+
+    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).rejects.toThrow(error);
+
+    const commands = database.queries.map((query) => normalizeSql(query.sql));
+    expect(commands).not.toContain('commit');
+    expect(commands).toContain('rollback');
+    const failureQuery = database.queries.find((query) => {
+      const sql = normalizeSql(query.sql);
+      return sql.startsWith('update store_item_update_schedule_runs') && sql.includes("status = 'failed'");
+    });
+    expect(failureQuery?.params?.[0]).toBe(detail);
+  });
+
+  it('preserves the distribution error when rollback cleanup fails', async () => {
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [runningRun({ id: '65' })],
+      [],
+      new Error('distribution failed'),
+      new Error('rollback cleanup failed'),
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createStoreItemUpdateScheduleService(database);
+
+    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).rejects.toThrow('distribution failed');
+
+    expect(database.closeCalls).toBe(1);
+    expect(normalizeSql(database.queries.at(-1)?.sql ?? '')).toBe('select pg_advisory_unlock($1)');
+  });
+
+  it('preserves the distribution error when durable failure recording fails', async () => {
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [runningRun({ id: '66' })],
+      [],
+      new Error('distribution failed'),
+      [],
+      new Error('failure recording failed'),
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createStoreItemUpdateScheduleService(database);
+
+    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).rejects.toThrow('distribution failed');
+
+    expect(database.closeCalls).toBe(1);
+    expect(normalizeSql(database.queries.at(-1)?.sql ?? '')).toBe('select pg_advisory_unlock($1)');
+  });
+
+  it('returns the completed run and discards the session when advisory unlock fails', async () => {
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [runningRun({ id: '67' })],
+      [],
+      [{ scheduled_item_count: '12', scheduled_store_count: '3' }],
+      [completedRun({ id: '67', scheduled_item_count: '12', scheduled_store_count: '3' })],
+      [],
+      new Error('unlock failed')
+    ]);
+    const service = createStoreItemUpdateScheduleService(database);
+
+    await expect(service.runManual(new Date('2026-08-05T15:00:00.000Z'))).resolves.toMatchObject({
+      id: 67,
+      status: 'COMPLETED'
+    });
+
+    expect(database.closeCalls).toBe(1);
   });
 
   it.each(['FAILED', 'RUNNING'] as const)(

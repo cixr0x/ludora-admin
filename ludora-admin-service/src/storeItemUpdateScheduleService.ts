@@ -145,23 +145,15 @@ export function createStoreItemUpdateScheduleService(
              returning ${RUN_COLUMNS}`,
             [Number(counts.scheduled_item_count), Number(counts.scheduled_store_count), runningRun.id]
           );
+          const completedRun = normalizeRun(firstRow(completed));
           await session.query('commit');
-          return normalizeRun(firstRow(completed));
+          return completedRun;
         } catch (error) {
-          await session.query('rollback');
-          await session.query(
-            `update store_item_update_schedule_runs
-             set status = 'FAILED',
-                 completed_at = now(),
-                 error_detail = $1
-             where id = $2
-             returning ${RUN_COLUMNS}`,
-            [String(error).slice(0, 2000), runningRun.id]
-          );
+          await recordFailureWithoutMasking(session, runningRun.id, error);
           throw error;
         }
       } finally {
-        await session.query('select pg_advisory_unlock($1)', [advisoryLockKey]);
+        await unlockWithoutMasking(session, advisoryLockKey);
       }
     });
 
@@ -169,6 +161,45 @@ export function createStoreItemUpdateScheduleService(
     runAutomatic: (now, localDate) => run('AUTOMATIC', now, localDate),
     runManual: (now) => run('MANUAL', now, null)
   };
+}
+
+async function recordFailureWithoutMasking(session: Database, runId: number, error: unknown): Promise<void> {
+  try {
+    await session.query('rollback');
+  } catch {
+    await discardWithoutMasking(session);
+    return;
+  }
+
+  try {
+    await session.query(
+      `update store_item_update_schedule_runs
+       set status = 'FAILED',
+           completed_at = now(),
+           error_detail = $1
+       where id = $2
+       returning ${RUN_COLUMNS}`,
+      [String(error).slice(0, 2000), runId]
+    );
+  } catch {
+    await discardWithoutMasking(session);
+  }
+}
+
+async function unlockWithoutMasking(session: Database, advisoryLockKey: number): Promise<void> {
+  try {
+    await session.query('select pg_advisory_unlock($1)', [advisoryLockKey]);
+  } catch {
+    await discardWithoutMasking(session);
+  }
+}
+
+async function discardWithoutMasking(session: Database): Promise<void> {
+  try {
+    await session.close?.();
+  } catch {
+    // Preserve the schedule operation's primary result or error.
+  }
 }
 
 async function createRunningRun(

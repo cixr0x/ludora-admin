@@ -23,12 +23,20 @@ export function createDatabase(databaseUrl: string): SessionDatabase {
     },
     async withSession<T>(operation: (session: Database) => Promise<T>): Promise<T> {
       const client = await pool.connect();
+      let discardClient = false;
       try {
         return await operation({
+          close: async () => {
+            discardClient = true;
+          },
           query: async (text, params) => toQueryResult(await client.query(text, params))
         });
       } finally {
-        client.release();
+        if (discardClient) {
+          client.release(true);
+        } else {
+          client.release();
+        }
       }
     },
     close: () => pool.end()
