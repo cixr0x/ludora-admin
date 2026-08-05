@@ -3,6 +3,10 @@ import { randomUUID } from 'node:crypto';
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
+import type {
+  ContinuousItemUpdateWorkerControlStatus,
+  ContinuousItemUpdateWorkerManager
+} from '../continuousItemUpdateWorkerManager.js';
 import type { DiscoveryOperationsClient, ItemDiscoveryRunScope, ItemUpdateRunScope } from '../discoveryOperations.js';
 import type { ExternalCoverImageOptimizerOptions, ExternalCoverImageOptimizerResult } from '../externalCoverImageOptimizer.js';
 
@@ -136,7 +140,8 @@ const storeItemUpdateJobsTableConfig: TableQueryConfig = {
 export function createOperationsRouter(
   operationsClient: DiscoveryOperationsClient,
   database: Database,
-  externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner
+  externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner,
+  continuousItemUpdateWorkerManager?: ContinuousItemUpdateWorkerManager
 ): Router {
   const router = Router();
   let latestExternalCoverImageOptimizationRun: ExternalCoverImageOptimizationRun | null = null;
@@ -251,13 +256,42 @@ export function createOperationsRouter(
     }
   });
 
+  router.post('/admin/operations/store-item-update-worker/pause', (_request, response, next) => {
+    try {
+      if (!continuousItemUpdateWorkerManager) {
+        throw httpError(409, 'Continuous item update worker is not configured');
+      }
+      response.json({ data: { status: continuousItemUpdateWorkerManager.pause() } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/admin/operations/store-item-update-worker/resume', (_request, response, next) => {
+    try {
+      if (!continuousItemUpdateWorkerManager) {
+        throw httpError(409, 'Continuous item update worker is not configured');
+      }
+      response.json({ data: { status: continuousItemUpdateWorkerManager.resume() } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/admin/operations/store-item-update-monitor', async (request, response, next) => {
     try {
       const rangeHours = integerQueryField(request.query.hours, 48, 24, 168);
       const histogramStoreId = Object.hasOwn(request.query, 'histogram_store_id')
         ? positiveIntegerQueryField(request.query.histogram_store_id, 'histogram_store_id')
         : null;
-      response.json({ data: await loadStoreItemUpdateMonitor(database, rangeHours, histogramStoreId) });
+      response.json({
+        data: await loadStoreItemUpdateMonitor(
+          database,
+          rangeHours,
+          histogramStoreId,
+          continuousItemUpdateWorkerManager?.getStatus() ?? 'unavailable'
+        )
+      });
     } catch (error) {
       next(error);
     }
@@ -473,7 +507,8 @@ export function createOperationsRouter(
 async function loadStoreItemUpdateMonitor(
   database: Database,
   rangeHours: number,
-  histogramStoreId: number | null
+  histogramStoreId: number | null,
+  controlStatus: ContinuousItemUpdateWorkerControlStatus | 'unavailable'
 ) {
   const workerResult = await database.query(
     `select
@@ -489,6 +524,15 @@ async function loadStoreItemUpdateMonitor(
   );
   const workerRow = workerResult.rows[0] as Record<string, unknown> | undefined;
   const pollSeconds = workerRow ? numberField(workerRow, 'poll_seconds') || 5 : 5;
+
+  const platformCooldownsResult = await database.query(
+    `select
+       platform, blocked_until, consecutive_429s,
+       (blocked_until > now()) as active
+     from store_item_update_platform_cooldown
+     where worker_name = 'continuous'
+     order by platform`
+  );
 
   const summaryResult = await database.query(
     `with eligible as (
@@ -653,6 +697,7 @@ async function loadStoreItemUpdateMonitor(
   );
 
   return {
+    control_status: controlStatus,
     store_statistics: storeStatisticsResult.rows,
     generated_at: new Date().toISOString(),
     histogram: histogramResult.rows.map((row) => {
@@ -666,6 +711,7 @@ async function loadStoreItemUpdateMonitor(
       };
     }),
     histogram_store_id: histogramStoreId,
+    platform_cooldowns: platformCooldownsResult.rows,
     range_hours: rangeHours,
     recent_attempts: recentAttemptsResult.rows,
     summary: {

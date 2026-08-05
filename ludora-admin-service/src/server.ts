@@ -135,6 +135,7 @@ const app = createApp({
   amazonTitleExtractionService,
   bggItemImporter,
   coverFlatteningWorkflowManager,
+  continuousItemUpdateWorkerManager,
   database,
   corsOrigin: config.corsOrigin,
   descriptionGenerationService,

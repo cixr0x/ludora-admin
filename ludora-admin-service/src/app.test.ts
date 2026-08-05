@@ -15,6 +15,10 @@ import type { ItemMatchingService } from './itemMatching/itemMatchingService.js'
 import { LocalCoverWorkflowError, type LocalCoverWorkflowManager, type LocalCoverWorkflowState } from './localCoverWorkflow.js';
 import type { ProductDetailsEnrichmentService } from './productDetailsExtraction/productDetailsExtractionService.js';
 import type { TranslationRequest, TranslationService } from './translation/translationService.js';
+import type {
+  ContinuousItemUpdateWorkerControlStatus,
+  ContinuousItemUpdateWorkerManager
+} from './continuousItemUpdateWorkerManager.js';
 
 describe('ludora admin service', () => {
   const normalizeSql = (sql: string): string => sql.replace(/\s+/g, ' ').trim().toLowerCase();
@@ -4252,6 +4256,18 @@ describe('ludora admin service', () => {
             }]
           };
         }
+        if (normalizedSql.includes('from store_item_update_platform_cooldown')) {
+          return {
+            rows: [
+              {
+                active: true,
+                blocked_until: '2026-08-04T19:00:00.000Z',
+                consecutive_429s: 2,
+                platform: 'woocommerce'
+              }
+            ]
+          };
+        }
         if (normalizedSql.includes('generate_series')) {
           return { rows: [{ item_count: 9, overflow: false, staleness_hour: 0 }, { item_count: 8, overflow: true, staleness_hour: 72 }] };
         }
@@ -4287,17 +4303,31 @@ describe('ludora admin service', () => {
       }
     };
 
-    const response = await request(createApp({ database, operationsClient: idleOperationsClient() })).get(
+    const workerManager = idleContinuousItemUpdateWorkerManager('running');
+    const response = await request(createApp({
+      continuousItemUpdateWorkerManager: workerManager,
+      database,
+      operationsClient: idleOperationsClient()
+    })).get(
       '/admin/operations/store-item-update-monitor?hours=72&histogram_store_id=12'
     );
 
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
+      control_status: 'running',
       histogram: [
         { item_count: 9, label: '0h', overflow: false, staleness_hour: 0 },
         { item_count: 8, label: '72h+', overflow: true, staleness_hour: 72 }
       ],
       histogram_store_id: 12,
+      platform_cooldowns: [
+        {
+          active: true,
+          blocked_until: '2026-08-04T19:00:00.000Z',
+          consecutive_429s: 2,
+          platform: 'woocommerce'
+        }
+      ],
       range_hours: 72,
       store_statistics: [
         {
@@ -4334,7 +4364,7 @@ describe('ludora admin service', () => {
       },
       worker: { health: 'healthy', status: 'idle', worker_id: 'worker-1' }
     });
-    expect(queries).toHaveLength(5);
+    expect(queries).toHaveLength(6);
     const histogramQuery = queries.find((query) => normalizeSql(query.sql).includes('generate_series'));
     expect(histogramQuery?.params).toEqual([72, 12]);
     expect(normalizeSql(histogramQuery?.sql ?? '')).toContain('store_items.store_id = $2::bigint');
@@ -4343,6 +4373,37 @@ describe('ludora admin service', () => {
     expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).toContain('left join store_item_update_attempt_log attempts');
     expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).not.toContain('having count(*)');
     expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).not.toContain('limit 12');
+  });
+
+  it('pauses and resumes the continuous automatic update worker', async () => {
+    const workerManager = idleContinuousItemUpdateWorkerManager('running');
+    vi.mocked(workerManager.pause).mockReturnValue('stopping');
+    vi.mocked(workerManager.resume).mockReturnValue('running');
+    const app = createApp({
+      continuousItemUpdateWorkerManager: workerManager,
+      database: idleDatabase(),
+      operationsClient: idleOperationsClient()
+    });
+
+    const pauseResponse = await request(app).post('/admin/operations/store-item-update-worker/pause').send({});
+    const resumeResponse = await request(app).post('/admin/operations/store-item-update-worker/resume').send({});
+
+    expect(pauseResponse.status).toBe(200);
+    expect(pauseResponse.body).toEqual({ data: { status: 'stopping' } });
+    expect(workerManager.pause).toHaveBeenCalledOnce();
+    expect(resumeResponse.status).toBe(200);
+    expect(resumeResponse.body).toEqual({ data: { status: 'running' } });
+    expect(workerManager.resume).toHaveBeenCalledOnce();
+  });
+
+  it('rejects automatic update worker controls when the worker is unavailable', async () => {
+    const response = await request(createApp({
+      database: idleDatabase(),
+      operationsClient: idleOperationsClient()
+    })).post('/admin/operations/store-item-update-worker/pause').send({});
+
+    expect(response.status).toBe(409);
+    expect(response.body).toEqual({ error: { message: 'Continuous item update worker is not configured' } });
   });
 
   it('lists failed continuous update attempts for a selected store and platform', async () => {
@@ -5195,6 +5256,18 @@ describe('ludora admin service', () => {
 function idleDatabase(): Database {
   return {
     query: async () => ({ rows: [] })
+  };
+}
+
+function idleContinuousItemUpdateWorkerManager(
+  status: ContinuousItemUpdateWorkerControlStatus
+): ContinuousItemUpdateWorkerManager {
+  return {
+    getStatus: vi.fn(() => status),
+    pause: vi.fn(() => 'stopping'),
+    resume: vi.fn(() => 'running'),
+    shutdown: vi.fn(async () => undefined),
+    start: vi.fn()
   };
 }
 

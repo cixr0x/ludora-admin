@@ -9,6 +9,7 @@ import type { DescriptionGenerationService } from './descriptionGeneration/descr
 import type { Database } from './db.js';
 import type { DiscoveryOperationsClient } from './discoveryOperations.js';
 import type { CoverFlatteningWorkflowManager } from './coverFlatteningWorkflow.js';
+import type { ContinuousItemUpdateWorkerManager } from './continuousItemUpdateWorkerManager.js';
 import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { createAmazonTitleExtractionRouter } from './routes/amazonTitleExtraction.js';
 import { createAuthRouter } from './routes/auth.js';
@@ -43,6 +44,7 @@ type CreateAppOptions = {
   amazonTitleExtractionService?: AmazonTitleExtractionService;
   bggItemImporter?: BggItemImporter;
   coverFlatteningWorkflowManager?: CoverFlatteningWorkflowManager;
+  continuousItemUpdateWorkerManager?: ContinuousItemUpdateWorkerManager;
   database: Database;
   corsOrigin?: string | string[];
   descriptionGenerationService?: DescriptionGenerationService;
@@ -61,6 +63,7 @@ export function createApp({
   amazonTitleExtractionService,
   bggItemImporter,
   coverFlatteningWorkflowManager,
+  continuousItemUpdateWorkerManager,
   database,
   corsOrigin,
   descriptionGenerationService,
@@ -112,7 +115,14 @@ export function createApp({
     app.use(createLocalCoverWorkflowRouter(localCoverWorkflowManager));
   }
   if (operationsClient) {
-    app.use(createOperationsRouter(operationsClient, database, externalCoverImageOptimizer));
+    app.use(
+      createOperationsRouter(
+        operationsClient,
+        database,
+        externalCoverImageOptimizer,
+        continuousItemUpdateWorkerManager
+      )
+    );
   }
   app.use(jsonErrorHandler);
 
