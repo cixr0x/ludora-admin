@@ -20,9 +20,14 @@ type ContinuousItemUpdateWorkerManagerOptions = {
 };
 
 export type ContinuousItemUpdateWorkerManager = {
+  getStatus(): ContinuousItemUpdateWorkerControlStatus;
+  pause(): ContinuousItemUpdateWorkerControlStatus;
+  resume(): ContinuousItemUpdateWorkerControlStatus;
   shutdown(): Promise<void>;
   start(): void;
 };
+
+export type ContinuousItemUpdateWorkerControlStatus = 'paused' | 'running' | 'stopping';
 
 export function createContinuousItemUpdateWorkerManager({
   adminApiUrl,
@@ -37,10 +42,12 @@ export function createContinuousItemUpdateWorkerManager({
 }: ContinuousItemUpdateWorkerManagerOptions): ContinuousItemUpdateWorkerManager {
   let child: ChildProcessWithoutNullStreams | null = null;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
+  let isPaused = false;
   let isShuttingDown = false;
+  let isStopping = false;
 
   function launch(): void {
-    if (isShuttingDown || child) {
+    if (isPaused || isShuttingDown || child) {
       return;
     }
     const packagePath = /^[A-Za-z]:[\\/]/.test(packageDir) ? path.win32 : path;
@@ -74,10 +81,19 @@ export function createContinuousItemUpdateWorkerManager({
       console.error(`[continuous-item-update] failed to start: ${error.message}`);
     });
     spawnedChild.on('close', (code, signal) => {
+      const stoppedForPause = isStopping;
       if (child === spawnedChild) {
         child = null;
       }
+      isStopping = false;
       if (isShuttingDown) {
+        return;
+      }
+      if (isPaused) {
+        return;
+      }
+      if (stoppedForPause) {
+        launch();
         return;
       }
       console.error(
@@ -91,6 +107,31 @@ export function createContinuousItemUpdateWorkerManager({
   }
 
   return {
+    getStatus(): ContinuousItemUpdateWorkerControlStatus {
+      if (child) {
+        return isStopping ? 'stopping' : 'running';
+      }
+      return isPaused ? 'paused' : 'running';
+    },
+    pause(): ContinuousItemUpdateWorkerControlStatus {
+      isPaused = true;
+      if (restartTimer) {
+        clearTimeout(restartTimer);
+        restartTimer = null;
+      }
+      if (child && !isStopping) {
+        isStopping = true;
+        child.kill('SIGTERM');
+      }
+      return child ? 'stopping' : 'paused';
+    },
+    resume(): ContinuousItemUpdateWorkerControlStatus {
+      isPaused = false;
+      if (!child && !restartTimer) {
+        launch();
+      }
+      return child && isStopping ? 'stopping' : 'running';
+    },
     start: launch,
     async shutdown(): Promise<void> {
       isShuttingDown = true;

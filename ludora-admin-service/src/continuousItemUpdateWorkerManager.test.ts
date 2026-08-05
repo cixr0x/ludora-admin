@@ -10,11 +10,12 @@ class FakeChildProcess extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
   killSignals: NodeJS.Signals[] = [];
+  closeOnSigterm = true;
 
   kill(signal?: NodeJS.Signals): boolean {
     if (signal) {
       this.killSignals.push(signal);
-      if (signal === 'SIGTERM') {
+      if (signal === 'SIGTERM' && this.closeOnSigterm) {
         queueMicrotask(() => this.emit('close', 0, signal));
       }
     }
@@ -68,5 +69,70 @@ describe('continuous item update worker manager', () => {
 
     await manager.shutdown();
     expect(spawned[0].child.killSignals).toEqual(['SIGTERM']);
+  });
+
+  it('pauses the automatic worker and resumes it after the child exits', () => {
+    const spawned: FakeChildProcess[] = [];
+    const manager = createContinuousItemUpdateWorkerManager({
+      adminApiUrl: 'http://127.0.0.1:4001',
+      envFile: 'C:/ludora-discovery/.env',
+      internalApiToken: 'internal-token',
+      leaseSeconds: 300,
+      packageDir: 'C:/ludora-discovery',
+      pollSeconds: 5,
+      pythonExecutable: 'python',
+      spawnProcess: () => {
+        const child = new FakeChildProcess();
+        child.closeOnSigterm = false;
+        spawned.push(child);
+        return child as never;
+      }
+    });
+
+    manager.start();
+
+    expect(manager.getStatus()).toBe('running');
+    expect(manager.pause()).toBe('stopping');
+    expect(spawned[0].killSignals).toEqual(['SIGTERM']);
+    expect(manager.pause()).toBe('stopping');
+    expect(spawned[0].killSignals).toEqual(['SIGTERM']);
+
+    spawned[0].emit('close', 0, 'SIGTERM');
+
+    expect(manager.getStatus()).toBe('paused');
+    expect(manager.resume()).toBe('running');
+    expect(spawned).toHaveLength(2);
+    expect(manager.resume()).toBe('running');
+    expect(spawned).toHaveLength(2);
+  });
+
+  it('relaunches once after resume is requested while the worker is stopping', () => {
+    const spawned: FakeChildProcess[] = [];
+    const manager = createContinuousItemUpdateWorkerManager({
+      adminApiUrl: 'http://127.0.0.1:4001',
+      envFile: 'C:/ludora-discovery/.env',
+      internalApiToken: 'internal-token',
+      leaseSeconds: 300,
+      packageDir: 'C:/ludora-discovery',
+      pollSeconds: 5,
+      pythonExecutable: 'python',
+      spawnProcess: () => {
+        const child = new FakeChildProcess();
+        child.closeOnSigterm = false;
+        spawned.push(child);
+        return child as never;
+      }
+    });
+
+    manager.start();
+    manager.pause();
+
+    expect(manager.resume()).toBe('stopping');
+    expect(spawned).toHaveLength(1);
+
+    spawned[0].emit('close', 0, 'SIGTERM');
+
+    expect(manager.getStatus()).toBe('running');
+    expect(spawned).toHaveLength(2);
   });
 });
