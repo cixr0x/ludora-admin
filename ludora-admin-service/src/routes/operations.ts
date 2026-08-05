@@ -9,6 +9,8 @@ import type {
 } from '../continuousItemUpdateWorkerManager.js';
 import type { DiscoveryOperationsClient, ItemDiscoveryRunScope, ItemUpdateRunScope } from '../discoveryOperations.js';
 import type { ExternalCoverImageOptimizerOptions, ExternalCoverImageOptimizerResult } from '../externalCoverImageOptimizer.js';
+import type { StoreItemUpdateScheduleManager } from '../storeItemUpdateScheduleManager.js';
+import { StoreItemUpdateScheduleConflictError } from '../storeItemUpdateScheduleService.js';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -141,7 +143,8 @@ export function createOperationsRouter(
   operationsClient: DiscoveryOperationsClient,
   database: Database,
   externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner,
-  continuousItemUpdateWorkerManager?: ContinuousItemUpdateWorkerManager
+  continuousItemUpdateWorkerManager?: ContinuousItemUpdateWorkerManager,
+  storeItemUpdateScheduleManager?: StoreItemUpdateScheduleManager
 ): Router {
   const router = Router();
   let latestExternalCoverImageOptimizationRun: ExternalCoverImageOptimizationRun | null = null;
@@ -275,6 +278,21 @@ export function createOperationsRouter(
       response.json({ data: { status: continuousItemUpdateWorkerManager.resume() } });
     } catch (error) {
       next(error);
+    }
+  });
+
+  router.post('/admin/operations/store-item-update-schedule/run', async (_request, response, next) => {
+    try {
+      if (!storeItemUpdateScheduleManager) {
+        throw httpError(409, 'Store item update scheduling is not configured');
+      }
+      response.json({ data: await storeItemUpdateScheduleManager.runManual() });
+    } catch (error) {
+      next(
+        error instanceof StoreItemUpdateScheduleConflictError
+          ? httpError(409, 'A store item update schedule run is already in progress')
+          : error
+      );
     }
   });
 
@@ -549,6 +567,9 @@ async function loadStoreItemUpdateMonitor(
      )
      select
        count(*)::int as eligible_items,
+       count(*) filter (where next_update_at is null)::int as unscheduled_items,
+       count(*) filter (where next_update_at is not null)::int as scheduled_items,
+       count(*) filter (where next_update_at > now())::int as scheduled_later_items,
        count(*) filter (where next_update_at <= now())::int as due_items,
        count(*) filter (where refreshed_date >= now() - interval '24 hours')::int as fresh_items,
        count(*) filter (where refreshed_date < now() - interval '24 hours')::int as stale_items,
@@ -583,7 +604,26 @@ async function loadStoreItemUpdateMonitor(
   const failures24h = numberField(summaryRow, 'failures_24h');
   const completed24h = successes24h + failures24h;
   const dailyCapacity = 86_400 / pollSeconds;
-  const projectedDailyDemand = eligibleItems * (24 / 22);
+  const projectedDailyDemand = eligibleItems;
+  const scheduleWindowHours = 20;
+  const scheduleWindowCapacity = Math.floor((scheduleWindowHours * 3_600) / pollSeconds);
+  const scheduleUtilizationPercent = scheduleWindowCapacity > 0
+    ? (eligibleItems / scheduleWindowCapacity) * 100
+    : 0;
+
+  const scheduleRunsResult = await database.query(
+    `select
+       (select row_to_json(latest_run) from (
+         select * from store_item_update_schedule_runs
+         order by started_at desc, id desc limit 1
+       ) latest_run) as latest_schedule_run,
+       (select row_to_json(latest_automatic) from (
+         select * from store_item_update_schedule_runs
+         where trigger = 'AUTOMATIC' and status = 'COMPLETED'
+         order by automatic_schedule_date desc, id desc limit 1
+       ) latest_automatic) as latest_automatic_schedule_run`
+  );
+  const scheduleRunsRow = (scheduleRunsResult.rows[0] ?? {}) as Record<string, unknown>;
 
   const histogramResult = await database.query(
     `with eligible as (
@@ -711,6 +751,8 @@ async function loadStoreItemUpdateMonitor(
       };
     }),
     histogram_store_id: histogramStoreId,
+    latest_automatic_schedule_run: scheduleRunsRow.latest_automatic_schedule_run ?? null,
+    latest_schedule_run: scheduleRunsRow.latest_schedule_run ?? null,
     platform_cooldowns: platformCooldownsResult.rows,
     range_hours: rangeHours,
     recent_attempts: recentAttemptsResult.rows,
@@ -729,9 +771,15 @@ async function loadStoreItemUpdateMonitor(
       projected_daily_demand: projectedDailyDemand,
       projected_utilization_percent: dailyCapacity > 0 ? (projectedDailyDemand / dailyCapacity) * 100 : 0,
       rate_limited_24h: numberField(summaryRow, 'rate_limited_24h'),
+      scheduled_items: numberField(summaryRow, 'scheduled_items'),
+      scheduled_later_items: numberField(summaryRow, 'scheduled_later_items'),
+      schedule_utilization_percent: scheduleUtilizationPercent,
+      schedule_window_capacity: scheduleWindowCapacity,
+      schedule_window_hours: scheduleWindowHours,
       stale_items: numberField(summaryRow, 'stale_items'),
       success_rate_percent: completed24h > 0 ? (successes24h / completed24h) * 100 : 100,
-      successes_24h: successes24h
+      successes_24h: successes24h,
+      unscheduled_items: numberField(summaryRow, 'unscheduled_items')
     },
     worker: workerRow
       ? {

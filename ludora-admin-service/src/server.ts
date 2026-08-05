@@ -27,6 +27,8 @@ import {
 } from './productDetailsExtraction/productDetailsExtractionService.js';
 import { createOpenAiStoreProfileDetectionClient } from './storeProfileDetection/openAiStoreProfileDetectionClient.js';
 import { createStoreProfileDetectionService } from './storeProfileDetection/storeProfileDetectionService.js';
+import { createStoreItemUpdateScheduleManager } from './storeItemUpdateScheduleManager.js';
+import { createStoreItemUpdateScheduleService } from './storeItemUpdateScheduleService.js';
 import { createOpenAiTranslationClient } from './translation/openAiTranslationClient.js';
 import { createTranslationService } from './translation/translationService.js';
 import { createWebBotAuthService } from './webBotAuth/webBotAuthService.js';
@@ -117,6 +119,11 @@ const continuousItemUpdateWorkerManager =
         pythonExecutable: config.discoveryRunner.pythonExecutable
       })
     : undefined;
+const storeItemUpdateScheduleManager = config.continuousItemUpdateWorker.enabled
+  ? createStoreItemUpdateScheduleManager({
+      scheduleService: createStoreItemUpdateScheduleService(database)
+    })
+  : undefined;
 const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   database,
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
@@ -147,6 +154,7 @@ const app = createApp({
   operationsClient,
   productDetailsEnrichmentService,
   storeProfileDetectionService,
+  storeItemUpdateScheduleManager,
   translationService,
   webBotAuthService
 });
@@ -154,6 +162,7 @@ const app = createApp({
 const server = app.listen(config.port, config.host, () => {
   console.log(`ludora-admin-service listening on ${config.host}:${config.port}`);
   continuousItemUpdateWorkerManager?.start();
+  storeItemUpdateScheduleManager?.start();
 });
 
 let isShuttingDown = false;
@@ -174,6 +183,7 @@ async function shutdown(): Promise<void> {
   });
   try {
     await continuousItemUpdateWorkerManager?.shutdown();
+    await storeItemUpdateScheduleManager?.shutdown();
     await shutdownOperationsClient();
     await closeServer;
     process.exit(0);
