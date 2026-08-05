@@ -53,7 +53,7 @@ The scheduling update changes only `next_update_at`. It does not clear leases, f
 
 ## Database State
 
-Keep the existing untracked `20260804_004_randomize_listed_store_item_update_schedule.sql` patch unchanged. Add all new schema changes in the sequential `20260804_005_daily_store_item_update_scheduling.sql` patch.
+Keep `20260804_004_randomize_listed_store_item_update_schedule.sql` unchanged and commit it as an immutable historical patch. Patch `004` has already been applied and must not be executed again. Add all new schema changes in the sequential `20260804_005_daily_store_item_update_scheduling.sql` patch.
 
 Change `store_items.next_update_at` to be nullable and remove its `now()` default. Existing insertion paths will therefore create unscheduled store items unless they explicitly provide a due time. The continuous claim query already treats null as not due.
 
@@ -154,9 +154,9 @@ Run the focused service, discovery, and UI suites first, followed by the normal 
 
 ## Deployment Sequence
 
-1. Commit the implementation without altering the existing `004` patch.
-2. Present the exact SQL from patches `004` and `005`, plus the runtime scheduling DML, and obtain explicit approval.
-3. Apply the approved incremental patches sequentially: `004`, then `005`.
+1. Commit the implementation and the existing historical `004` patch without altering its SQL.
+2. Present the exact SQL from patch `005`, plus the runtime scheduling DML, and obtain explicit approval.
+3. Apply only the approved incremental patch `005`; do not reapply `004`.
 4. Deploy the admin service, discovery package, and admin UI at one exact commit.
 5. Verify scheduler startup state, worker health, and the Update Monitor.
 6. Run the manual schedule once if an immediate 20-hour redistribution is desired; otherwise the next 3:00 AM automatic run initializes the new schedule.
