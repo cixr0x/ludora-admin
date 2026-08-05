@@ -1,5 +1,5 @@
 import '@testing-library/jest-dom/vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { adminApi, type StoreItemUpdateMonitor } from '../api/client';
@@ -18,6 +18,16 @@ const completedManualScheduleRun = {
   window_end: '2026-08-06T06:00:00.000Z',
   window_start: '2026-08-05T10:00:00.000Z'
 };
+
+function deferred<T>() {
+  let reject!: (reason?: unknown) => void;
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
 
 const monitor: StoreItemUpdateMonitor = {
   control_status: 'running',
@@ -286,8 +296,59 @@ describe('StoreItemUpdateMonitorPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Redistribute update schedule' }));
     await user.click(screen.getByRole('button', { name: 'Confirm redistribution' }));
 
-    expect(await screen.findByText('A store item update schedule run is already in progress')).toBeInTheDocument();
+    const dialog = screen.getByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('A store item update schedule run is already in progress');
     expect(screen.getByText('Store Item Update Monitor', { selector: 'h4' })).toBeInTheDocument();
-    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
+  it('keeps a schedule conflict visible when an older monitor refresh completes', async () => {
+    const oldRefresh = deferred<StoreItemUpdateMonitor>();
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor')
+      .mockResolvedValueOnce(monitor)
+      .mockReturnValueOnce(oldRefresh.promise);
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+    vi.spyOn(adminApi, 'runStoreItemUpdateSchedule').mockRejectedValue(
+      new Error('A store item update schedule run is already in progress')
+    );
+    const user = userEvent.setup();
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Refresh' }));
+    await user.click(screen.getByRole('button', { name: 'Redistribute update schedule' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm redistribution' }));
+
+    const dialog = screen.getByRole('dialog');
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('A store item update schedule run is already in progress');
+    oldRefresh.resolve(monitor);
+    await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('A store item update schedule run is already in progress'));
+  });
+
+  it('does not restore an older monitor response after a schedule refresh succeeds', async () => {
+    const oldRefresh = deferred<StoreItemUpdateMonitor>();
+    const freshMonitor: StoreItemUpdateMonitor = {
+      ...monitor,
+      store_statistics: [{ ...monitor.store_statistics[0], store_name: 'Fresh Store' }]
+    };
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor')
+      .mockResolvedValueOnce(monitor)
+      .mockReturnValueOnce(oldRefresh.promise)
+      .mockResolvedValueOnce(freshMonitor);
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+    vi.spyOn(adminApi, 'runStoreItemUpdateSchedule').mockResolvedValue(completedManualScheduleRun);
+    const user = userEvent.setup();
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    await user.click(await screen.findByRole('button', { name: 'Refresh' }));
+    await user.click(screen.getByRole('button', { name: 'Redistribute update schedule' }));
+    await user.click(screen.getByRole('button', { name: 'Confirm redistribution' }));
+    expect(await screen.findByText('Fresh Store')).toBeInTheDocument();
+
+    await act(async () => {
+      oldRefresh.resolve(monitor);
+      await oldRefresh.promise;
+    });
+    await waitFor(() => expect(screen.getByText('Fresh Store')).toBeInTheDocument());
   });
 });

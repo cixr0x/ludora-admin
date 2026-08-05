@@ -24,7 +24,7 @@ import {
   TableRow,
   Typography
 } from '@mui/material';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { adminApi, type AdminRecord, type StoreItemUpdateMonitor } from '../api/client';
 
 const REFRESH_INTERVAL_MS = 15_000;
@@ -42,20 +42,32 @@ export function StoreItemUpdateMonitorPage() {
   const [failureDetailsLoading, setFailureDetailsLoading] = useState(false);
   const [controlLoading, setControlLoading] = useState(false);
   const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleSuccess, setScheduleSuccess] = useState('');
+  const monitorRequestId = useRef(0);
 
   const loadMonitor = useCallback(async (showLoading = false) => {
+    const requestId = ++monitorRequestId.current;
     if (showLoading) {
       setLoading(true);
     }
     try {
-      setMonitor(await adminApi.getStoreItemUpdateMonitor(hours, histogramStoreId || undefined));
+      const nextMonitor = await adminApi.getStoreItemUpdateMonitor(hours, histogramStoreId || undefined);
+      if (requestId !== monitorRequestId.current) {
+        return;
+      }
+      setMonitor(nextMonitor);
       setError('');
     } catch (loadError) {
+      if (requestId !== monitorRequestId.current) {
+        return;
+      }
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
-      setLoading(false);
+      if (requestId === monitorRequestId.current) {
+        setLoading(false);
+      }
     }
   }, [histogramStoreId, hours]);
 
@@ -76,6 +88,7 @@ export function StoreItemUpdateMonitorPage() {
   }, [loadMonitor]);
 
   const runSchedule = useCallback(async () => {
+    setScheduleError('');
     setScheduleLoading(true);
     try {
       const run = await adminApi.runStoreItemUpdateSchedule();
@@ -83,7 +96,7 @@ export function StoreItemUpdateMonitorPage() {
       setScheduleDialogOpen(false);
       await loadMonitor();
     } catch (scheduleError) {
-      setError(scheduleError instanceof Error ? scheduleError.message : String(scheduleError));
+      setScheduleError(scheduleError instanceof Error ? scheduleError.message : String(scheduleError));
     } finally {
       setScheduleLoading(false);
     }
@@ -177,7 +190,7 @@ export function StoreItemUpdateMonitorPage() {
           <Button
             disabled={scheduleLoading}
             onClick={() => {
-              setError('');
+              setScheduleError('');
               setScheduleSuccess('');
               setScheduleDialogOpen(true);
             }}
@@ -438,6 +451,7 @@ export function StoreItemUpdateMonitorPage() {
       <Dialog
         onClose={() => {
           if (!scheduleLoading) {
+            setScheduleError('');
             setScheduleDialogOpen(false);
           }
         }}
@@ -445,12 +459,16 @@ export function StoreItemUpdateMonitorPage() {
       >
         <DialogTitle>Redistribute update schedule?</DialogTitle>
         <DialogContent>
+          {scheduleError ? <Alert severity="error" sx={{ mb: 2 }}>{scheduleError}</Alert> : null}
           <Typography>
             This reschedules every eligible item over a new 20-hour window, including products already updated today and failures in backoff.
           </Typography>
         </DialogContent>
         <DialogActions>
-          <Button disabled={scheduleLoading} onClick={() => setScheduleDialogOpen(false)}>Cancel</Button>
+          <Button disabled={scheduleLoading} onClick={() => {
+            setScheduleError('');
+            setScheduleDialogOpen(false);
+          }}>Cancel</Button>
           <Button disabled={scheduleLoading} onClick={() => void runSchedule()} variant="contained">
             {scheduleLoading ? 'Redistributing schedule' : 'Confirm redistribution'}
           </Button>
