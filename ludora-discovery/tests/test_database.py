@@ -53,7 +53,181 @@ class FakeConnection:
         self.commits += 1
 
 
+def confirmed_store_item_record() -> DiscoveryItemCandidateRecord:
+    return DiscoveryItemCandidateRecord(
+        store_id=12,
+        store_item_id=501,
+        source_url="https://example.mx/products/catan",
+        title="Catan",
+        original_title="Catan",
+        item_id=77,
+        listing_status="LISTED",
+        store_active=True,
+        is_boardgame=True,
+        is_boardgame_confirmed=True,
+    )
+
+
+def confirmed_store_item_row() -> tuple[object, ...]:
+    return (
+        12,
+        "https://example.mx/products/catan",
+        "",
+        "Catan",
+        "Catan",
+        "",
+        "",
+        77,
+        "base_game",
+        None,
+        None,
+        None,
+        None,
+        None,
+        "",
+        "",
+        "",
+        "",
+        "LISTED",
+        "",
+        None,
+        "none",
+        "MXN",
+        "unknown",
+        "none",
+        True,
+        "",
+        {},
+        True,
+        True,
+        None,
+        [],
+        "",
+        None,
+        "",
+        None,
+        [],
+        {},
+        None,
+        None,
+        "",
+        501,
+    )
+
+
 class DatabaseRepositoryTests(unittest.TestCase):
+    def test_claim_due_store_item_update_skips_blocked_platforms_and_reads_platform_count(self):
+        connection = FakeConnection(
+            fetchone_rows=[
+                (501,),
+                confirmed_store_item_row(),
+                ("Example", "woocommerce", 0, 2),
+                (91,),
+            ]
+        )
+        repository = DiscoveryRepository(connection)
+
+        claim = repository.claim_due_store_item_update(
+            worker_name="continuous",
+            worker_id="worker-1",
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            lease_seconds=300,
+        )
+
+        claim_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
+        platform_sql = " ".join(connection.cursor_instance.executions[2][0].casefold().split())
+        self.assertIn("store_item_update_platform_cooldown", claim_sql)
+        self.assertIn("blocked_until > now()", claim_sql)
+        self.assertIn("store_item_update_platform_cooldown", platform_sql)
+        self.assertIn("consecutive_429s", platform_sql)
+        self.assertEqual(claim.platform, "woocommerce")
+        self.assertEqual(claim.platform_consecutive_429s, 2)
+
+    def test_successful_platform_update_clears_platform_cooldown(self):
+        connection = FakeConnection(fetchone_rows=[(501,)])
+        repository = DiscoveryRepository(connection)
+        record = confirmed_store_item_record()
+
+        repository.complete_claimed_store_item_update(
+            record,
+            replace(record),
+            attempt_id=91,
+            job_id=17,
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            next_update_at=datetime(2026, 8, 5, 16, 0, tzinfo=timezone.utc),
+            run_id="continuous:test",
+            worker_id="worker-1",
+            worker_name="continuous",
+            platform="woocommerce",
+        )
+
+        cooldown_updates = [
+            (sql, params)
+            for sql, params in connection.cursor_instance.executions
+            if "store_item_update_platform_cooldown" in sql.casefold()
+        ]
+        self.assertEqual(len(cooldown_updates), 1)
+        sql, params = cooldown_updates[0]
+        self.assertIn("blocked_until = null", " ".join(sql.casefold().split()))
+        self.assertIn("consecutive_429s = 0", " ".join(sql.casefold().split()))
+        self.assertEqual(params, ("continuous", "woocommerce"))
+
+    def test_woocommerce_429_upserts_platform_cooldown_with_failed_item(self):
+        connection = FakeConnection(fetchone_rows=[(501,)])
+        repository = DiscoveryRepository(connection)
+        blocked_until = datetime(2026, 8, 4, 18, 15, tzinfo=timezone.utc)
+
+        repository.fail_claimed_store_item_update(
+            confirmed_store_item_record(),
+            attempt_id=91,
+            error="HTTP 429",
+            http_status=429,
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            next_update_at=blocked_until,
+            platform_blocked_until=blocked_until,
+            worker_id="worker-1",
+            worker_name="continuous",
+            job_id=17,
+            platform="woocommerce",
+        )
+
+        cooldown_writes = [
+            (sql, params)
+            for sql, params in connection.cursor_instance.executions
+            if "store_item_update_platform_cooldown" in sql.casefold()
+        ]
+        self.assertEqual(len(cooldown_writes), 1)
+        sql, params = cooldown_writes[0]
+        normalized_sql = " ".join(sql.casefold().split())
+        self.assertIn("insert into store_item_update_platform_cooldown", normalized_sql)
+        self.assertIn("consecutive_429s = store_item_update_platform_cooldown.consecutive_429s + 1", normalized_sql)
+        self.assertEqual(params, ("continuous", "woocommerce", blocked_until))
+
+    def test_non_rate_limited_platform_failure_does_not_write_platform_cooldown(self):
+        connection = FakeConnection(fetchone_rows=[(501,)])
+        repository = DiscoveryRepository(connection)
+
+        repository.fail_claimed_store_item_update(
+            confirmed_store_item_record(),
+            attempt_id=91,
+            error="HTTP 429",
+            http_status=429,
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            next_update_at=datetime(2026, 8, 4, 18, 15, tzinfo=timezone.utc),
+            platform_blocked_until=None,
+            worker_id="worker-1",
+            worker_name="continuous",
+            job_id=17,
+            platform="custom",
+        )
+
+        self.assertFalse(
+            any(
+                "store_item_update_platform_cooldown" in sql.casefold()
+                for sql, _params in connection.cursor_instance.executions
+            )
+        )
+
     def test_connect_database_maps_pgsslmode_no_verify_to_psycopg_require(self):
         fake_psycopg = SimpleNamespace(connect=Mock(return_value="connection"))
 
