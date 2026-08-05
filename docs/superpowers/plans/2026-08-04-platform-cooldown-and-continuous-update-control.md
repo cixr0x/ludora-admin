@@ -200,7 +200,7 @@ Also assert Pause and Resume are idempotent and Resume during stopping relaunche
 
 - [ ] **Step 2: Run the manager test and verify RED**
 
-Run: `npm test -- src/continuousItemUpdateWorkerManager.test.ts --maxWorkers=1 --minWorkers=1`
+Run: `npm test -- src/continuousItemUpdateWorkerManager.test.ts --maxWorkers=1`
 
 Expected: FAIL because the control methods do not exist.
 
@@ -210,7 +210,7 @@ Track `isPaused`, `isShuttingDown`, the active child, and restart timer separate
 
 - [ ] **Step 4: Run the manager test and verify GREEN**
 
-Run: `npm test -- src/continuousItemUpdateWorkerManager.test.ts --maxWorkers=1 --minWorkers=1`
+Run: `npm test -- src/continuousItemUpdateWorkerManager.test.ts --maxWorkers=1`
 
 Expected: PASS.
 
@@ -241,7 +241,7 @@ Inject a fake manager into `createApp`, assert both POST routes call the right m
 
 - [ ] **Step 2: Run focused service tests and verify RED**
 
-Run: `npm test -- src/app.test.ts --maxWorkers=1 --minWorkers=1`
+Run: `npm test -- src/app.test.ts --maxWorkers=1`
 
 Expected: FAIL because the manager dependency and routes are absent.
 
@@ -251,7 +251,7 @@ Pass the manager from `server.ts` through `createApp` to `createOperationsRouter
 
 - [ ] **Step 4: Run focused service tests and verify GREEN**
 
-Run: `npm test -- src/app.test.ts --maxWorkers=1 --minWorkers=1`
+Run: `npm test -- src/app.test.ts --maxWorkers=1`
 
 Expected: PASS.
 
@@ -281,7 +281,7 @@ Assert POST requests to the exact pause and resume paths and response decoding.
 
 - [ ] **Step 2: Run client tests and verify RED**
 
-Run: `npm test -- src/api/client.test.ts --maxWorkers=1 --minWorkers=1`
+Run: `npm test -- src/api/client.test.ts --maxWorkers=1`
 
 Expected: FAIL because the methods are absent.
 
@@ -291,7 +291,7 @@ Use the existing `sendJson` helper with an empty object payload for both operati
 
 - [ ] **Step 4: Run client tests and verify GREEN**
 
-Run: `npm test -- src/api/client.test.ts --maxWorkers=1 --minWorkers=1`
+Run: `npm test -- src/api/client.test.ts --maxWorkers=1`
 
 Expected: PASS.
 
@@ -308,7 +308,7 @@ Verify:
 
 - [ ] **Step 6: Run page tests and verify RED**
 
-Run: `npm test -- src/pages/StoreItemUpdateMonitorPage.test.tsx --maxWorkers=1 --minWorkers=1`
+Run: `npm test -- src/pages/StoreItemUpdateMonitorPage.test.tsx --maxWorkers=1`
 
 Expected: FAIL because controls and generic cooldown chips are absent.
 
@@ -321,7 +321,7 @@ Add a control-request loading flag, render the appropriate button beside Refresh
 Run:
 
 ```powershell
-npm test -- src/api/client.test.ts src/pages/StoreItemUpdateMonitorPage.test.tsx --maxWorkers=1 --minWorkers=1
+npm test -- src/api/client.test.ts src/pages/StoreItemUpdateMonitorPage.test.tsx --maxWorkers=1
 ```
 
 Expected: PASS.
@@ -356,11 +356,11 @@ Set-Location C:\PROJECTS\ludora\ludora-admin\ludora-discovery
 python -m unittest discover -s tests -v
 
 Set-Location C:\PROJECTS\ludora\ludora-admin\ludora-admin-service
-npm test -- --maxWorkers=1 --minWorkers=1
+npm test -- --maxWorkers=1
 npm run build
 
 Set-Location C:\PROJECTS\ludora\ludora-admin\ludora-admin-ui
-npm test -- --maxWorkers=1 --minWorkers=1
+npm test -- --maxWorkers=1
 npm run build
 
 Set-Location C:\PROJECTS\ludora\ludora-admin

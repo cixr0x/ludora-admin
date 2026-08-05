@@ -128,9 +128,15 @@ The continuous updater is a supervised Python child of admin-service. It claims
 one due item at a time, uses a five-minute expiring lease, and schedules a
 successful item 21–23 hours into the future. The worker uses a PostgreSQL
 advisory lock, so a manual batch update cannot run concurrently and double the
-store request rate. Its heartbeat, leases, attempts, Shopify cooldown, and
-hourly staleness distribution are available under **Operations > Update
-Monitor**.
+store request rate. HTTP 429 responses trigger independent platform-wide
+cooldowns for Shopify and WooCommerce, allowing the worker to continue with
+other platforms while the blocked platform recovers. Its heartbeat, leases,
+attempts, platform cooldowns, pause/resume controls, and hourly staleness
+distribution are available under **Operations > Update Monitor**. Pausing lets
+the in-flight item finish, stops the automatic worker, and releases the
+coordinator lock for manual updates. The pause is process-local, so restarting
+admin-service starts the automatic worker again when it is enabled by
+configuration.
 
 The production UI file contains:
 
