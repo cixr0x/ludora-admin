@@ -168,6 +168,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         completion_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
         self.assertIn("next_update_at = null", completion_sql)
+        self.assertIn("last_update_attempt_at = clock_timestamp()", completion_sql)
         cooldown_updates = [
             (sql, params)
             for sql, params in connection.cursor_instance.executions
@@ -192,6 +193,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         recovery_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
         self.assertIn("next_update_at = coalesce(next_update_at, now() + interval '1 minute')", recovery_sql)
+        self.assertIn("last_update_attempt_at = clock_timestamp()", recovery_sql)
 
     def test_woocommerce_429_upserts_platform_cooldown_with_failed_item(self):
         connection = FakeConnection(fetchone_rows=[(501,)])
@@ -212,6 +214,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
             platform="woocommerce",
         )
 
+        failure_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
+        self.assertIn("last_update_attempt_at = clock_timestamp()", failure_sql)
         cooldown_writes = [
             (sql, params)
             for sql, params in connection.cursor_instance.executions

@@ -479,6 +479,7 @@ class DiscoveryRepository:
                 )
                 update store_items
                 set next_update_at = coalesce(next_update_at, now() + interval '1 minute'),
+                    last_update_attempt_at = clock_timestamp(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = consecutive_update_failures + 1,
@@ -726,6 +727,7 @@ class DiscoveryRepository:
                     last_seen_at = now(),
                     refreshed_date = now(),
                     next_update_at = null,
+                    last_update_attempt_at = clock_timestamp(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = 0,
@@ -924,6 +926,7 @@ class DiscoveryRepository:
                 """
                 update store_items
                 set next_update_at = %s,
+                    last_update_attempt_at = clock_timestamp(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = consecutive_update_failures + 1,
