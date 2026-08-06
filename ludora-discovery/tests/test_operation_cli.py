@@ -9,7 +9,9 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ludora.operations import (
+    ItemDiscoveryBatchError,
     ItemDiscoveryRunResult,
+    ItemDiscoveryStoreFailure,
     ItemEmbeddingRunResult,
     ItemUpdateRunResult,
     StoreDiscoveryRunResult,
@@ -87,6 +89,26 @@ class OperationCliTests(unittest.TestCase):
         self.assertEqual(runner.call_args.kwargs["store_ids"], [12, 34])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["result"]["stores_scanned"], 2)
+
+    def test_item_discovery_batch_aggregate_error_prints_one_bounded_json_error(self):
+        """Returning a batch success after aggregate failures must fail this test."""
+        stdout = StringIO()
+        stderr = StringIO()
+        batch_error = ItemDiscoveryBatchError(
+            [ItemDiscoveryStoreFailure(store_id=12, store_name="Alpha Games", error="store failure")]
+        )
+
+        with patch("sys.stdout", stdout), patch("sys.stderr", stderr), patch(
+            "ludora.operation_cli.run_item_discovery_batch", side_effect=batch_error
+        ):
+            exit_code = main(["item-discovery-batch"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        error_lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(error_lines), 1)
+        self.assertLessEqual(len(error_lines[0]), 4000 + 32)
+        self.assertIn("Alpha Games", json.loads(error_lines[0])["error"]["message"])
 
     def test_runs_item_update(self):
         stdout = StringIO()

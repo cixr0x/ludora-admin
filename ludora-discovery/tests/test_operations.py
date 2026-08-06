@@ -15,6 +15,7 @@ from ludora.item_classification import apply_item_classification
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.operations import (
     ItemEmbeddingRunResult,
+    ItemDiscoveryBatchError,
     ItemDiscoveryRunResult,
     ItemUpdateRunResult,
     OperationAlreadyRunning,
@@ -27,6 +28,7 @@ from ludora.operations import (
     run_item_update,
     run_store_discovery,
 )
+from ludora.cancellation import OperationCancelled
 from ludora.product_discovery_throttle import ProductDiscoveryRequestThrottle
 
 
@@ -503,6 +505,124 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(result.unconfirmed_non_boardgames, 1)
         self.assertEqual(result.stores_scanned, 2)
         connection.close.assert_called_once_with()
+
+    def test_run_item_discovery_batch_continues_after_store_failures_and_raises_aggregate_error(self):
+        """Removing the per-store exception handler must fail this test."""
+        listing_connection = Mock()
+        trace_connection = Mock()
+        repository = Mock()
+        repository.list_store_item_discovery_sources.return_value = [
+            SimpleNamespace(store_id=12, store_name="Alpha Games", website_url="https://alpha.mx/", platform="shopify"),
+            SimpleNamespace(store_id=34, store_name="Beta Games", website_url="https://beta.mx/", platform="custom"),
+            SimpleNamespace(store_id=56, store_name="Gamma Games", website_url="https://gamma.mx/", platform="shopify"),
+        ]
+        throttle = ProductDiscoveryRequestThrottle()
+        trace_logger = Mock()
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", side_effect=[listing_connection, trace_connection]
+        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.create_item_discovery_trace_logger", return_value=trace_logger
+        ), patch(
+            "ludora.operations.run_item_discovery",
+            side_effect=[
+                RuntimeError("Alpha failure " + "x" * 600),
+                ItemDiscoveryRunResult(store_id=34, website_url="https://beta.mx/", item_candidates=2),
+                RuntimeError("Gamma failure"),
+            ],
+        ) as run_item_discovery_:
+            with self.assertRaises(ItemDiscoveryBatchError) as raised:
+                run_item_discovery_batch(
+                    run_id="batch-run",
+                    product_request_throttle=throttle,
+                )
+
+        self.assertEqual(
+            [call.kwargs["store_id"] for call in run_item_discovery_.call_args_list],
+            [12, 34, 56],
+        )
+        self.assertTrue(
+            all(call.kwargs["product_request_throttle"] is throttle for call in run_item_discovery_.call_args_list)
+        )
+        self.assertEqual(
+            [(failure.store_id, failure.store_name) for failure in raised.exception.failures],
+            [(12, "Alpha Games"), (56, "Gamma Games")],
+        )
+        self.assertEqual(raised.exception.failures[0].error, "Alpha failure " + "x" * 486)
+        self.assertIn("Alpha Games", str(raised.exception))
+        self.assertIn("Gamma Games", str(raised.exception))
+        self.assertLessEqual(len(str(raised.exception)), 4000)
+        trace_logger.log.assert_called_once_with(
+            "item_discovery.batch.failed",
+            failed_store_count=2,
+            failed_stores=[
+                {"store_id": 12, "store_name": "Alpha Games", "error": "Alpha failure " + "x" * 486},
+                {"store_id": 56, "store_name": "Gamma Games", "error": "Gamma failure"},
+            ],
+            stores_attempted=3,
+        )
+        listing_connection.close.assert_called_once_with()
+        trace_connection.close.assert_called_once_with()
+
+    def test_run_item_discovery_batch_normalizes_empty_store_name_in_failure(self):
+        """Removing the empty-name fallback must fail this test."""
+        connection = Mock()
+        trace_connection = Mock()
+        repository = Mock()
+        repository.list_store_item_discovery_sources.return_value = [
+            SimpleNamespace(store_id=12, store_name="  ", website_url="https://alpha.mx/", platform="shopify"),
+        ]
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", side_effect=[connection, trace_connection]
+        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.run_item_discovery", side_effect=RuntimeError()
+        ):
+            with self.assertRaises(ItemDiscoveryBatchError) as raised:
+                run_item_discovery_batch(run_id="batch-run")
+
+        self.assertEqual(raised.exception.failures[0].store_name, "Store 12")
+        self.assertEqual(raised.exception.failures[0].error, "RuntimeError")
+
+    def test_run_item_discovery_batch_cancellation_aborts_before_later_stores(self):
+        """Catching OperationCancelled as a store failure must fail this test."""
+        connection = Mock()
+        repository = Mock()
+        repository.list_store_item_discovery_sources.return_value = [
+            SimpleNamespace(store_id=12, store_name="Alpha Games", website_url="https://alpha.mx/", platform="shopify"),
+            SimpleNamespace(store_id=34, store_name="Beta Games", website_url="https://beta.mx/", platform="custom"),
+        ]
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", return_value=connection
+        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.run_item_discovery", side_effect=OperationCancelled("cancelled")
+        ) as run_item_discovery_:
+            with self.assertRaises(OperationCancelled):
+                run_item_discovery_batch(run_id="batch-run")
+
+        self.assertEqual(run_item_discovery_.call_count, 1)
+        self.assertEqual(run_item_discovery_.call_args.kwargs["store_id"], 12)
+
+    def test_run_item_discovery_batch_preserves_aggregate_error_when_batch_trace_fails(self):
+        """Letting trace failures mask store failures must fail this test."""
+        listing_connection = Mock()
+        trace_connection = Mock()
+        repository = Mock()
+        repository.list_store_item_discovery_sources.return_value = [
+            SimpleNamespace(store_id=12, store_name="Alpha Games", website_url="https://alpha.mx/", platform="shopify"),
+        ]
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", side_effect=[listing_connection, trace_connection]
+        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.create_item_discovery_trace_logger", side_effect=RuntimeError("trace unavailable")
+        ), patch("ludora.operations.run_item_discovery", side_effect=RuntimeError("store failure")):
+            with self.assertRaises(ItemDiscoveryBatchError) as raised:
+                run_item_discovery_batch(run_id="batch-run")
+
+        self.assertEqual(raised.exception.failures[0].error, "store failure")
+        trace_connection.close.assert_called_once_with()
 
     def test_run_item_update_refreshes_confirmed_boardgames_and_closes_database(self):
         connection = Mock()

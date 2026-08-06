@@ -40,6 +40,8 @@ from ludora.trace import create_item_discovery_trace_logger, create_item_update_
 RunStatus = Literal["running", "cancelling", "cancelled", "completed", "failed"]
 EmbeddingRefreshMode = Literal["missing", "full"]
 ItemClassifierCallable = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidateRecord]
+ITEM_DISCOVERY_STORE_ERROR_MAX_LENGTH = 500
+ITEM_DISCOVERY_BATCH_ERROR_MAX_LENGTH = 4000
 
 
 class OperationAlreadyRunning(RuntimeError):
@@ -48,6 +50,26 @@ class OperationAlreadyRunning(RuntimeError):
 
 class OperationNotRunning(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class ItemDiscoveryStoreFailure:
+    store_id: int
+    store_name: str
+    error: str
+
+
+class ItemDiscoveryBatchError(RuntimeError):
+    def __init__(self, failures: list[ItemDiscoveryStoreFailure]) -> None:
+        self.failures = tuple(failures)
+        summary = "; ".join(
+            f"{failure.store_id} ({failure.store_name}): {failure.error}"
+            for failure in self.failures
+        )
+        message = f"Item discovery batch failed for {len(self.failures)} store(s): {summary}"
+        if len(message) > ITEM_DISCOVERY_BATCH_ERROR_MAX_LENGTH:
+            message = f"{message[:ITEM_DISCOVERY_BATCH_ERROR_MAX_LENGTH - 3]}..."
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -498,19 +520,32 @@ def run_item_discovery_batch(
     unconfirmed_boardgames = 0
     unconfirmed_non_boardgames = 0
     stores_scanned = 0
+    failures: list[ItemDiscoveryStoreFailure] = []
     for store in stores:
         raise_if_cancelled(cancellation_token)
-        result = run_item_discovery(
-            store_id=store.store_id,
-            website_url=store.website_url,
-            platform=store.platform,
-            store_name=store.store_name,
-            env=current_env,
-            env_file=env_file,
-            cancellation_token=cancellation_token,
-            run_id=f"{resolved_run_id}:{store.store_id}",
-            product_request_throttle=resolved_product_request_throttle,
-        )
+        try:
+            result = run_item_discovery(
+                store_id=store.store_id,
+                website_url=store.website_url,
+                platform=store.platform,
+                store_name=store.store_name,
+                env=current_env,
+                env_file=env_file,
+                cancellation_token=cancellation_token,
+                run_id=f"{resolved_run_id}:{store.store_id}",
+                product_request_throttle=resolved_product_request_throttle,
+            )
+        except OperationCancelled:
+            raise
+        except Exception as exc:
+            failures.append(
+                ItemDiscoveryStoreFailure(
+                    store_id=store.store_id,
+                    store_name=store.store_name.strip() or f"Store {store.store_id}",
+                    error=(str(exc).strip() or type(exc).__name__)[:ITEM_DISCOVERY_STORE_ERROR_MAX_LENGTH],
+                )
+            )
+            continue
         item_candidates += result.item_candidates
         new_items += result.new_items
         items_discovered += result.items_discovered
@@ -519,6 +554,16 @@ def run_item_discovery_batch(
         unconfirmed_boardgames += result.unconfirmed_boardgames
         unconfirmed_non_boardgames += result.unconfirmed_non_boardgames
         stores_scanned += 1
+
+    if failures:
+        batch_error = ItemDiscoveryBatchError(failures)
+        _log_item_discovery_batch_failure(
+            database_url=database_url,
+            run_id=resolved_run_id,
+            failures=failures,
+            stores_attempted=len(stores),
+        )
+        raise batch_error
 
     return ItemDiscoveryRunResult(
         store_id=None,
@@ -532,6 +577,36 @@ def run_item_discovery_batch(
         unconfirmed_non_boardgames=unconfirmed_non_boardgames,
         stores_scanned=stores_scanned,
     )
+
+
+def _log_item_discovery_batch_failure(
+    *,
+    database_url: str,
+    run_id: str,
+    failures: list[ItemDiscoveryStoreFailure],
+    stores_attempted: int,
+) -> None:
+    connection = None
+    try:
+        connection = connect_database(database_url)
+        batch_trace = create_item_discovery_trace_logger(connection, run_id)
+        batch_trace.log(
+            "item_discovery.batch.failed",
+            failed_store_count=len(failures),
+            failed_stores=[
+                {"store_id": failure.store_id, "store_name": failure.store_name, "error": failure.error}
+                for failure in failures
+            ],
+            stores_attempted=stores_attempted,
+        )
+    except Exception:
+        pass
+    finally:
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
 
 
 def _resolve_item_classifier(current_env: Mapping[str, str], env_file: str) -> ItemClassifierCallable:
