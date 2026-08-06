@@ -315,6 +315,8 @@ class DiscoveryRepository:
             placeholders = ", ".join(["%s"] * len(store_ids))
             sql += f"\n            where stores.id in ({placeholders})"
             params.extend(store_ids)
+        else:
+            sql += "\n            where stores.active = true"
         sql += "\n            order by stores.canonical_domain asc"
 
         with self.connection.cursor() as cursor:

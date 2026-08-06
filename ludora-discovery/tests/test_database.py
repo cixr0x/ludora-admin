@@ -535,6 +535,16 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("completed", "", completed_at, 3, 5, 2, 1, 1, 1, "run-123"))
         self.assertEqual(connection.commits, 3)
 
+    def test_lists_only_active_store_item_discovery_sources_by_default(self):
+        connection = FakeConnection(fetchall_rows=[[]])
+        repository = DiscoveryRepository(connection)
+
+        repository.list_store_item_discovery_sources()
+
+        sql, params = connection.cursor_instance.executions[0]
+        self.assertIn("where stores.active = true", sql.casefold())
+        self.assertEqual(params, [])
+
     def test_lists_store_item_discovery_sources_for_selected_stores(self):
         connection = FakeConnection(
             fetchall_rows=[
@@ -551,6 +561,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         sql, params = connection.cursor_instance.executions[0]
         self.assertIn("from stores", sql.casefold())
         self.assertIn("where stores.id in (%s, %s)", sql.casefold())
+        self.assertNotIn("stores.active = true", sql.casefold())
         self.assertIn("store_items.raw_payload::text ilike '%%shopify%%'", sql.casefold())
         self.assertEqual(params, [12, 34])
         self.assertEqual([store.store_id for store in stores], [12, 34])
