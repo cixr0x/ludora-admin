@@ -4,6 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { DiscoveryOperationError } from './discoveryOperations.js';
 import { createLocalDiscoveryOperationsClient, type SpawnDiscoveryProcess } from './localDiscoveryOperationsClient.js';
 
+const ITEM_DISCOVERY_ACCEPTANCE_FRAME =
+  '@@LUDORA_OPERATION_EVENT@@{"event":"item_discovery.accepted"}\n';
+
 class FakeChildProcess extends EventEmitter {
   stdout = new EventEmitter();
   stderr = new EventEmitter();
@@ -30,6 +33,12 @@ class FakeChildProcess extends EventEmitter {
 
   failToSpawn(error: Error): void {
     this.emit('error', error);
+  }
+
+  acceptItemDiscovery(...chunks: string[]): void {
+    for (const chunk of chunks.length > 0 ? chunks : [ITEM_DISCOVERY_ACCEPTANCE_FRAME]) {
+      this.stderr.emit('data', Buffer.from(chunk));
+    }
   }
 
   succeedWithRawStdout(stdout: string): void {
@@ -132,7 +141,9 @@ describe('local discovery operations client', () => {
   it('starts item discovery with the store URL, platform, and store name', async () => {
     const { client, spawned } = createClient();
 
-    const run = await client.startItemDiscoveryRun(12, 'https://example.mx/', 'amazon_brand', 'Hasbro Gaming');
+    const started = client.startItemDiscoveryRun(12, 'https://example.mx/', 'amazon_brand', 'Hasbro Gaming');
+    spawned[0].child.acceptItemDiscovery();
+    const run = await started;
 
     expect(run.status).toBe('running');
     expect(run.type).toBe('item_discovery');
@@ -156,7 +167,9 @@ describe('local discovery operations client', () => {
   it('starts item discovery by spawning the CLI with selected store ids', async () => {
     const { client, spawned } = createClient();
 
-    const run = await client.startItemDiscoveryRun({ store_ids: [12, 34] });
+    const started = client.startItemDiscoveryRun({ store_ids: [12, 34] });
+    spawned[0].child.acceptItemDiscovery();
+    const run = await started;
 
     expect(run.status).toBe('running');
     expect(run.type).toBe('item_discovery');
@@ -176,7 +189,9 @@ describe('local discovery operations client', () => {
   it('starts item discovery for all stores without CLI store ids', async () => {
     const { client, spawned } = createClient();
 
-    const run = await client.startItemDiscoveryRun({ all_stores: true });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery();
+    const run = await started;
 
     expect(run.status).toBe('running');
     expect(run.type).toBe('item_discovery');
@@ -187,6 +202,159 @@ describe('local discovery operations client', () => {
       'C:/PROJECTS/ludora/ludora-admin/ludora-admin-service/.env',
       'item-discovery-batch'
     ]);
+  });
+
+  it('waits for a complete framed item-discovery acceptance across diagnostic stderr chunks', async () => {
+    const { client, spawned } = createClient();
+    let startSettled = false;
+
+    const started = client.startItemDiscoveryRun({ all_stores: true }).finally(() => {
+      startSettled = true;
+    });
+    await flushPromises();
+    expect(startSettled).toBe(false);
+
+    spawned[0].child.acceptItemDiscovery(
+      'ordinary diagnostic output\n@@LUDORA_OPER',
+      'ATION_EVENT@@{"event":"item_discovery.',
+      'accepted"}',
+      '\n'
+    );
+    const run = await started;
+    expect(run).toMatchObject({ status: 'running', type: 'item_discovery' });
+
+    spawned[0].child.succeed({
+      result: {
+        item_candidates: 4,
+        store_id: null,
+        stores_scanned: 2,
+        website_url: ''
+      }
+    });
+
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({
+      result: {
+        item_candidates: 4,
+        store_id: null,
+        stores_scanned: 2,
+        website_url: ''
+      },
+      status: 'completed'
+    });
+    expectChildListenersRemoved(spawned[0].child);
+  });
+
+  it('rejects an item-discovery coordinator conflict before launch acceptance with HTTP 409 semantics', async () => {
+    const { client, spawned } = createClient();
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+
+    spawned[0].child.stderr.emit('data', Buffer.from('checking coordinator without newline: '));
+    spawned[0].child.stderr.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({
+          error: {
+            code: 'OPERATION_ALREADY_RUNNING',
+            message: 'Item discovery is already running'
+          }
+        })
+      )
+    );
+    spawned[0].child.emit('close', 1, null);
+
+    await expect(started).rejects.toMatchObject({
+      message: 'Item discovery is already running',
+      status: 409
+    });
+    expect(await client.getLatestStoreDiscoveryRun()).toMatchObject({
+      error: 'Item discovery is already running',
+      status: 'failed'
+    });
+    expectChildListenersRemoved(spawned[0].child);
+    await expect(client.startStoreDiscoveryRun()).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('rejects an item-discovery spawn error before acceptance and releases the active slot', async () => {
+    const { client, spawned } = createClient();
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+
+    spawned[0].child.failToSpawn(new Error('spawn ENOENT'));
+
+    await expect(started).rejects.toThrow('spawn ENOENT');
+    expect(await client.getLatestStoreDiscoveryRun()).toMatchObject({ error: 'spawn ENOENT', status: 'failed' });
+    expectChildListenersRemoved(spawned[0].child);
+    await expect(client.startStoreDiscoveryRun()).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('rejects an item-discovery child that exits successfully before acceptance', async () => {
+    const { client, spawned } = createClient();
+    const started = client.startItemDiscoveryRun(12, 'https://example.mx/');
+
+    spawned[0].child.succeed({
+      result: {
+        item_candidates: 4,
+        store_id: 12,
+        website_url: 'https://example.mx/'
+      }
+    });
+
+    await expect(started).rejects.toThrow('Item discovery operation exited before acceptance');
+    expect(await client.getLatestStoreDiscoveryRun()).toMatchObject({
+      error: 'Item discovery operation exited before acceptance',
+      status: 'failed'
+    });
+    expectChildListenersRemoved(spawned[0].child);
+  });
+
+  it('rejects malformed item-discovery acceptance and terminates the untrusted child', async () => {
+    const { client, spawned } = createClient();
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+
+    spawned[0].child.stderr.emit('data', Buffer.from('@@LUDORA_OPERATION_EVENT@@not-json\n'));
+
+    await expect(started).rejects.toThrow('Malformed item discovery acceptance event');
+    expect(spawned[0].child.killSignals).toEqual(['SIGTERM']);
+    spawned[0].child.emit('close', null, 'SIGTERM');
+    expect(await client.getLatestStoreDiscoveryRun()).toMatchObject({
+      error: 'Malformed item discovery acceptance event',
+      status: 'failed'
+    });
+    expectChildListenersRemoved(spawned[0].child);
+    await expect(client.startStoreDiscoveryRun()).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('rejects pending item-discovery acceptance when shutdown cancels the child', async () => {
+    const { client, spawned } = createClient();
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+
+    const shutdown = client.shutdown();
+    expect(spawned[0].child.killSignals).toEqual(['SIGTERM']);
+    spawned[0].child.emit('close', null, 'SIGTERM');
+
+    await expect(started).rejects.toMatchObject({ status: 503 });
+    await shutdown;
+    expect(await client.getLatestStoreDiscoveryRun()).toMatchObject({ status: 'cancelled' });
+    expectChildListenersRemoved(spawned[0].child);
+  });
+
+  it('rejects pending item-discovery acceptance as soon as explicit cancellation begins', async () => {
+    const { client, spawned } = createClient();
+    let startError: unknown;
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    void started.catch((error: unknown) => {
+      startError = error;
+    });
+    const pendingRun = await client.getLatestStoreDiscoveryRun();
+
+    const cancelling = await client.cancelStoreDiscoveryRun(pendingRun!.id);
+    await flushPromises();
+
+    expect(cancelling.status).toBe('cancelling');
+    expect(startError).toMatchObject({ status: 409 });
+    spawned[0].child.emit('close', null, 'SIGTERM');
+    await expect(started).rejects.toMatchObject({ status: 409 });
+    expect(await client.getLatestStoreDiscoveryRun()).toMatchObject({ status: 'cancelled' });
+    expectChildListenersRemoved(spawned[0].child);
   });
 
   it('cancels the active child process and marks the run cancelled', async () => {
@@ -449,3 +617,16 @@ describe('local discovery operations client', () => {
     expect(spawned).toHaveLength(1);
   });
 });
+
+function expectChildListenersRemoved(child: FakeChildProcess): void {
+  expect(child.listenerCount('close')).toBe(0);
+  expect(child.listenerCount('error')).toBe(0);
+  expect(child.stdout.listenerCount('data')).toBe(0);
+  expect(child.stderr.listenerCount('data')).toBe(0);
+}
+
+async function flushPromises(): Promise<void> {
+  for (let index = 0; index < 10; index += 1) {
+    await Promise.resolve();
+  }
+}

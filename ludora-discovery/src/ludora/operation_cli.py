@@ -8,6 +8,7 @@ import sys
 from ludora.cancellation import CancellationToken, OperationCancelled
 from ludora.operations import (
     EmbeddingRefreshMode,
+    OperationAlreadyRunning,
     run_item_discovery_batch,
     run_item_discovery,
     run_item_embeddings,
@@ -16,6 +17,8 @@ from ludora.operations import (
 )
 
 OPERATION_CLI_ERROR_OUTPUT_MAX_LENGTH = 4032
+OPERATION_ALREADY_RUNNING_ERROR_CODE = "OPERATION_ALREADY_RUNNING"
+OPERATION_EVENT_PREFIX = "@@LUDORA_OPERATION_EVENT@@"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -53,6 +56,12 @@ def main(argv: list[str] | None = None) -> int:
     except OperationCancelled:
         print(json.dumps({"cancelled": True}), file=sys.stderr)
         return 130
+    except OperationAlreadyRunning as exc:
+        print(
+            _bounded_error_output(str(exc), code=OPERATION_ALREADY_RUNNING_ERROR_CODE),
+            file=sys.stderr,
+        )
+        return 1
     except Exception as exc:
         print(_bounded_error_output(str(exc)), file=sys.stderr)
         return 1
@@ -72,6 +81,7 @@ def _run_command(args: argparse.Namespace, cancellation_token: CancellationToken
             platform=args.platform.strip().casefold(),
             env_file=args.env_file,
             cancellation_token=cancellation_token,
+            on_accepted=_emit_item_discovery_acceptance,
         )
     if args.command == "item-discovery-batch":
         store_ids = _selected_store_ids(args.store_id)
@@ -79,6 +89,7 @@ def _run_command(args: argparse.Namespace, cancellation_token: CancellationToken
             env_file=args.env_file,
             cancellation_token=cancellation_token,
             store_ids=store_ids,
+            on_accepted=_emit_item_discovery_acceptance,
         )
     if args.command == "item-update":
         store_ids = _selected_store_ids(args.store_id)
@@ -106,8 +117,8 @@ def _selected_store_ids(raw_store_ids: list[int]) -> list[int] | None:
     return raw_store_ids
 
 
-def _bounded_error_output(message: str) -> str:
-    serialized = json.dumps({"error": {"message": message}})
+def _bounded_error_output(message: str, *, code: str | None = None) -> str:
+    serialized = _serialize_error_output(message, code=code)
     if len(serialized) <= OPERATION_CLI_ERROR_OUTPUT_MAX_LENGTH:
         return serialized
 
@@ -116,12 +127,27 @@ def _bounded_error_output(message: str) -> str:
     upper = len(message)
     while lower < upper:
         midpoint = (lower + upper + 1) // 2
-        candidate = json.dumps({"error": {"message": f"{message[:midpoint]}{truncation_suffix}"}})
+        candidate = _serialize_error_output(
+            f"{message[:midpoint]}{truncation_suffix}",
+            code=code,
+        )
         if len(candidate) <= OPERATION_CLI_ERROR_OUTPUT_MAX_LENGTH:
             lower = midpoint
         else:
             upper = midpoint - 1
-    return json.dumps({"error": {"message": f"{message[:lower]}{truncation_suffix}"}})
+    return _serialize_error_output(f"{message[:lower]}{truncation_suffix}", code=code)
+
+
+def _serialize_error_output(message: str, *, code: str | None = None) -> str:
+    error = {"message": message}
+    if code is not None:
+        error["code"] = code
+    return json.dumps({"error": error})
+
+
+def _emit_item_discovery_acceptance() -> None:
+    event = json.dumps({"event": "item_discovery.accepted"})
+    print(f"{OPERATION_EVENT_PREFIX}{event}", file=sys.stderr, flush=True)
 
 
 def _install_signal_handlers(cancellation_token: CancellationToken) -> None:

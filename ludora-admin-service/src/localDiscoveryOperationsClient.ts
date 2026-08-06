@@ -11,6 +11,10 @@ import {
   type StoreDiscoveryRunStatus
 } from './discoveryOperations.js';
 
+const ITEM_DISCOVERY_ACCEPTANCE_EVENT = 'item_discovery.accepted';
+const OPERATION_ALREADY_RUNNING_ERROR_CODE = 'OPERATION_ALREADY_RUNNING';
+const OPERATION_EVENT_PREFIX = '@@LUDORA_OPERATION_EVENT@@';
+
 export type SpawnDiscoveryProcess = (
   command: string,
   args: string[],
@@ -29,10 +33,15 @@ type LocalDiscoveryOptions = {
 };
 
 type ManagedRun = StoreDiscoveryRun & {
+  acceptanceRequired?: boolean;
+  accepted?: boolean;
   cancelEscalationTimer?: ReturnType<typeof setTimeout>;
   cancelForceFailTimer?: ReturnType<typeof setTimeout>;
   child?: ChildProcessWithoutNullStreams;
+  rejectAcceptance?: (error: DiscoveryOperationError) => void;
+  resolveAcceptance?: () => void;
   settleRun?: (status: StoreDiscoveryRunStatus, result: StoreDiscoveryRun['result'], error: string | null) => void;
+  terminalFailure?: string;
   waiters?: Array<() => void>;
 };
 
@@ -51,7 +60,11 @@ export function createLocalDiscoveryOperationsClient({
   let activeRunId: string | null = null;
   let isShuttingDown = false;
 
-  function startRun(type: StoreDiscoveryRun['type'], commandArgs: string[]): StoreDiscoveryRun {
+  function startRun(
+    type: StoreDiscoveryRun['type'],
+    commandArgs: string[],
+    { waitForAcceptance = false }: { waitForAcceptance?: boolean } = {}
+  ): StoreDiscoveryRun | Promise<StoreDiscoveryRun> {
     if (isShuttingDown) {
       throw new DiscoveryOperationError('Discovery operations client is shutting down', 503);
     }
@@ -66,8 +79,32 @@ export function createLocalDiscoveryOperationsClient({
       result: null,
       started_at: formatDate(now()),
       status: 'running',
-      type
+      type,
+      ...(waitForAcceptance ? { acceptanceRequired: true, accepted: false } : {})
     };
+
+    let acceptancePromise: Promise<StoreDiscoveryRun> | undefined;
+    if (waitForAcceptance) {
+      acceptancePromise = new Promise<StoreDiscoveryRun>((resolve, reject) => {
+        run.resolveAcceptance = () => {
+          if (!run.rejectAcceptance) {
+            return;
+          }
+          run.accepted = true;
+          run.rejectAcceptance = undefined;
+          run.resolveAcceptance = undefined;
+          resolve(publicRun(run));
+        };
+        run.rejectAcceptance = (error) => {
+          if (!run.resolveAcceptance) {
+            return;
+          }
+          run.rejectAcceptance = undefined;
+          run.resolveAcceptance = undefined;
+          reject(error);
+        };
+      });
+    }
 
     const args = ['-m', 'ludora.operation_cli', '--env-file', envFile, ...commandArgs];
     const packagePath = /^[A-Za-z]:[\\/]/.test(packageDir) ? path.win32 : path;
@@ -88,13 +125,12 @@ export function createLocalDiscoveryOperationsClient({
 
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.on('data', (chunk) => {
-      stderr += String(chunk);
-    });
+    let protocolBuffer = '';
     let settled = false;
+    let removeChildListeners = (): void => undefined;
+    const rejectPendingAcceptance = (error: DiscoveryOperationError): void => {
+      run.rejectAcceptance?.(error);
+    };
     const settleRun = (
       status: StoreDiscoveryRunStatus,
       result: StoreDiscoveryRun['result'],
@@ -105,6 +141,15 @@ export function createLocalDiscoveryOperationsClient({
       }
       settled = true;
       clearCancellationTimers(run);
+      removeChildListeners();
+      if (run.acceptanceRequired && !run.accepted) {
+        rejectPendingAcceptance(
+          new DiscoveryOperationError(
+            error ?? 'Item discovery operation ended before acceptance',
+            500
+          )
+        );
+      }
       finishRun(run, status, result, error, now());
       if (activeRunId === run.id) {
         activeRunId = null;
@@ -116,10 +161,88 @@ export function createLocalDiscoveryOperationsClient({
       }
     };
     run.settleRun = settleRun;
-    child.on('error', (error) => {
+
+    const failAcceptanceProtocol = (message: string): void => {
+      if (!run.acceptanceRequired || run.accepted || run.terminalFailure) {
+        return;
+      }
+      run.terminalFailure = message;
+      rejectPendingAcceptance(new DiscoveryOperationError(message, 500));
+      requestCancellation(run);
+    };
+    const onStdoutData = (chunk: unknown): void => {
+      stdout += String(chunk);
+    };
+    const onStderrData = (chunk: unknown): void => {
+      const text = String(chunk);
+      stderr += text;
+      if (!run.acceptanceRequired || run.accepted || run.terminalFailure) {
+        return;
+      }
+
+      protocolBuffer += text;
+      let newlineIndex = protocolBuffer.indexOf('\n');
+      while (newlineIndex >= 0) {
+        const line = protocolBuffer.slice(0, newlineIndex).replace(/\r$/, '');
+        protocolBuffer = protocolBuffer.slice(newlineIndex + 1);
+        if (line.startsWith(OPERATION_EVENT_PREFIX)) {
+          let event: unknown;
+          try {
+            event = JSON.parse(line.slice(OPERATION_EVENT_PREFIX.length));
+          } catch {
+            failAcceptanceProtocol('Malformed item discovery acceptance event');
+            return;
+          }
+          if (!isRecord(event) || event.event !== ITEM_DISCOVERY_ACCEPTANCE_EVENT) {
+            failAcceptanceProtocol('Malformed item discovery acceptance event');
+            return;
+          }
+          run.resolveAcceptance?.();
+          return;
+        }
+        newlineIndex = protocolBuffer.indexOf('\n');
+      }
+    };
+    const onChildError = (error: Error): void => {
+      rejectPendingAcceptance(new DiscoveryOperationError(error.message, 500));
       settleRun('failed', null, error.message);
-    });
-    child.on('close', (code, signal) => {
+    };
+    const onChildClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (run.terminalFailure) {
+        settleRun('failed', null, run.terminalFailure);
+        return;
+      }
+      if (run.acceptanceRequired && !run.accepted) {
+        if (run.status === 'cancelling') {
+          rejectPendingAcceptance(
+            new DiscoveryOperationError(
+              isShuttingDown
+                ? 'Discovery operations client shut down before item discovery was accepted'
+                : 'Item discovery operation was cancelled before acceptance',
+              isShuttingDown ? 503 : 409
+            )
+          );
+          settleRun('cancelled', null, null);
+          return;
+        }
+        if (signal) {
+          const message = `Discovery operation exited with signal ${signal}`;
+          rejectPendingAcceptance(new DiscoveryOperationError(message, 500));
+          settleRun('failed', null, message);
+          return;
+        }
+        if (code !== 0) {
+          const exitError = operationExitError(stderr, stdout, code);
+          const status = exitError.code === OPERATION_ALREADY_RUNNING_ERROR_CODE ? 409 : 500;
+          rejectPendingAcceptance(new DiscoveryOperationError(exitError.message, status));
+          settleRun('failed', null, exitError.message);
+          return;
+        }
+        const message = 'Item discovery operation exited before acceptance';
+        rejectPendingAcceptance(new DiscoveryOperationError(message, 500));
+        settleRun('failed', null, message);
+        return;
+      }
       if (run.status === 'cancelling') {
         settleRun('cancelled', null, null);
         return;
@@ -138,9 +261,19 @@ export function createLocalDiscoveryOperationsClient({
         return;
       }
       settleRun('failed', null, errorMessage(stderr, stdout, code));
-    });
+    };
+    removeChildListeners = () => {
+      child.stdout.off('data', onStdoutData);
+      child.stderr.off('data', onStderrData);
+      child.off('error', onChildError);
+      child.off('close', onChildClose);
+    };
+    child.stdout.on('data', onStdoutData);
+    child.stderr.on('data', onStderrData);
+    child.on('error', onChildError);
+    child.on('close', onChildClose);
 
-    return publicRun(run);
+    return acceptancePromise ?? publicRun(run);
   }
 
   return {
@@ -152,7 +285,10 @@ export function createLocalDiscoveryOperationsClient({
       if (activeRunId !== runId || !['running', 'cancelling'].includes(run.status)) {
         throw new DiscoveryOperationError('Run is not running', 409);
       }
-      requestCancellation(run);
+      requestCancellation(
+        run,
+        new DiscoveryOperationError('Item discovery operation was cancelled before acceptance', 409)
+      );
       return publicRun(run);
     },
     async getLatestStoreDiscoveryRun(): Promise<StoreDiscoveryRun | null> {
@@ -167,7 +303,11 @@ export function createLocalDiscoveryOperationsClient({
       platform = '',
       storeName = ''
     ): Promise<StoreDiscoveryRun> {
-      return startRun('item_discovery', itemDiscoveryCommandArgs(storeIdOrScope, websiteUrl, platform, storeName));
+      return startRun(
+        'item_discovery',
+        itemDiscoveryCommandArgs(storeIdOrScope, websiteUrl, platform, storeName),
+        { waitForAcceptance: true }
+      );
     },
     async startItemEmbeddingRun(refreshMode: 'full' | 'missing'): Promise<StoreDiscoveryRun> {
       return startRun('item_embeddings', ['item-embeddings', '--refresh-mode', refreshMode]);
@@ -184,13 +324,22 @@ export function createLocalDiscoveryOperationsClient({
       if (!run) {
         return;
       }
-      requestCancellation(run);
+      requestCancellation(
+        run,
+        new DiscoveryOperationError(
+          'Discovery operations client shut down before item discovery was accepted',
+          503
+        )
+      );
       await waitForRunToSettle(run, cancelEscalationMs + cancelForceFailMs + 100);
     }
   };
 
-  function requestCancellation(run: ManagedRun): void {
+  function requestCancellation(run: ManagedRun, pendingAcceptanceError?: DiscoveryOperationError): void {
     if (run.status === 'running') {
+      if (pendingAcceptanceError && run.acceptanceRequired && !run.accepted) {
+        run.rejectAcceptance?.(pendingAcceptanceError);
+      }
       run.status = 'cancelling';
       run.child?.kill('SIGTERM');
       scheduleCancellationEscalation(run);
@@ -208,7 +357,11 @@ export function createLocalDiscoveryOperationsClient({
       run.cancelForceFailTimer = setTimeout(() => {
         run.cancelForceFailTimer = undefined;
         if (activeRunId === run.id && run.status === 'cancelling') {
-          run.settleRun?.('failed', null, 'Discovery operation did not exit after cancellation');
+          run.settleRun?.(
+            'failed',
+            null,
+            run.terminalFailure ?? 'Discovery operation did not exit after cancellation'
+          );
         }
       }, cancelForceFailMs);
       run.cancelForceFailTimer.unref?.();
@@ -225,7 +378,11 @@ export function createLocalDiscoveryOperationsClient({
         const waiters = run.waiters ?? [];
         run.waiters = waiters.filter((waiter) => waiter !== resolve);
         if (activeRunId === run.id && run.status === 'cancelling') {
-          run.settleRun?.('failed', null, 'Discovery operation did not exit during shutdown');
+          run.settleRun?.(
+            'failed',
+            null,
+            run.terminalFailure ?? 'Discovery operation did not exit during shutdown'
+          );
         }
         resolve();
       }, timeoutMs);
@@ -250,12 +407,17 @@ function finishRun(
   error: string | null,
   completedAt: Date
 ): void {
+  run.acceptanceRequired = undefined;
+  run.accepted = undefined;
   run.child = undefined;
   run.completed_at = formatDate(completedAt);
   run.error = error;
   run.result = result;
+  run.rejectAcceptance = undefined;
+  run.resolveAcceptance = undefined;
   run.status = status;
   run.settleRun = undefined;
+  run.terminalFailure = undefined;
 }
 
 function publicRun(run: ManagedRun): StoreDiscoveryRun;
@@ -265,10 +427,15 @@ function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null {
     return null;
   }
   const {
+    acceptanceRequired: _acceptanceRequired,
+    accepted: _accepted,
     cancelEscalationTimer: _cancelEscalationTimer,
     cancelForceFailTimer: _cancelForceFailTimer,
     child: _child,
+    rejectAcceptance: _rejectAcceptance,
+    resolveAcceptance: _resolveAcceptance,
     settleRun: _settleRun,
+    terminalFailure: _terminalFailure,
     waiters: _waiters,
     ...payload
   } = run;
@@ -401,19 +568,63 @@ function isNumber(value: unknown): value is number {
 }
 
 function errorMessage(stderr: string, stdout: string, code: number | null): string {
-  const rawMessage = stderr.trim() || stdout.trim();
-  if (rawMessage) {
+  return operationExitError(stderr, stdout, code).message;
+}
+
+function operationExitError(
+  stderr: string,
+  stdout: string,
+  code: number | null
+): { code?: string; message: string } {
+  for (const output of [stderr, stdout]) {
+    const lines = output.split(/\r?\n/);
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index].trim();
+      if (!line || line.startsWith(OPERATION_EVENT_PREFIX)) {
+        continue;
+      }
+      const structuredError = parseStructuredErrorLine(line);
+      if (structuredError) {
+        return structuredError;
+      }
+    }
+  }
+
+  const rawMessage = diagnosticOutput(stderr) || diagnosticOutput(stdout);
+  return {
+    message: rawMessage || `Discovery operation exited with code ${code ?? 'unknown'}`
+  };
+}
+
+function parseStructuredErrorLine(line: string): { code?: string; message: string } | null {
+  const embeddedErrorIndex = line.lastIndexOf('{"error"');
+  const candidates = embeddedErrorIndex > 0 ? [line, line.slice(embeddedErrorIndex)] : [line];
+  for (const candidate of candidates) {
     try {
-      const parsed = JSON.parse(rawMessage) as { error?: { message?: string } };
-      if (parsed.error?.message) {
-        return parsed.error.message;
+      const parsed = JSON.parse(candidate) as unknown;
+      if (
+        isRecord(parsed) &&
+        isRecord(parsed.error) &&
+        typeof parsed.error.message === 'string'
+      ) {
+        return {
+          ...(typeof parsed.error.code === 'string' ? { code: parsed.error.code } : {}),
+          message: parsed.error.message
+        };
       }
     } catch {
-      return rawMessage;
+      // Ordinary diagnostics are valid stderr and may directly precede the structured error.
     }
-    return rawMessage;
   }
-  return `Discovery operation exited with code ${code ?? 'unknown'}`;
+  return null;
+}
+
+function diagnosticOutput(output: string): string {
+  return output
+    .split(/\r?\n/)
+    .filter((line) => !line.startsWith(OPERATION_EVENT_PREFIX))
+    .join('\n')
+    .trim();
 }
 
 function formatDate(value: Date): string {

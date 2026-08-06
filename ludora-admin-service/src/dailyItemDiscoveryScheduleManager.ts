@@ -21,6 +21,7 @@ type LocalDate = {
 };
 
 export type DailyItemDiscoveryScheduleManager = {
+  disarm(): void;
   start(): void;
   shutdown(): Promise<void>;
 };
@@ -43,6 +44,15 @@ export function createDailyItemDiscoveryScheduleManager(options: {
   let timer: ReturnType<typeof setTimeout> | null = null;
   const activeLaunches = new Set<Promise<void>>();
   let stopped = false;
+  let shutdownPromise: Promise<void> | null = null;
+
+  const disarm = (): void => {
+    stopped = true;
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
 
   const scheduleFrom = (from: Date): void => {
     if (stopped) {
@@ -81,20 +91,22 @@ export function createDailyItemDiscoveryScheduleManager(options: {
   };
 
   return {
+    disarm,
     start(): void {
       if (stopped || timer) {
         return;
       }
       scheduleFrom(now());
     },
-    async shutdown(): Promise<void> {
-      stopped = true;
-      if (timer) {
-        clearTimeout(timer);
-        timer = null;
+    shutdown(): Promise<void> {
+      disarm();
+      if (!shutdownPromise) {
+        shutdownPromise = (async () => {
+          await Promise.all(activeLaunches);
+          console.info('[item-discovery-schedule] stopped');
+        })();
       }
-      await Promise.all(activeLaunches);
-      console.info('[item-discovery-schedule] stopped');
+      return shutdownPromise;
     }
   };
 }

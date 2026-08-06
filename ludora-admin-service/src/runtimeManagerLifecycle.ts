@@ -29,6 +29,13 @@ export function createRuntimeManagerLifecycle(options: {
     options.storeItemUpdateScheduleManager,
     dailyItemDiscoveryScheduleManager
   ].filter((manager): manager is RuntimeManager => manager !== undefined);
+  let shutdownPromise: Promise<void> | null = null;
+
+  const drainManagers = async (): Promise<void> => {
+    for (const manager of managers) {
+      await manager.shutdown();
+    }
+  };
 
   return {
     start(): void {
@@ -36,10 +43,12 @@ export function createRuntimeManagerLifecycle(options: {
         manager.start();
       }
     },
-    async shutdown(): Promise<void> {
-      for (const manager of managers) {
-        await manager.shutdown();
+    shutdown(): Promise<void> {
+      if (!shutdownPromise) {
+        dailyItemDiscoveryScheduleManager?.disarm();
+        shutdownPromise = drainManagers();
       }
+      return shutdownPromise;
     }
   };
 }

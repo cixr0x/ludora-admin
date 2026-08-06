@@ -20,6 +20,21 @@ from ludora.operations import (
 from ludora.operation_cli import main
 
 
+class FlushRecordingStream(StringIO):
+    def __init__(self):
+        super().__init__()
+        self.flush_count = 0
+
+    def flush(self):
+        self.flush_count += 1
+        super().flush()
+
+
+def parse_protocol_events(output: str):
+    prefix = "@@LUDORA_OPERATION_EVENT@@"
+    return [json.loads(line.removeprefix(prefix)) for line in output.splitlines() if line.startswith(prefix)]
+
+
 class OperationCliTests(unittest.TestCase):
     def test_runs_store_discovery_and_prints_result_json(self):
         stdout = StringIO()
@@ -66,6 +81,37 @@ class OperationCliTests(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["result"]["item_candidates"], 5)
 
+    def test_item_discovery_emits_and_flushes_acceptance_before_runner_work_completes(self):
+        """Dropping, buffering, or delaying the acceptance event must fail this test."""
+        stdout = StringIO()
+        stderr = FlushRecordingStream()
+
+        def accepted_runner(**kwargs):
+            kwargs["on_accepted"]()
+            self.assertGreater(stderr.flush_count, 0)
+            self.assertTrue(stderr.getvalue().endswith("\n"))
+            return ItemDiscoveryRunResult(store_id=12, website_url="https://store.test", item_candidates=5)
+
+        with patch("sys.stdout", stdout), patch("sys.stderr", stderr), patch(
+            "ludora.operation_cli.run_item_discovery", side_effect=accepted_runner
+        ):
+            exit_code = main(
+                [
+                    "item-discovery",
+                    "--store-id",
+                    "12",
+                    "--website-url",
+                    "https://store.test",
+                ]
+            )
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["result"]["item_candidates"], 5)
+        self.assertEqual(
+            parse_protocol_events(stderr.getvalue()),
+            [{"event": "item_discovery.accepted"}],
+        )
+
     def test_runs_item_discovery_batch_with_repeatable_store_id(self):
         stdout = StringIO()
         with patch("sys.stdout", stdout), patch(
@@ -90,6 +136,35 @@ class OperationCliTests(unittest.TestCase):
         self.assertEqual(runner.call_args.kwargs["store_ids"], [12, 34])
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["result"]["stores_scanned"], 2)
+
+    def test_item_discovery_batch_emits_and_flushes_acceptance_before_runner_work_completes(self):
+        """Bypassing the batch acceptance handshake must fail this test."""
+        stdout = StringIO()
+        stderr = FlushRecordingStream()
+
+        def accepted_runner(**kwargs):
+            kwargs["on_accepted"]()
+            self.assertGreater(stderr.flush_count, 0)
+            self.assertTrue(stderr.getvalue().endswith("\n"))
+            return ItemDiscoveryRunResult(
+                store_id=None,
+                website_url="",
+                item_candidates=5,
+                new_items=5,
+                stores_scanned=2,
+            )
+
+        with patch("sys.stdout", stdout), patch("sys.stderr", stderr), patch(
+            "ludora.operation_cli.run_item_discovery_batch", side_effect=accepted_runner
+        ):
+            exit_code = main(["item-discovery-batch"])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["result"]["stores_scanned"], 2)
+        self.assertEqual(
+            parse_protocol_events(stderr.getvalue()),
+            [{"event": "item_discovery.accepted"}],
+        )
 
     def test_item_discovery_batch_aggregate_error_prints_one_bounded_json_error(self):
         """Returning a batch success after aggregate failures must fail this test."""
@@ -168,6 +243,27 @@ class OperationCliTests(unittest.TestCase):
             json.loads(error_lines[0])["error"]["message"],
             "Item discovery is already running",
         )
+        self.assertEqual(json.loads(error_lines[0])["error"].get("code"), "OPERATION_ALREADY_RUNNING")
+
+    def test_item_discovery_batch_coordinator_conflict_prints_bounded_structured_error(self):
+        """Removing the rejection code or serialized bound must fail this test."""
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with patch("sys.stdout", stdout), patch("sys.stderr", stderr), patch(
+            "ludora.operation_cli.run_item_discovery_batch",
+            side_effect=OperationAlreadyRunning("x" * 10_000),
+        ):
+            exit_code = main(["item-discovery-batch"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        error_lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(error_lines), 1)
+        self.assertLessEqual(len(error_lines[0]), 4032)
+        payload = json.loads(error_lines[0])
+        self.assertEqual(payload["error"].get("code"), "OPERATION_ALREADY_RUNNING")
+        self.assertTrue(payload["error"]["message"].endswith("..."))
 
     def test_runs_item_update(self):
         stdout = StringIO()

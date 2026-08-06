@@ -221,6 +221,7 @@ def run_item_discovery(
     run_id: str | None = None,
     started_at: datetime | None = None,
     product_request_throttle: ProductDiscoveryRequestThrottle | None = None,
+    on_accepted: Callable[[], None] | None = None,
 ) -> ItemDiscoveryRunResult:
     current_env = env if env is not None else os.environ
     database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
@@ -229,9 +230,12 @@ def run_item_discovery(
 
     coordinator_connection = connect_database(database_url)
     try:
+        coordinator_connection.autocommit = True
         coordinator_repository = DiscoveryRepository(coordinator_connection)
         if not coordinator_repository.try_acquire_item_discovery_coordinator_lock():
             raise OperationAlreadyRunning("Item discovery is already running")
+        if on_accepted is not None:
+            on_accepted()
         return _run_item_discovery_for_store(
             database_url=database_url,
             current_env=current_env,
@@ -529,6 +533,7 @@ def run_item_discovery_batch(
     run_id: str | None = None,
     store_ids: list[int] | None = None,
     product_request_throttle: ProductDiscoveryRequestThrottle | None = None,
+    on_accepted: Callable[[], None] | None = None,
 ) -> ItemDiscoveryRunResult:
     current_env = env if env is not None else os.environ
     database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
@@ -537,9 +542,12 @@ def run_item_discovery_batch(
 
     coordinator_connection = connect_database(database_url)
     try:
+        coordinator_connection.autocommit = True
         coordinator_repository = DiscoveryRepository(coordinator_connection)
         if not coordinator_repository.try_acquire_item_discovery_coordinator_lock():
             raise OperationAlreadyRunning("Item discovery is already running")
+        if on_accepted is not None:
+            on_accepted()
 
         listing_connection = connect_database(database_url)
         try:

@@ -111,11 +111,15 @@ git commit -m "Limit all-store discovery to active stores"
 - Modify: `ludora-discovery/tests/test_database.py`
 - Modify: `ludora-discovery/tests/test_operations.py:212-672`
 - Modify: `ludora-discovery/tests/test_operation_cli.py`
+- Modify: `ludora-admin-service/src/localDiscoveryOperationsClient.ts`
+- Modify: `ludora-admin-service/src/localDiscoveryOperationsClient.test.ts`
+- Modify: `ludora-admin-service/src/dailyItemDiscoveryScheduleManager.test.ts`
 
 **Interfaces:**
 - Consumes: `connect_database(database_url)`, `DiscoveryRepository`, `OperationAlreadyRunning`, public `run_item_discovery(...)`, and public `run_item_discovery_batch(...)`.
-- Produces: `DiscoveryRepository.try_acquire_item_discovery_coordinator_lock() -> bool`; both public product-discovery operations fail fast with `OperationAlreadyRunning("Item discovery is already running")` when the lock is unavailable.
-- Internal contract: `_run_item_discovery_for_store(...)` contains the existing per-store work without coordinator acquisition; both public entry points own a dedicated coordinator connection and invoke this helper only after acquiring the lock.
+- Produces: `DiscoveryRepository.try_acquire_item_discovery_coordinator_lock() -> bool`; both public product-discovery operations fail fast with `OperationAlreadyRunning("Item discovery is already running")` when the lock is unavailable. Each public operation accepts an optional `on_accepted: Callable[[], None]` callback for the local child-process launch handshake.
+- Internal contract: `_run_item_discovery_for_store(...)` contains the existing per-store work without coordinator acquisition; both public entry points own a dedicated autocommit coordinator connection, acquire the lock, invoke `on_accepted` when provided, and only then list or process stores.
+- Local-process contract: item-discovery single and batch CLI children emit a flushed `@@LUDORA_OPERATION_EVENT@@{"event":"item_discovery.accepted"}` stderr frame after coordinator acquisition. Final stdout remains the existing result JSON. A pre-acceptance conflict exits with the bounded structured stderr code `OPERATION_ALREADY_RUNNING`, which the local Node client maps to `DiscoveryOperationError(..., 409)` before resolving `startItemDiscoveryRun()`.
 
 - [ ] **Step 1: Write the failing repository lock test**
 
@@ -176,7 +180,7 @@ with self.assertRaisesRegex(OperationAlreadyRunning, "Item discovery is already 
 
 when the dedicated coordinator repository returns `False`, with no operation connection opened and no persisted job started. Add the equivalent rejection case for `run_item_discovery_batch` and prove it does not list or crawl stores.
 
-For successful single-store and batch operations, prove the call order uses a dedicated coordinator connection plus the existing work connections. For the batch, assert the internal helper is called once per store while the coordinator is acquired only once:
+For successful single-store and batch operations, prove the call order enables autocommit on the dedicated coordinator connection before lock acquisition, then emits acceptance before existing work/listing. For the batch, assert the internal helper is called once per store while the coordinator is acquired only once:
 
 ```python
 self.assertEqual(run_item_discovery_for_store.call_count, 2)
@@ -221,14 +225,17 @@ The helper must preserve the existing trace events, persisted job lifecycle, req
 
 - [ ] **Step 7: Coordinate top-level single-store discovery on a dedicated connection**
 
-Keep the public `run_item_discovery(...)` signature unchanged. Resolve `database_url`, open a coordinator connection, acquire the advisory lock, and invoke the private helper only after successful acquisition:
+Keep existing `run_item_discovery(...)` callers compatible while adding the optional `on_accepted` callback. Resolve `database_url`, open a coordinator connection, enable autocommit, acquire the advisory lock, emit acceptance when requested, and invoke the private helper only after successful acquisition:
 
 ```python
 coordinator_connection = connect_database(database_url)
 try:
+    coordinator_connection.autocommit = True
     coordinator_repository = DiscoveryRepository(coordinator_connection)
     if not coordinator_repository.try_acquire_item_discovery_coordinator_lock():
         raise OperationAlreadyRunning("Item discovery is already running")
+    if on_accepted is not None:
+        on_accepted()
     return _run_item_discovery_for_store(
         database_url=database_url,
         current_env=current_env,
@@ -247,9 +254,12 @@ At the start of `run_item_discovery_batch`, after resolving `database_url`, acqu
 ```python
 coordinator_connection = connect_database(database_url)
 try:
+    coordinator_connection.autocommit = True
     coordinator_repository = DiscoveryRepository(coordinator_connection)
     if not coordinator_repository.try_acquire_item_discovery_coordinator_lock():
         raise OperationAlreadyRunning("Item discovery is already running")
+    if on_accepted is not None:
+        on_accepted()
 
     # Keep the existing short-lived listing connection and batch body here.
 finally:
@@ -267,7 +277,9 @@ _run_item_discovery_for_store(
 )
 ```
 
-The coordinator `try/finally` must enclose store selection, selected-ID validation, all per-store calls, aggregate failure tracing, and the final return/raise. Do not call the public coordinated wrapper from the batch. Do not alter the existing shared throttle, continuation, aggregation, trace, or cancellation behavior.
+The coordinator `try/finally` must enclose store selection, selected-ID validation, all per-store calls, aggregate failure tracing, and the final return/raise. Autocommit is required so the session advisory lock is not left idle in a transaction while crawling. Do not call the public coordinated wrapper from the batch. Do not alter the existing shared throttle, continuation, aggregation, trace, or cancellation behavior.
+
+The local Node client must wait only for item-discovery single/batch acceptance; other operation launch semantics stay unchanged. Its stderr frame decoder buffers across chunks, ignores ordinary diagnostics, rejects malformed frames and pre-acceptance terminal paths, maps `OPERATION_ALREADY_RUNNING` to status `409`, and removes child listeners on every terminal path. After acceptance, the child continues to own the existing final stdout result JSON and run-completion lifecycle. A scheduler integration test with this real local client and a fake child must prove a coordinator conflict logs `automatic run skipped` without first logging `automatic run started`.
 
 - [ ] **Step 9: Run focused discovery tests and verify GREEN**
 
@@ -296,7 +308,7 @@ git commit -m "Coordinate product discovery runs"
 
 **Interfaces:**
 - Consumes: `Pick<DiscoveryOperationsClient, 'startItemDiscoveryRun'>`, `DiscoveryOperationError`, Node timers, and an injectable `now: () => Date`.
-- Produces: `nextMexicoCityDiscoveryAt(now: Date) -> Date`; `createDailyItemDiscoveryScheduleManager(options) -> DailyItemDiscoveryScheduleManager` with `start(): void` and `shutdown(): Promise<void>`.
+- Produces: `nextMexicoCityDiscoveryAt(now: Date) -> Date`; `createDailyItemDiscoveryScheduleManager(options) -> DailyItemDiscoveryScheduleManager` with synchronous `disarm(): void`, `start(): void`, and idempotent `shutdown(): Promise<void>`.
 
 - [ ] **Step 1: Write failing timezone-boundary tests**
 
@@ -357,7 +369,7 @@ Add a conflict case using:
 new DiscoveryOperationError('Discovery operation is already running', 409)
 ```
 
-Assert one warning, no same-day retry, and the next attempt on the following day. Add a non-409 rejection case that logs one error and also waits until the next day. Add shutdown coverage that clears the timer and waits for an in-flight launch promise.
+Assert one warning, no same-day retry, and the next attempt on the following day. Add a non-409 rejection case that logs one error and also waits until the next day. Add shutdown coverage that disarms the timer synchronously, waits for every in-flight launch promise, and logs stopped only once across repeated calls.
 
 - [ ] **Step 5: Implement the one-shot manager**
 
@@ -365,6 +377,7 @@ Use this public contract:
 
 ```typescript
 export type DailyItemDiscoveryScheduleManager = {
+  disarm(): void;
   start(): void;
   shutdown(): Promise<void>;
 };
@@ -394,7 +407,7 @@ Use stable log prefixes:
 [item-discovery-schedule] stopped
 ```
 
-`shutdown()` marks the manager stopped, clears the pending timer, waits for the launch promise if present, and logs the stop event. It does not wait for the spawned discovery child; the operations client owns that process lifecycle.
+`disarm()` synchronously marks the manager stopped and clears the pending timer without logging. `shutdown()` calls `disarm()`, reuses one shutdown promise across repeated calls, waits for every in-flight launch request, and logs the stop event exactly once. It does not wait for an accepted spawned discovery child; the operations client owns that process lifecycle.
 
 - [ ] **Step 6: Run scheduler tests and verify GREEN**
 
@@ -508,6 +521,7 @@ expect(events).toEqual([
   'first.start',
   'second.start',
   'daily.start',
+  'daily.disarm',
   'first.shutdown',
   'second.shutdown',
   'daily.shutdown'
@@ -537,7 +551,7 @@ export function createRuntimeManagerLifecycle(options: {
 }): RuntimeManagerLifecycle;
 ```
 
-Use the real daily-manager factory by default. Construct the daily manager only when enabled and an operations client exists. Store the defined managers in this exact order: continuous update, update schedule, daily discovery. `start()` calls each manager once in order; `shutdown()` awaits each manager sequentially in the same order to preserve current shutdown behavior.
+Use the real daily-manager factory by default. Construct the daily manager only when enabled and an operations client exists. Store the defined managers in this exact order: continuous update, update schedule, daily discovery. `start()` calls each manager once in order. On the first `shutdown()` call, synchronously invoke `dailyItemDiscoveryScheduleManager.disarm()` before awaiting any manager, then drain continuous update, update schedule, and daily discovery sequentially in the established order. Repeated shutdown calls reuse the same drain promise. This two-phase disarm-then-drain behavior prevents the 05:00 timer from firing while an older manager is still shutting down without changing their drain order.
 
 - [ ] **Step 6: Wire the scheduler into `server.ts`**
 

@@ -497,6 +497,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         coordinator_connection = Mock()
         coordinator_repository = Mock()
         coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = False
+        accepted = Mock()
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
             "ludora.operations.resolve_browser_fetch_enabled", return_value=False
@@ -512,13 +513,71 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             "ludora.operations.collect_store_inventory", return_value=[]
         ) as collect_store_inventory:
             with self.assertRaisesRegex(OperationAlreadyRunning, "Item discovery is already running"):
-                run_item_discovery(store_id=12, website_url="https://example.mx/")
+                try:
+                    run_item_discovery(
+                        store_id=12,
+                        website_url="https://example.mx/",
+                        on_accepted=accepted,
+                    )
+                except TypeError as exc:
+                    self.fail(f"item discovery lacks the acceptance callback contract: {exc}")
 
         connect_database.assert_called_once_with("postgresql://ludora")
         coordinator_repository.try_acquire_item_discovery_coordinator_lock.assert_called_once_with()
         coordinator_repository.start_store_item_discovery_log.assert_not_called()
         collect_store_inventory.assert_not_called()
+        accepted.assert_not_called()
         coordinator_connection.close.assert_called_once_with()
+
+    def test_run_item_discovery_enables_coordinator_autocommit_before_lock_and_store_work(self):
+        """Removing or delaying coordinator autocommit must fail this test."""
+        events = []
+
+        class RecordingCoordinatorConnection:
+            @property
+            def autocommit(self):
+                return False
+
+            @autocommit.setter
+            def autocommit(self, value):
+                events.append(("autocommit", value))
+
+            def close(self):
+                events.append(("close", None))
+
+        class RecordingCoordinatorRepository:
+            def try_acquire_item_discovery_coordinator_lock(self):
+                events.append(("lock", None))
+                return True
+
+        result = ItemDiscoveryRunResult(store_id=12, website_url="https://example.mx/", item_candidates=0)
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", return_value=RecordingCoordinatorConnection()
+        ), patch(
+            "ludora.operations.DiscoveryRepository", return_value=RecordingCoordinatorRepository()
+        ), patch(
+            "ludora.operations._run_item_discovery_for_store",
+            side_effect=lambda **_kwargs: events.append(("store_work", None)) or result,
+        ):
+            try:
+                run_item_discovery(
+                    store_id=12,
+                    website_url="https://example.mx/",
+                    on_accepted=lambda: events.append(("accepted", None)),
+                )
+            except TypeError as exc:
+                self.fail(f"item discovery lacks the acceptance callback contract: {exc}")
+
+        self.assertEqual(
+            events,
+            [
+                ("autocommit", True),
+                ("lock", None),
+                ("accepted", None),
+                ("store_work", None),
+                ("close", None),
+            ],
+        )
 
     def test_run_item_discovery_closes_coordinator_after_cancellation(self):
         coordinator_connection = Mock()
@@ -552,6 +611,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         coordinator_repository = Mock()
         coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = False
         coordinator_repository.list_store_item_discovery_sources.return_value = []
+        accepted = Mock()
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
             "ludora.operations.connect_database", return_value=coordinator_connection
@@ -561,13 +621,66 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             "ludora.operations._run_item_discovery_for_store"
         ) as run_item_discovery_for_store:
             with self.assertRaisesRegex(OperationAlreadyRunning, "Item discovery is already running"):
-                run_item_discovery_batch()
+                try:
+                    run_item_discovery_batch(on_accepted=accepted)
+                except TypeError as exc:
+                    self.fail(f"item discovery batch lacks the acceptance callback contract: {exc}")
 
         connect_database.assert_called_once_with("postgresql://ludora")
         coordinator_repository.try_acquire_item_discovery_coordinator_lock.assert_called_once_with()
         coordinator_repository.list_store_item_discovery_sources.assert_not_called()
         run_item_discovery_for_store.assert_not_called()
+        accepted.assert_not_called()
         coordinator_connection.close.assert_called_once_with()
+
+    def test_run_item_discovery_batch_enables_coordinator_autocommit_before_lock_and_store_listing(self):
+        """Moving autocommit after lock acquisition or listing must fail this test."""
+        events = []
+
+        class RecordingCoordinatorConnection:
+            @property
+            def autocommit(self):
+                return False
+
+            @autocommit.setter
+            def autocommit(self, value):
+                events.append(("autocommit", value))
+
+            def close(self):
+                events.append(("close", None))
+
+        class RecordingCoordinatorRepository:
+            def try_acquire_item_discovery_coordinator_lock(self):
+                events.append(("lock", None))
+                return True
+
+        listing_connection = Mock()
+        listing_repository = Mock()
+        listing_repository.list_store_item_discovery_sources.side_effect = (
+            lambda **_kwargs: events.append(("store_listing", None)) or []
+        )
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database",
+            side_effect=[RecordingCoordinatorConnection(), listing_connection],
+        ), patch(
+            "ludora.operations.DiscoveryRepository",
+            side_effect=[RecordingCoordinatorRepository(), listing_repository],
+        ):
+            try:
+                run_item_discovery_batch(on_accepted=lambda: events.append(("accepted", None)))
+            except TypeError as exc:
+                self.fail(f"item discovery batch lacks the acceptance callback contract: {exc}")
+
+        self.assertEqual(
+            events,
+            [
+                ("autocommit", True),
+                ("lock", None),
+                ("accepted", None),
+                ("store_listing", None),
+                ("close", None),
+            ],
+        )
 
     def test_run_item_discovery_batch_runs_selected_stores_and_closes_database(self):
         coordinator_connection = Mock()
