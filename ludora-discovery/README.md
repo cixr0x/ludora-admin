@@ -92,6 +92,12 @@ Browser fallback uses the installed Chrome executable when available. You can ov
 $env:LUDORA_BROWSER_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'
 ```
 
+## Product-detail pacing and Shopify discovery
+
+Product-detail requests are globally start-paced at three seconds across a discovery process. The throttle spans every store in a batch and also applies to retry attempts.
+
+Shopify discovery enumerates product URLs from the sitemap and fetches each product detail through signed Storefront GraphQL only. It has no HTML fallback and does not use GraphQL for product enumeration. A null Shopify product is skipped and logged. A failed store does not stop the remaining stores in the batch, but any store failure causes the parent batch to fail after all stores have run.
+
 Item discovery uses the AI classifier by default. It calls the OpenAI-compatible `/responses` endpoint, stores the returned reasoning in `classification_reasons`, and fails the discovery run if the classifier request or response contract fails. This uses the same `OPENAI_BASE_URL` toggle as admin-service AI calls, although the classifier itself runs inside the Python discovery operation:
 
 ```text

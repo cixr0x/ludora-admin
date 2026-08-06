@@ -151,6 +151,14 @@ or incomplete product responses are retried with a rendered browser page:
 LUDORA_BROWSER_FETCH_ENABLED=true
 ```
 
+### Product-detail pacing and Shopify discovery
+
+Product-detail requests are globally start-paced at three seconds across a discovery process. The throttle spans every store in a batch and also applies to retry attempts.
+
+Shopify discovery enumerates product URLs from the sitemap and fetches each product detail through signed Storefront GraphQL only. It has no HTML fallback and does not use GraphQL for product enumeration. A null Shopify product is skipped and logged. A failed store does not stop the remaining stores in the batch, but any store failure causes the parent batch to fail after all stores have run.
+
+Deployment smoke tests do not start a discovery run, because a run persists candidates and job/trace data.
+
 ### Web Bot Auth identity and signing key
 
 Shopify storefront requests are signed with the public bot identity
