@@ -114,6 +114,7 @@ LUDORA_DISCOVERY_RUNNER=local
 LUDORA_DISCOVERY_PACKAGE_DIR=/opt/ludora/ludora-admin/ludora-discovery
 LUDORA_DISCOVERY_PYTHON=/opt/ludora/ludora-admin/ludora-discovery/.venv/bin/python
 LUDORA_DISCOVERY_ENV_FILE=/opt/ludora/ludora-admin/ludora-discovery/.env
+LUDORA_DAILY_ITEM_DISCOVERY_ENABLED=true
 LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED=true
 LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS=5
 LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS=300
@@ -138,6 +139,27 @@ coordinator lock for manual updates. The pause is process-local, so restarting
 admin-service starts the automatic worker again when it is enabled by
 configuration.
 
+### Daily item-discovery schedule
+
+With `LUDORA_DAILY_ITEM_DISCOVERY_ENABLED=true`, admin-service automatically
+launches an all-store item-discovery run at 05:00
+`America/Mexico_City`. It does not catch up after a missed 05:00 start, and a
+conflict or launch failure has no same-day automatic retry. An operator may
+still start a manual retry.
+
+Scheduled and manual all-store runs select active stores only. Explicit store
+IDs remain targetable, including inactive stores. A second product-discovery job
+is rejected while one is already running across batch and single-store entry
+points. The product-discovery lock is independent from the continuous
+item-update lock, so the continuous item-update worker remains active during
+discovery.
+
+Review schedule events with:
+
+```bash
+sudo journalctl -u ludora-admin-service.service -n 100 --no-pager
+```
+
 The production UI file contains:
 
 ```dotenv
@@ -157,7 +179,8 @@ Product-detail requests are globally start-paced at three seconds across a disco
 
 Shopify discovery enumerates product URLs from the sitemap and fetches each product detail through signed Storefront GraphQL only. It has no HTML fallback and does not use GraphQL for product enumeration. A null Shopify product is skipped and logged. A failed store does not stop the remaining stores in the batch, but any store failure causes the parent batch to fail after all stores have run.
 
-Deployment smoke tests do not start a discovery run, because a run persists candidates and job/trace data.
+Deployment smoke tests must not start a real discovery run, because a run
+persists candidates and job/trace data.
 
 ### Web Bot Auth identity and signing key
 
