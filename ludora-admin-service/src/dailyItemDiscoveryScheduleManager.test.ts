@@ -148,6 +148,38 @@ describe('daily item discovery schedule manager', () => {
     expect(shutdownComplete).toBe(true);
     expect(info).toHaveBeenCalledWith('[item-discovery-schedule] stopped');
   });
+
+  it('waits for every overlapping launch request during shutdown', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-05T11:00:00.000Z'));
+    const firstLaunch = createDeferred<ReturnType<typeof discoveryRun>>();
+    const secondLaunch = createDeferred<ReturnType<typeof discoveryRun>>();
+    const startItemDiscoveryRun = vi
+      .fn<DiscoveryOperationsClient['startItemDiscoveryRun']>()
+      .mockReturnValueOnce(firstLaunch.promise)
+      .mockReturnValueOnce(secondLaunch.promise);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const manager = createDailyItemDiscoveryScheduleManager({ operationsClient: { startItemDiscoveryRun } });
+
+    manager.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(86_400_000);
+    expect(startItemDiscoveryRun).toHaveBeenCalledTimes(2);
+
+    let shutdownComplete = false;
+    const shutdown = manager.shutdown().then(() => {
+      shutdownComplete = true;
+    });
+
+    secondLaunch.resolve(discoveryRun('run-2'));
+    await flushPromises();
+
+    expect(shutdownComplete).toBe(false);
+
+    firstLaunch.resolve(discoveryRun('run-1'));
+    await shutdown;
+    expect(shutdownComplete).toBe(true);
+  });
 });
 
 function discoveryRun(id: string) {
@@ -168,4 +200,10 @@ function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void
     resolve = complete;
   });
   return { promise, resolve };
+}
+
+async function flushPromises(): Promise<void> {
+  for (let index = 0; index < 20; index += 1) {
+    await Promise.resolve();
+  }
 }

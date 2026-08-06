@@ -41,7 +41,7 @@ export function createDailyItemDiscoveryScheduleManager(options: {
 }): DailyItemDiscoveryScheduleManager {
   const now = options.now ?? (() => new Date());
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let activeLaunch: Promise<void> | null = null;
+  const activeLaunches = new Set<Promise<void>>();
   let stopped = false;
 
   const scheduleFrom = (from: Date): void => {
@@ -73,11 +73,9 @@ export function createDailyItemDiscoveryScheduleManager(options: {
           console.error('[item-discovery-schedule] automatic launch failed', error);
         })
         .finally(() => {
-          if (activeLaunch === launchPromise) {
-            activeLaunch = null;
-          }
+          activeLaunches.delete(launchPromise);
         });
-      activeLaunch = launchPromise;
+      activeLaunches.add(launchPromise);
     }, delay);
     console.info('[item-discovery-schedule] next run scheduled', scheduledAt.toISOString());
   };
@@ -95,7 +93,7 @@ export function createDailyItemDiscoveryScheduleManager(options: {
         clearTimeout(timer);
         timer = null;
       }
-      await activeLaunch;
+      await Promise.all(activeLaunches);
       console.info('[item-discovery-schedule] stopped');
     }
   };
