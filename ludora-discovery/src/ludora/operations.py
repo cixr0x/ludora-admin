@@ -33,6 +33,7 @@ from ludora.embeddings import OpenAIEmbeddingClient, build_item_embedding_text, 
 from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.item_classification import apply_item_classification
 from ludora.models import DiscoveryItemCandidateRecord
+from ludora.product_discovery_throttle import ProductDiscoveryRequestThrottle
 from ludora.trace import create_item_discovery_trace_logger, create_item_update_trace_logger
 
 
@@ -196,6 +197,7 @@ def run_item_discovery(
     cancellation_token: CancellationToken | None = None,
     run_id: str | None = None,
     started_at: datetime | None = None,
+    product_request_throttle: ProductDiscoveryRequestThrottle | None = None,
 ) -> ItemDiscoveryRunResult:
     current_env = env if env is not None else os.environ
     database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
@@ -206,6 +208,25 @@ def run_item_discovery(
     resolved_run_id = run_id or str(uuid.uuid4())
     resolved_started_at = started_at or _utc_now()
     trace_logger = create_item_discovery_trace_logger(connection, resolved_run_id)
+    resolved_product_request_throttle = (
+        product_request_throttle
+        if product_request_throttle is not None
+        else ProductDiscoveryRequestThrottle()
+    )
+
+    def before_product_request(source_url: str) -> None:
+        resolved_product_request_throttle.wait_before_request(
+            cancellation_token,
+            on_wait=lambda wait: trace_logger.log(
+                "item_discovery.product_fetch.throttle_wait",
+                delay_seconds=wait.delay_seconds,
+                platform=platform.strip().casefold(),
+                source_url=source_url,
+                store_id=store_id,
+                store_name=store_name,
+            ),
+        )
+
     trace_logger.log(
         "item_discovery.run.start",
         platform=platform,
@@ -276,6 +297,7 @@ def run_item_discovery(
                 item_title_extractor=item_title_extractor,
                 request_headers_provider=web_bot_auth_headers_provider,
                 trace_logger=trace_logger,
+                before_product_request=before_product_request,
                 **collect_kwargs,
             )
             raise_if_cancelled(cancellation_token)
@@ -445,6 +467,7 @@ def run_item_discovery_batch(
     cancellation_token: CancellationToken | None = None,
     run_id: str | None = None,
     store_ids: list[int] | None = None,
+    product_request_throttle: ProductDiscoveryRequestThrottle | None = None,
 ) -> ItemDiscoveryRunResult:
     current_env = env if env is not None else os.environ
     database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
@@ -462,6 +485,11 @@ def run_item_discovery_batch(
         raise RuntimeError("One or more selected stores were not found")
 
     resolved_run_id = run_id or str(uuid.uuid4())
+    resolved_product_request_throttle = (
+        product_request_throttle
+        if product_request_throttle is not None
+        else ProductDiscoveryRequestThrottle()
+    )
     item_candidates = 0
     new_items = 0
     items_discovered = 0
@@ -481,6 +509,7 @@ def run_item_discovery_batch(
             env_file=env_file,
             cancellation_token=cancellation_token,
             run_id=f"{resolved_run_id}:{store.store_id}",
+            product_request_throttle=resolved_product_request_throttle,
         )
         item_candidates += result.item_candidates
         new_items += result.new_items

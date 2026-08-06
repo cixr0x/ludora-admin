@@ -16,6 +16,7 @@ from ludora.product_crawler import (
     ItemCandidateProcessor,
     ItemCandidateRepository,
     ItemClassifier,
+    BeforeProductRequest,
     crawl_listing_candidates,
 )
 from ludora.product_detail_extraction import extract_product_detail_candidate
@@ -55,6 +56,7 @@ def crawl_amukiri_inventory(
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
     catalog_fetcher: CatalogFetcher | None = None,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
@@ -82,6 +84,7 @@ def crawl_amukiri_inventory(
         item_detail_extractor=extract_amukiri_product_detail_candidate,
         trace_logger=trace,
         cancellation_token=cancellation_token,
+        before_product_request=before_product_request,
     )
     trace.log(
         "amukiri_inventory.crawl.completed",

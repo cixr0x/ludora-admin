@@ -27,6 +27,7 @@ from ludora.operations import (
     run_item_update,
     run_store_discovery,
 )
+from ludora.product_discovery_throttle import ProductDiscoveryRequestThrottle
 
 
 class StoreDiscoveryOperationsTests(unittest.TestCase):
@@ -92,7 +93,11 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ai_classifier = Mock()
         ai_classifier.apply_item_classification = object()
 
+        product_urls = ["https://example.mx/products/catan", "https://example.mx/products/sleeves"]
+
         def collect_inventory(_website_url, _store_id, inventory_repository, **_kwargs):
+            for product_url in product_urls:
+                _kwargs["before_product_request"](product_url)
             catan = DiscoveryItemCandidateRecord(
                 store_id=12,
                 source_url="https://example.mx/products/catan",
@@ -119,6 +124,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             ItemCandidateUpsertResult(candidate_id=102, listing_status="PENDING", item_id=None, should_process=False, created=False),
         ]
 
+        injected_throttle = Mock()
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora") as resolve_database_url, patch(
             "ludora.operations.resolve_browser_fetch_enabled", return_value=True
         ) as resolve_browser_fetch_enabled, patch(
@@ -153,6 +159,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
                 store_name="Hasbro Gaming",
                 env_file="custom.env",
                 run_id="run-123",
+                product_request_throttle=injected_throttle,
             )
 
         resolve_database_url.assert_called_once()
@@ -197,6 +204,10 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertIs(
             collect_store_inventory.call_args.kwargs["item_title_extractor"],
             admin_title_extractor.return_value.extract_title,
+        )
+        self.assertEqual(
+            [call.args[0] for call in injected_throttle.wait_before_request.call_args_list],
+            [None, None],
         )
         repository.start_store_item_discovery_log.assert_called_once()
         self.assertEqual(repository.start_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
@@ -412,33 +423,58 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             SimpleNamespace(store_id=34, store_name="Beta Games", website_url="https://beta.mx/", platform="custom"),
         ]
 
+        class FakeClock:
+            def __init__(self):
+                self.now = 100.0
+                self.waits = []
+
+            def monotonic(self):
+                return self.now
+
+            def wait(self, seconds, _cancellation_token):
+                self.waits.append(seconds)
+                self.now += seconds
+
+        fake_clock = FakeClock()
+        injected_throttle = ProductDiscoveryRequestThrottle(clock=fake_clock.monotonic, waiter=fake_clock.wait)
+        item_discovery_results = [
+            ItemDiscoveryRunResult(
+                store_id=12,
+                website_url="https://alpha.mx/",
+                item_candidates=4,
+                new_items=3,
+                items_discovered=4,
+                confirmed_boardgames=2,
+                confirmed_non_boardgames=1,
+                unconfirmed_boardgames=1,
+            ),
+            ItemDiscoveryRunResult(
+                store_id=34,
+                website_url="https://beta.mx/",
+                item_candidates=2,
+                new_items=1,
+                items_discovered=2,
+                confirmed_boardgames=1,
+                unconfirmed_non_boardgames=1,
+            ),
+        ]
+
+        def run_item_discovery_with_throttle(**kwargs):
+            kwargs["product_request_throttle"].wait_before_request()
+            return item_discovery_results.pop(0)
+
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
             "ludora.operations.connect_database", return_value=connection
         ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
             "ludora.operations.run_item_discovery",
-            side_effect=[
-                ItemDiscoveryRunResult(
-                    store_id=12,
-                    website_url="https://alpha.mx/",
-                    item_candidates=4,
-                    new_items=3,
-                    items_discovered=4,
-                    confirmed_boardgames=2,
-                    confirmed_non_boardgames=1,
-                    unconfirmed_boardgames=1,
-                ),
-                ItemDiscoveryRunResult(
-                    store_id=34,
-                    website_url="https://beta.mx/",
-                    item_candidates=2,
-                    new_items=1,
-                    items_discovered=2,
-                    confirmed_boardgames=1,
-                    unconfirmed_non_boardgames=1,
-                ),
-            ],
+            side_effect=run_item_discovery_with_throttle,
         ) as run_item_discovery_:
-            result = run_item_discovery_batch(env_file="custom.env", run_id="batch-run", store_ids=[12, 34])
+            result = run_item_discovery_batch(
+                env_file="custom.env",
+                run_id="batch-run",
+                store_ids=[12, 34],
+                product_request_throttle=injected_throttle,
+            )
 
         repository.list_store_item_discovery_sources.assert_called_once_with(store_ids=[12, 34])
         self.assertEqual(run_item_discovery_.call_count, 2)
@@ -451,7 +487,12 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(first_call["run_id"], "batch-run:12")
         self.assertEqual(second_call["store_id"], 34)
         self.assertEqual(second_call["run_id"], "batch-run:34")
-        self.assertEqual(result.store_id, None)
+        first_throttle = run_item_discovery_.call_args_list[0].kwargs["product_request_throttle"]
+        second_throttle = run_item_discovery_.call_args_list[1].kwargs["product_request_throttle"]
+        self.assertIs(first_throttle, second_throttle)
+        self.assertIs(first_throttle, injected_throttle)
+        self.assertEqual(fake_clock.waits, [3.0])
+        self.assertIsNone(result.store_id)
         self.assertEqual(result.website_url, "")
         self.assertEqual(result.item_candidates, 6)
         self.assertEqual(result.new_items, 4)

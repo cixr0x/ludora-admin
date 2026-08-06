@@ -138,6 +138,7 @@ class ItemCandidateProcessor(Protocol):
 
 
 ItemClassifier = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidateRecord]
+BeforeProductRequest = Callable[[str], None]
 ItemTitleExtractor = Callable[[DiscoveryItemCandidateRecord], str]
 ItemCandidateEnricher = Callable[
     [DiscoveryItemCandidateRecord, DiscoveryItemCandidateRecord],
@@ -189,6 +190,7 @@ def crawl_store_product_details(
     request_headers_provider: RequestHeadersProvider | None = None,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     use_browser_fetch = browser_sitemap_fetch_enabled if browser_fetch_enabled is None else browser_fetch_enabled
@@ -286,6 +288,7 @@ def crawl_store_product_details(
             request_headers_provider=request_headers_provider,
             trace_logger=trace,
             cancellation_token=cancellation_token,
+            before_product_request=before_product_request,
         )
         trace.log("inventory.crawl.completed", record_count=len(records), store_id=store_id, store_url=store_url)
         return records
@@ -307,6 +310,7 @@ def crawl_listing_candidates(
     request_headers_provider: RequestHeadersProvider | None = None,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     trace = trace_logger or NullTraceLogger()
     records: list[DiscoveryItemCandidateRecord] = []
@@ -342,6 +346,7 @@ def crawl_listing_candidates(
                 request_headers_provider=request_headers_provider,
                 trace_logger=trace,
                 cancellation_token=cancellation_token,
+                before_request=before_product_request,
             )
         except ProductDetailRejectedError:
             continue

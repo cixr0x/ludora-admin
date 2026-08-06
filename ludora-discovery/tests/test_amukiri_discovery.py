@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -269,6 +269,15 @@ class AmukiriDiscoveryTests(unittest.TestCase):
         self.assertEqual(repository.item_records, records)
         self.assertEqual(records[0].description, "Descripción completa del producto.")
         self.assertTrue(records[0].is_boardgame)
+
+    def test_crawl_forwards_product_callback_to_listing_candidate_details(self):
+        callback = Mock()
+        with patch("ludora.amukiri_discovery.discover_amukiri_listing_candidates", return_value=[]), patch(
+            "ludora.amukiri_discovery.crawl_listing_candidates", return_value=[]
+        ) as crawl_candidates:
+            crawl_amukiri_inventory("https://amukiri.mx/", 12, FakeRepository(), before_product_request=callback)
+
+        self.assertIs(crawl_candidates.call_args.kwargs["before_product_request"], callback)
 
     def test_catalog_page_url_uses_amukiri_pagination_parameter(self):
         self.assertEqual(amukiri_catalog_page_url("https://amukiri.mx/", 1), "https://amukiri.mx/tienda")

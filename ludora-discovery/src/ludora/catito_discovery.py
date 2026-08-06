@@ -17,6 +17,7 @@ from ludora.product_crawler import (
     ItemCandidateProcessor,
     ItemCandidateRepository,
     ItemClassifier,
+    BeforeProductRequest,
     crawl_listing_candidates,
 )
 from ludora.trace import NullTraceLogger, TraceLogger
@@ -45,6 +46,7 @@ def crawl_catito_inventory(
     cancellation_token: CancellationToken | None = None,
     catalog_fetcher: CatalogFetcher | None = None,
     catalog_page_size: int = DEFAULT_CATITO_CATALOG_PAGE_SIZE,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
@@ -72,6 +74,7 @@ def crawl_catito_inventory(
         item_candidate_enricher=_merge_catito_catalog_details,
         trace_logger=trace,
         cancellation_token=cancellation_token,
+        before_product_request=before_product_request,
     )
     trace.log(
         "catito_inventory.crawl.completed",

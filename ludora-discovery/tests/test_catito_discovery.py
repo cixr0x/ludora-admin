@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlparse
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -185,6 +185,15 @@ class CatitoDiscoveryTests(unittest.TestCase):
         self.assertTrue(record.is_boardgame)
         self.assertEqual(record.raw_payload["catito_catalog"]["categories"], ["Juego de mesa", "Estrategia"])
         self.assertEqual(repository.item_records, records)
+
+    def test_crawl_forwards_product_callback_to_listing_candidate_details(self):
+        callback = Mock()
+        with patch("ludora.catito_discovery.discover_catito_listing_candidates", return_value=[]), patch(
+            "ludora.catito_discovery.crawl_listing_candidates", return_value=[]
+        ) as crawl_candidates:
+            crawl_catito_inventory("https://www.catitogames.com/", 16, FakeRepository(), before_product_request=callback)
+
+        self.assertIs(crawl_candidates.call_args.kwargs["before_product_request"], callback)
 
     @staticmethod
     def _catalog_page(number, total_pages, total_elements, content):

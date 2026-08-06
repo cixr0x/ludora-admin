@@ -12,7 +12,7 @@ from ludora.cancellation import CancellationToken, raise_if_cancelled
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import _collapse_text, _extract_price
 from ludora.models import DiscoveryItemCandidateRecord, ItemCandidateType
-from ludora.product_crawler import ItemCandidateProcessor, ItemCandidateRepository, ItemClassifier
+from ludora.product_crawler import BeforeProductRequest, ItemCandidateProcessor, ItemCandidateRepository, ItemClassifier
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import FetchResult
 
@@ -93,6 +93,7 @@ def crawl_amazon_store_inventory(
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
     delay_seconds: float = 1.0,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     search_urls = [
         build_amazon_store_search_url(store_url, str(raw_term).strip())
@@ -112,6 +113,7 @@ def crawl_amazon_store_inventory(
         delay_seconds=delay_seconds,
         limit=limit,
         require_nonempty_first_search_page=True,
+        before_product_request=before_product_request,
     )
 
 
@@ -130,6 +132,7 @@ def crawl_amazon_brand_inventory(
     cancellation_token: CancellationToken | None = None,
     delay_seconds: float = 1.0,
     max_pages: int = DEFAULT_AMAZON_BRAND_MAX_PAGES,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     if not brand_name.strip():
         raise ValueError("Amazon brand crawl requires a brand name")
@@ -147,6 +150,7 @@ def crawl_amazon_brand_inventory(
         limit=limit,
         expected_brand_name=brand_name,
         max_search_pages=max(1, max_pages),
+        before_product_request=before_product_request,
     )
 
 
@@ -166,6 +170,7 @@ def _crawl_amazon_search_inventory(
     expected_brand_name: str = "",
     max_search_pages: int = 1,
     require_nonempty_first_search_page: bool = False,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
@@ -244,6 +249,7 @@ def _crawl_amazon_search_inventory(
                             cancellation_token=cancellation_token,
                             retry_delay_seconds=max(0.0, delay_seconds),
                             require_brand_byline=bool(expected_brand_name),
+                            before_product_request=before_product_request,
                         )
                     except AmazonDetailFetchError as exc:
                         detail_failures.append(exc)
@@ -466,6 +472,7 @@ def _fetch_valid_amazon_detail_page(
     retry_delay_seconds: float,
     require_brand_byline: bool = False,
     max_attempts: int = DEFAULT_AMAZON_DETAIL_FETCH_ATTEMPTS,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> FetchResult:
     attempts = max(1, max_attempts)
     expected_asin = _asin_from_url(source_url)
@@ -473,6 +480,8 @@ def _fetch_valid_amazon_detail_page(
 
     for attempt in range(1, attempts + 1):
         raise_if_cancelled(cancellation_token)
+        if before_product_request is not None:
+            before_product_request(source_url)
         fetched_detail = browser_fetcher(source_url)
         if fetched_detail is None:
             diagnostics: dict[str, object] = {

@@ -2,7 +2,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, Mock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -360,6 +360,66 @@ class InventoryTests(unittest.TestCase):
             12,
             repository,
         ))
+
+    def test_collect_store_inventory_forwards_product_callback_to_every_detail_crawler(self):
+        repository = FakeRepository()
+        callback = Mock()
+        routes = [
+            ("https://example.mx/", "custom", "crawl_store_product_details"),
+            ("https://www.amazon.com.mx/stores/page/example", "amazon", "crawl_amazon_store_inventory"),
+            ("https://www.amazon.com.mx/s?brand=example", "amazon_brand", "crawl_amazon_brand_inventory"),
+            ("https://amukiri.mx/", "custom", "crawl_amukiri_inventory"),
+            ("https://www.catitogames.com/", "custom", "crawl_catito_inventory"),
+        ]
+        with patch("ludora.inventory.crawl_store_product_details", return_value=[]) as generic, patch(
+            "ludora.inventory.crawl_amazon_store_inventory", return_value=[]
+        ) as amazon, patch("ludora.inventory.crawl_amazon_brand_inventory", return_value=[]) as amazon_brand, patch(
+            "ludora.inventory.crawl_amukiri_inventory", return_value=[]
+        ) as amukiri, patch("ludora.inventory.crawl_catito_inventory", return_value=[]) as catito:
+            crawlers = {
+                "crawl_store_product_details": generic,
+                "crawl_amazon_store_inventory": amazon,
+                "crawl_amazon_brand_inventory": amazon_brand,
+                "crawl_amukiri_inventory": amukiri,
+                "crawl_catito_inventory": catito,
+            }
+            for store_url, platform, crawler_name in routes:
+                collect_store_inventory(
+                    store_url, 12, repository, platform=platform, before_product_request=callback
+                )
+                self.assertIs(crawlers[crawler_name].call_args.kwargs["before_product_request"], callback)
+
+    def test_crawl_store_product_details_calls_product_callback_immediately_before_detail_fetch(self):
+        product_url = "https://example.mx/products/catan"
+        repository = FakeRepository()
+        calls = []
+
+        def callback(url):
+            calls.append(("callback", url))
+
+        def fetcher(url, **_kwargs):
+            calls.append(("fetch", url))
+            return FetchResult(url=url, text='<script type="application/ld+json">{"@type":"Product","name":"Catan"}</script>')
+
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[product_url]), patch(
+            "ludora.product_crawler.fetch_html", side_effect=fetcher
+        ):
+            crawl_store_product_details("https://example.mx/", 12, repository, before_product_request=callback)
+
+        self.assertEqual(calls, [("callback", product_url), ("fetch", product_url)])
+
+    def test_crawl_store_product_details_calls_product_callback_for_each_transient_retry(self):
+        product_url = "https://example.mx/products/catan"
+        repository = FakeRepository()
+        callback = Mock()
+        detail_html = '<script type="application/ld+json">{"@type":"Product","name":"Catan"}</script>'
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[product_url]), patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=[FetchResult(url=product_url, text="", status_code=503), FetchResult(url=product_url, text=detail_html)],
+        ), patch("ludora.webfetch._wait_for_fetch_retry"):
+            crawl_store_product_details("https://example.mx/", 12, repository, before_product_request=callback)
+
+        self.assertEqual(callback.call_args_list, [((product_url,), {}), ((product_url,), {})])
 
     def test_collect_store_inventory_routes_amazon_brand_platform_to_brand_crawler(self):
         repository = FakeRepository()

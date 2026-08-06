@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -463,6 +464,32 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual([entry["attempt"] for entry in invalid_entries], [1, 2, 3])
         self.assertEqual(invalid_entries[-1]["page_title"], "Amazon.com.mx")
         self.assertFalse(invalid_entries[-1]["will_retry"])
+
+    def test_calls_product_callback_for_each_detail_retry_but_not_search_enumeration(self):
+        product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
+        search_html = f'<html><body><a href="{product_url}"></a></body></html>'
+        invalid_html = "<html><head><title>Amazon.com.mx</title></head><body>Inicio</body></html>"
+        valid_html = "<html><body><span id='productTitle'>Catan</span><div>ASIN: B0B7QXY8ZS</div></body></html>"
+        callback = Mock()
+        fetches = []
+
+        def fetcher(url):
+            fetches.append(url)
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            return FetchResult(url=url, text=invalid_html if fetches.count(product_url) == 1 else valid_html)
+
+        crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11,
+            FakeRepository(),
+            browser_fetcher=fetcher,
+            before_product_request=callback,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(callback.call_args_list, [((product_url,), {}), ((product_url,), {})])
+        self.assertNotIn(fetches[0], [call.args[0] for call in callback.call_args_list])
 
     def test_preserves_valid_products_after_an_exhausted_detail_page_and_reports_partial_failure(self):
         failed_url = "https://www.amazon.com.mx/dp/B0BAD00001"

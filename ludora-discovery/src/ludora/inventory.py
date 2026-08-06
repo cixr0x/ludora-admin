@@ -11,6 +11,7 @@ from ludora.amazon_discovery import crawl_amazon_brand_inventory, crawl_amazon_s
 from ludora.product_crawler import (
     ItemCandidateProcessor,
     ItemClassifier,
+    BeforeProductRequest,
     RequestHeadersProvider,
     crawl_store_product_details,
     update_confirmed_store_item_details,
@@ -64,6 +65,7 @@ def collect_store_inventory(
     platform: str = "",
     store_name: str = "",
     request_headers_provider: RequestHeadersProvider | None = None,
+    before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     normalized_platform = platform.strip().casefold()
     browser_fetch_enabled = browser_sitemap_fetch_enabled or normalized_platform in BROWSER_FETCH_REQUIRED_PLATFORMS
@@ -78,6 +80,7 @@ def collect_store_inventory(
             item_title_extractor=item_title_extractor,
             trace_logger=trace_logger,
             cancellation_token=cancellation_token,
+            before_product_request=before_product_request,
         )
     if normalized_platform == "amazon_brand":
         return crawl_amazon_brand_inventory(
@@ -91,6 +94,7 @@ def collect_store_inventory(
             item_title_extractor=item_title_extractor,
             trace_logger=trace_logger,
             cancellation_token=cancellation_token,
+            before_product_request=before_product_request,
         )
     if is_amukiri_store_url(store_url):
         return crawl_amukiri_inventory(
@@ -102,6 +106,7 @@ def collect_store_inventory(
             item_processor=item_processor,
             trace_logger=trace_logger,
             cancellation_token=cancellation_token,
+            before_product_request=before_product_request,
         )
     if is_catito_store_url(store_url):
         return crawl_catito_inventory(
@@ -113,6 +118,7 @@ def collect_store_inventory(
             item_processor=item_processor,
             trace_logger=trace_logger,
             cancellation_token=cancellation_token,
+            before_product_request=before_product_request,
         )
 
     return crawl_store_product_details(
@@ -126,6 +132,7 @@ def collect_store_inventory(
         request_headers_provider=request_headers_provider if normalized_platform == "shopify" else None,
         trace_logger=trace_logger,
         cancellation_token=cancellation_token,
+        before_product_request=before_product_request,
     )
 
 
