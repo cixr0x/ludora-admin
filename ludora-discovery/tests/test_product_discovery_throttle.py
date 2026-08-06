@@ -1,4 +1,9 @@
+import sys
 import unittest
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
 from ludora.product_discovery_throttle import ProductDiscoveryRequestThrottle
