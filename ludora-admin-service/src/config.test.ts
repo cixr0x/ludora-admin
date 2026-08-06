@@ -222,6 +222,36 @@ describe('loadConfig', () => {
     expect(loadConfig().continuousItemUpdateWorker.enabled).toBe(true);
   });
 
+  it('keeps daily item discovery scheduling off outside production and accepts an explicit override', () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('LUDORA_DAILY_ITEM_DISCOVERY_ENABLED', undefined);
+    expect(loadConfig().dailyItemDiscoverySchedule.enabled).toBe(false);
+
+    vi.stubEnv('LUDORA_DAILY_ITEM_DISCOVERY_ENABLED', 'true');
+    expect(loadConfig().dailyItemDiscoverySchedule.enabled).toBe(true);
+  });
+
+  it('enables daily item discovery scheduling by default in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('LUDORA_DAILY_ITEM_DISCOVERY_ENABLED', undefined);
+    expect(loadConfig().dailyItemDiscoverySchedule.enabled).toBe(true);
+  });
+
+  it('accepts an explicit production disable for daily item discovery scheduling', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('LUDORA_DAILY_ITEM_DISCOVERY_ENABLED', 'false');
+    expect(loadConfig().dailyItemDiscoverySchedule.enabled).toBe(false);
+  });
+
+  it.each(['yes', '1', 'disabled'])(
+    'rejects invalid daily item discovery scheduling value %s',
+    (value) => {
+      vi.stubEnv('LUDORA_DAILY_ITEM_DISCOVERY_ENABLED', value);
+
+      expect(() => loadConfig()).toThrow('LUDORA_DAILY_ITEM_DISCOVERY_ENABLED must be true or false');
+    }
+  );
+
   it.each(['0', '-1', 'not-a-number'])('rejects invalid continuous updater poll seconds %s', (value) => {
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', value);
 

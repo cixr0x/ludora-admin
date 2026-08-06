@@ -25,6 +25,7 @@ import {
   createProductDetailsEnrichmentService,
   createProductDetailsExtractionService
 } from './productDetailsExtraction/productDetailsExtractionService.js';
+import { createRuntimeManagerLifecycle } from './runtimeManagerLifecycle.js';
 import { createOpenAiStoreProfileDetectionClient } from './storeProfileDetection/openAiStoreProfileDetectionClient.js';
 import { createStoreProfileDetectionService } from './storeProfileDetection/storeProfileDetectionService.js';
 import { createStoreItemUpdateScheduleManager } from './storeItemUpdateScheduleManager.js';
@@ -124,6 +125,12 @@ const storeItemUpdateScheduleManager = config.continuousItemUpdateWorker.enabled
       scheduleService: createStoreItemUpdateScheduleService(database)
     })
   : undefined;
+const runtimeManagerLifecycle = createRuntimeManagerLifecycle({
+  continuousItemUpdateWorkerManager,
+  dailyItemDiscoveryEnabled: config.dailyItemDiscoverySchedule.enabled,
+  operationsClient,
+  storeItemUpdateScheduleManager
+});
 const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   database,
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
@@ -161,8 +168,7 @@ const app = createApp({
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`ludora-admin-service listening on ${config.host}:${config.port}`);
-  continuousItemUpdateWorkerManager?.start();
-  storeItemUpdateScheduleManager?.start();
+  runtimeManagerLifecycle.start();
 });
 
 let isShuttingDown = false;
@@ -182,8 +188,7 @@ async function shutdown(): Promise<void> {
     });
   });
   try {
-    await continuousItemUpdateWorkerManager?.shutdown();
-    await storeItemUpdateScheduleManager?.shutdown();
+    await runtimeManagerLifecycle.shutdown();
     await shutdownOperationsClient();
     await closeServer;
     process.exit(0);

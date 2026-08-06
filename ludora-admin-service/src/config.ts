@@ -36,6 +36,9 @@ export type Config = {
     leaseSeconds: number;
     pollSeconds: number;
   };
+  dailyItemDiscoverySchedule: {
+    enabled: boolean;
+  };
   webBotAuth: {
     contactEmail: string;
     identityOrigin: string;
@@ -73,6 +76,12 @@ export function loadConfig(): Config {
     databaseUrl: process.env.LUDORA_DATABASE_URL,
     corsOrigin: readCorsOrigins(),
     continuousItemUpdateWorker: readContinuousItemUpdateWorkerConfig(),
+    dailyItemDiscoverySchedule: {
+      enabled: readBooleanEnv(
+        'LUDORA_DAILY_ITEM_DISCOVERY_ENABLED',
+        process.env.NODE_ENV === 'production'
+      )
+    },
     webBotAuth: readWebBotAuthConfig(),
     discoveryRunner: readDiscoveryRunnerConfig()
   };
