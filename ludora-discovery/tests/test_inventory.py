@@ -271,6 +271,37 @@ class InventoryTests(unittest.TestCase):
 
         fetch_html.assert_not_called()
 
+    def test_shopify_sitemap_discovery_never_uses_unsigned_browser_fallback(self):
+        store_url = "https://example.mx/"
+        product_url = "https://example.mx/products/catan"
+        repository = FakeRepository()
+        browser_fetcher = Mock(
+            return_value=FetchResult(
+                url=f"{store_url}sitemap.xml",
+                text=f"<urlset><url><loc>{product_url}</loc></url></urlset>",
+            )
+        )
+
+        with patch("ludora.sitemap_discovery.fetch_sitemap_text", return_value=None), patch(
+            "ludora.product_crawler.fetch_shopify_storefront_product",
+            return_value=FetchResult(url="https://example.mx/graphql.json", text="{}"),
+        ) as fetch_product:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Shopify sitemap discovery returned no product URLs: https://example.mx/",
+            ):
+                crawl_store_product_details(
+                    store_url,
+                    12,
+                    repository,
+                    platform="shopify",
+                    browser_sitemap_fetch_enabled=True,
+                    browser_fetcher=browser_fetcher,
+                )
+
+        browser_fetcher.assert_not_called()
+        fetch_product.assert_not_called()
+
     def test_collect_store_inventory_raises_when_homepage_fetch_fails(self):
         repository = FakeRepository()
 

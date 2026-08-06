@@ -21,6 +21,7 @@ from ludora.shopify_storefront import (
     shopify_graphql_error_messages,
     shopify_graphql_errors,
     shopify_graphql_is_throttled,
+    shopify_discovery_product_from_payload,
     shopify_product_from_payload,
     shopify_product_handle,
     shopify_storefront_endpoint,
@@ -197,7 +198,9 @@ def crawl_store_product_details(
     platform: str = "",
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
+    normalized_platform = platform.strip().casefold()
     use_browser_fetch = browser_sitemap_fetch_enabled if browser_fetch_enabled is None else browser_fetch_enabled
+    browser_sitemap_fallback_enabled = use_browser_fetch and normalized_platform != "shopify"
     trace = trace_logger or NullTraceLogger()
     trace.log(
         "inventory.crawl.start",
@@ -206,7 +209,7 @@ def crawl_store_product_details(
         store_url=store_url,
     )
     browser_session = None
-    if use_browser_fetch and browser_fetcher is None:
+    if browser_sitemap_fallback_enabled and browser_fetcher is None:
         from ludora.browser_fetch import BrowserTextFetcher
 
         browser_session = BrowserTextFetcher(trace_logger=trace)
@@ -216,8 +219,8 @@ def crawl_store_product_details(
         trace.log("inventory.sitemap_discovery.start", store_id=store_id, store_url=store_url)
         product_urls = discover_product_urls_from_sitemaps(
             store_url,
-            browser_fetcher=browser_fetcher,
-            browser_fallback_enabled=use_browser_fetch,
+            browser_fetcher=browser_fetcher if browser_sitemap_fallback_enabled else None,
+            browser_fallback_enabled=browser_sitemap_fallback_enabled,
             limit=limit,
             request_headers_provider=request_headers_provider,
             trace_logger=trace,
@@ -229,7 +232,6 @@ def crawl_store_product_details(
             store_id=store_id,
             store_url=store_url,
         )
-        normalized_platform = platform.strip().casefold()
         if normalized_platform == "shopify" and not product_urls:
             raise RuntimeError(f"Shopify sitemap discovery returned no product URLs: {store_url}")
         if product_urls:
@@ -943,7 +945,23 @@ def _fetch_shopify_discovery_candidate(
                     f"{listing_candidate.source_url}: {error_summary}"
                 )
             else:
-                product = shopify_product_from_payload(payload)
+                try:
+                    product = shopify_discovery_product_from_payload(payload)
+                except ValueError as exc:
+                    message = str(exc)
+                    trace.log(
+                        "item_discovery.candidate.shopify_graphql.failed",
+                        **trace_fields,
+                        attempt=attempt,
+                        error=message,
+                        error_type=type(exc).__name__,
+                        max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
+                        message=message,
+                        response_excerpt=response_excerpt,
+                        source_url=listing_candidate.source_url,
+                        status_code=fetched.status_code,
+                    )
+                    raise RuntimeError(message) from exc
                 if product is None:
                     message = (
                         "Shopify Storefront GraphQL did not return a published product for "

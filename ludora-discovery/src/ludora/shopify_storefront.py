@@ -115,6 +115,7 @@ def fetch_shopify_storefront_product(
                 url=response.geturl(),
                 text=response.read().decode(charset, errors="replace"),
                 status_code=int(getattr(response, "status", 200)),
+                retry_after_seconds=retry_after_seconds_from_headers(response.headers),
             )
     except HTTPError as exc:
         charset = exc.headers.get_content_charset() if exc.headers is not None else None
@@ -175,6 +176,20 @@ def shopify_product_from_payload(payload: Mapping[str, object]) -> dict[str, obj
         return None
     product = data.get("product")
     return dict(product) if isinstance(product, dict) else None
+
+
+def shopify_discovery_product_from_payload(payload: Mapping[str, object]) -> dict[str, object] | None:
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("malformed Shopify Storefront GraphQL payload: data must be an object")
+    if "product" not in data:
+        raise ValueError("malformed Shopify Storefront GraphQL payload: data.product is missing")
+    product = data["product"]
+    if product is None:
+        return None
+    if not isinstance(product, dict):
+        raise ValueError("malformed Shopify Storefront GraphQL payload: data.product must be an object or null")
+    return dict(product)
 
 
 def extract_shopify_storefront_candidate(

@@ -148,6 +148,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
         response.__exit__ = Mock(return_value=False)
         response.headers = Message()
         response.headers["Content-Type"] = "application/json; charset=utf-8"
+        response.headers["Retry-After"] = "37"
         response.status = 200
         response.geturl.return_value = GRAPHQL_ENDPOINT
         response.read.return_value = _payload().encode("utf-8")
@@ -169,6 +170,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
         self.assertEqual(request.get_header("Signature"), "sig-value")
         headers_provider.assert_called_once_with(GRAPHQL_ENDPOINT, "POST")
         self.assertEqual(fetched.status_code, 200)
+        self.assertEqual(fetched.retry_after_seconds, 37.0)
 
     def test_new_shopify_sitemap_candidate_uses_graphql_without_product_html(self):
         store_url = "https://tienda.example.mx/"
@@ -333,6 +335,79 @@ class ShopifyStorefrontTests(unittest.TestCase):
         self.assertEqual(fetch_product.call_count, 3)
         self.assertEqual(wait.call_args_list, [call(60.0, None), call(300.0, None)])
         self.assertEqual(raised.exception.status_code, 429)
+
+    def test_shopify_discovery_honors_retry_after_for_http_200_graphql_throttling(self):
+        product_url = PRODUCT_URL.split("?")[0]
+        repository = DiscoveryRepository()
+        errors = [{"message": "Query throttled", "extensions": {"code": "THROTTLED"}}]
+        throttled_response = Mock()
+        throttled_response.__enter__ = Mock(return_value=throttled_response)
+        throttled_response.__exit__ = Mock(return_value=False)
+        throttled_response.headers = Message()
+        throttled_response.headers["Content-Type"] = "application/json; charset=utf-8"
+        throttled_response.headers["Retry-After"] = "41"
+        throttled_response.status = 200
+        throttled_response.geturl.return_value = GRAPHQL_ENDPOINT
+        throttled_response.read.return_value = _payload(errors=errors).encode("utf-8")
+        success_response = Mock()
+        success_response.__enter__ = Mock(return_value=success_response)
+        success_response.__exit__ = Mock(return_value=False)
+        success_response.headers = Message()
+        success_response.headers["Content-Type"] = "application/json; charset=utf-8"
+        success_response.status = 200
+        success_response.geturl.return_value = GRAPHQL_ENDPOINT
+        success_response.read.return_value = _payload().encode("utf-8")
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[product_url],
+        ), patch(
+            "ludora.shopify_storefront.urlopen",
+            side_effect=[throttled_response, success_response],
+        ), patch("ludora.product_crawler.wait_for_discovery_delay") as wait:
+            records = crawl_store_product_details(
+                "https://tienda.example.mx/",
+                31,
+                repository,
+                platform="shopify",
+            )
+
+        self.assertEqual(len(records), 1)
+        wait.assert_called_once_with(41.0, None)
+
+    def test_shopify_discovery_rejects_malformed_payloads_instead_of_skipping_them(self):
+        product_url = PRODUCT_URL.split("?")[0]
+        malformed_payloads = (
+            {},
+            {"data": []},
+            {"data": {}},
+            {"data": {"product": []}},
+        )
+
+        for payload in malformed_payloads:
+            with self.subTest(payload=payload):
+                repository = DiscoveryRepository()
+                trace = FakeTraceLogger()
+                with patch(
+                    "ludora.product_crawler.discover_product_urls_from_sitemaps",
+                    return_value=[product_url],
+                ), patch(
+                    "ludora.product_crawler.fetch_shopify_storefront_product",
+                    return_value=FetchResult(url=GRAPHQL_ENDPOINT, text=json.dumps(payload)),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "malformed Shopify Storefront GraphQL payload"):
+                        crawl_store_product_details(
+                            "https://tienda.example.mx/",
+                            31,
+                            repository,
+                            platform="shopify",
+                            trace_logger=trace,
+                        )
+
+                self.assertNotIn(
+                    "item_discovery.candidate.shopify_graphql.not_found",
+                    [event for event, _ in trace.events],
+                )
 
     def test_shopify_discovery_rejects_http_430_without_retry(self):
         product_url = PRODUCT_URL.split("?")[0]
