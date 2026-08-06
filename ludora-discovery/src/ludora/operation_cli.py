@@ -15,6 +15,8 @@ from ludora.operations import (
     run_store_discovery,
 )
 
+OPERATION_CLI_ERROR_OUTPUT_MAX_LENGTH = 4032
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run one Ludora discovery operation and print JSON.")
@@ -52,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"cancelled": True}), file=sys.stderr)
         return 130
     except Exception as exc:
-        print(json.dumps({"error": {"message": str(exc)}}), file=sys.stderr)
+        print(_bounded_error_output(str(exc)), file=sys.stderr)
         return 1
 
     print(json.dumps({"result": result.to_dict()}))
@@ -102,6 +104,24 @@ def _selected_store_ids(raw_store_ids: list[int]) -> list[int] | None:
     if len(set(raw_store_ids)) != len(raw_store_ids):
         raise ValueError("store ids must not contain duplicates")
     return raw_store_ids
+
+
+def _bounded_error_output(message: str) -> str:
+    serialized = json.dumps({"error": {"message": message}})
+    if len(serialized) <= OPERATION_CLI_ERROR_OUTPUT_MAX_LENGTH:
+        return serialized
+
+    truncation_suffix = "..."
+    lower = 0
+    upper = len(message)
+    while lower < upper:
+        midpoint = (lower + upper + 1) // 2
+        candidate = json.dumps({"error": {"message": f"{message[:midpoint]}{truncation_suffix}"}})
+        if len(candidate) <= OPERATION_CLI_ERROR_OUTPUT_MAX_LENGTH:
+            lower = midpoint
+        else:
+            upper = midpoint - 1
+    return json.dumps({"error": {"message": f"{message[:lower]}{truncation_suffix}"}})
 
 
 def _install_signal_handlers(cancellation_token: CancellationToken) -> None:

@@ -110,6 +110,36 @@ class OperationCliTests(unittest.TestCase):
         self.assertLessEqual(len(error_lines[0]), 4000 + 32)
         self.assertIn("Alpha Games", json.loads(error_lines[0])["error"]["message"])
 
+    def test_item_discovery_batch_error_caps_unicode_and_escaped_json_output(self):
+        """Removing serialized-output truncation must fail this test."""
+        stdout = StringIO()
+        stderr = StringIO()
+        escaped_error = ("🙂\"\\\x00\n" * 100)[:500]
+        batch_error = ItemDiscoveryBatchError(
+            [
+                ItemDiscoveryStoreFailure(
+                    store_id=store_id,
+                    store_name=f"Store {store_id}",
+                    error=escaped_error,
+                )
+                for store_id in range(1, 9)
+            ]
+        )
+
+        with patch("sys.stdout", stdout), patch("sys.stderr", stderr), patch(
+            "ludora.operation_cli.run_item_discovery_batch", side_effect=batch_error
+        ):
+            exit_code = main(["item-discovery-batch"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        error_lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(error_lines), 1)
+        self.assertLessEqual(len(error_lines[0]), 4032)
+        message = json.loads(error_lines[0])["error"]["message"]
+        self.assertTrue(message.startswith("Item discovery batch failed for 8 store(s):"))
+        self.assertTrue(message.endswith("..."))
+
     def test_runs_item_update(self):
         stdout = StringIO()
         with patch("sys.stdout", stdout), patch(
