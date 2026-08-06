@@ -15,7 +15,7 @@ from ludora.webfetch import FetchResult, retry_after_seconds_from_headers
 
 SHOPIFY_STOREFRONT_API_VERSION = "2026-07"
 SHOPIFY_STOREFRONT_PRODUCT_QUERY = """
-query LudoraProduct($handle: String!) {
+query LudoraProduct($handle: String!) @inContext(country: MX, language: ES) {
   product(handle: $handle) {
     id
     handle

@@ -252,6 +252,25 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records[0].source_url, "https://example.mx/products/catan")
         self.assertEqual(repository.item_records[0].source_listing_url, "https://example.mx/")
 
+    def test_collect_store_inventory_rejects_shopify_without_sitemap_product_urls(self):
+        repository = FakeRepository()
+
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[]), patch(
+            "ludora.product_crawler.fetch_html"
+        ) as fetch_html:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Shopify sitemap discovery returned no product URLs: https://example.mx/",
+            ):
+                collect_store_inventory(
+                    "https://example.mx/",
+                    12,
+                    repository,
+                    platform="shopify",
+                )
+
+        fetch_html.assert_not_called()
+
     def test_collect_store_inventory_raises_when_homepage_fetch_fails(self):
         repository = FakeRepository()
 

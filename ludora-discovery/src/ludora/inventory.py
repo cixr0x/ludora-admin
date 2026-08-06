@@ -130,6 +130,7 @@ def collect_store_inventory(
         item_classifier=item_classifier,
         item_processor=item_processor,
         request_headers_provider=request_headers_provider if normalized_platform == "shopify" else None,
+        platform=platform,
         trace_logger=trace_logger,
         cancellation_token=cancellation_token,
         before_product_request=before_product_request,
