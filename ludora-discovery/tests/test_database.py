@@ -1193,6 +1193,21 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(params[5], 3)
         self.assertEqual(connection.commits, 1)
 
+    def test_acquires_item_discovery_coordinator_with_distinct_advisory_key(self):
+        connection = FakeConnection(fetchone_rows=[(True,), (True,)])
+        repository = DiscoveryRepository(connection)
+
+        self.assertTrue(repository.try_acquire_item_discovery_coordinator_lock())
+        self.assertTrue(repository.try_acquire_store_item_update_coordinator_lock())
+
+        discovery_sql, discovery_params = connection.cursor_instance.executions[0]
+        update_sql, update_params = connection.cursor_instance.executions[1]
+        self.assertIn("pg_try_advisory_lock", discovery_sql.casefold())
+        self.assertIn("pg_try_advisory_lock", update_sql.casefold())
+        self.assertEqual(discovery_params, ("ludora:item-discovery-coordinator",))
+        self.assertEqual(update_params, ("ludora:store-item-update-coordinator",))
+        self.assertNotEqual(discovery_params, update_params)
+
 
 if __name__ == "__main__":
     unittest.main()

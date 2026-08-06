@@ -227,6 +227,42 @@ def run_item_discovery(
     if not database_url:
         raise RuntimeError("Missing database URL")
 
+    coordinator_connection = connect_database(database_url)
+    try:
+        coordinator_repository = DiscoveryRepository(coordinator_connection)
+        if not coordinator_repository.try_acquire_item_discovery_coordinator_lock():
+            raise OperationAlreadyRunning("Item discovery is already running")
+        return _run_item_discovery_for_store(
+            database_url=database_url,
+            current_env=current_env,
+            store_id=store_id,
+            website_url=website_url,
+            platform=platform,
+            store_name=store_name,
+            env_file=env_file,
+            cancellation_token=cancellation_token,
+            run_id=run_id,
+            started_at=started_at,
+            product_request_throttle=product_request_throttle,
+        )
+    finally:
+        coordinator_connection.close()
+
+
+def _run_item_discovery_for_store(
+    *,
+    database_url: str,
+    current_env: Mapping[str, str],
+    store_id: int,
+    website_url: str,
+    platform: str = "",
+    store_name: str = "",
+    env_file: str = ".env",
+    cancellation_token: CancellationToken | None = None,
+    run_id: str | None = None,
+    started_at: datetime | None = None,
+    product_request_throttle: ProductDiscoveryRequestThrottle | None = None,
+) -> ItemDiscoveryRunResult:
     connection = connect_database(database_url)
     resolved_run_id = run_id or str(uuid.uuid4())
     resolved_started_at = started_at or _utc_now()
@@ -499,87 +535,96 @@ def run_item_discovery_batch(
     if not database_url:
         raise RuntimeError("Missing database URL")
 
-    connection = connect_database(database_url)
+    coordinator_connection = connect_database(database_url)
     try:
-        repository = DiscoveryRepository(connection)
-        stores = repository.list_store_item_discovery_sources(store_ids=store_ids)
-    finally:
-        connection.close()
+        coordinator_repository = DiscoveryRepository(coordinator_connection)
+        if not coordinator_repository.try_acquire_item_discovery_coordinator_lock():
+            raise OperationAlreadyRunning("Item discovery is already running")
 
-    if store_ids and len(stores) != len(set(store_ids)):
-        raise RuntimeError("One or more selected stores were not found")
-
-    resolved_run_id = run_id or str(uuid.uuid4())
-    resolved_product_request_throttle = (
-        product_request_throttle
-        if product_request_throttle is not None
-        else ProductDiscoveryRequestThrottle()
-    )
-    item_candidates = 0
-    new_items = 0
-    items_discovered = 0
-    confirmed_boardgames = 0
-    confirmed_non_boardgames = 0
-    unconfirmed_boardgames = 0
-    unconfirmed_non_boardgames = 0
-    stores_scanned = 0
-    failures: list[ItemDiscoveryStoreFailure] = []
-    for store in stores:
-        raise_if_cancelled(cancellation_token)
+        listing_connection = connect_database(database_url)
         try:
-            result = run_item_discovery(
-                store_id=store.store_id,
-                website_url=store.website_url,
-                platform=store.platform,
-                store_name=store.store_name,
-                env=current_env,
-                env_file=env_file,
-                cancellation_token=cancellation_token,
-                run_id=f"{resolved_run_id}:{store.store_id}",
-                product_request_throttle=resolved_product_request_throttle,
-            )
-        except OperationCancelled:
-            raise
-        except Exception as exc:
-            failures.append(
-                ItemDiscoveryStoreFailure(
-                    store_id=store.store_id,
-                    store_name=store.store_name.strip() or f"Store {store.store_id}",
-                    error=(str(exc).strip() or type(exc).__name__)[:ITEM_DISCOVERY_STORE_ERROR_MAX_LENGTH],
-                )
-            )
-            continue
-        item_candidates += result.item_candidates
-        new_items += result.new_items
-        items_discovered += result.items_discovered
-        confirmed_boardgames += result.confirmed_boardgames
-        confirmed_non_boardgames += result.confirmed_non_boardgames
-        unconfirmed_boardgames += result.unconfirmed_boardgames
-        unconfirmed_non_boardgames += result.unconfirmed_non_boardgames
-        stores_scanned += 1
+            listing_repository = DiscoveryRepository(listing_connection)
+            stores = listing_repository.list_store_item_discovery_sources(store_ids=store_ids)
+        finally:
+            listing_connection.close()
 
-    if failures:
-        batch_error = ItemDiscoveryBatchError(failures)
-        _log_item_discovery_batch_failure(
-            database_url=database_url,
-            run_id=resolved_run_id,
-            failures=failures,
-            stores_attempted=len(stores),
+        if store_ids and len(stores) != len(set(store_ids)):
+            raise RuntimeError("One or more selected stores were not found")
+
+        resolved_run_id = run_id or str(uuid.uuid4())
+        resolved_product_request_throttle = (
+            product_request_throttle
+            if product_request_throttle is not None
+            else ProductDiscoveryRequestThrottle()
         )
-        raise batch_error
+        item_candidates = 0
+        new_items = 0
+        items_discovered = 0
+        confirmed_boardgames = 0
+        confirmed_non_boardgames = 0
+        unconfirmed_boardgames = 0
+        unconfirmed_non_boardgames = 0
+        stores_scanned = 0
+        failures: list[ItemDiscoveryStoreFailure] = []
+        for store in stores:
+            raise_if_cancelled(cancellation_token)
+            try:
+                result = _run_item_discovery_for_store(
+                    database_url=database_url,
+                    current_env=current_env,
+                    store_id=store.store_id,
+                    website_url=store.website_url,
+                    platform=store.platform,
+                    store_name=store.store_name,
+                    env_file=env_file,
+                    cancellation_token=cancellation_token,
+                    run_id=f"{resolved_run_id}:{store.store_id}",
+                    product_request_throttle=resolved_product_request_throttle,
+                )
+            except OperationCancelled:
+                raise
+            except Exception as exc:
+                failures.append(
+                    ItemDiscoveryStoreFailure(
+                        store_id=store.store_id,
+                        store_name=store.store_name.strip() or f"Store {store.store_id}",
+                        error=(str(exc).strip() or type(exc).__name__)[:ITEM_DISCOVERY_STORE_ERROR_MAX_LENGTH],
+                    )
+                )
+                continue
+            item_candidates += result.item_candidates
+            new_items += result.new_items
+            items_discovered += result.items_discovered
+            confirmed_boardgames += result.confirmed_boardgames
+            confirmed_non_boardgames += result.confirmed_non_boardgames
+            unconfirmed_boardgames += result.unconfirmed_boardgames
+            unconfirmed_non_boardgames += result.unconfirmed_non_boardgames
+            stores_scanned += 1
 
-    return ItemDiscoveryRunResult(
-        store_id=None,
-        website_url="",
-        item_candidates=item_candidates,
-        new_items=new_items,
-        items_discovered=items_discovered,
-        confirmed_boardgames=confirmed_boardgames,
-        confirmed_non_boardgames=confirmed_non_boardgames,
-        unconfirmed_boardgames=unconfirmed_boardgames,
-        unconfirmed_non_boardgames=unconfirmed_non_boardgames,
-        stores_scanned=stores_scanned,
-    )
+        if failures:
+            batch_error = ItemDiscoveryBatchError(failures)
+            _log_item_discovery_batch_failure(
+                database_url=database_url,
+                run_id=resolved_run_id,
+                failures=failures,
+                stores_attempted=len(stores),
+            )
+            raise batch_error
+
+        return ItemDiscoveryRunResult(
+            store_id=None,
+            website_url="",
+            item_candidates=item_candidates,
+            new_items=new_items,
+            items_discovered=items_discovered,
+            confirmed_boardgames=confirmed_boardgames,
+            confirmed_non_boardgames=confirmed_non_boardgames,
+            unconfirmed_boardgames=unconfirmed_boardgames,
+            unconfirmed_non_boardgames=unconfirmed_non_boardgames,
+            stores_scanned=stores_scanned,
+        )
+    finally:
+        coordinator_connection.close()
 
 
 def _log_item_discovery_batch_failure(

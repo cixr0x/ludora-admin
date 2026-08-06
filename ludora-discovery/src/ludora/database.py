@@ -425,6 +425,15 @@ class DiscoveryRepository:
             row = cursor.fetchone()
         return bool(row and row[0])
 
+    def try_acquire_item_discovery_coordinator_lock(self) -> bool:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "select pg_try_advisory_lock(hashtext(%s))",
+                ("ludora:item-discovery-coordinator",),
+            )
+            row = cursor.fetchone()
+        return bool(row and row[0])
+
     def mark_continuous_update_worker_started(
         self,
         *,

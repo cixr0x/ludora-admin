@@ -85,7 +85,10 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
                 run_store_discovery()
 
     def test_run_item_discovery_crawls_one_store_and_closes_database(self):
+        coordinator_connection = Mock()
         connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
         repository = Mock()
 
         item_processor = Mock()
@@ -142,9 +145,9 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ) as resolve_classifier_model, patch(
             "ludora.operations.resolve_openai_base_url", return_value="http://ai.test/v1"
         ) as resolve_openai_base_url, patch(
-            "ludora.operations.connect_database", return_value=connection
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
         ) as connect_database, patch(
-            "ludora.operations.DiscoveryRepository", return_value=repository
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
         ), patch(
             "ludora.operations.AdminItemMatcher", return_value=item_processor
         ) as admin_item_matcher, patch(
@@ -180,7 +183,11 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(resolve_classifier_model.call_args.kwargs["dotenv_path"], "custom.env")
         resolve_openai_base_url.assert_called_once()
         self.assertEqual(resolve_openai_base_url.call_args.kwargs["dotenv_path"], "custom.env")
-        connect_database.assert_called_once_with("postgresql://ludora")
+        self.assertEqual(connect_database.call_args_list, [
+            unittest.mock.call("postgresql://ludora"),
+            unittest.mock.call("postgresql://ludora"),
+        ])
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.assert_called_once_with()
         admin_item_matcher.assert_called_once_with(
             "http://admin.test",
             repository,
@@ -263,6 +270,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             },
         )
         connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
         self.assertEqual(result.store_id, 12)
         self.assertEqual(result.website_url, "https://example.mx/")
         self.assertEqual(result.item_candidates, 2)
@@ -274,8 +282,11 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(result.unconfirmed_non_boardgames, 0)
 
     def test_run_item_discovery_writes_database_trace_events(self):
+        coordinator_connection = Mock()
         connection = MagicMock()
         cursor = connection.cursor.return_value.__enter__.return_value
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
         repository = Mock()
         repository.upsert_item_candidate.return_value = ItemCandidateUpsertResult(
             candidate_id=101,
@@ -294,9 +305,9 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch(
             "ludora.operations.resolve_ai_classifier_enabled", return_value=False
         ), patch(
-            "ludora.operations.connect_database", return_value=connection
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
         ), patch(
-            "ludora.operations.DiscoveryRepository", return_value=repository
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
         ), patch(
             "ludora.operations.collect_store_inventory", return_value=[]
         ):
@@ -312,6 +323,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             if "insert into store_item_discovery_trace_log" in call.args[0]
         ]
         events = [call.args[1][2] for call in trace_calls]
+        self.assertTrue(events)
         self.assertEqual(events[0], "item_discovery.run.start")
         self.assertEqual(trace_calls[0].args[1][0], "run-123")
         self.assertEqual(trace_calls[0].args[1][1], "discovery")
@@ -319,9 +331,13 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertIn('"website_url":"https://example.mx/"', trace_calls[0].args[1][3])
         self.assertIn("item_discovery.config.resolved", events)
         self.assertEqual(events[-1], "item_discovery.run.completed")
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_logs_failed_run(self):
+        coordinator_connection = Mock()
         connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
         repository = Mock()
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
@@ -331,9 +347,9 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch(
             "ludora.operations.resolve_ai_classifier_enabled", return_value=False
         ), patch(
-            "ludora.operations.connect_database", return_value=connection
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
         ), patch(
-            "ludora.operations.DiscoveryRepository", return_value=repository
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
         ), patch(
             "ludora.operations.AdminItemMatcher", return_value=object()
         ), patch(
@@ -355,9 +371,13 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["items_discovered"], 0)
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["error"], "crawl failed")
         connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_bounds_failed_trace_and_persisted_job_error(self):
+        coordinator_connection = Mock()
         connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
         repository = Mock()
         trace_logger = Mock()
         failure = RuntimeError("upstream GraphQL failure: " + ("x" * 10_000))
@@ -369,9 +389,9 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch(
             "ludora.operations.resolve_ai_classifier_enabled", return_value=False
         ), patch(
-            "ludora.operations.connect_database", return_value=connection
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
         ), patch(
-            "ludora.operations.DiscoveryRepository", return_value=repository
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
         ), patch(
             "ludora.operations.create_item_discovery_trace_logger", return_value=trace_logger
         ), patch(
@@ -397,13 +417,18 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertLessEqual(len(failed_trace["error"]), 2_000)
         self.assertEqual(failed_trace["error_type"], "RuntimeError")
         self.assertTrue(failed_trace["error"].endswith("..."))
+        repository.complete_store_item_discovery_log.assert_called_once()
         persisted_error = repository.complete_store_item_discovery_log.call_args.kwargs["error"]
         self.assertLessEqual(len(persisted_error), 2_000)
         self.assertTrue(persisted_error.endswith("..."))
         connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_uses_heuristic_classifier_when_ai_disabled(self):
+        coordinator_connection = Mock()
         connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
         repository = Mock()
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
@@ -417,9 +442,9 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ) as resolve_openai_api_key, patch(
             "ludora.operations.OpenAIItemClassifier"
         ) as openai_item_classifier, patch(
-            "ludora.operations.connect_database", return_value=connection
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
         ), patch(
-            "ludora.operations.DiscoveryRepository", return_value=repository
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
         ), patch(
             "ludora.operations.AdminItemMatcher", return_value=object()
         ), patch(
@@ -431,9 +456,13 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         openai_item_classifier.assert_not_called()
         self.assertIs(collect_store_inventory.call_args.kwargs["item_classifier"], apply_item_classification)
         connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_requires_openai_key_when_ai_classifier_enabled(self):
+        coordinator_connection = Mock()
         connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
         repository = Mock()
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
@@ -445,14 +474,14 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch(
             "ludora.operations.resolve_openai_api_key", return_value=""
         ), patch(
-            "ludora.operations.connect_database", return_value=connection
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
         ) as connect_database, patch(
-            "ludora.operations.DiscoveryRepository", return_value=repository
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
         ):
             with self.assertRaisesRegex(RuntimeError, "Missing OpenAI API key for AI item classifier"):
                 run_item_discovery(store_id=12, website_url="https://example.mx/", run_id="run-123")
 
-        connect_database.assert_called_once_with("postgresql://ludora")
+        self.assertEqual(connect_database.call_count, 2)
         repository.start_store_item_discovery_log.assert_called_once()
         repository.complete_store_item_discovery_log.assert_called_once()
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
@@ -462,14 +491,96 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             "Missing OpenAI API key for AI item classifier",
         )
         connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
+
+    def test_run_item_discovery_rejects_unavailable_coordinator_before_starting_job(self):
+        coordinator_connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = False
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.resolve_browser_fetch_enabled", return_value=False
+        ), patch(
+            "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
+        ), patch(
+            "ludora.operations.resolve_ai_classifier_enabled", return_value=False
+        ), patch(
+            "ludora.operations.connect_database", return_value=coordinator_connection
+        ) as connect_database, patch(
+            "ludora.operations.DiscoveryRepository", return_value=coordinator_repository
+        ), patch(
+            "ludora.operations.collect_store_inventory", return_value=[]
+        ) as collect_store_inventory:
+            with self.assertRaisesRegex(OperationAlreadyRunning, "Item discovery is already running"):
+                run_item_discovery(store_id=12, website_url="https://example.mx/")
+
+        connect_database.assert_called_once_with("postgresql://ludora")
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.assert_called_once_with()
+        coordinator_repository.start_store_item_discovery_log.assert_not_called()
+        collect_store_inventory.assert_not_called()
+        coordinator_connection.close.assert_called_once_with()
+
+    def test_run_item_discovery_closes_coordinator_after_cancellation(self):
+        coordinator_connection = Mock()
+        operation_connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
+        operation_repository = Mock()
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.resolve_browser_fetch_enabled", return_value=False
+        ), patch(
+            "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
+        ), patch(
+            "ludora.operations.resolve_ai_classifier_enabled", return_value=False
+        ), patch(
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, operation_connection]
+        ), patch(
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, operation_repository]
+        ), patch(
+            "ludora.operations.collect_store_inventory", side_effect=OperationCancelled("cancelled")
+        ):
+            with self.assertRaisesRegex(OperationCancelled, "cancelled"):
+                run_item_discovery(store_id=12, website_url="https://example.mx/")
+
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.assert_called_once_with()
+        operation_connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
+
+    def test_run_item_discovery_batch_rejects_unavailable_coordinator_before_listing_stores(self):
+        coordinator_connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = False
+        coordinator_repository.list_store_item_discovery_sources.return_value = []
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", return_value=coordinator_connection
+        ) as connect_database, patch(
+            "ludora.operations.DiscoveryRepository", return_value=coordinator_repository
+        ), patch(
+            "ludora.operations._run_item_discovery_for_store"
+        ) as run_item_discovery_for_store:
+            with self.assertRaisesRegex(OperationAlreadyRunning, "Item discovery is already running"):
+                run_item_discovery_batch()
+
+        connect_database.assert_called_once_with("postgresql://ludora")
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.assert_called_once_with()
+        coordinator_repository.list_store_item_discovery_sources.assert_not_called()
+        run_item_discovery_for_store.assert_not_called()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_batch_runs_selected_stores_and_closes_database(self):
-        connection = Mock()
-        repository = Mock()
-        repository.list_store_item_discovery_sources.return_value = [
+        coordinator_connection = Mock()
+        listing_connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
+        listing_repository = Mock()
+        stores = [
             SimpleNamespace(store_id=12, store_name="Alpha Games", website_url="https://alpha.mx/", platform="shopify"),
             SimpleNamespace(store_id=34, store_name="Beta Games", website_url="https://beta.mx/", platform="custom"),
         ]
+        coordinator_repository.list_store_item_discovery_sources.return_value = stores
+        listing_repository.list_store_item_discovery_sources.return_value = stores
 
         class FakeClock:
             def __init__(self):
@@ -512,11 +623,16 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             return item_discovery_results.pop(0)
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
-            "ludora.operations.connect_database", return_value=connection
-        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, listing_connection]
+        ), patch(
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, listing_repository]
+        ), patch(
             "ludora.operations.run_item_discovery",
             side_effect=run_item_discovery_with_throttle,
-        ) as run_item_discovery_:
+        ) as coordinated_run_item_discovery, patch(
+            "ludora.operations._run_item_discovery_for_store",
+            side_effect=run_item_discovery_with_throttle,
+        ) as run_item_discovery_for_store:
             result = run_item_discovery_batch(
                 env_file="custom.env",
                 run_id="batch-run",
@@ -524,10 +640,16 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
                 product_request_throttle=injected_throttle,
             )
 
-        repository.list_store_item_discovery_sources.assert_called_once_with(store_ids=[12, 34])
-        self.assertEqual(run_item_discovery_.call_count, 2)
-        first_call = run_item_discovery_.call_args_list[0].kwargs
-        second_call = run_item_discovery_.call_args_list[1].kwargs
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.assert_called_once_with()
+        listing_repository.list_store_item_discovery_sources.assert_called_once_with(store_ids=[12, 34])
+        coordinated_run_item_discovery.assert_not_called()
+        self.assertEqual(run_item_discovery_for_store.call_count, 2)
+        self.assertEqual(
+            [entry.kwargs["store_id"] for entry in run_item_discovery_for_store.call_args_list],
+            [12, 34],
+        )
+        first_call = run_item_discovery_for_store.call_args_list[0].kwargs
+        second_call = run_item_discovery_for_store.call_args_list[1].kwargs
         self.assertEqual(first_call["store_id"], 12)
         self.assertEqual(first_call["website_url"], "https://alpha.mx/")
         self.assertEqual(first_call["store_name"], "Alpha Games")
@@ -535,8 +657,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(first_call["run_id"], "batch-run:12")
         self.assertEqual(second_call["store_id"], 34)
         self.assertEqual(second_call["run_id"], "batch-run:34")
-        first_throttle = run_item_discovery_.call_args_list[0].kwargs["product_request_throttle"]
-        second_throttle = run_item_discovery_.call_args_list[1].kwargs["product_request_throttle"]
+        first_throttle = run_item_discovery_for_store.call_args_list[0].kwargs["product_request_throttle"]
+        second_throttle = run_item_discovery_for_store.call_args_list[1].kwargs["product_request_throttle"]
         self.assertIs(first_throttle, second_throttle)
         self.assertIs(first_throttle, injected_throttle)
         self.assertEqual(fake_clock.waits, [3.0])
@@ -550,24 +672,32 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(result.unconfirmed_boardgames, 1)
         self.assertEqual(result.unconfirmed_non_boardgames, 1)
         self.assertEqual(result.stores_scanned, 2)
-        connection.close.assert_called_once_with()
+        listing_connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_batch_continues_after_store_failures_and_raises_aggregate_error(self):
         """Removing the per-store exception handler must fail this test."""
+        coordinator_connection = Mock()
         listing_connection = Mock()
         trace_connection = Mock()
-        repository = Mock()
-        repository.list_store_item_discovery_sources.return_value = [
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
+        listing_repository = Mock()
+        stores = [
             SimpleNamespace(store_id=12, store_name="Alpha Games", website_url="https://alpha.mx/", platform="shopify"),
             SimpleNamespace(store_id=34, store_name="Beta Games", website_url="https://beta.mx/", platform="custom"),
             SimpleNamespace(store_id=56, store_name="Gamma Games", website_url="https://gamma.mx/", platform="shopify"),
         ]
+        coordinator_repository.list_store_item_discovery_sources.return_value = stores
+        listing_repository.list_store_item_discovery_sources.return_value = stores
         throttle = ProductDiscoveryRequestThrottle()
         trace_logger = Mock()
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
-            "ludora.operations.connect_database", side_effect=[listing_connection, trace_connection]
-        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, listing_connection, trace_connection]
+        ), patch(
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, listing_repository]
+        ), patch(
             "ludora.operations.create_item_discovery_trace_logger", return_value=trace_logger
         ), patch(
             "ludora.operations.run_item_discovery",
@@ -576,7 +706,14 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
                 ItemDiscoveryRunResult(store_id=34, website_url="https://beta.mx/", item_candidates=2),
                 RuntimeError("Gamma failure"),
             ],
-        ) as run_item_discovery_:
+        ) as coordinated_run_item_discovery, patch(
+            "ludora.operations._run_item_discovery_for_store",
+            side_effect=[
+                RuntimeError("Alpha failure " + "x" * 600),
+                ItemDiscoveryRunResult(store_id=34, website_url="https://beta.mx/", item_candidates=2),
+                RuntimeError("Gamma failure"),
+            ],
+        ) as run_item_discovery_for_store:
             with self.assertRaises(ItemDiscoveryBatchError) as raised:
                 run_item_discovery_batch(
                     run_id="batch-run",
@@ -584,12 +721,13 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
                 )
 
         self.assertEqual(
-            [call.kwargs["store_id"] for call in run_item_discovery_.call_args_list],
+            [call.kwargs["store_id"] for call in run_item_discovery_for_store.call_args_list],
             [12, 34, 56],
         )
         self.assertTrue(
-            all(call.kwargs["product_request_throttle"] is throttle for call in run_item_discovery_.call_args_list)
+            all(call.kwargs["product_request_throttle"] is throttle for call in run_item_discovery_for_store.call_args_list)
         )
+        coordinated_run_item_discovery.assert_not_called()
         self.assertEqual(
             [(failure.store_id, failure.store_name) for failure in raised.exception.failures],
             [(12, "Alpha Games"), (56, "Gamma Games")],
@@ -609,66 +747,105 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         )
         listing_connection.close.assert_called_once_with()
         trace_connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_batch_normalizes_empty_store_name_in_failure(self):
         """Removing the empty-name fallback must fail this test."""
-        connection = Mock()
+        coordinator_connection = Mock()
+        listing_connection = Mock()
         trace_connection = Mock()
-        repository = Mock()
-        repository.list_store_item_discovery_sources.return_value = [
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
+        listing_repository = Mock()
+        stores = [
             SimpleNamespace(store_id=12, store_name="  ", website_url="https://alpha.mx/", platform="shopify"),
         ]
+        coordinator_repository.list_store_item_discovery_sources.return_value = stores
+        listing_repository.list_store_item_discovery_sources.return_value = stores
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
-            "ludora.operations.connect_database", side_effect=[connection, trace_connection]
-        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, listing_connection, trace_connection]
+        ), patch(
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, listing_repository]
+        ), patch(
             "ludora.operations.run_item_discovery", side_effect=RuntimeError()
+        ) as coordinated_run_item_discovery, patch(
+            "ludora.operations._run_item_discovery_for_store", side_effect=RuntimeError()
         ):
             with self.assertRaises(ItemDiscoveryBatchError) as raised:
                 run_item_discovery_batch(run_id="batch-run")
 
         self.assertEqual(raised.exception.failures[0].store_name, "Store 12")
         self.assertEqual(raised.exception.failures[0].error, "RuntimeError")
+        coordinated_run_item_discovery.assert_not_called()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_batch_cancellation_aborts_before_later_stores(self):
         """Catching OperationCancelled as a store failure must fail this test."""
-        connection = Mock()
-        repository = Mock()
-        repository.list_store_item_discovery_sources.return_value = [
+        coordinator_connection = Mock()
+        listing_connection = Mock()
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
+        listing_repository = Mock()
+        stores = [
             SimpleNamespace(store_id=12, store_name="Alpha Games", website_url="https://alpha.mx/", platform="shopify"),
             SimpleNamespace(store_id=34, store_name="Beta Games", website_url="https://beta.mx/", platform="custom"),
         ]
+        coordinator_repository.list_store_item_discovery_sources.return_value = stores
+        listing_repository.list_store_item_discovery_sources.return_value = stores
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
-            "ludora.operations.connect_database", return_value=connection
-        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, listing_connection]
+        ), patch(
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, listing_repository]
+        ), patch(
             "ludora.operations.run_item_discovery", side_effect=OperationCancelled("cancelled")
-        ) as run_item_discovery_:
+        ) as coordinated_run_item_discovery, patch(
+            "ludora.operations._run_item_discovery_for_store",
+            side_effect=OperationCancelled("cancelled"),
+        ) as run_item_discovery_for_store:
             with self.assertRaises(OperationCancelled):
                 run_item_discovery_batch(run_id="batch-run")
 
-        self.assertEqual(run_item_discovery_.call_count, 1)
-        self.assertEqual(run_item_discovery_.call_args.kwargs["store_id"], 12)
+        coordinated_run_item_discovery.assert_not_called()
+        self.assertEqual(run_item_discovery_for_store.call_count, 1)
+        self.assertEqual(run_item_discovery_for_store.call_args.kwargs["store_id"], 12)
+        listing_connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_batch_preserves_aggregate_error_when_batch_trace_fails(self):
         """Letting trace failures mask store failures must fail this test."""
+        coordinator_connection = Mock()
         listing_connection = Mock()
         trace_connection = Mock()
-        repository = Mock()
-        repository.list_store_item_discovery_sources.return_value = [
+        coordinator_repository = Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
+        listing_repository = Mock()
+        stores = [
             SimpleNamespace(store_id=12, store_name="Alpha Games", website_url="https://alpha.mx/", platform="shopify"),
         ]
+        coordinator_repository.list_store_item_discovery_sources.return_value = stores
+        listing_repository.list_store_item_discovery_sources.return_value = stores
 
         with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
-            "ludora.operations.connect_database", side_effect=[listing_connection, trace_connection]
-        ), patch("ludora.operations.DiscoveryRepository", return_value=repository), patch(
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, listing_connection, trace_connection]
+        ), patch(
+            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, listing_repository]
+        ), patch(
             "ludora.operations.create_item_discovery_trace_logger", side_effect=RuntimeError("trace unavailable")
-        ), patch("ludora.operations.run_item_discovery", side_effect=RuntimeError("store failure")):
+        ), patch(
+            "ludora.operations.run_item_discovery", side_effect=RuntimeError("store failure")
+        ) as coordinated_run_item_discovery, patch(
+            "ludora.operations._run_item_discovery_for_store",
+            side_effect=RuntimeError("store failure"),
+        ):
             with self.assertRaises(ItemDiscoveryBatchError) as raised:
                 run_item_discovery_batch(run_id="batch-run")
 
         self.assertEqual(raised.exception.failures[0].error, "store failure")
+        coordinated_run_item_discovery.assert_not_called()
         trace_connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_update_refreshes_confirmed_boardgames_and_closes_database(self):
         connection = Mock()

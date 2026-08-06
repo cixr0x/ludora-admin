@@ -14,6 +14,7 @@ from ludora.operations import (
     ItemDiscoveryStoreFailure,
     ItemEmbeddingRunResult,
     ItemUpdateRunResult,
+    OperationAlreadyRunning,
     StoreDiscoveryRunResult,
 )
 from ludora.operation_cli import main
@@ -139,6 +140,34 @@ class OperationCliTests(unittest.TestCase):
         message = json.loads(error_lines[0])["error"]["message"]
         self.assertTrue(message.startswith("Item discovery batch failed for 8 store(s):"))
         self.assertTrue(message.endswith("..."))
+
+    def test_item_discovery_coordinator_conflict_prints_bounded_error_without_success_json(self):
+        stdout = StringIO()
+        stderr = StringIO()
+
+        with patch("sys.stdout", stdout), patch("sys.stderr", stderr), patch(
+            "ludora.operation_cli.run_item_discovery",
+            side_effect=OperationAlreadyRunning("Item discovery is already running"),
+        ):
+            exit_code = main(
+                [
+                    "item-discovery",
+                    "--store-id",
+                    "12",
+                    "--website-url",
+                    "https://store.test",
+                ]
+            )
+
+        self.assertEqual(exit_code, 1)
+        self.assertEqual(stdout.getvalue(), "")
+        error_lines = stderr.getvalue().splitlines()
+        self.assertEqual(len(error_lines), 1)
+        self.assertLessEqual(len(error_lines[0]), 4032)
+        self.assertEqual(
+            json.loads(error_lines[0])["error"]["message"],
+            "Item discovery is already running",
+        )
 
     def test_runs_item_update(self):
         stdout = StringIO()
