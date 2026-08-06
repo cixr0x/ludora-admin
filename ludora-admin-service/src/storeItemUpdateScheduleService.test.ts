@@ -47,7 +47,7 @@ class FakeSessionDatabase implements SessionDatabase {
 }
 
 describe('store item update schedule service', () => {
-  it('spreads shuffled items evenly per store inside one 20-hour window', async () => {
+  it('spreads deterministically ranked items evenly per store inside one 20-hour window', async () => {
     const database = new FakeSessionDatabase([
       [{ acquired: true }],
       [runningRun({ id: '41' })],
@@ -78,9 +78,15 @@ describe('store item update schedule service', () => {
       new Date('2026-08-05T15:00:00.000Z'),
       new Date('2026-08-06T11:00:00.000Z')
     ]);
-    expect(distributionSql).toContain('row_number() over ( partition by store_items.store_id order by random() )');
+    expect(distributionSql).toContain(
+      'row_number() over ( partition by store_items.store_id order by store_items.id )'
+    );
+    expect(distributionSql).not.toContain(
+      'partition by store_items.store_id order by random()'
+    );
     expect(distributionSql).toContain('count(*) over (partition by store_items.store_id)');
-    expect(distributionSql).toContain('(ranked.random_rank + store_phases.phase)');
+    expect(distributionSql).toContain('select store_id, random() as phase');
+    expect(distributionSql).toContain('(ranked.schedule_rank + store_phases.phase)');
     expect(distributionSql).toContain('stores.active = true');
     expect(distributionSql).toContain('store_items.store_active = true');
     expect(distributionSql).toContain('store_items.is_boardgame = true');

@@ -86,8 +86,8 @@ with eligible as materialized (
     store_items.id,
     store_items.store_id,
     row_number() over (
-      partition by store_items.store_id order by random()
-    ) - 1 as random_rank,
+      partition by store_items.store_id order by store_items.id
+    ) - 1 as schedule_rank,
     count(*) over (partition by store_items.store_id) as store_item_count
   from store_items
   join eligible on eligible.id = store_items.id
@@ -99,7 +99,7 @@ with eligible as materialized (
   update store_items
   set next_update_at = $1::timestamptz
     + (($2::timestamptz - $1::timestamptz)
-      * ((ranked.random_rank + store_phases.phase) / ranked.store_item_count))
+      * ((ranked.schedule_rank + store_phases.phase) / ranked.store_item_count))
   from ranked
   join store_phases on store_phases.store_id = ranked.store_id
   where store_items.id = ranked.id
