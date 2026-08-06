@@ -68,6 +68,8 @@ def collect_store_inventory(
     before_product_request: BeforeProductRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     normalized_platform = platform.strip().casefold()
+    if normalized_platform == "shopify" and request_headers_provider is None:
+        raise RuntimeError("Shopify discovery requires a Web Bot Auth signing provider")
     browser_fetch_enabled = browser_sitemap_fetch_enabled or normalized_platform in BROWSER_FETCH_REQUIRED_PLATFORMS
     if normalized_platform == "amazon":
         return crawl_amazon_store_inventory(

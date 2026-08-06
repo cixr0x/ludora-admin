@@ -14,6 +14,9 @@ from ludora.webfetch import FetchResult, retry_after_seconds_from_headers
 
 
 SHOPIFY_STOREFRONT_API_VERSION = "2026-07"
+SHOPIFY_GRAPHQL_ERROR_COUNT_LIMIT = 5
+SHOPIFY_GRAPHQL_ERROR_CODE_MAX_LENGTH = 100
+SHOPIFY_GRAPHQL_ERROR_MESSAGE_MAX_LENGTH = 500
 SHOPIFY_STOREFRONT_PRODUCT_QUERY = """
 query LudoraProduct($handle: String!) @inContext(country: MX, language: ES) {
   product(handle: $handle) {
@@ -85,6 +88,7 @@ def fetch_shopify_storefront_product(
     source_url: str,
     *,
     request_headers_provider: ShopifyRequestHeadersProvider | None,
+    before_request: Callable[[], None] | None = None,
     timeout_seconds: int = 20,
 ) -> FetchResult:
     endpoint = shopify_storefront_endpoint(source_url)
@@ -109,6 +113,19 @@ def fetch_shopify_storefront_product(
         if request_headers_provider is not None:
             request_headers.update(request_headers_provider(endpoint, "POST"))
         request = Request(endpoint, data=body, headers=request_headers, method="POST")
+    except (HTTPException, RuntimeError, TypeError, URLError, TimeoutError, ValueError) as exc:
+        return FetchResult(
+            url=endpoint,
+            text="",
+            status_code=0,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+
+    if before_request is not None:
+        before_request()
+
+    try:
         with urlopen(request, timeout=timeout_seconds) as response:
             charset = response.headers.get_content_charset() or "utf-8"
             return FetchResult(
@@ -152,12 +169,31 @@ def shopify_graphql_errors(payload: Mapping[str, object]) -> list[dict[str, obje
 
 def shopify_graphql_error_messages(errors: list[dict[str, object]]) -> list[str]:
     messages = []
-    for error in errors[:5]:
-        message = str(error.get("message") or "Unknown GraphQL error").strip()
+    for error in errors[:SHOPIFY_GRAPHQL_ERROR_COUNT_LIMIT]:
+        message = _bounded_graphql_diagnostic(
+            error.get("message") or "Unknown GraphQL error",
+            SHOPIFY_GRAPHQL_ERROR_MESSAGE_MAX_LENGTH,
+        )
         extensions = error.get("extensions")
-        code = str(extensions.get("code") or "").strip() if isinstance(extensions, dict) else ""
+        code = (
+            _bounded_graphql_diagnostic(
+                extensions.get("code") or "",
+                SHOPIFY_GRAPHQL_ERROR_CODE_MAX_LENGTH,
+            )
+            if isinstance(extensions, dict)
+            else ""
+        )
         messages.append(f"{code}: {message}" if code else message)
     return messages
+
+
+def _bounded_graphql_diagnostic(value: object, max_length: int) -> str:
+    normalized = " ".join(str(value).split())
+    if len(normalized) <= max_length:
+        return normalized
+    if max_length <= 3:
+        return normalized[:max_length]
+    return f"{normalized[:max_length - 3]}..."
 
 
 def shopify_graphql_is_throttled(errors: list[dict[str, object]]) -> bool:

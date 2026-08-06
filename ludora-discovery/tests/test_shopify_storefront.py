@@ -15,6 +15,7 @@ from ludora.product_crawler import (
     crawl_store_product_details,
     refresh_confirmed_store_item_candidate,
 )
+from ludora.product_discovery_throttle import ProductDiscoveryRequestThrottle
 from ludora.shopify_storefront import (
     SHOPIFY_STOREFRONT_API_VERSION,
     extract_shopify_storefront_candidate,
@@ -29,6 +30,10 @@ PRODUCT_URL = "https://tienda.example.mx/products/mago-el-despertar-2%C2%AA-edic
 GRAPHQL_ENDPOINT = (
     f"https://tienda.example.mx/api/{SHOPIFY_STOREFRONT_API_VERSION}/graphql.json"
 )
+
+
+def _signing_provider(_target_url, _method="GET"):
+    return {"Signature": "test-signature"}
 
 
 def _shopify_product(**overrides):
@@ -172,6 +177,63 @@ class ShopifyStorefrontTests(unittest.TestCase):
         self.assertEqual(fetched.status_code, 200)
         self.assertEqual(fetched.retry_after_seconds, 37.0)
 
+    def test_shopify_discovery_paces_outbound_posts_after_unequal_signer_latency(self):
+        class FakeClock:
+            def __init__(self):
+                self.now = 100.0
+                self.waits = []
+
+            def monotonic(self):
+                return self.now
+
+            def wait(self, seconds, _cancellation_token):
+                self.waits.append(seconds)
+                self.now += seconds
+
+        product_urls = [
+            PRODUCT_URL.split("?")[0],
+            "https://tienda.example.mx/products/catan",
+        ]
+        repository = DiscoveryRepository()
+        clock = FakeClock()
+        throttle = ProductDiscoveryRequestThrottle(clock=clock.monotonic, waiter=clock.wait)
+        signer_delays = iter([10.0, 0.0])
+        dispatch_times = []
+
+        def headers_provider(_endpoint, _method):
+            clock.now += next(signer_delays)
+            return {"Signature": "sig-value"}
+
+        def urlopen(_request, timeout):
+            self.assertEqual(timeout, 20)
+            dispatch_times.append(clock.now)
+            response = Mock()
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            response.headers = Message()
+            response.headers["Content-Type"] = "application/json; charset=utf-8"
+            response.status = 200
+            response.geturl.return_value = GRAPHQL_ENDPOINT
+            response.read.return_value = _payload().encode("utf-8")
+            return response
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=product_urls,
+        ), patch("ludora.shopify_storefront.urlopen", side_effect=urlopen):
+            records = crawl_store_product_details(
+                "https://tienda.example.mx/",
+                31,
+                repository,
+                platform="shopify",
+                request_headers_provider=headers_provider,
+                before_product_request=lambda _url: throttle.wait_before_request(),
+            )
+
+        self.assertEqual(len(records), 2)
+        self.assertEqual(dispatch_times, [110.0, 113.0])
+        self.assertEqual(clock.waits, [3.0])
+
     def test_new_shopify_sitemap_candidate_uses_graphql_without_product_html(self):
         store_url = "https://tienda.example.mx/"
         product_url = PRODUCT_URL.split("?")[0]
@@ -180,12 +242,18 @@ class ShopifyStorefrontTests(unittest.TestCase):
         headers_provider = Mock(return_value={"Signature": "sig-value"})
         browser_fetcher = Mock()
 
+        def fetch_graphql(_source_url, *, request_headers_provider, before_request=None):
+            self.assertIs(request_headers_provider, headers_provider)
+            if before_request is not None:
+                before_request()
+            return FetchResult(url=GRAPHQL_ENDPOINT, text=_payload())
+
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=[product_url],
         ), patch(
             "ludora.product_crawler.fetch_shopify_storefront_product",
-            return_value=FetchResult(url=GRAPHQL_ENDPOINT, text=_payload()),
+            side_effect=fetch_graphql,
         ) as fetch_product, patch("ludora.product_crawler.fetch_html") as fetch_html:
             records = crawl_store_product_details(
                 store_url,
@@ -199,7 +267,10 @@ class ShopifyStorefrontTests(unittest.TestCase):
 
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].price_source, "shopify_storefront_graphql")
-        fetch_product.assert_called_once_with(product_url, request_headers_provider=headers_provider)
+        fetch_product.assert_called_once()
+        self.assertEqual(fetch_product.call_args.args, (product_url,))
+        self.assertIs(fetch_product.call_args.kwargs["request_headers_provider"], headers_provider)
+        self.assertIsNotNone(fetch_product.call_args.kwargs["before_request"])
         fetch_html.assert_not_called()
         browser_fetcher.assert_not_called()
         self.assertEqual(before_product_request.call_args_list, [call(product_url)])
@@ -218,6 +289,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                 31,
                 repository,
                 platform="shopify",
+                request_headers_provider=_signing_provider,
             )
 
         self.assertEqual(records, [])
@@ -245,6 +317,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                 31,
                 repository,
                 platform="shopify",
+                request_headers_provider=_signing_provider,
                 trace_logger=trace,
             )
 
@@ -263,22 +336,32 @@ class ShopifyStorefrontTests(unittest.TestCase):
         product_url = PRODUCT_URL.split("?")[0]
         repository = DiscoveryRepository()
         before_product_request = Mock()
+        responses = iter(
+            [
+                FetchResult(url=GRAPHQL_ENDPOINT, text="busy", status_code=429, retry_after_seconds=17.5),
+                FetchResult(url=GRAPHQL_ENDPOINT, text=_payload()),
+            ]
+        )
+
+        def fetch_graphql(_source_url, *, request_headers_provider, before_request=None):
+            self.assertIs(request_headers_provider, _signing_provider)
+            if before_request is not None:
+                before_request()
+            return next(responses)
 
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=[product_url],
         ), patch(
             "ludora.product_crawler.fetch_shopify_storefront_product",
-            side_effect=[
-                FetchResult(url=GRAPHQL_ENDPOINT, text="busy", status_code=429, retry_after_seconds=17.5),
-                FetchResult(url=GRAPHQL_ENDPOINT, text=_payload()),
-            ],
+            side_effect=fetch_graphql,
         ) as fetch_product, patch("ludora.product_crawler.wait_for_discovery_delay") as wait:
             records = crawl_store_product_details(
                 "https://tienda.example.mx/",
                 31,
                 repository,
                 platform="shopify",
+                request_headers_provider=_signing_provider,
                 before_product_request=before_product_request,
             )
 
@@ -305,6 +388,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                     31,
                     repository,
                     platform="shopify",
+                    request_headers_provider=_signing_provider,
                 )
 
         self.assertEqual(fetch_product.call_count, 3)
@@ -330,6 +414,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                     31,
                     repository,
                     platform="shopify",
+                    request_headers_provider=_signing_provider,
                 )
 
         self.assertEqual(fetch_product.call_count, 3)
@@ -370,6 +455,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                 31,
                 repository,
                 platform="shopify",
+                request_headers_provider=_signing_provider,
             )
 
         self.assertEqual(len(records), 1)
@@ -401,6 +487,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                             31,
                             repository,
                             platform="shopify",
+                            request_headers_provider=_signing_provider,
                             trace_logger=trace,
                         )
 
@@ -426,6 +513,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                     31,
                     repository,
                     platform="shopify",
+                    request_headers_provider=_signing_provider,
                 )
 
         fetch_product.assert_called_once()
@@ -449,9 +537,113 @@ class ShopifyStorefrontTests(unittest.TestCase):
                     31,
                     repository,
                     platform="shopify",
+                    request_headers_provider=_signing_provider,
                 )
 
         fetch_product.assert_called_once()
+
+    def test_shopify_discovery_bounds_oversized_graphql_error_diagnostics(self):
+        product_url = PRODUCT_URL.split("?")[0]
+        repository = DiscoveryRepository()
+        trace = FakeTraceLogger()
+        oversized_errors = [
+            {
+                "message": f"Access denied {index}: " + ("m" * 8_000),
+                "extensions": {"code": f"ACCESS_DENIED_{index}_" + ("c" * 1_000)},
+            }
+            for index in range(8)
+        ]
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[product_url],
+        ), patch(
+            "ludora.product_crawler.fetch_shopify_storefront_product",
+            return_value=FetchResult(
+                url=GRAPHQL_ENDPOINT,
+                text=_payload(errors=oversized_errors),
+            ),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                crawl_store_product_details(
+                    "https://tienda.example.mx/",
+                    31,
+                    repository,
+                    platform="shopify",
+                    request_headers_provider=_signing_provider,
+                    trace_logger=trace,
+                )
+
+        failed_fields = next(
+            fields
+            for event, fields in trace.events
+            if event == "item_discovery.candidate.shopify_graphql.failed"
+        )
+        self.assertLessEqual(len(str(raised.exception)), 2_000)
+        self.assertLessEqual(len(failed_fields["error"]), 1_200)
+        self.assertLessEqual(len(failed_fields["message"]), 2_000)
+        self.assertEqual(len(failed_fields["graphql_errors"]), 5)
+        self.assertTrue(all(len(error) <= 603 for error in failed_fields["graphql_errors"]))
+        self.assertLessEqual(len(failed_fields["response_excerpt"]), 503)
+        self.assertEqual(failed_fields["error_type"], "GraphQLError")
+        self.assertEqual(failed_fields["source_url"], product_url)
+        self.assertEqual(failed_fields["status_code"], 200)
+        self.assertEqual(failed_fields["attempt"], 1)
+        self.assertEqual(failed_fields["store_id"], 31)
+
+    def test_shopify_discovery_bounds_oversized_transport_diagnostics(self):
+        product_url = PRODUCT_URL.split("?")[0]
+        repository = DiscoveryRepository()
+        trace = FakeTraceLogger()
+        transport_failure = FetchResult(
+            url=GRAPHQL_ENDPOINT,
+            text="",
+            status_code=0,
+            error="socket failure " + ("e" * 8_000),
+            error_type="TransportError" + ("t" * 1_000),
+        )
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[product_url],
+        ), patch(
+            "ludora.product_crawler.fetch_shopify_storefront_product",
+            return_value=transport_failure,
+        ):
+            with self.assertRaises(TransientProductFetchError) as raised:
+                crawl_store_product_details(
+                    "https://tienda.example.mx/",
+                    31,
+                    repository,
+                    platform="shopify",
+                    request_headers_provider=_signing_provider,
+                    trace_logger=trace,
+                )
+
+        attempt_failures = [
+            fields
+            for event, fields in trace.events
+            if event == "item_discovery.candidate.shopify_graphql.attempt.failed"
+        ]
+        self.assertEqual(len(attempt_failures), 3)
+        for fields in attempt_failures:
+            self.assertLessEqual(len(fields["error"]), 500)
+            self.assertLessEqual(len(fields["error_type"]), 100)
+            self.assertLessEqual(len(fields["message"]), 2_000)
+            self.assertEqual(fields["store_id"], 31)
+            self.assertIn(fields["attempt"], {1, 2, 3})
+        final_failure = next(
+            fields
+            for event, fields in trace.events
+            if event == "item_discovery.candidate.shopify_graphql.failed"
+        )
+        self.assertLessEqual(len(str(raised.exception)), 2_000)
+        self.assertLessEqual(len(final_failure["error"]), 500)
+        self.assertLessEqual(len(final_failure["error_type"]), 100)
+        self.assertLessEqual(len(final_failure["message"]), 2_000)
+        self.assertEqual(final_failure["source_url"], product_url)
+        self.assertEqual(final_failure["attempt"], 1)
+        self.assertEqual(final_failure["store_id"], 31)
 
     def test_shopify_discovery_reports_invalid_json_with_bounded_excerpt(self):
         product_url = PRODUCT_URL.split("?")[0]
@@ -472,6 +664,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                     31,
                     repository,
                     platform="shopify",
+                    request_headers_provider=_signing_provider,
                     trace_logger=trace,
                 )
 
@@ -495,6 +688,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                     31,
                     repository,
                     platform="shopify",
+                    request_headers_provider=_signing_provider,
                 )
 
     def test_maps_public_product_fields_to_existing_candidate_shape(self):

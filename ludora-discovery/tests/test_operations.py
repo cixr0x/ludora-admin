@@ -356,6 +356,52 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["error"], "crawl failed")
         connection.close.assert_called_once_with()
 
+    def test_run_item_discovery_bounds_failed_trace_and_persisted_job_error(self):
+        connection = Mock()
+        repository = Mock()
+        trace_logger = Mock()
+        failure = RuntimeError("upstream GraphQL failure: " + ("x" * 10_000))
+
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.resolve_browser_fetch_enabled", return_value=False
+        ), patch(
+            "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
+        ), patch(
+            "ludora.operations.resolve_ai_classifier_enabled", return_value=False
+        ), patch(
+            "ludora.operations.connect_database", return_value=connection
+        ), patch(
+            "ludora.operations.DiscoveryRepository", return_value=repository
+        ), patch(
+            "ludora.operations.create_item_discovery_trace_logger", return_value=trace_logger
+        ), patch(
+            "ludora.operations.AdminItemMatcher", return_value=object()
+        ), patch(
+            "ludora.operations.collect_store_inventory", side_effect=failure
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                run_item_discovery(
+                    store_id=12,
+                    website_url="https://example.mx/",
+                    env_file="custom.env",
+                    run_id="run-123",
+                )
+
+        self.assertIs(raised.exception, failure)
+        failed_trace = next(
+            trace_call.kwargs
+            for trace_call in trace_logger.log.call_args_list
+            if trace_call.args[0] == "item_discovery.run.failed"
+        )
+        self.assertEqual(failed_trace["store_id"], 12)
+        self.assertLessEqual(len(failed_trace["error"]), 2_000)
+        self.assertEqual(failed_trace["error_type"], "RuntimeError")
+        self.assertTrue(failed_trace["error"].endswith("..."))
+        persisted_error = repository.complete_store_item_discovery_log.call_args.kwargs["error"]
+        self.assertLessEqual(len(persisted_error), 2_000)
+        self.assertTrue(persisted_error.endswith("..."))
+        connection.close.assert_called_once_with()
+
     def test_run_item_discovery_uses_heuristic_classifier_when_ai_disabled(self):
         connection = Mock()
         repository = Mock()

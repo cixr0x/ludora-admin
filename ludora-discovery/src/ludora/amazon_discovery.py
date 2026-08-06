@@ -8,6 +8,7 @@ from collections.abc import Callable, Iterable
 from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
+from ludora.browser_fetch import fetch_product_detail_with_browser
 from ludora.cancellation import CancellationToken, raise_if_cancelled
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import _collapse_text, _extract_price
@@ -480,9 +481,12 @@ def _fetch_valid_amazon_detail_page(
 
     for attempt in range(1, attempts + 1):
         raise_if_cancelled(cancellation_token)
-        if before_product_request is not None:
-            before_product_request(source_url)
-        fetched_detail = browser_fetcher(source_url)
+        fetched_detail = fetch_product_detail_with_browser(
+            browser_fetcher,
+            source_url,
+            before_navigation=before_product_request,
+            cancellation_token=cancellation_token,
+        )
         if fetched_detail is None:
             diagnostics: dict[str, object] = {
                 "expected_asin": expected_asin,

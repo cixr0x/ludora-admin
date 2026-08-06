@@ -8,6 +8,7 @@ from html import unescape
 from typing import Protocol
 from urllib.parse import urljoin, urlparse
 
+from ludora.browser_fetch import fetch_product_detail_with_browser
 from ludora.cancellation import CancellationToken, raise_if_cancelled
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import extract_listing_candidates
@@ -54,6 +55,12 @@ AMAZON_UPDATE_STATIC_FETCH_ATTEMPTS = 1
 AMAZON_UPDATE_BROWSER_FETCH_ATTEMPTS = 2
 SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS = 3
 SHOPIFY_DISCOVERY_THROTTLE_BACKOFF_SECONDS = (60.0, 300.0)
+SHOPIFY_DISCOVERY_ERROR_SUMMARY_MAX_LENGTH = 1_200
+SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH = 2_000
+SHOPIFY_DISCOVERY_TRANSPORT_ERROR_MAX_LENGTH = 500
+SHOPIFY_DISCOVERY_ERROR_TYPE_MAX_LENGTH = 100
+SHOPIFY_DISCOVERY_SOURCE_URL_MAX_LENGTH = 2_000
+SHOPIFY_DISCOVERY_HANDLE_MAX_LENGTH = 500
 ASCII_LIGATURE_TRANSLATION = str.maketrans({"æ": "ae", "œ": "oe", "ß": "ss"})
 GENERIC_TITLE_MATCH_TOKENS = {
     "base",
@@ -199,6 +206,8 @@ def crawl_store_product_details(
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     normalized_platform = platform.strip().casefold()
+    if normalized_platform == "shopify" and request_headers_provider is None:
+        raise RuntimeError("Shopify discovery requires a Web Bot Auth signing provider")
     use_browser_fetch = browser_sitemap_fetch_enabled if browser_fetch_enabled is None else browser_fetch_enabled
     browser_sitemap_fallback_enabled = use_browser_fetch and normalized_platform != "shopify"
     trace = trace_logger or NullTraceLogger()
@@ -796,36 +805,48 @@ def _fetch_shopify_discovery_candidate(
     request_headers_provider: RequestHeadersProvider | None,
 ) -> DiscoveryItemCandidateRecord | None:
     trace = trace_logger or NullTraceLogger()
+    diagnostic_source_url = _bounded_shopify_diagnostic(
+        listing_candidate.source_url,
+        SHOPIFY_DISCOVERY_SOURCE_URL_MAX_LENGTH,
+    )
     try:
         endpoint = shopify_storefront_endpoint(listing_candidate.source_url)
         handle = shopify_product_handle(listing_candidate.source_url)
     except ValueError as exc:
         raise RuntimeError(
-            f"Invalid Shopify product URL {listing_candidate.source_url}: {exc}"
+            f"Invalid Shopify product URL {diagnostic_source_url}: {exc}"
         ) from exc
 
     trace_fields: dict[str, object] = {
         "fetch_method": "shopify_storefront_graphql",
         "graphql_endpoint": endpoint,
-        "product_handle": handle,
+        "product_handle": _bounded_shopify_diagnostic(
+            handle,
+            SHOPIFY_DISCOVERY_HANDLE_MAX_LENGTH,
+        ),
         "store_id": listing_candidate.store_id,
     }
     trace.log(
         "item_discovery.candidate.shopify_graphql.started",
         **trace_fields,
         message="Fetching Shopify discovery candidate through Storefront GraphQL",
-        source_url=listing_candidate.source_url,
+        source_url=diagnostic_source_url,
     )
 
     last_fetch: FetchResult | None = None
 
     def fetch_product(_: str) -> FetchResult:
         nonlocal last_fetch
-        if before_product_request is not None:
-            before_product_request(listing_candidate.source_url)
-        last_fetch = fetch_shopify_storefront_product(
-            listing_candidate.source_url,
-            request_headers_provider=request_headers_provider,
+        last_fetch = _bounded_shopify_fetch_result(
+            fetch_shopify_storefront_product(
+                listing_candidate.source_url,
+                request_headers_provider=request_headers_provider,
+                before_request=(
+                    (lambda: before_product_request(listing_candidate.source_url))
+                    if before_product_request is not None
+                    else None
+                ),
+            )
         )
         return last_fetch
 
@@ -847,10 +868,11 @@ def _fetch_shopify_discovery_candidate(
         if fetched is None:
             error = last_fetch.error if last_fetch is not None and last_fetch.error else "No response was returned"
             error_type = last_fetch.error_type if last_fetch is not None and last_fetch.error_type else "NoResponse"
-            message = (
+            message = _bounded_shopify_diagnostic(
                 "Shopify Storefront GraphQL request failed after "
-                f"{DEFAULT_FETCH_MAX_ATTEMPTS} attempts for {listing_candidate.source_url}: "
-                f"{error_type}: {error}"
+                f"{DEFAULT_FETCH_MAX_ATTEMPTS} attempts for {diagnostic_source_url}: "
+                f"{error_type}: {error}",
+                SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
             )
             trace.log(
                 "item_discovery.candidate.shopify_graphql.failed",
@@ -860,22 +882,24 @@ def _fetch_shopify_discovery_candidate(
                 error_type=error_type,
                 max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                 message=message,
-                source_url=listing_candidate.source_url,
+                source_url=diagnostic_source_url,
             )
             raise TransientProductFetchError(message) from None
 
         response_excerpt = _shopify_response_excerpt(fetched.text)
         if fetched.status_code == 429:
             throttled = True
-            message = (
-                f"Shopify Storefront GraphQL returned HTTP 429 for {listing_candidate.source_url}"
-                f"; response: {response_excerpt}"
+            message = _bounded_shopify_diagnostic(
+                f"Shopify Storefront GraphQL returned HTTP 429 for {diagnostic_source_url}"
+                f"; response: {response_excerpt}",
+                SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
             )
             graphql_error_messages: list[str] = []
         elif fetched.status_code >= 400:
-            message = (
+            message = _bounded_shopify_diagnostic(
                 f"Shopify Storefront GraphQL returned HTTP {fetched.status_code} "
-                f"for {listing_candidate.source_url}; response: {response_excerpt}"
+                f"for {diagnostic_source_url}; response: {response_excerpt}",
+                SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
             )
             trace.log(
                 "item_discovery.candidate.shopify_graphql.failed",
@@ -885,7 +909,7 @@ def _fetch_shopify_discovery_candidate(
                 max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                 message=message,
                 response_excerpt=response_excerpt,
-                source_url=listing_candidate.source_url,
+                source_url=diagnostic_source_url,
                 status_code=fetched.status_code,
             )
             if fetched.status_code in TRANSIENT_FETCH_STATUS_CODES:
@@ -899,17 +923,24 @@ def _fetch_shopify_discovery_candidate(
             try:
                 payload = parse_shopify_storefront_payload(fetched.text)
             except ValueError as exc:
-                message = f"Invalid Shopify Storefront GraphQL response for {listing_candidate.source_url}: {exc}"
+                error = _bounded_shopify_diagnostic(
+                    exc,
+                    SHOPIFY_DISCOVERY_TRANSPORT_ERROR_MAX_LENGTH,
+                )
+                message = _bounded_shopify_diagnostic(
+                    f"Invalid Shopify Storefront GraphQL response for {diagnostic_source_url}: {error}",
+                    SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
+                )
                 trace.log(
                     "item_discovery.candidate.shopify_graphql.failed",
                     **trace_fields,
                     attempt=attempt,
-                    error=str(exc),
+                    error=error,
                     error_type=type(exc).__name__,
                     max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                     message=message,
                     response_excerpt=response_excerpt,
-                    source_url=listing_candidate.source_url,
+                    source_url=diagnostic_source_url,
                     status_code=fetched.status_code,
                 )
                 raise RuntimeError(message) from exc
@@ -918,10 +949,14 @@ def _fetch_shopify_discovery_candidate(
             graphql_error_messages = shopify_graphql_error_messages(graphql_errors)
             throttled = shopify_graphql_is_throttled(graphql_errors)
             if graphql_errors and not throttled:
-                error_summary = "; ".join(graphql_error_messages)
-                message = (
-                    f"Shopify Storefront GraphQL returned errors for {listing_candidate.source_url}: "
-                    f"{error_summary}"
+                error_summary = _bounded_shopify_diagnostic(
+                    "; ".join(graphql_error_messages),
+                    SHOPIFY_DISCOVERY_ERROR_SUMMARY_MAX_LENGTH,
+                )
+                message = _bounded_shopify_diagnostic(
+                    f"Shopify Storefront GraphQL returned errors for {diagnostic_source_url}: "
+                    f"{error_summary}",
+                    SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
                 )
                 trace.log(
                     "item_discovery.candidate.shopify_graphql.failed",
@@ -929,26 +964,34 @@ def _fetch_shopify_discovery_candidate(
                     attempt=attempt,
                     error=error_summary,
                     error_count=len(graphql_errors),
+                    error_type="GraphQLError",
                     graphql_errors=graphql_error_messages,
                     max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                     message=message,
                     response_excerpt=response_excerpt,
-                    source_url=listing_candidate.source_url,
+                    source_url=diagnostic_source_url,
                     status_code=fetched.status_code,
                     throttled=False,
                 )
                 raise RuntimeError(message)
             if throttled:
-                error_summary = "; ".join(graphql_error_messages) or "Shopify Storefront GraphQL throttled"
-                message = (
+                error_summary = _bounded_shopify_diagnostic(
+                    "; ".join(graphql_error_messages) or "Shopify Storefront GraphQL throttled",
+                    SHOPIFY_DISCOVERY_ERROR_SUMMARY_MAX_LENGTH,
+                )
+                message = _bounded_shopify_diagnostic(
                     f"Shopify Storefront GraphQL returned throttling errors for "
-                    f"{listing_candidate.source_url}: {error_summary}"
+                    f"{diagnostic_source_url}: {error_summary}",
+                    SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
                 )
             else:
                 try:
                     product = shopify_discovery_product_from_payload(payload)
                 except ValueError as exc:
-                    message = str(exc)
+                    message = _bounded_shopify_diagnostic(
+                        exc,
+                        SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
+                    )
                     trace.log(
                         "item_discovery.candidate.shopify_graphql.failed",
                         **trace_fields,
@@ -958,14 +1001,15 @@ def _fetch_shopify_discovery_candidate(
                         max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                         message=message,
                         response_excerpt=response_excerpt,
-                        source_url=listing_candidate.source_url,
+                        source_url=diagnostic_source_url,
                         status_code=fetched.status_code,
                     )
                     raise RuntimeError(message) from exc
                 if product is None:
-                    message = (
+                    message = _bounded_shopify_diagnostic(
                         "Shopify Storefront GraphQL did not return a published product for "
-                        f"handle {handle}: {listing_candidate.source_url}"
+                        f"handle {trace_fields['product_handle']}: {diagnostic_source_url}",
+                        SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
                     )
                     trace.log(
                         "item_discovery.candidate.shopify_graphql.not_found",
@@ -973,7 +1017,7 @@ def _fetch_shopify_discovery_candidate(
                         attempt=attempt,
                         max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                         message=message,
-                        source_url=listing_candidate.source_url,
+                        source_url=diagnostic_source_url,
                         status_code=fetched.status_code,
                     )
                     return None
@@ -985,17 +1029,25 @@ def _fetch_shopify_discovery_candidate(
                         store_id=listing_candidate.store_id,
                     )
                 except ValueError as exc:
-                    message = f"Failed to normalize Shopify Storefront GraphQL product {handle}: {exc}"
+                    error = _bounded_shopify_diagnostic(
+                        exc,
+                        SHOPIFY_DISCOVERY_TRANSPORT_ERROR_MAX_LENGTH,
+                    )
+                    message = _bounded_shopify_diagnostic(
+                        "Failed to normalize Shopify Storefront GraphQL product "
+                        f"{trace_fields['product_handle']}: {error}",
+                        SHOPIFY_DISCOVERY_FAILURE_MESSAGE_MAX_LENGTH,
+                    )
                     trace.log(
                         "item_discovery.candidate.shopify_graphql.failed",
                         **trace_fields,
                         attempt=attempt,
-                        error=str(exc),
+                        error=error,
                         error_type=type(exc).__name__,
                         max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                         message=message,
                         response_excerpt=response_excerpt,
-                        source_url=listing_candidate.source_url,
+                        source_url=diagnostic_source_url,
                         status_code=fetched.status_code,
                     )
                     raise RuntimeError(message) from exc
@@ -1009,7 +1061,7 @@ def _fetch_shopify_discovery_candidate(
                     max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                     price=candidate.price,
                     product_gid=str(product.get("id") or ""),
-                    source_url=listing_candidate.source_url,
+                    source_url=diagnostic_source_url,
                     status_code=fetched.status_code,
                 )
                 return candidate
@@ -1023,7 +1075,7 @@ def _fetch_shopify_discovery_candidate(
                 max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                 message=message,
                 response_excerpt=response_excerpt,
-                source_url=listing_candidate.source_url,
+                source_url=diagnostic_source_url,
                 status_code=fetched.status_code,
             )
             if attempt >= SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS:
@@ -1045,7 +1097,7 @@ def _fetch_shopify_discovery_candidate(
                 max_attempts=SHOPIFY_DISCOVERY_MAX_THROTTLE_ATTEMPTS,
                 retry_in_seconds=retry_in_seconds,
                 response_excerpt=response_excerpt,
-                source_url=listing_candidate.source_url,
+                source_url=diagnostic_source_url,
                 status_code=fetched.status_code,
             )
             wait_for_discovery_delay(retry_in_seconds, cancellation_token)
@@ -1256,6 +1308,40 @@ def _shopify_response_excerpt(value: str, *, limit: int = 500) -> str:
     return normalized if len(normalized) <= limit else f"{normalized[:limit]}..."
 
 
+def _bounded_shopify_diagnostic(value: object, max_length: int) -> str:
+    normalized = " ".join(str(value).split())
+    if len(normalized) <= max_length:
+        return normalized
+    if max_length <= 3:
+        return normalized[:max_length]
+    return f"{normalized[:max_length - 3]}..."
+
+
+def _bounded_shopify_fetch_result(fetched: FetchResult) -> FetchResult:
+    return FetchResult(
+        url=fetched.url,
+        text=fetched.text,
+        status_code=fetched.status_code,
+        retry_after_seconds=fetched.retry_after_seconds,
+        error=(
+            _bounded_shopify_diagnostic(
+                fetched.error,
+                SHOPIFY_DISCOVERY_TRANSPORT_ERROR_MAX_LENGTH,
+            )
+            if fetched.error
+            else fetched.error
+        ),
+        error_type=(
+            _bounded_shopify_diagnostic(
+                fetched.error_type,
+                SHOPIFY_DISCOVERY_ERROR_TYPE_MAX_LENGTH,
+            )
+            if fetched.error_type
+            else fetched.error_type
+        ),
+    )
+
+
 def _preserve_shopify_unavailable_metadata(
     refreshed_record: DiscoveryItemCandidateRecord,
     existing_record: DiscoveryItemCandidateRecord,
@@ -1422,9 +1508,17 @@ def _fetch_detail_candidate(
             if isinstance(browser_status, int) and browser_status >= 400:
                 last_failure_status_code = browser_status
         else:
-            if before_request is not None:
-                before_request(listing_candidate.source_url)
-            fetched_detail = browser_fetcher(listing_candidate.source_url)
+            if detect_removed:
+                if before_request is not None:
+                    before_request(listing_candidate.source_url)
+                fetched_detail = browser_fetcher(listing_candidate.source_url)
+            else:
+                fetched_detail = fetch_product_detail_with_browser(
+                    browser_fetcher,
+                    listing_candidate.source_url,
+                    before_navigation=before_request,
+                    cancellation_token=cancellation_token,
+                )
         _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
         if fetched_detail is not None and fetched_detail.status_code >= 400:
             last_failure_status_code = fetched_detail.status_code

@@ -4,10 +4,13 @@ import json
 import os
 import re
 import unicodedata
+from collections.abc import Callable
 from html import unescape
 from pathlib import Path
 from urllib.parse import urlparse
 
+from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
+from ludora.product_discovery_throttle import wait_for_discovery_delay
 from ludora.trace import TraceLogger
 from ludora.webfetch import FetchResult
 
@@ -118,7 +121,13 @@ class BrowserTextFetcher:
         if self._playwright is not None:
             self._playwright.stop()
 
-    def fetch(self, url: str) -> FetchResult | None:
+    def fetch(
+        self,
+        url: str,
+        *,
+        before_navigation: Callable[[str], None] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> FetchResult | None:
         if self._context is None and self._page is None:
             raise BrowserFetchUnavailable("Browser fetcher has not been started.")
 
@@ -132,7 +141,13 @@ class BrowserTextFetcher:
                 raise BrowserFetchUnavailable("Browser fetcher has not been started.")
             amazon_resource_counts = _configure_lightweight_amazon_page(page, url)
             amazon_detail_request = _is_amazon_product_detail_url(url)
-            response = _navigate_past_reload_challenge(page, url, timeout_ms=self.timeout_ms)
+            response = _navigate_past_reload_challenge(
+                page,
+                url,
+                timeout_ms=self.timeout_ms,
+                before_navigation=before_navigation,
+                cancellation_token=cancellation_token,
+            )
             if response is None:
                 return FetchResult(url=page.url, text=page.content())
             if _is_xml_response(response):
@@ -171,6 +186,8 @@ class BrowserTextFetcher:
                 text=rendered_html,
                 status_code=status_code,
             )
+        except OperationCancelled:
+            raise
         except (
             AmazonStoreSearchIncomplete,
             self._playwright_error,
@@ -216,15 +233,48 @@ def fetch_text_with_browser(url: str, timeout_ms: int = 30_000) -> FetchResult |
         return fetcher.fetch(url)
 
 
-def _navigate_past_reload_challenge(page, url: str, *, timeout_ms: int):
+def fetch_product_detail_with_browser(
+    browser_fetcher: Callable[[str], FetchResult | None],
+    url: str,
+    *,
+    before_navigation: Callable[[str], None] | None,
+    cancellation_token: CancellationToken | None,
+) -> FetchResult | None:
+    fetcher_owner = getattr(browser_fetcher, "__self__", None)
+    if isinstance(fetcher_owner, BrowserTextFetcher):
+        return fetcher_owner.fetch(
+            url,
+            before_navigation=before_navigation,
+            cancellation_token=cancellation_token,
+        )
+
+    raise_if_cancelled(cancellation_token)
+    if before_navigation is not None:
+        before_navigation(url)
+    raise_if_cancelled(cancellation_token)
+    return browser_fetcher(url)
+
+
+def _navigate_past_reload_challenge(
+    page,
+    url: str,
+    *,
+    timeout_ms: int,
+    before_navigation: Callable[[str], None] | None = None,
+    cancellation_token: CancellationToken | None = None,
+):
     response = None
     for attempt in range(3):
+        raise_if_cancelled(cancellation_token)
+        if before_navigation is not None:
+            before_navigation(url)
+        raise_if_cancelled(cancellation_token)
         response = page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
         text = page.content()
         if not _looks_like_reload_challenge(text):
             return response
         if attempt < 2:
-            page.wait_for_timeout(6_000)
+            wait_for_discovery_delay(6.0, cancellation_token)
     return response
 
 

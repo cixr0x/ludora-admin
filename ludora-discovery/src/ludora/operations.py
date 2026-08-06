@@ -42,6 +42,7 @@ EmbeddingRefreshMode = Literal["missing", "full"]
 ItemClassifierCallable = Callable[[DiscoveryItemCandidateRecord], DiscoveryItemCandidateRecord]
 ITEM_DISCOVERY_STORE_ERROR_MAX_LENGTH = 500
 ITEM_DISCOVERY_BATCH_ERROR_MAX_LENGTH = 4000
+ITEM_DISCOVERY_RUN_ERROR_MAX_LENGTH = 2_000
 
 
 class OperationAlreadyRunning(RuntimeError):
@@ -341,9 +342,11 @@ def run_item_discovery(
             raise
         except Exception as exc:
             statistics = _item_discovery_statistics(tracking_repository)
+            bounded_error = _bounded_item_discovery_run_error(exc)
             trace_logger.log(
                 "item_discovery.run.failed",
-                error=str(exc),
+                error=bounded_error,
+                error_type=type(exc).__name__,
                 store_id=store_id,
                 **statistics,
             )
@@ -351,7 +354,7 @@ def run_item_discovery(
                 run_id=resolved_run_id,
                 status="failed",
                 completed_at=_utc_now(),
-                error=str(exc),
+                error=bounded_error,
                 **statistics,
             )
             raise
@@ -1409,6 +1412,13 @@ def _accepts_platform_positional(runner: Callable[..., object]) -> bool:
         if parameter.kind in {inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
     ]
     return len(positional) >= 3 and positional[2].name not in {"cancellation_token", "token"}
+
+
+def _bounded_item_discovery_run_error(exc: Exception) -> str:
+    error = str(exc).strip() or type(exc).__name__
+    if len(error) <= ITEM_DISCOVERY_RUN_ERROR_MAX_LENGTH:
+        return error
+    return f"{error[:ITEM_DISCOVERY_RUN_ERROR_MAX_LENGTH - 3]}..."
 
 
 def _utc_now() -> datetime:

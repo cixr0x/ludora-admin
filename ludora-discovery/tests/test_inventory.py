@@ -2,11 +2,13 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import ANY, Mock, patch
+from unittest.mock import ANY, Mock, call, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from ludora.browser_fetch import BrowserTextFetcher
+from ludora.cancellation import CancellationToken, OperationCancelled
 from ludora.database import ItemCandidateUpsertResult
 from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.models import DiscoveryItemCandidateRecord
@@ -20,6 +22,62 @@ from ludora.product_crawler import (
     update_confirmed_store_item_details,
 )
 from ludora.webfetch import FetchResult, PerHostRequestThrottle
+
+
+class RetryBrowserResponse:
+    def __init__(self, url, text, *, content_type="text/html;charset=utf-8"):
+        self.url = url
+        self._text = text
+        self.headers = {"content-type": content_type}
+        self.status = 200
+
+    def text(self):
+        return self._text
+
+
+class RetryBrowserPage:
+    def __init__(self, response, rendered_html_by_read, *, on_first_content=None):
+        self.url = response.url
+        self.response = response
+        self.rendered_html_by_read = list(rendered_html_by_read)
+        self.on_first_content = on_first_content
+        self.content_reads = 0
+        self.goto_count = 0
+        self.wait_timeouts = []
+        self.closed = False
+
+    def goto(self, _url, wait_until, timeout):
+        self.goto_count += 1
+        if wait_until != "domcontentloaded" or timeout != 30_000:
+            raise AssertionError("Unexpected browser navigation arguments")
+        return self.response
+
+    def content(self):
+        if self.content_reads == 0 and self.on_first_content is not None:
+            self.on_first_content()
+        index = min(self.content_reads, len(self.rendered_html_by_read) - 1)
+        self.content_reads += 1
+        return self.rendered_html_by_read[index]
+
+    def wait_for_timeout(self, timeout):
+        self.wait_timeouts.append(timeout)
+
+    def wait_for_load_state(self, state, timeout):
+        return None
+
+    def wait_for_function(self, expression, arg, timeout):
+        return None
+
+    def close(self):
+        self.closed = True
+
+
+class RetryBrowserContext:
+    def __init__(self, pages):
+        self.pages = list(pages)
+
+    def new_page(self):
+        return self.pages.pop(0)
 
 
 class FakeRepository:
@@ -267,9 +325,46 @@ class InventoryTests(unittest.TestCase):
                     12,
                     repository,
                     platform="shopify",
+                    request_headers_provider=Mock(),
                 )
 
         fetch_html.assert_not_called()
+
+    def test_collect_store_inventory_rejects_shopify_without_signer_before_enumeration(self):
+        repository = FakeRepository()
+
+        with patch("ludora.inventory.crawl_store_product_details") as crawl_store_product_details:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Shopify discovery requires a Web Bot Auth signing provider",
+            ):
+                collect_store_inventory(
+                    "https://example.mx/",
+                    12,
+                    repository,
+                    platform="shopify",
+                    request_headers_provider=None,
+                )
+
+        crawl_store_product_details.assert_not_called()
+
+    def test_shopify_product_crawler_rejects_missing_signer_before_sitemap_enumeration(self):
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+        ) as discover_product_urls_from_sitemaps:
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Shopify discovery requires a Web Bot Auth signing provider",
+            ):
+                crawl_store_product_details(
+                    "https://example.mx/",
+                    12,
+                    FakeRepository(),
+                    platform="shopify",
+                    request_headers_provider=None,
+                )
+
+        discover_product_urls_from_sitemaps.assert_not_called()
 
     def test_shopify_sitemap_discovery_never_uses_unsigned_browser_fallback(self):
         store_url = "https://example.mx/"
@@ -297,6 +392,7 @@ class InventoryTests(unittest.TestCase):
                     platform="shopify",
                     browser_sitemap_fetch_enabled=True,
                     browser_fetcher=browser_fetcher,
+                    request_headers_provider=Mock(),
                 )
 
         browser_fetcher.assert_not_called()
@@ -624,6 +720,99 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(records[0].title, "Exploding Kittens")
         self.assertEqual(records[0].price, "499.00")
+
+    def test_real_browser_detail_retry_paces_each_navigation_but_not_sitemap(self):
+        store_url = "https://example.mx/"
+        sitemap_url = f"{store_url}sitemap.xml"
+        product_url = "https://example.mx/products/catan"
+        challenge_html = (
+            "<html><head><title>One moment</title></head>"
+            "<body><script>window.location.reload()</script></body></html>"
+        )
+        detail_html = (
+            '<script type="application/ld+json">'
+            '{"@type":"Product","name":"Catan"}'
+            "</script>"
+        )
+        sitemap_text = f"<urlset><url><loc>{product_url}</loc></url></urlset>"
+        sitemap_page = RetryBrowserPage(
+            RetryBrowserResponse(sitemap_url, sitemap_text, content_type="application/xml"),
+            [sitemap_text],
+        )
+        detail_page = RetryBrowserPage(
+            RetryBrowserResponse(product_url, detail_html),
+            [challenge_html, challenge_html, detail_html],
+        )
+        browser_fetcher = BrowserTextFetcher()
+        browser_fetcher._context = RetryBrowserContext([sitemap_page, detail_page])
+        callback = Mock()
+
+        def discover_from_sitemap(_store_url, *, browser_fetcher, **_kwargs):
+            fetched_sitemap = browser_fetcher(sitemap_url)
+            self.assertEqual(fetched_sitemap.text, sitemap_text)
+            return [product_url]
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            side_effect=discover_from_sitemap,
+        ), patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=product_url, text=challenge_html),
+        ), patch(
+            "ludora.browser_fetch.wait_for_discovery_delay",
+        ):
+            records = crawl_store_product_details(
+                store_url,
+                12,
+                FakeRepository(),
+                browser_sitemap_fetch_enabled=True,
+                browser_fetcher=browser_fetcher.fetch,
+                before_product_request=callback,
+            )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(sitemap_page.goto_count, 1)
+        self.assertEqual(detail_page.goto_count, 3)
+        self.assertEqual(callback.call_args_list, [call(product_url)] * 4)
+
+    def test_real_browser_detail_retry_stops_before_next_navigation_when_cancelled(self):
+        product_url = "https://example.mx/products/catan"
+        challenge_html = (
+            "<html><head><title>One moment</title></head>"
+            "<body><script>window.location.reload()</script></body></html>"
+        )
+        detail_html = (
+            '<script type="application/ld+json">'
+            '{"@type":"Product","name":"Catan"}'
+            "</script>"
+        )
+        cancellation_token = CancellationToken()
+        detail_page = RetryBrowserPage(
+            RetryBrowserResponse(product_url, detail_html),
+            [challenge_html, challenge_html, detail_html],
+            on_first_content=cancellation_token.cancel,
+        )
+        browser_fetcher = BrowserTextFetcher()
+        browser_fetcher._context = RetryBrowserContext([detail_page])
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[product_url],
+        ), patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=product_url, text=challenge_html),
+        ):
+            with self.assertRaises(OperationCancelled):
+                crawl_store_product_details(
+                    "https://example.mx/",
+                    12,
+                    FakeRepository(),
+                    browser_fetch_enabled=True,
+                    browser_fetcher=browser_fetcher.fetch,
+                    cancellation_token=cancellation_token,
+                )
+
+        self.assertEqual(detail_page.goto_count, 1)
 
     def test_crawl_store_product_details_uses_browser_when_static_detail_does_not_match_listing(self):
         static_html = """
