@@ -185,10 +185,11 @@ export function createLocalDiscoveryOperationsClient({
       while (newlineIndex >= 0) {
         const line = protocolBuffer.slice(0, newlineIndex).replace(/\r$/, '');
         protocolBuffer = protocolBuffer.slice(newlineIndex + 1);
-        if (line.startsWith(OPERATION_EVENT_PREFIX)) {
+        const eventPrefixIndex = line.indexOf(OPERATION_EVENT_PREFIX);
+        if (eventPrefixIndex >= 0) {
           let event: unknown;
           try {
-            event = JSON.parse(line.slice(OPERATION_EVENT_PREFIX.length));
+            event = JSON.parse(line.slice(eventPrefixIndex + OPERATION_EVENT_PREFIX.length));
           } catch {
             failAcceptanceProtocol('Malformed item discovery acceptance event');
             return;

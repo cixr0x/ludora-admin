@@ -244,6 +244,34 @@ describe('local discovery operations client', () => {
     expectChildListenersRemoved(spawned[0].child);
   });
 
+  it('accepts a framed item-discovery event after diagnostic stderr without a trailing newline', async () => {
+    const { client, spawned } = createClient();
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+
+    spawned[0].child.acceptItemDiscovery(`ordinary diagnostic without newline${ITEM_DISCOVERY_ACCEPTANCE_FRAME}`);
+    spawned[0].child.succeed({
+      result: {
+        item_candidates: 3,
+        store_id: null,
+        stores_scanned: 2,
+        website_url: ''
+      }
+    });
+
+    const acceptedRun = await started;
+    expect(acceptedRun).toMatchObject({ status: 'running', type: 'item_discovery' });
+    expect(await client.getStoreDiscoveryRun(acceptedRun.id)).toMatchObject({
+      result: {
+        item_candidates: 3,
+        store_id: null,
+        stores_scanned: 2,
+        website_url: ''
+      },
+      status: 'completed'
+    });
+    expectChildListenersRemoved(spawned[0].child);
+  });
+
   it('rejects an item-discovery coordinator conflict before launch acceptance with HTTP 409 semantics', async () => {
     const { client, spawned } = createClient();
     const started = client.startItemDiscoveryRun({ all_stores: true });
