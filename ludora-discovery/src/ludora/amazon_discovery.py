@@ -342,14 +342,14 @@ def _crawl_amazon_search_inventory(
                         )
                     records.append(detail_candidate)
                     if limit is not None and len(records) >= limit:
-                        _raise_amazon_detail_failures(detail_failures, records=records, store_id=store_id, trace=trace)
+                        _log_amazon_detail_skips(detail_failures, records=records, store_id=store_id, trace=trace)
                         return records
                     if delay_seconds > 0:
                         _wait_for_amazon_retry(delay_seconds, cancellation_token)
                 if limit is not None and len(records) >= limit:
-                    _raise_amazon_detail_failures(detail_failures, records=records, store_id=store_id, trace=trace)
+                    _log_amazon_detail_skips(detail_failures, records=records, store_id=store_id, trace=trace)
                     return records
-        _raise_amazon_detail_failures(detail_failures, records=records, store_id=store_id, trace=trace)
+        _log_amazon_detail_skips(detail_failures, records=records, store_id=store_id, trace=trace)
         return records
     finally:
         if browser_session is not None:
@@ -616,7 +616,7 @@ def _jittered_delay_seconds(delay_seconds: float, jitter_fraction: float) -> flo
     )
 
 
-def _raise_amazon_detail_failures(
+def _log_amazon_detail_skips(
     failures: list[AmazonDetailFetchError],
     *,
     records: list[DiscoveryItemCandidateRecord],
@@ -626,18 +626,13 @@ def _raise_amazon_detail_failures(
     if not failures:
         return
 
-    failed_urls = [failure.source_url for failure in failures]
+    skipped_urls = [failure.source_url for failure in failures]
     trace.log(
-        "amazon_inventory.crawl.partial_failure",
-        failed_detail_pages=len(failed_urls),
-        failed_source_urls=failed_urls,
+        "amazon_inventory.crawl.completed_with_skips",
+        skipped_detail_pages=len(skipped_urls),
+        skipped_source_urls=skipped_urls,
         processed_items=len(records),
         store_id=store_id,
-    )
-    first_failure = failures[0]
-    raise RuntimeError(
-        f"{first_failure}. Retries were exhausted for {len(failed_urls)} product(s). "
-        "Valid products were preserved and the failed products remain pending."
     )
 
 

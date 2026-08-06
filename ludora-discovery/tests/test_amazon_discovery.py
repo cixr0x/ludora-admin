@@ -340,7 +340,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertGreaterEqual(jittered_delay, 48)
         self.assertLessEqual(jittered_delay, 72)
 
-    def test_raises_when_amazon_detail_fetch_fails(self):
+    def test_skips_when_amazon_detail_fetch_fails_after_retries(self):
         search_html = """
         <html><body>
           <a href="/Compania-Juegos-Yokai-Pagoda/dp/B0TEST1234?ref_=ast_sto_dp">
@@ -349,23 +349,44 @@ class AmazonDiscoveryTests(unittest.TestCase):
         </body></html>
         """
 
+        detail_fetches = []
+
         def fetcher(url):
             if "/search?" in url:
                 return FetchResult(url=url, text=search_html)
+            detail_fetches.append(url)
             return None
 
+        trace = FakeTraceLogger()
         repository = FakeRepository()
 
-        with self.assertRaisesRegex(RuntimeError, "Failed to fetch Amazon product detail page: https://www.amazon.com.mx/dp/B0TEST1234"):
-            crawl_amazon_store_inventory(
-                "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2",
-                12,
-                repository,
-                browser_fetcher=fetcher,
-                delay_seconds=0,
-            )
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/page/00565807-102E-497A-894A-3434B4619BD2",
+            12,
+            repository,
+            browser_fetcher=fetcher,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
 
+        self.assertEqual(records, [])
+        self.assertEqual(detail_fetches, ["https://www.amazon.com.mx/dp/B0TEST1234"] * 3)
         self.assertEqual(repository.item_records, [])
+        self.assertEqual(
+            [
+                fields
+                for event, fields in trace.entries
+                if event == "amazon_inventory.crawl.completed_with_skips"
+            ],
+            [
+                {
+                    "skipped_detail_pages": 1,
+                    "skipped_source_urls": ["https://www.amazon.com.mx/dp/B0TEST1234"],
+                    "processed_items": 0,
+                    "store_id": 12,
+                }
+            ],
+        )
 
     def test_retries_generic_amazon_detail_page_before_title_extraction(self):
         product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
@@ -429,7 +450,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
             },
         )
 
-    def test_raises_after_invalid_amazon_detail_page_retries(self):
+    def test_skips_invalid_amazon_detail_page_after_retries_without_failing_run(self):
         product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
         search_html = f'<html><body><a href="{product_url}"></a></body></html>'
         generic_html = "<html><head><title>Amazon.com.mx</title></head><body>Inicio</body></html>"
@@ -445,17 +466,17 @@ class AmazonDiscoveryTests(unittest.TestCase):
         trace = FakeTraceLogger()
         repository = FakeRepository()
 
-        with self.assertRaisesRegex(RuntimeError, "Failed to fetch valid Amazon product detail page"):
-            crawl_amazon_store_inventory(
-                "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
-                11,
-                repository,
-                browser_fetcher=fetcher,
-                item_title_extractor=lambda record: extractor_inputs.append(record.title) or record.title,
-                trace_logger=trace,
-                delay_seconds=0,
-            )
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11,
+            repository,
+            browser_fetcher=fetcher,
+            item_title_extractor=lambda record: extractor_inputs.append(record.title) or record.title,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
 
+        self.assertEqual(records, [])
         self.assertEqual(detail_fetches, [product_url, product_url, product_url])
         self.assertEqual(extractor_inputs, [])
         self.assertEqual(repository.item_records, [])
@@ -464,6 +485,31 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual([entry["attempt"] for entry in invalid_entries], [1, 2, 3])
         self.assertEqual(invalid_entries[-1]["page_title"], "Amazon.com.mx")
         self.assertFalse(invalid_entries[-1]["will_retry"])
+        self.assertEqual(
+            len(
+                [
+                    fields
+                    for event, fields in trace.entries
+                    if event == "amazon_inventory.candidate.detail_fetch.exhausted"
+                ]
+            ),
+            1,
+        )
+        self.assertEqual(
+            [
+                fields
+                for event, fields in trace.entries
+                if event == "amazon_inventory.crawl.completed_with_skips"
+            ],
+            [
+                {
+                    "skipped_detail_pages": 1,
+                    "skipped_source_urls": [product_url],
+                    "processed_items": 0,
+                    "store_id": 11,
+                }
+            ],
+        )
 
     def test_calls_product_callback_for_each_detail_retry_but_not_search_enumeration(self):
         product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
@@ -491,7 +537,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(callback.call_args_list, [((product_url,), {}), ((product_url,), {})])
         self.assertNotIn(fetches[0], [call.args[0] for call in callback.call_args_list])
 
-    def test_preserves_valid_products_after_an_exhausted_detail_page_and_reports_partial_failure(self):
+    def test_returns_valid_products_and_reports_skipped_exhausted_detail_page(self):
         failed_url = "https://www.amazon.com.mx/dp/B0BAD00001"
         valid_url = "https://www.amazon.com.mx/dp/B0GOOD0001"
         search_html = f"""
@@ -518,17 +564,17 @@ class AmazonDiscoveryTests(unittest.TestCase):
         trace = FakeTraceLogger()
         repository = FakeRepository()
 
-        with self.assertRaisesRegex(RuntimeError, "Valid products were preserved"):
-            crawl_amazon_store_inventory(
-                "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
-                11,
-                repository,
-                browser_fetcher=fetcher,
-                trace_logger=trace,
-                delay_seconds=0,
-            )
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11,
+            repository,
+            browser_fetcher=fetcher,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
 
         self.assertEqual(detail_fetches, [failed_url, failed_url, failed_url, valid_url])
+        self.assertEqual([record.source_url for record in records], [valid_url])
         self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
         exhausted_entries = [
             fields
@@ -548,15 +594,17 @@ class AmazonDiscoveryTests(unittest.TestCase):
                 }
             ],
         )
-        partial_entries = [
-            fields for event, fields in trace.entries if event == "amazon_inventory.crawl.partial_failure"
+        completed_with_skips_entries = [
+            fields
+            for event, fields in trace.entries
+            if event == "amazon_inventory.crawl.completed_with_skips"
         ]
         self.assertEqual(
-            partial_entries,
+            completed_with_skips_entries,
             [
                 {
-                    "failed_detail_pages": 1,
-                    "failed_source_urls": [failed_url],
+                    "skipped_detail_pages": 1,
+                    "skipped_source_urls": [failed_url],
                     "processed_items": 1,
                     "store_id": 11,
                 }
@@ -745,7 +793,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(records[0].raw_payload["amazon"]["brand_byline"], "Marca: Asmodee")
         self.assertEqual([record.source_url for record in repository.item_records], [product_url])
 
-    def test_brand_search_retries_missing_byline_instead_of_logging_mismatch(self):
+    def test_brand_search_skips_missing_byline_after_retries_without_failing_run(self):
         brand_search_url = "https://www.amazon.com.mx/s?srs=13145563011&rh=p_89%3AAsmodee"
         product_url = "https://www.amazon.com.mx/dp/B0BJJ9TNRM"
         detail_fetches = []
@@ -768,17 +816,17 @@ class AmazonDiscoveryTests(unittest.TestCase):
 
         trace = FakeTraceLogger()
         repository = FakeRepository()
-        with self.assertRaisesRegex(RuntimeError, "Failed to fetch valid Amazon product detail page"):
-            crawl_amazon_brand_inventory(
-                brand_search_url,
-                8,
-                repository,
-                brand_name="Asmodee",
-                browser_fetcher=fetcher,
-                trace_logger=trace,
-                delay_seconds=0,
-            )
+        records = crawl_amazon_brand_inventory(
+            brand_search_url,
+            8,
+            repository,
+            brand_name="Asmodee",
+            browser_fetcher=fetcher,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
 
+        self.assertEqual(records, [])
         self.assertEqual(detail_fetches, [product_url, product_url, product_url])
         invalid_entries = [
             fields
@@ -791,6 +839,21 @@ class AmazonDiscoveryTests(unittest.TestCase):
             any(event == "amazon_inventory.candidate.skipped_brand_mismatch" for event, _fields in trace.entries)
         )
         self.assertEqual(repository.item_records, [])
+        self.assertEqual(
+            [
+                fields
+                for event, fields in trace.entries
+                if event == "amazon_inventory.crawl.completed_with_skips"
+            ],
+            [
+                {
+                    "skipped_detail_pages": 1,
+                    "skipped_source_urls": [product_url],
+                    "processed_items": 0,
+                    "store_id": 8,
+                }
+            ],
+        )
 
     def test_crawls_brand_search_up_to_five_pages(self):
         brand_search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"

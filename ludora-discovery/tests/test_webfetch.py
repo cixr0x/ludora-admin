@@ -87,6 +87,48 @@ class WebFetchTests(unittest.TestCase):
         self.assertEqual(result.error_type, "URLError")
         self.assertIn("connection reset", result.error or "")
 
+    def test_fetch_html_can_preserve_connection_reset_for_retry(self):
+        error = ConnectionResetError(104, "Connection reset by peer")
+        with patch("ludora.webfetch.urlopen", side_effect=error):
+            result = fetch_html(
+                "https://example.mx/products/catan",
+                include_http_error_status=True,
+            )
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.status_code, 0)
+        self.assertEqual(result.error_type, "ConnectionResetError")
+        self.assertIn("Connection reset by peer", result.error or "")
+
+    def test_connection_reset_uses_configured_transient_attempts(self):
+        fetcher = Mock(
+            side_effect=[
+                FetchResult(
+                    url="https://example.mx/products/catan",
+                    text="",
+                    status_code=0,
+                    error="[Errno 104] Connection reset by peer",
+                    error_type="ConnectionResetError",
+                ),
+                FetchResult(
+                    url="https://example.mx/products/catan",
+                    text="<html></html>",
+                ),
+            ]
+        )
+
+        result = fetch_with_transient_retries(
+            "https://example.mx/products/catan",
+            fetcher,
+            trace_event="inventory.candidate.detail_fetch.http_error",
+            ambiguous_failure_attempts=1,
+            max_attempts=3,
+        )
+
+        self.assertIsNotNone(result)
+        self.assertEqual(fetcher.call_count, 2)
+
     def test_verbose_retry_trace_records_attempt_error_delay_and_success(self):
         trace = Mock()
         responses = [

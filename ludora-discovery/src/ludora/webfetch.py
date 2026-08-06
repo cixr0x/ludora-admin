@@ -17,6 +17,7 @@ from ludora.trace import NullTraceLogger, TraceLogger
 
 
 TRANSIENT_FETCH_STATUS_CODES = {429, 500, 502, 503, 504}
+TRANSIENT_FETCH_ERROR_TYPES = {"ConnectionResetError"}
 DEFAULT_FETCH_MAX_ATTEMPTS = 3
 DEFAULT_FETCH_RETRY_BASE_SECONDS = 1.0
 DEFAULT_FETCH_RETRY_MAX_SECONDS = 300.0
@@ -156,7 +157,7 @@ def fetch_html(
                 retry_after_seconds=retry_after_seconds_from_headers(exc.headers),
             )
         return None
-    except (HTTPException, URLError, TimeoutError, ValueError) as exc:
+    except (ConnectionResetError, HTTPException, URLError, TimeoutError, ValueError) as exc:
         if include_http_error_status:
             return FetchResult(
                 url=url,
@@ -192,7 +193,12 @@ def fetch_with_transient_retries(
         fetched = fetcher(url)
         attempt_elapsed_ms = int((time.monotonic() - attempt_started_at) * 1000)
         if fetched is None or fetched.error:
-            will_retry = attempt < resolved_ambiguous_attempts
+            error_attempts = (
+                resolved_max_attempts
+                if fetched is not None and fetched.error_type in TRANSIENT_FETCH_ERROR_TYPES
+                else resolved_ambiguous_attempts
+            )
+            will_retry = attempt < error_attempts
             if trace_attempts:
                 error = fetched.error if fetched is not None else "No response was returned"
                 error_type = fetched.error_type if fetched is not None else "NoResponse"
