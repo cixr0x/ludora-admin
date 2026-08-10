@@ -45,6 +45,9 @@ describe('item matching service', () => {
 
     await service.confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
+    expect(cache.lookup).toHaveBeenCalledWith('La Guerra del Anillo', {
+      imageUrl: 'https://store.mx/coffee-rush.jpg'
+    });
     expect(ai.findMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).toHaveBeenCalledWith(115746);
     expect(linkUpdate(updates)?.params?.slice(0, 6)).toEqual([
@@ -69,6 +72,9 @@ describe('item matching service', () => {
     await createItemMatchingService(database, dependencies({ ai, cache, importer }))
       .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
+    expect(cache.lookup).toHaveBeenCalledWith('Coffee Rush', {
+      imageUrl: 'https://store.mx/coffee-rush.jpg'
+    });
     expect(ai.findMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).toHaveBeenCalledWith(377061);
   });
@@ -95,7 +101,9 @@ describe('item matching service', () => {
     await createItemMatchingService(database, dependencies({ ai, bggClient, cache, importer }))
       .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
-    expect(cache.lookup).toHaveBeenCalledWith('La Guerra del Anillo');
+    expect(cache.lookup).toHaveBeenCalledWith('La Guerra del Anillo', {
+      imageUrl: 'https://store.mx/guerra-del-anillo.jpg'
+    });
     expect(ai.findMatch).toHaveBeenCalledWith({
       itemName: 'La Guerra del Anillo',
       imageUrl: 'https://store.mx/guerra-del-anillo.jpg'
@@ -103,7 +111,8 @@ describe('item matching service', () => {
     expect(bggClient.fetchThing).toHaveBeenCalledWith(115746);
     expect(cache.recordAiMatch).toHaveBeenCalledWith(
       ['La Guerra del Anillo', 'War of the Ring: Second Edition'],
-      { bggId: 115746, name: 'War of the Ring: Second Edition', type: 'boardgame', yearPublished: 2011 }
+      { bggId: 115746, name: 'War of the Ring: Second Edition', type: 'boardgame', yearPublished: 2011 },
+      { imageUrl: 'https://store.mx/guerra-del-anillo.jpg' }
     );
     expect(importer.importBggId).toHaveBeenCalledWith(115746);
     expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([
@@ -198,6 +207,42 @@ describe('item matching service', () => {
     expect(importer.importBggId).not.toHaveBeenCalled();
   });
 
+  it('rechecks with AI when the title changes to War of the Ring but the Coffee Rush cover remains', async () => {
+    const database = matchingDatabase(storeItemCandidate({
+      image_url: 'https://store.mx/coffee-rush.jpg',
+      title: 'War of the Ring'
+    }));
+    const ai = aiService(null);
+    const cache = matchCache();
+    vi.mocked(cache.lookup).mockImplementation(async (_query, context) =>
+      context?.imageUrl === 'https://store.mx/coffee-rush.jpg'
+        ? {
+            cacheHit: true,
+            matches: [{ item: bggSearchItem(), verifiedByAi: false }]
+          }
+        : {
+            cacheHit: true,
+            matches: [{ item: bggSearchItem(), verifiedByAi: true }]
+          });
+    const importer = itemImporter(88);
+
+    await createItemMatchingService(database, dependencies({
+      ai,
+      bggClient: clientWithThing(bggThingDetails()),
+      cache,
+      importer
+    })).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(cache.lookup).toHaveBeenCalledWith('War of the Ring', {
+      imageUrl: 'https://store.mx/coffee-rush.jpg'
+    });
+    expect(ai.findMatch).toHaveBeenCalledWith({
+      itemName: 'War of the Ring',
+      imageUrl: 'https://store.mx/coffee-rush.jpg'
+    });
+    expect(importer.importBggId).not.toHaveBeenCalled();
+  });
+
   it('stages an AI candidate without auto-linking from generateMatchCandidates', async () => {
     const updates: RecordedQuery[] = [];
     const decision = aiMatchFound({ confidence: 0.2 });
@@ -229,23 +274,34 @@ describe('item matching service', () => {
       status: 'PENDING'
     });
     expect(result[0].raw_payload).toEqual({ ai_match: decision, thing: bggThingDetails() });
-    expect(cache.recordAiMatch).toHaveBeenCalledOnce();
+    expect(cache.recordAiMatch).toHaveBeenCalledWith(
+      ['La Guerra del Anillo', 'War of the Ring: Second Edition'],
+      { bggId: 115746, name: 'War of the Ring: Second Edition', type: 'boardgame', yearPublished: 2011 },
+      { imageUrl: 'https://store.mx/guerra-del-anillo.jpg' }
+    );
     expect(importer.importBggId).not.toHaveBeenCalled();
     expect(updates).toEqual([]);
   });
 
-  it('uses a name-only AI result when candidate image_url is empty', async () => {
-    const ai = aiService(null);
+  it('uses and records a name-only AI result when candidate image_url is empty', async () => {
+    const ai = aiService(aiMatchFound());
+    const cache = matchCache();
     const database = matchingDatabase(storeItemCandidate({ image_url: '   ', title: 'Image Free Game' }));
 
     await createItemMatchingService(database, dependencies({
       ai,
       bggClient: clientWithThing(bggThingDetails()),
-      cache: matchCache(),
+      cache,
       importer: itemImporter(88)
     })).generateMatchCandidates(42);
 
+    expect(cache.lookup).toHaveBeenCalledWith('Image Free Game', { imageUrl: null });
     expect(ai.findMatch).toHaveBeenCalledWith({ itemName: 'Image Free Game', imageUrl: null });
+    expect(cache.recordAiMatch).toHaveBeenCalledWith(
+      ['Image Free Game', 'War of the Ring: Second Edition'],
+      { bggId: 115746, name: 'War of the Ring: Second Edition', type: 'boardgame', yearPublished: 2011 },
+      { imageUrl: null }
+    );
   });
 
   it('logs AI start, result, validation, cache, import, and link events', async () => {

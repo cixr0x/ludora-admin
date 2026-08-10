@@ -484,7 +484,9 @@ async function generateBggMatches(
     candidate_id: candidate.id,
     query: candidate.title
   });
-  const cached = await dependencies.bggMatchCache.lookup(candidate.title);
+  const cached = await dependencies.bggMatchCache.lookup(candidate.title, {
+    imageUrl: nonEmptyStringOrNull(candidate.image_url)
+  });
   const cacheMatches = cached.matches.map((match) => generatedCacheMatch(candidate, match));
   traceLog(traceLogger, 'item_matcher.bgg_cache.completed', {
     accepted_match: hasAcceptedMatch(cacheMatches),
@@ -533,15 +535,16 @@ async function generateAiBggMatch(
     return null;
   }
 
+  const imageUrl = nonEmptyStringOrNull(candidate.image_url);
   traceLog(traceLogger, 'item_matcher.ai_match.start', {
     candidate_id: candidate.id,
-    has_image: nonEmptyStringOrNull(candidate.image_url) !== null,
+    has_image: imageUrl !== null,
     item_name: candidate.title
   });
   try {
     const decision = await dependencies.aiBggMatchingService.findMatch({
       itemName: candidate.title,
-      imageUrl: nonEmptyStringOrNull(candidate.image_url)
+      imageUrl
     });
     traceLog(traceLogger, 'item_matcher.ai_match.completed', {
       bgg_id: decision?.bggId ?? null,
@@ -576,7 +579,11 @@ async function generateAiBggMatch(
       type: thing.details.type,
       yearPublished: thing.details.yearPublished
     };
-    await dependencies.bggMatchCache.recordAiMatch([candidate.title, thing.details.name], searchItem);
+    await dependencies.bggMatchCache.recordAiMatch(
+      [candidate.title, thing.details.name],
+      searchItem,
+      { imageUrl }
+    );
     traceLog(traceLogger, 'item_matcher.ai_match.cache.completed', {
       bgg_id: decision.bggId,
       candidate_id: candidate.id,

@@ -1,4 +1,6 @@
-import type { Database } from '../db.js';
+import { createHash } from 'node:crypto';
+
+import type { Database, SessionDatabase } from '../db.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggSearchItem } from './bggParser.js';
 
@@ -10,28 +12,70 @@ export type BggCachedMatch = {
   verifiedByAi: boolean;
 };
 
+export type BggCachedSearch = {
+  cacheHit: boolean;
+  matches: BggCachedMatch[];
+};
+
+export type BggMatchCacheContext = {
+  imageUrl: string | null;
+};
+
 export type BggMatchCache = {
-  lookup(query: string): Promise<{ cacheHit: boolean; matches: BggCachedMatch[] }>;
+  lookup(query: string, context?: BggMatchCacheContext): Promise<BggCachedSearch>;
   recordSearch(query: string, results: BggSearchItem[]): Promise<void>;
-  recordAiMatch(queries: string[], result: BggSearchItem): Promise<void>;
+  recordAiMatch(queries: string[], result: BggSearchItem, context: BggMatchCacheContext): Promise<void>;
 };
 
 export function createBggMatchCache(database: Database): BggMatchCache {
   return {
-    async lookup(query): Promise<{ cacheHit: boolean; matches: BggCachedMatch[] }> {
+    async lookup(query, context): Promise<BggCachedSearch> {
       const normalizedQuery = normalizeTitle(query);
       if (!normalizedQuery) {
         return { cacheHit: false, matches: [] };
       }
 
-      const aiQuery = await queryAssociations(database, normalizedQuery, BGG_AI_MATCH_SEARCH_TYPE, true);
+      const trustedAiQuery = context
+        ? await queryAssociations(
+            database,
+            trustedAssociationKey(normalizedQuery, context),
+            BGG_AI_MATCH_SEARCH_TYPE,
+            true
+          )
+        : { cacheHit: false, matches: [] };
+      const contextualAiCandidates = context
+        ? await queryOtherContextAssociations(
+            database,
+            normalizedQuery,
+            trustedAssociationKey(normalizedQuery, context)
+          )
+        : { cacheHit: false, matches: [] };
+      const legacyAiQuery = await queryAssociations(
+        database,
+        normalizedQuery,
+        BGG_AI_MATCH_SEARCH_TYPE,
+        false
+      );
       const ordinaryQuery = await queryAssociations(database, normalizedQuery, BGG_SEARCH_TYPE, false);
       const directCache = await searchCacheNames(database, query);
       const thingCache = await searchThingCache(database, query);
 
       return {
-        cacheHit: aiQuery.cacheHit || ordinaryQuery.cacheHit || directCache.length > 0 || thingCache.length > 0,
-        matches: dedupeMatches([...aiQuery.matches, ...ordinaryQuery.matches, ...directCache, ...thingCache])
+        cacheHit:
+          trustedAiQuery.cacheHit ||
+          contextualAiCandidates.cacheHit ||
+          legacyAiQuery.cacheHit ||
+          ordinaryQuery.cacheHit ||
+          directCache.length > 0 ||
+          thingCache.length > 0,
+        matches: dedupeMatches([
+          ...trustedAiQuery.matches,
+          ...contextualAiCandidates.matches,
+          ...legacyAiQuery.matches,
+          ...ordinaryQuery.matches,
+          ...directCache,
+          ...thingCache
+        ])
       };
     },
 
@@ -39,18 +83,67 @@ export function createBggMatchCache(database: Database): BggMatchCache {
       await writeSearch(database, query, results, BGG_SEARCH_TYPE);
     },
 
-    async recordAiMatch(queries, result): Promise<void> {
-      const uniqueQueries = uniqueNonEmptyQueries(queries);
+    async recordAiMatch(queries, result, context): Promise<void> {
+      const uniqueQueries = uniqueTrustedQueries(queries, context);
       if (uniqueQueries.length === 0) {
         return;
       }
 
-      const cacheId = await writeSearchResult(database, result);
-      for (const query of uniqueQueries) {
-        const queryId = await writeAiQuery(database, query.query, query.normalizedQuery);
-        await replaceQueryResults(database, queryId, [{ cacheId, resultRank: 0 }]);
-      }
+      await requireSessionDatabase(database).withSession(async (session) => {
+        let transactionStarted = false;
+        try {
+          await session.query('BEGIN');
+          transactionStarted = true;
+
+          for (const query of uniqueQueries) {
+            await session.query('select pg_advisory_xact_lock($1, $2)', advisoryLockParts(query.associationKey));
+          }
+
+          const cacheId = await writeSearchResult(session, result);
+          for (const query of uniqueQueries) {
+            const queryId = await writeAiQuery(session, query.query, query.associationKey);
+            await replaceQueryResults(session, queryId, [{ cacheId, resultRank: 0 }]);
+          }
+
+          await session.query('COMMIT');
+        } catch (error) {
+          if (transactionStarted) {
+            await rollbackWithoutMasking(session);
+          }
+          throw error;
+        }
+      });
     }
+  };
+}
+
+async function queryOtherContextAssociations(
+  database: Database,
+  normalizedQuery: string,
+  trustedAssociationKeyValue: string
+): Promise<BggCachedSearch> {
+  const associationPrefix = `${normalizedQuery}::cover-context:`;
+  const cachedResults = await database.query(
+    `
+    select
+      q.id as query_id,
+      c.bgg_id,
+      c.name,
+      c.item_type,
+      c.year_published
+    from bgg_search_queries q
+    left join bgg_search_query_results qr on qr.query_id = q.id
+    left join bgg_search_cache c on c.id = qr.cache_id
+    where q.search_type = $1
+      and q.normalized_query like $2 escape '\\'
+      and q.normalized_query <> $3
+    order by q.updated_at desc, q.id desc, qr.result_rank asc
+    `,
+    [BGG_AI_MATCH_SEARCH_TYPE, `${escapeLikePattern(associationPrefix)}%`, trustedAssociationKeyValue]
+  );
+  return {
+    cacheHit: cachedResults.rows.length > 0,
+    matches: bggSearchItems(cachedResults.rows).map((item) => ({ item, verifiedByAi: false }))
   };
 }
 
@@ -255,15 +348,77 @@ async function writeQueryResult(database: Database, queryId: number, cacheId: nu
   );
 }
 
-function uniqueNonEmptyQueries(queries: string[]): Array<{ query: string; normalizedQuery: string }> {
-  const uniqueQueries = new Map<string, { query: string; normalizedQuery: string }>();
+function uniqueTrustedQueries(
+  queries: string[],
+  context: BggMatchCacheContext
+): Array<{ associationKey: string; query: string }> {
+  const uniqueQueries = new Map<string, { associationKey: string; query: string }>();
   for (const query of queries) {
     const normalizedQuery = normalizeTitle(query);
-    if (normalizedQuery && !uniqueQueries.has(normalizedQuery)) {
-      uniqueQueries.set(normalizedQuery, { query, normalizedQuery });
+    if (!normalizedQuery) {
+      continue;
+    }
+    const associationKey = trustedAssociationKey(normalizedQuery, context);
+    if (!uniqueQueries.has(associationKey)) {
+      uniqueQueries.set(associationKey, { associationKey, query });
     }
   }
-  return [...uniqueQueries.values()];
+  return [...uniqueQueries.values()].sort((left, right) =>
+    left.associationKey < right.associationKey ? -1 : left.associationKey > right.associationKey ? 1 : 0
+  );
+}
+
+function trustedAssociationKey(normalizedQuery: string, context: BggMatchCacheContext): string {
+  return `${normalizedQuery}::cover-context:${coverContextDiscriminator(context.imageUrl)}`;
+}
+
+function coverContextDiscriminator(imageUrl: string | null): string {
+  const normalizedImageUrl = canonicalImageUrl(imageUrl);
+  if (normalizedImageUrl === null) {
+    return 'name-only';
+  }
+  return `image-sha256:${sha256(normalizedImageUrl)}`;
+}
+
+function canonicalImageUrl(imageUrl: string | null): string | null {
+  const trimmed = imageUrl?.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    return new URL(trimmed).href;
+  } catch {
+    return trimmed;
+  }
+}
+
+function advisoryLockParts(associationKey: string): [number, number] {
+  const digest = createHash('sha256').update(associationKey).digest();
+  return [digest.readInt32BE(0), digest.readInt32BE(4)];
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function requireSessionDatabase(database: Database): SessionDatabase {
+  const sessionDatabase = database as Partial<SessionDatabase>;
+  if (typeof sessionDatabase.withSession !== 'function') {
+    throw new Error('AI BGG cache writes require a session-capable database');
+  }
+  return database as SessionDatabase;
+}
+
+async function rollbackWithoutMasking(session: Database): Promise<void> {
+  try {
+    await session.query('ROLLBACK');
+  } catch {
+    try {
+      await session.close?.();
+    } catch {
+      // Preserve the original transaction error.
+    }
+  }
 }
 
 function searchPattern(query: string): string {
