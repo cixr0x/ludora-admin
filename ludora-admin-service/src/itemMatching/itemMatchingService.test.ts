@@ -25,7 +25,7 @@ describe('item matching service', () => {
 
     const candidateQuery = queries.find((query) => normalizeSql(query.sql).includes('from store_items'));
     expect(normalizeSql(candidateQuery?.sql ?? '')).toContain(
-      'select id, title, image_url, publisher, item_type, min_players, max_players, language'
+      'select id, title, image_url, publisher, item_type, min_players, max_players, language, is_boardgame_confirmed, match_source, processing_error'
     );
   });
 
@@ -167,7 +167,7 @@ describe('item matching service', () => {
     expect(normalizeSql(noMatch?.sql ?? '')).toContain('is_boardgame_confirmed = false');
   });
 
-  it('keeps an admin-confirmed no-match confirmed and final', async () => {
+  it('runs matching for a fresh admin action and persists its no-match as confirmed', async () => {
     const updates: RecordedQuery[] = [];
     const ai = aiService(null);
     const cache = matchCache();
@@ -188,6 +188,97 @@ describe('item matching service', () => {
     const noMatch = updates.find((query) => normalizeSql(query.sql).includes("match_source = 'none'"));
     expect(normalizeSql(noMatch?.sql ?? '')).toContain('is_boardgame_confirmed = true');
     expect(noMatch?.params).toEqual([JSON.stringify(['no match above threshold']), 42]);
+  });
+
+  it('short-circuits an automated re-entry for a persisted confirmed no-match', async () => {
+    const queries: RecordedQuery[] = [];
+    const events: TraceEvent[] = [];
+    const ai = aiService(null);
+    const cache = matchCache();
+    const importer = itemImporter(88);
+    const database = matchingDatabase(
+      storeItemCandidate({
+        is_boardgame_confirmed: true,
+        match_source: 'NONE',
+        processing_error: '',
+        title: 'Unknown Game'
+      }),
+      [],
+      { onQuery: (query) => queries.push(query) }
+    );
+
+    await createItemMatchingService(database, dependencies({ ai, cache, importer }))
+      .confirmBoardgameAndMatch?.(42, {
+        confirmationSource: 'automated',
+        traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
+      });
+
+    expect(ai.findMatch).not.toHaveBeenCalled();
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(cache.recordAiMatch).not.toHaveBeenCalled();
+    expect(importer.importBggId).not.toHaveBeenCalled();
+    expect(queries).toHaveLength(1);
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain('from store_items');
+    expect(events.map(({ event }) => event)).toEqual([
+      'item_matcher.confirm.start',
+      'item_matcher.candidate.loaded',
+      'item_matcher.confirm.completed'
+    ]);
+    expect(traceFields(events, 'item_matcher.confirm.completed')).toEqual({
+      candidate_id: 42,
+      result: 'already_confirmed_no_match'
+    });
+  });
+
+  it('reruns matching when an admin explicitly reopens a persisted confirmed no-match', async () => {
+    const updates: RecordedQuery[] = [];
+    const ai = aiService(null);
+    const cache = matchCache();
+    const database = matchingDatabase(
+      storeItemCandidate({
+        is_boardgame_confirmed: true,
+        match_source: 'NONE',
+        processing_error: '',
+        title: 'Unknown Game'
+      }),
+      [],
+      { onStoreItemUpdate: (query) => updates.push(query) }
+    );
+
+    await createItemMatchingService(database, dependencies({ ai, cache }))
+      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'admin' });
+
+    expect(cache.lookup).toHaveBeenCalledOnce();
+    expect(ai.findMatch).toHaveBeenCalledOnce();
+    const noMatch = updates.find((query) => normalizeSql(query.sql).includes("match_source = 'none'"));
+    expect(normalizeSql(noMatch?.sql ?? '')).toContain('is_boardgame_confirmed = true');
+  });
+
+  it('retries matching for an automated confirmed no-match that has a processing error', async () => {
+    const updates: RecordedQuery[] = [];
+    const ai = aiService(null);
+    const cache = matchCache();
+    const importer = itemImporter(88);
+    const database = matchingDatabase(
+      storeItemCandidate({
+        is_boardgame_confirmed: true,
+        match_source: 'NONE',
+        processing_error: 'CodexAPI unavailable',
+        title: 'Unknown Game'
+      }),
+      [],
+      { onStoreItemUpdate: (query) => updates.push(query) }
+    );
+
+    await createItemMatchingService(database, dependencies({ ai, cache, importer }))
+      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(cache.lookup).toHaveBeenCalledOnce();
+    expect(ai.findMatch).toHaveBeenCalledOnce();
+    expect(importer.importBggId).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(2);
+    expect(normalizeSql(updates[0]?.sql ?? '')).toContain("processing_error = ''");
+    expect(normalizeSql(updates[1]?.sql ?? '')).toContain("match_source = 'none'");
   });
 
   it('records a processing error when the returned BGG ID does not resolve', async () => {
@@ -722,10 +813,13 @@ function storeItemCandidate(overrides: Record<string, unknown> = {}): Record<str
   return {
     id: 42,
     image_url: 'https://store.mx/coffee-rush.jpg',
+    is_boardgame_confirmed: false,
     item_type: 'base_game',
     language: 'es',
+    match_source: null,
     max_players: 4,
     min_players: 2,
+    processing_error: '',
     publisher: 'Korea Boardgames',
     title: 'Coffee Rush',
     ...overrides

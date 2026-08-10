@@ -44,10 +44,13 @@ type ConfirmBoardgameOptions = {
 type DiscoveryItemCandidateRow = {
   id: number;
   image_url?: string | null;
+  is_boardgame_confirmed?: boolean | null;
   item_type?: string | null;
   language?: string | null;
+  match_source?: 'BGG' | 'LOCAL' | 'NONE' | null;
   max_players?: number | null;
   min_players?: number | null;
+  processing_error?: string | null;
   publisher?: string | null;
   title: string;
 };
@@ -100,6 +103,18 @@ export function createItemMatchingService(
         title: candidate.title
       });
       const isAdminConfirmation = options.confirmationSource === 'admin';
+      if (
+        options.confirmationSource === 'automated' &&
+        candidate.is_boardgame_confirmed === true &&
+        candidate.match_source === 'NONE' &&
+        !nonEmptyStringOrNull(candidate.processing_error)
+      ) {
+        traceLog(traceLogger, 'item_matcher.confirm.completed', {
+          candidate_id: discoveryItemCandidateId,
+          result: 'already_confirmed_no_match'
+        });
+        return;
+      }
       await confirmStoreItemAsBoardgame(database, discoveryItemCandidateId, isAdminConfirmation);
       traceLog(traceLogger, 'item_matcher.boardgame.confirmed', {
         candidate_id: discoveryItemCandidateId,
@@ -421,7 +436,8 @@ async function markStoreItemProcessingError(
 async function loadDiscoveryItemCandidate(database: Database, discoveryItemCandidateId: number): Promise<DiscoveryItemCandidateRow> {
   const result = await database.query(
     `
-    select id, title, image_url, publisher, item_type, min_players, max_players, language
+    select id, title, image_url, publisher, item_type, min_players, max_players, language,
+           is_boardgame_confirmed, match_source, processing_error
     from store_items
     where id = $1
     `,
