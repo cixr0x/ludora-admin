@@ -42,6 +42,8 @@ export function createAiBggMatchingService(
         throw new Error('AI BGG match confidence must be between 0 and 1');
       }
 
+      assertAiBggMatchDecisionConsistency(decision);
+
       if (!decision.matchFound) {
         return null;
       }
@@ -72,6 +74,19 @@ export function createAiBggMatchingService(
       };
     }
   };
+}
+
+export function assertAiBggMatchDecisionConsistency(decision: AiBggMatchDecision): void {
+  if (!decision.matchFound && (
+    decision.bggId !== null ||
+    decision.matchedName !== null ||
+    decision.bggUrl !== null ||
+    decision.bggImageUrl !== null ||
+    decision.nameAssessment !== 'NO_MATCH' ||
+    decision.coverAssessment !== 'UNAVAILABLE'
+  )) {
+    throw new Error('Invalid AI BGG match decision: no-match decisions must have null identity fields and NO_MATCH or UNAVAILABLE assessments');
+  }
 }
 
 function normalizeDecision(decision: AiBggMatchDecision): AiBggMatchDecision {

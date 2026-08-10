@@ -9,5 +9,5 @@ export type OpenAiResponsesClient = {
 };
 
 export function createCodexResponsesClient(options: CodexResponsesClientOptions): OpenAiResponsesClient {
-  return new OpenAI({ apiKey: 'codexapi-local', baseURL: options.baseURL }).responses;
+  return new OpenAI({ apiKey: 'codexapi-local', baseURL: options.baseURL, maxRetries: 0 }).responses;
 }

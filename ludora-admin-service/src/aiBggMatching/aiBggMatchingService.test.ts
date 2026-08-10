@@ -96,6 +96,22 @@ describe('AI BGG matching service', () => {
     await expect(service.findMatch({ itemName: 'Unknown game', imageUrl: null })).resolves.toBeNull();
   });
 
+  it.each([
+    ['a BGG id', { bggId: 13 }],
+    ['a matched name', { matchedName: 'Catan' }],
+    ['a BGG URL', { bggUrl: 'https://boardgamegeek.com/boardgame/13/catan' }],
+    ['a BGG image URL', { bggImageUrl: 'https://cf.geekdo-images.com/catan.jpg' }],
+    ['a matching name assessment', { nameAssessment: 'MATCH' as const }],
+    ['a matching cover assessment', { coverAssessment: 'MATCH' as const }]
+  ])('rejects a no-match decision paired with %s before the caller can cache or import it', async (_label, overrides) => {
+    const service = createAiBggMatchingService({
+      findMatch: async () => decisionFixture(overrides)
+    }, { model: 'gpt-5.6-terra' });
+
+    await expect(service.findMatch({ itemName: 'Unknown game', imageUrl: null }))
+      .rejects.toThrow('Invalid AI BGG match decision: no-match decisions must have null identity fields and NO_MATCH or UNAVAILABLE assessments');
+  });
+
   it('rejects a positive decision without a positive integer BGG id', async () => {
     const service = createAiBggMatchingService({
       findMatch: async () => decisionFixture({
@@ -147,11 +163,29 @@ describe('Codex AI BGG matching client', () => {
     responsesCreate.mockResolvedValueOnce({ output_text: JSON.stringify(decision) });
     const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1' });
 
-    await expect(client.findMatch({ itemName: 'Catan', imageUrl: null }, { model: 'gpt-5.6-terra' }))
+    await expect(client.findMatch({ itemName: 'Catan', imageUrl: 'https://store.mx/catan.jpg' }, { model: 'gpt-5.6-terra' }))
       .resolves.toEqual(decision);
 
     expect(responsesCreate).toHaveBeenCalledWith(expect.objectContaining({
       model: 'gpt-5.6-terra',
+      tools: [{ type: 'web_search' }],
+      input: [{
+        role: 'user',
+        content: [
+          {
+            type: 'input_text',
+            text: JSON.stringify({
+              itemName: 'Catan',
+              imageUrl: 'https://store.mx/catan.jpg'
+            })
+          },
+          {
+            type: 'input_image',
+            image_url: 'https://store.mx/catan.jpg',
+            detail: 'high'
+          }
+        ]
+      }],
       text: expect.objectContaining({
         format: expect.objectContaining({
           name: 'ai_bgg_match_decision',
@@ -164,6 +198,27 @@ describe('Codex AI BGG matching client', () => {
         })
       })
     }));
+  });
+
+  it.each([
+    ['a null image URL', null],
+    ['a blank image URL', '   ']
+  ])('sends a name-only BGG request for %s', async (_label, imageUrl) => {
+    responsesCreate.mockResolvedValueOnce({ output_text: JSON.stringify(decisionFixture()) });
+    const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1' });
+
+    await expect(client.findMatch({ itemName: 'Unknown game', imageUrl }, { model: 'gpt-5.6-terra' }))
+      .resolves.toEqual(decisionFixture());
+
+    const request = responsesCreate.mock.calls[0]?.[0];
+    expect(request).toMatchObject({ tools: [{ type: 'web_search' }] });
+    expect(request.input).toEqual([{
+      role: 'user',
+      content: [{
+        type: 'input_text',
+        text: JSON.stringify({ itemName: 'Unknown game', imageUrl })
+      }]
+    }]);
   });
 
   it.each([
@@ -190,5 +245,25 @@ describe('Codex AI BGG matching client', () => {
 
     await expect(client.findMatch({ itemName: 'Catan', imageUrl: null }, { model: 'gpt-5.6-terra' }))
       .rejects.toThrow(`Invalid AI BGG match decision: ${expectedMessage}`);
+  });
+
+  it.each([
+    ['a BGG id', { bggId: 13 }],
+    ['a matched name', { matchedName: 'Catan' }],
+    ['a BGG URL', { bggUrl: 'https://boardgamegeek.com/boardgame/13/catan' }],
+    ['a BGG image URL', { bggImageUrl: 'https://cf.geekdo-images.com/catan.jpg' }],
+    ['a matching name assessment', { nameAssessment: 'MATCH' as const }],
+    ['a matching cover assessment', { coverAssessment: 'MATCH' as const }]
+  ])('rejects a no-match decision paired with %s', async (_label, overrides) => {
+    const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1' });
+    responsesCreate.mockResolvedValueOnce({
+      output_text: JSON.stringify({
+        ...decisionFixture(),
+        ...overrides
+      })
+    });
+
+    await expect(client.findMatch({ itemName: 'Unknown game', imageUrl: null }, { model: 'gpt-5.6-terra' }))
+      .rejects.toThrow('Invalid AI BGG match decision: no-match decisions must have null identity fields and NO_MATCH or UNAVAILABLE assessments');
   });
 });

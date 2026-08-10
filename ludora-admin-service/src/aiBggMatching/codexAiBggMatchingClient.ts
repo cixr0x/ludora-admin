@@ -1,3 +1,5 @@
+import OpenAI from 'openai';
+
 import {
   createCodexResponsesClient,
   type CodexResponsesClientOptions
@@ -6,9 +8,10 @@ import {
   systemPromptForAiBggMatch,
   userPromptForAiBggMatch
 } from './aiBggMatchingPrompts.js';
-import type {
-  AiBggMatchDecision,
-  AiBggMatchingClient
+import {
+  assertAiBggMatchDecisionConsistency,
+  type AiBggMatchDecision,
+  type AiBggMatchingClient
 } from './aiBggMatchingService.js';
 
 export const aiBggMatchSchema = {
@@ -35,18 +38,18 @@ export function createCodexAiBggMatchingClient(
 
   return {
     async findMatch(request, context): Promise<AiBggMatchDecision> {
+      const content: OpenAI.Responses.ResponseInputContent[] = [
+        { type: 'input_text', text: userPromptForAiBggMatch(request) }
+      ];
+      if (request.imageUrl?.trim()) {
+        content.push({ type: 'input_image', image_url: request.imageUrl.trim(), detail: 'high' });
+      }
+
       const response = await responses.create({
         model: context.model,
-        input: [
-          {
-            role: 'system',
-            content: systemPromptForAiBggMatch()
-          },
-          {
-            role: 'user',
-            content: userPromptForAiBggMatch(request)
-          }
-        ],
+        instructions: systemPromptForAiBggMatch(),
+        input: [{ role: 'user', content }],
+        tools: [{ type: 'web_search' }],
         text: {
           format: {
             type: 'json_schema',
@@ -108,7 +111,7 @@ export function parseAiBggMatchDecision(output: string): AiBggMatchDecision {
     invalidDecision('confidence must be a finite number between 0 and 1');
   }
 
-  return {
+  const decision: AiBggMatchDecision = {
     matchFound,
     bggId,
     matchedName: nullableString(parsed.matchedName, 'matchedName'),
@@ -119,6 +122,10 @@ export function parseAiBggMatchDecision(output: string): AiBggMatchDecision {
     confidence,
     reasoning: requiredString(parsed.reasoning, 'reasoning')
   };
+
+  assertAiBggMatchDecisionConsistency(decision);
+
+  return decision;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
