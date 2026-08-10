@@ -165,4 +165,30 @@ describe('Codex AI BGG matching client', () => {
       })
     }));
   });
+
+  it.each([
+    ['a truthy string matchFound value', { matchFound: 'false' }, 'matchFound must be a boolean'],
+    ['an invalid name assessment', { nameAssessment: 'LIKELY' }, 'nameAssessment must be MATCH or NO_MATCH'],
+    ['an invalid cover assessment', { coverAssessment: 'LIKELY' }, 'coverAssessment must be MATCH, CONFLICT, or UNAVAILABLE'],
+    ['an extra field', { unexpected: true }, 'contains unexpected field unexpected'],
+    ['a missing required field', { reasoning: undefined }, 'missing required field reasoning'],
+    ['a non-integer BGG id', { bggId: 13.5 }, 'bggId must be an integer or null'],
+    ['a non-string nullable matched name', { matchedName: 13 }, 'matchedName must be a string or null'],
+    ['a non-string nullable BGG URL', { bggUrl: 13 }, 'bggUrl must be a string or null'],
+    ['a non-string nullable BGG image URL', { bggImageUrl: 13 }, 'bggImageUrl must be a string or null'],
+    ['a non-numeric confidence', { confidence: '0.9' }, 'confidence must be a finite number between 0 and 1'],
+    ['an out-of-range confidence', { confidence: 1.1 }, 'confidence must be a finite number between 0 and 1'],
+    ['a non-string reason', { reasoning: null }, 'reasoning must be a string']
+  ])('rejects %s from untrusted CodexAPI output', async (_label, overrides, expectedMessage) => {
+    const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1' });
+    responsesCreate.mockResolvedValueOnce({
+      output_text: JSON.stringify({
+        ...decisionFixture(),
+        ...overrides
+      })
+    });
+
+    await expect(client.findMatch({ itemName: 'Catan', imageUrl: null }, { model: 'gpt-5.6-terra' }))
+      .rejects.toThrow(`Invalid AI BGG match decision: ${expectedMessage}`);
+  });
 });
