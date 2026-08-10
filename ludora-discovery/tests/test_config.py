@@ -19,7 +19,7 @@ from ludora.config import (
     resolve_database_url,
     resolve_embedding_model,
     resolve_internal_api_token,
-    resolve_openai_base_url,
+    resolve_codex_api_base_url,
     resolve_openai_api_key,
 )
 
@@ -180,26 +180,38 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(resolve_ai_classifier_enabled(env={}, dotenv_path=dotenv_path))
             self.assertFalse(resolve_ai_classifier_enabled(env={"AI_ENABLED_CLASSIFIER": "false"}, dotenv_path=dotenv_path))
 
-    def test_resolves_ai_classifier_model_and_openai_base_url(self):
+    def test_resolves_ai_classifier_model_and_codex_api_base_url(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             dotenv_path = Path(temp_dir) / ".env"
             dotenv_path.write_text(
-                "OPENAI_CLASSIFIER_MODEL=model-dotenv\nOPENAI_BASE_URL=http://dotenv.test/v1\n",
+                "OPENAI_CLASSIFIER_MODEL=model-dotenv\nCODEX_API_BASE_URL=http://localhost:3001/v1\n",
                 encoding="utf-8",
             )
 
             self.assertEqual(
-                resolve_classifier_model(env={"OPENAI_CLASSIFIER_MODEL": "model-env"}, dotenv_path=dotenv_path),
-                "model-env",
+                resolve_classifier_model(
+                    env={"CODEX_CLASSIFIER_MODEL": "codex-model-env", "OPENAI_CLASSIFIER_MODEL": "model-env"},
+                    dotenv_path=dotenv_path,
+                ),
+                "codex-model-env",
             )
             self.assertEqual(resolve_classifier_model(env={}, dotenv_path=dotenv_path), "model-dotenv")
             self.assertEqual(resolve_classifier_model(env={}, dotenv_path=Path(temp_dir) / "missing.env"), "gpt-5.4-mini")
             self.assertEqual(
-                resolve_openai_base_url(env={"OPENAI_BASE_URL": "http://env.test/v1"}, dotenv_path=dotenv_path),
-                "http://env.test/v1",
+                resolve_codex_api_base_url(env={"CODEX_API_BASE_URL": "http://127.0.0.1:3001/v1/"}, dotenv_path=dotenv_path),
+                "http://127.0.0.1:3001/v1",
             )
-            self.assertEqual(resolve_openai_base_url(env={}, dotenv_path=dotenv_path), "http://dotenv.test/v1")
-            self.assertEqual(resolve_openai_base_url(env={}, dotenv_path=Path(temp_dir) / "missing.env"), "http://127.0.0.1:3001/v1")
+            self.assertEqual(resolve_codex_api_base_url(env={}, dotenv_path=dotenv_path), "http://localhost:3001/v1")
+
+    def test_codex_api_base_url_defaults_to_loopback(self):
+        self.assertEqual(
+            resolve_codex_api_base_url(env={}, dotenv_path=Path("missing.env")),
+            "http://127.0.0.1:3001/v1",
+        )
+
+    def test_codex_api_base_url_rejects_official_openai(self):
+        with self.assertRaisesRegex(ValueError, "must target loopback CodexAPI"):
+            resolve_codex_api_base_url(env={"CODEX_API_BASE_URL": "https://api.openai.com/v1"})
 
 
 if __name__ == "__main__":

@@ -4,11 +4,11 @@ import json
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from ludora.config import DEFAULT_CODEX_API_BASE_URL
 from ludora.item_classification import ClassificationResult, should_auto_confirm_classification
 from ludora.models import DiscoveryItemCandidateRecord
 
 
-DEFAULT_OPENAI_BASE_URL = "http://127.0.0.1:3001/v1"
 ALLOWED_CLASSIFICATIONS = {"LIKELY_BOARDGAME", "LIKELY_NON_BOARDGAME"}
 CLASSIFICATION_ALIASES = {
     "LIKELY_BOARD_GAME": "LIKELY_BOARDGAME",
@@ -29,16 +29,14 @@ Return JSON only with:
 """.strip()
 
 
-class OpenAIItemClassifier:
+class CodexApiItemClassifier:
     def __init__(
         self,
         *,
-        api_key: str,
         model: str,
-        base_url: str = DEFAULT_OPENAI_BASE_URL,
+        base_url: str = DEFAULT_CODEX_API_BASE_URL,
         timeout_seconds: float = 60,
     ) -> None:
-        self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
@@ -76,15 +74,7 @@ class OpenAIItemClassifier:
         return record
 
     def _request_classification(self, record: DiscoveryItemCandidateRecord) -> dict[str, object]:
-        request = Request(
-            f"{self.base_url}/responses",
-            data=json.dumps(_request_payload(self.model, record)).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+        request = self._build_request(record)
 
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:
@@ -98,6 +88,17 @@ class OpenAIItemClassifier:
             raise RuntimeError(f"AI item classifier request failed: {exc}") from exc
         except json.JSONDecodeError as exc:
             raise RuntimeError("AI item classifier returned invalid JSON response") from exc
+
+    def _build_request(self, record: DiscoveryItemCandidateRecord) -> Request:
+        return Request(
+            f"{self.base_url}/responses",
+            data=json.dumps(_request_payload(self.model, record)).encode("utf-8"),
+            headers={
+                "Authorization": "Bearer codexapi-local",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
 
 
 def _request_payload(model: str, record: DiscoveryItemCandidateRecord) -> dict[str, object]:

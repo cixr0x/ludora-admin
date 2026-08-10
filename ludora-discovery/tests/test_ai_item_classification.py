@@ -9,12 +9,20 @@ from urllib.error import URLError
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.ai_item_classification import OpenAIItemClassifier
+from ludora.ai_item_classification import CodexApiItemClassifier
 from ludora.models import DiscoveryItemCandidateRecord
 
 
 class AIItemClassificationTests(unittest.TestCase):
-    def test_classifies_boardgame_from_openai_response(self):
+    def test_classifier_uses_local_compatibility_authorization(self):
+        classifier = CodexApiItemClassifier(model="gpt-5.6-terra")
+        request = classifier._build_request(
+            DiscoveryItemCandidateRecord(store_id=12, source_url="https://example.mx/products/catan", title="Catan")
+        )
+
+        self.assertEqual(request.headers["Authorization"], "Bearer codexapi-local")
+
+    def test_classifies_boardgame_from_codex_api_response(self):
         record = DiscoveryItemCandidateRecord(
             store_id=12,
             source_url="https://example.mx/products/catan",
@@ -35,13 +43,13 @@ class AIItemClassificationTests(unittest.TestCase):
         with patch("ludora.ai_item_classification.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
-            classifier = OpenAIItemClassifier(api_key="key", model="model", base_url="http://ai.test/v1")
+            classifier = CodexApiItemClassifier(model="model", base_url="http://ai.test/v1")
             classifier.apply_item_classification(record)
 
         request = urlopen.call_args.args[0]
         request_payload = json.loads(request.data.decode("utf-8"))
         self.assertEqual(request.full_url, "http://ai.test/v1/responses")
-        self.assertEqual(request.headers["Authorization"], "Bearer key")
+        self.assertEqual(request.headers["Authorization"], "Bearer codexapi-local")
         self.assertEqual(request_payload["model"], "model")
         self.assertIn('"raw_payload"', request_payload["input"][1]["content"])
         self.assertTrue(record.is_boardgame)
@@ -71,7 +79,7 @@ class AIItemClassificationTests(unittest.TestCase):
         with patch("ludora.ai_item_classification.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
-            OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(record)
+            CodexApiItemClassifier(model="model").apply_item_classification(record)
 
         self.assertEqual(
             record.classification_reasons,
@@ -99,7 +107,7 @@ class AIItemClassificationTests(unittest.TestCase):
         with patch("ludora.ai_item_classification.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
-            OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(record)
+            CodexApiItemClassifier(model="model").apply_item_classification(record)
 
         request = urlopen.call_args.args[0]
         request_payload = json.loads(request.data.decode("utf-8"))
@@ -129,7 +137,7 @@ class AIItemClassificationTests(unittest.TestCase):
         with patch("ludora.ai_item_classification.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
-            OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(record)
+            CodexApiItemClassifier(model="model").apply_item_classification(record)
 
         self.assertFalse(record.is_boardgame)
         self.assertTrue(record.is_boardgame_confirmed)
@@ -155,7 +163,7 @@ class AIItemClassificationTests(unittest.TestCase):
         with patch("ludora.ai_item_classification.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
-            OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(record)
+            CodexApiItemClassifier(model="model").apply_item_classification(record)
 
         self.assertFalse(record.is_boardgame)
         self.assertTrue(record.is_boardgame_confirmed)
@@ -181,7 +189,7 @@ class AIItemClassificationTests(unittest.TestCase):
         with patch("ludora.ai_item_classification.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
-            OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(record)
+            CodexApiItemClassifier(model="model").apply_item_classification(record)
 
         self.assertTrue(record.is_boardgame)
         self.assertFalse(record.is_boardgame_confirmed)
@@ -207,7 +215,7 @@ class AIItemClassificationTests(unittest.TestCase):
         with patch("ludora.ai_item_classification.urlopen") as urlopen:
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
-            OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(record)
+            CodexApiItemClassifier(model="model").apply_item_classification(record)
 
         self.assertFalse(record.is_boardgame)
         self.assertFalse(record.is_boardgame_confirmed)
@@ -228,7 +236,7 @@ class AIItemClassificationTests(unittest.TestCase):
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
             with self.assertRaisesRegex(RuntimeError, "invalid classification"):
-                OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(
+                CodexApiItemClassifier(model="model").apply_item_classification(
                     DiscoveryItemCandidateRecord(store_id=None, source_url="", title="")
                 )
 
@@ -247,14 +255,14 @@ class AIItemClassificationTests(unittest.TestCase):
             urlopen.return_value.__enter__.return_value.read.return_value = json.dumps(response_body).encode("utf-8")
 
             with self.assertRaisesRegex(RuntimeError, "confidence"):
-                OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(
+                CodexApiItemClassifier(model="model").apply_item_classification(
                     DiscoveryItemCandidateRecord(store_id=None, source_url="", title="")
                 )
 
     def test_wraps_openai_request_errors(self):
         with patch("ludora.ai_item_classification.urlopen", side_effect=URLError("connection refused")):
             with self.assertRaisesRegex(RuntimeError, "AI item classifier request failed"):
-                OpenAIItemClassifier(api_key="key", model="model").apply_item_classification(
+                CodexApiItemClassifier(model="model").apply_item_classification(
                     DiscoveryItemCandidateRecord(store_id=None, source_url="", title="")
                 )
 

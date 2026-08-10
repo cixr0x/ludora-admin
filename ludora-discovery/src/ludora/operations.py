@@ -12,7 +12,7 @@ from typing import Literal
 from ludora.admin_matching import AdminItemMatcher
 from ludora.admin_title_extraction import AdminAmazonTitleExtractor
 from ludora.admin_web_bot_auth import AdminWebBotAuthHeadersProvider
-from ludora.ai_item_classification import OpenAIItemClassifier
+from ludora.ai_item_classification import CodexApiItemClassifier
 from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
 from ludora.collector import collect_stores
 from ludora.config import (
@@ -21,10 +21,10 @@ from ludora.config import (
     resolve_brave_api_key,
     resolve_browser_fetch_enabled,
     resolve_classifier_model,
+    resolve_codex_api_base_url,
     resolve_database_url,
     resolve_embedding_model,
     resolve_internal_api_token,
-    resolve_openai_base_url,
     resolve_openai_api_key,
     resolve_web_bot_auth_enabled,
 )
@@ -669,14 +669,9 @@ def _resolve_item_classifier(current_env: Mapping[str, str], env_file: str) -> I
     if not resolve_ai_classifier_enabled(env=current_env, dotenv_path=env_file):
         return apply_item_classification
 
-    openai_api_key = resolve_openai_api_key(env=current_env, dotenv_path=env_file)
-    if not openai_api_key:
-        raise RuntimeError("Missing OpenAI API key for AI item classifier")
-
-    return OpenAIItemClassifier(
-        api_key=openai_api_key,
+    return CodexApiItemClassifier(
         model=resolve_classifier_model(env=current_env, dotenv_path=env_file),
-        base_url=resolve_openai_base_url(env=current_env, dotenv_path=env_file),
+        base_url=resolve_codex_api_base_url(env=current_env, dotenv_path=env_file),
     ).apply_item_classification
 
 

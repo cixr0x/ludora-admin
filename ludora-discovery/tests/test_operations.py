@@ -14,6 +14,7 @@ from ludora.database import ItemCandidateUpsertResult
 from ludora.item_classification import apply_item_classification
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.operations import (
+    _resolve_item_classifier,
     ItemEmbeddingRunResult,
     ItemDiscoveryBatchError,
     ItemDiscoveryRunResult,
@@ -139,12 +140,12 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ) as resolve_internal_api_token, patch(
             "ludora.operations.resolve_ai_classifier_enabled", return_value=True
         ) as resolve_ai_classifier_enabled, patch(
-            "ludora.operations.resolve_openai_api_key", return_value="openai-key"
+            "ludora.operations.resolve_openai_api_key"
         ) as resolve_openai_api_key, patch(
             "ludora.operations.resolve_classifier_model", return_value="classifier-model"
         ) as resolve_classifier_model, patch(
-            "ludora.operations.resolve_openai_base_url", return_value="http://ai.test/v1"
-        ) as resolve_openai_base_url, patch(
+            "ludora.operations.resolve_codex_api_base_url", return_value="http://127.0.0.1:3001/v1"
+        ) as resolve_codex_api_base_url, patch(
             "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
         ) as connect_database, patch(
             "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
@@ -153,8 +154,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ) as admin_item_matcher, patch(
             "ludora.operations.AdminAmazonTitleExtractor"
         ) as admin_title_extractor, patch(
-            "ludora.operations.OpenAIItemClassifier", return_value=ai_classifier
-        ) as openai_item_classifier, patch(
+            "ludora.operations.CodexApiItemClassifier", return_value=ai_classifier
+        ) as codex_api_item_classifier, patch(
             "ludora.operations.collect_store_inventory", side_effect=collect_inventory
         ) as collect_store_inventory:
             result = run_item_discovery(
@@ -177,12 +178,11 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         self.assertEqual(resolve_internal_api_token.call_args.kwargs["dotenv_path"], "custom.env")
         resolve_ai_classifier_enabled.assert_called_once()
         self.assertEqual(resolve_ai_classifier_enabled.call_args.kwargs["dotenv_path"], "custom.env")
-        resolve_openai_api_key.assert_called_once()
-        self.assertEqual(resolve_openai_api_key.call_args.kwargs["dotenv_path"], "custom.env")
+        resolve_openai_api_key.assert_not_called()
         resolve_classifier_model.assert_called_once()
         self.assertEqual(resolve_classifier_model.call_args.kwargs["dotenv_path"], "custom.env")
-        resolve_openai_base_url.assert_called_once()
-        self.assertEqual(resolve_openai_base_url.call_args.kwargs["dotenv_path"], "custom.env")
+        resolve_codex_api_base_url.assert_called_once()
+        self.assertEqual(resolve_codex_api_base_url.call_args.kwargs["dotenv_path"], "custom.env")
         self.assertEqual(connect_database.call_args_list, [
             unittest.mock.call("postgresql://ludora"),
             unittest.mock.call("postgresql://ludora"),
@@ -195,10 +195,9 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             trace_logger=ANY,
         )
         admin_title_extractor.assert_called_once_with("http://admin.test", internal_api_token="internal-token")
-        openai_item_classifier.assert_called_once_with(
-            api_key="openai-key",
+        codex_api_item_classifier.assert_called_once_with(
             model="classifier-model",
-            base_url="http://ai.test/v1",
+            base_url="http://127.0.0.1:3001/v1",
         )
         collect_store_inventory.assert_called_once()
         self.assertEqual(collect_store_inventory.call_args.args[:2], ("https://example.mx/", 12))
@@ -440,8 +439,8 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ), patch(
             "ludora.operations.resolve_openai_api_key"
         ) as resolve_openai_api_key, patch(
-            "ludora.operations.OpenAIItemClassifier"
-        ) as openai_item_classifier, patch(
+            "ludora.operations.CodexApiItemClassifier"
+        ) as codex_api_item_classifier, patch(
             "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
         ), patch(
             "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
@@ -453,45 +452,30 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             run_item_discovery(store_id=12, website_url="https://example.mx/")
 
         resolve_openai_api_key.assert_not_called()
-        openai_item_classifier.assert_not_called()
+        codex_api_item_classifier.assert_not_called()
         self.assertIs(collect_store_inventory.call_args.kwargs["item_classifier"], apply_item_classification)
         connection.close.assert_called_once_with()
         coordinator_connection.close.assert_called_once_with()
 
-    def test_run_item_discovery_requires_openai_key_when_ai_classifier_enabled(self):
-        coordinator_connection = Mock()
-        connection = Mock()
-        coordinator_repository = Mock()
-        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
-        repository = Mock()
+    def test_resolve_item_classifier_does_not_require_openai_key(self):
+        classifier = Mock()
+        classifier.apply_item_classification = object()
 
-        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
-            "ludora.operations.resolve_browser_fetch_enabled", return_value=False
+        with patch("ludora.operations.resolve_ai_classifier_enabled", return_value=True), patch(
+            "ludora.operations.resolve_openai_api_key"
+        ) as resolve_openai_api_key, patch(
+            "ludora.operations.resolve_classifier_model", return_value="classifier-model"
         ), patch(
-            "ludora.operations.resolve_admin_api_url", return_value="http://admin.test"
-        ), patch(
-            "ludora.operations.resolve_ai_classifier_enabled", return_value=True
-        ), patch(
-            "ludora.operations.resolve_openai_api_key", return_value=""
-        ), patch(
-            "ludora.operations.connect_database", side_effect=[coordinator_connection, connection]
-        ) as connect_database, patch(
-            "ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, repository]
-        ):
-            with self.assertRaisesRegex(RuntimeError, "Missing OpenAI API key for AI item classifier"):
-                run_item_discovery(store_id=12, website_url="https://example.mx/", run_id="run-123")
+            "ludora.operations.resolve_codex_api_base_url", return_value="http://127.0.0.1:3001/v1"
+        ), patch("ludora.operations.CodexApiItemClassifier", return_value=classifier) as codex_api_item_classifier:
+            resolved = _resolve_item_classifier({}, "custom.env")
 
-        self.assertEqual(connect_database.call_count, 2)
-        repository.start_store_item_discovery_log.assert_called_once()
-        repository.complete_store_item_discovery_log.assert_called_once()
-        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["run_id"], "run-123")
-        self.assertEqual(repository.complete_store_item_discovery_log.call_args.kwargs["status"], "failed")
-        self.assertEqual(
-            repository.complete_store_item_discovery_log.call_args.kwargs["error"],
-            "Missing OpenAI API key for AI item classifier",
+        resolve_openai_api_key.assert_not_called()
+        codex_api_item_classifier.assert_called_once_with(
+            model="classifier-model",
+            base_url="http://127.0.0.1:3001/v1",
         )
-        connection.close.assert_called_once_with()
-        coordinator_connection.close.assert_called_once_with()
+        self.assertIs(resolved, classifier.apply_item_classification)
 
     def test_run_item_discovery_rejects_unavailable_coordinator_before_starting_job(self):
         coordinator_connection = Mock()

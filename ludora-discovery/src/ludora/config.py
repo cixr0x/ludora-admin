@@ -3,6 +3,11 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping
 from pathlib import Path
+from urllib.parse import urlparse
+
+
+DEFAULT_CODEX_API_BASE_URL = "http://127.0.0.1:3001/v1"
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def load_dotenv_values(path: str | Path = ".env") -> dict[str, str]:
@@ -106,25 +111,37 @@ def resolve_classifier_model(
     dotenv_path: str | Path = ".env",
 ) -> str:
     current_env = env if env is not None else os.environ
-    env_value = current_env.get("OPENAI_CLASSIFIER_MODEL", "").strip()
+    env_value = (
+        current_env.get("CODEX_CLASSIFIER_MODEL", "").strip()
+        or current_env.get("OPENAI_CLASSIFIER_MODEL", "").strip()
+    )
     if env_value:
         return env_value
 
-    dotenv_value = load_dotenv_values(dotenv_path).get("OPENAI_CLASSIFIER_MODEL", "").strip()
+    dotenv = load_dotenv_values(dotenv_path)
+    dotenv_value = (
+        dotenv.get("CODEX_CLASSIFIER_MODEL", "").strip()
+        or dotenv.get("OPENAI_CLASSIFIER_MODEL", "").strip()
+    )
     return dotenv_value or "gpt-5.4-mini"
 
 
-def resolve_openai_base_url(
+def resolve_codex_api_base_url(
     env: Mapping[str, str] | None = None,
     dotenv_path: str | Path = ".env",
 ) -> str:
     current_env = env if env is not None else os.environ
-    env_value = current_env.get("OPENAI_BASE_URL", "").strip()
-    if env_value:
-        return env_value
-
-    dotenv_value = load_dotenv_values(dotenv_path).get("OPENAI_BASE_URL", "").strip()
-    return dotenv_value or "http://127.0.0.1:3001/v1"
+    dotenv = load_dotenv_values(dotenv_path)
+    value = (
+        current_env.get("CODEX_API_BASE_URL", "").strip()
+        or dotenv.get("CODEX_API_BASE_URL", "").strip()
+        or current_env.get("OPENAI_BASE_URL", "").strip()
+        or dotenv.get("OPENAI_BASE_URL", "").strip()
+        or DEFAULT_CODEX_API_BASE_URL
+    )
+    if urlparse(value).hostname not in LOOPBACK_HOSTS:
+        raise ValueError("CODEX_API_BASE_URL must target loopback CodexAPI")
+    return value.rstrip("/")
 
 
 def resolve_bgg_api_token(
