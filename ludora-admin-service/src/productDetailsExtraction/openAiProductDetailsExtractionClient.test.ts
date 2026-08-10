@@ -24,11 +24,11 @@ describe('OpenAI product details extraction client', () => {
     createMock.mockReset();
   });
 
-  it('passes a configured base URL to the OpenAI SDK', () => {
-    createOpenAiProductDetailsExtractionClient('test-key', { baseURL: 'http://127.0.0.1:3001/v1' });
+  it('uses the fixed CodexAPI compatibility key', () => {
+    createOpenAiProductDetailsExtractionClient({ baseURL: 'http://127.0.0.1:3001/v1' });
 
     expect(OpenAI).toHaveBeenCalledWith({
-      apiKey: 'test-key',
+      apiKey: 'codexapi-local',
       baseURL: 'http://127.0.0.1:3001/v1'
     });
   });
@@ -107,7 +107,7 @@ describe('OpenAI product details extraction client', () => {
       })
     });
 
-    const client = createOpenAiProductDetailsExtractionClient('test-key');
+    const client = createOpenAiProductDetailsExtractionClient({ baseURL: 'http://127.0.0.1:3001/v1' });
     const result = await client.extract(
       {
         description: 'Para 2-5 jugadores, 30-60 minutos, edad 10+.',

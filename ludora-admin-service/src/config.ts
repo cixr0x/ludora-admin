@@ -10,15 +10,17 @@ dotenv.config({ quiet: true });
 
 type DiscoveryRunnerMode = 'local' | 'http';
 
+const DEFAULT_CODEX_API_BASE_URL = 'http://127.0.0.1:3001/v1';
+const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1']);
+
 export type Config = {
   adminAuth: AdminAuthOptions;
   bggApiBaseUrl: string;
   bggApiToken?: string;
   host: string;
   coverFlatteningWorkDir: string;
-  openAiApiKey?: string;
-  openAiBaseUrl?: string;
-  openAiTranslationModel: string;
+  codexApiBaseUrl: string;
+  codexAiModel: string;
   localCoverWorkflow: {
     gimpPath: string;
     publicBaseUrl: string;
@@ -67,9 +69,10 @@ export function loadConfig(): Config {
       'LUDORA_COVER_FLATTENING_WORK_DIR',
       path.join(os.tmpdir(), 'ludora-cover-flattening')
     ),
-    openAiApiKey: process.env.OPENAI_API_KEY,
-    openAiBaseUrl: readOptionalEnv('OPENAI_BASE_URL'),
-    openAiTranslationModel: process.env.OPENAI_TRANSLATION_MODEL ?? 'gpt-5.4-nano',
+    codexApiBaseUrl: readCodexApiBaseUrl(),
+    codexAiModel: readOptionalEnv('CODEX_AI_MODEL')
+      ?? readOptionalEnv('OPENAI_TRANSLATION_MODEL')
+      ?? 'gpt-5.6-terra',
     localCoverWorkflow: readLocalCoverWorkflowConfig(),
     internalApiToken: readOptionalEnv('LUDORA_INTERNAL_API_TOKEN'),
     port,
@@ -127,6 +130,17 @@ function readPositiveNumberEnv(key: string, defaultValue: number): number {
 function readOptionalEnv(key: string): string | undefined {
   const value = process.env[key]?.trim();
   return value ? value : undefined;
+}
+
+function readCodexApiBaseUrl(): string {
+  const value = readOptionalEnv('CODEX_API_BASE_URL')
+    ?? readOptionalEnv('OPENAI_BASE_URL')
+    ?? DEFAULT_CODEX_API_BASE_URL;
+  const parsed = new URL(value);
+  if (!LOOPBACK_HOSTS.has(parsed.hostname)) {
+    throw new Error('CODEX_API_BASE_URL must target loopback CodexAPI');
+  }
+  return value.replace(/\/$/, '');
 }
 
 function readAdminAuthConfig(): AdminAuthOptions {

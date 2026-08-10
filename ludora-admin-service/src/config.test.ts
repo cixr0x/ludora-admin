@@ -182,16 +182,28 @@ describe('loadConfig', () => {
     });
   });
 
-  it('loads optional OpenAI translation configuration', () => {
-    vi.stubEnv('OPENAI_API_KEY', 'test-openai-key');
-    vi.stubEnv('OPENAI_BASE_URL', 'http://127.0.0.1:3001/v1');
-    vi.stubEnv('OPENAI_TRANSLATION_MODEL', 'gpt-5.4-nano');
+  it('defaults generative AI to the loopback CodexAPI', () => {
+    vi.stubEnv('CODEX_API_BASE_URL', undefined);
+    vi.stubEnv('OPENAI_BASE_URL', undefined);
+    vi.stubEnv('CODEX_AI_MODEL', undefined);
+    vi.stubEnv('OPENAI_TRANSLATION_MODEL', undefined);
 
     expect(loadConfig()).toMatchObject({
-      openAiApiKey: 'test-openai-key',
-      openAiBaseUrl: 'http://127.0.0.1:3001/v1',
-      openAiTranslationModel: 'gpt-5.4-nano'
+      codexApiBaseUrl: 'http://127.0.0.1:3001/v1',
+      codexAiModel: 'gpt-5.6-terra'
     });
+  });
+
+  it('accepts the legacy base URL only when it is loopback', () => {
+    vi.stubEnv('OPENAI_BASE_URL', 'http://localhost:3001/v1');
+
+    expect(loadConfig().codexApiBaseUrl).toBe('http://localhost:3001/v1');
+  });
+
+  it('rejects a non-loopback generative AI endpoint', () => {
+    vi.stubEnv('CODEX_API_BASE_URL', 'https://api.openai.com/v1');
+
+    expect(() => loadConfig()).toThrow('CODEX_API_BASE_URL must target loopback CodexAPI');
   });
 
   it('loads the optional internal API token', () => {

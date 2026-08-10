@@ -18,11 +18,11 @@ describe('OpenAI description generation client output parsing', () => {
     vi.mocked(OpenAI).mockClear();
   });
 
-  it('passes a configured base URL to the OpenAI SDK', () => {
-    createOpenAiDescriptionGenerationClient('test-key', { baseURL: 'http://127.0.0.1:3001/v1' });
+  it('uses the fixed CodexAPI compatibility key', () => {
+    createOpenAiDescriptionGenerationClient({ baseURL: 'http://127.0.0.1:3001/v1' });
 
     expect(OpenAI).toHaveBeenCalledWith({
-      apiKey: 'test-key',
+      apiKey: 'codexapi-local',
       baseURL: 'http://127.0.0.1:3001/v1'
     });
   });

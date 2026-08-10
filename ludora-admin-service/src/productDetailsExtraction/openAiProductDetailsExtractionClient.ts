@@ -1,4 +1,4 @@
-import { createOpenAiResponsesClient, type OpenAiClientOptions } from '../ai/openAiResponsesClient.js';
+import { createCodexResponsesClient, type CodexResponsesClientOptions } from '../ai/codexResponsesClient.js';
 import {
   systemPromptForProductDetailsExtraction,
   userPromptForProductDetailsExtraction
@@ -10,10 +10,9 @@ import {
 } from './productDetailsExtractionService.js';
 
 export function createOpenAiProductDetailsExtractionClient(
-  apiKey: string,
-  options: OpenAiClientOptions = {}
+  options: CodexResponsesClientOptions
 ): ProductDetailsExtractionClient {
-  const responses = createOpenAiResponsesClient(apiKey, options);
+  const responses = createCodexResponsesClient(options);
 
   return {
     async extract(request, context): Promise<ProductDetailsExtractionClientResult> {

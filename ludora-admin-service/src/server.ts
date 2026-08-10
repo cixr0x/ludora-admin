@@ -56,39 +56,20 @@ const rawBggClient = config.bggApiToken
     })
   : undefined;
 const bggClient = rawBggClient ? createCachedBggClient(database, rawBggClient) : undefined;
-const amazonTitleExtractionClient = config.openAiApiKey
-  ? createOpenAiAmazonTitleExtractionClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
-  : undefined;
-const amazonTitleExtractionService = amazonTitleExtractionClient
-  ? createAmazonTitleExtractionService(amazonTitleExtractionClient, { model: config.openAiTranslationModel })
-  : undefined;
-const translationClient = config.openAiApiKey
-  ? createOpenAiTranslationClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
-  : undefined;
-const translationService = translationClient
-  ? createTranslationService(database, translationClient, { model: config.openAiTranslationModel })
-  : undefined;
-const descriptionGenerationClient = config.openAiApiKey
-  ? createOpenAiDescriptionGenerationClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
-  : undefined;
-const descriptionGenerationService = descriptionGenerationClient
-  ? createDescriptionGenerationService(descriptionGenerationClient, { model: config.openAiTranslationModel })
-  : undefined;
-const productDetailsExtractionClient = config.openAiApiKey
-  ? createOpenAiProductDetailsExtractionClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
-  : undefined;
-const productDetailsExtractionService = productDetailsExtractionClient
-  ? createProductDetailsExtractionService(productDetailsExtractionClient, { model: config.openAiTranslationModel })
-  : undefined;
-const productDetailsEnrichmentService = productDetailsExtractionService
-  ? createProductDetailsEnrichmentService(database, productDetailsExtractionService)
-  : undefined;
-const storeProfileAiClient = config.openAiApiKey
-  ? createOpenAiStoreProfileDetectionClient(config.openAiApiKey, { baseURL: config.openAiBaseUrl })
-  : undefined;
+const codexOptions = { baseURL: config.codexApiBaseUrl };
+const amazonTitleExtractionClient = createOpenAiAmazonTitleExtractionClient(codexOptions);
+const amazonTitleExtractionService = createAmazonTitleExtractionService(amazonTitleExtractionClient, { model: config.codexAiModel });
+const translationClient = createOpenAiTranslationClient(codexOptions);
+const translationService = createTranslationService(database, translationClient, { model: config.codexAiModel });
+const descriptionGenerationClient = createOpenAiDescriptionGenerationClient(codexOptions);
+const descriptionGenerationService = createDescriptionGenerationService(descriptionGenerationClient, { model: config.codexAiModel });
+const productDetailsExtractionClient = createOpenAiProductDetailsExtractionClient(codexOptions);
+const productDetailsExtractionService = createProductDetailsExtractionService(productDetailsExtractionClient, { model: config.codexAiModel });
+const productDetailsEnrichmentService = createProductDetailsEnrichmentService(database, productDetailsExtractionService);
+const storeProfileAiClient = createOpenAiStoreProfileDetectionClient(codexOptions);
 const storeProfileDetectionService = createStoreProfileDetectionService({
   aiClient: storeProfileAiClient,
-  model: config.openAiTranslationModel
+  model: config.codexAiModel
 });
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
 const itemMatchingService = createItemMatchingService(database, bggClient, translationService, bggItemImporter);

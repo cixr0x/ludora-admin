@@ -24,11 +24,11 @@ describe('OpenAI Amazon title extraction client', () => {
     createMock.mockReset();
   });
 
-  it('uses the shared base URL aware OpenAI client flow', () => {
-    createOpenAiAmazonTitleExtractionClient('test-key', { baseURL: 'http://127.0.0.1:3001/v1' });
+  it('uses the fixed CodexAPI compatibility key', () => {
+    createOpenAiAmazonTitleExtractionClient({ baseURL: 'http://127.0.0.1:3001/v1' });
 
     expect(OpenAI).toHaveBeenCalledWith({
-      apiKey: 'test-key',
+      apiKey: 'codexapi-local',
       baseURL: 'http://127.0.0.1:3001/v1'
     });
   });
@@ -67,7 +67,7 @@ describe('OpenAI Amazon title extraction client', () => {
       })
     });
 
-    const client = createOpenAiAmazonTitleExtractionClient('test-key');
+    const client = createOpenAiAmazonTitleExtractionClient({ baseURL: 'http://127.0.0.1:3001/v1' });
     const result = await client.extract(
       {
         amazonTitle:

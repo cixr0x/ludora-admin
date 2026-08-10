@@ -1,4 +1,4 @@
-import { createOpenAiResponsesClient, type OpenAiClientOptions } from '../ai/openAiResponsesClient.js';
+import { createCodexResponsesClient, type CodexResponsesClientOptions } from '../ai/codexResponsesClient.js';
 import {
   systemPromptForAmazonTitleExtraction,
   userPromptForAmazonTitleExtraction
@@ -9,10 +9,9 @@ import type {
 } from './amazonTitleExtractionService.js';
 
 export function createOpenAiAmazonTitleExtractionClient(
-  apiKey: string,
-  options: OpenAiClientOptions = {}
+  options: CodexResponsesClientOptions
 ): AmazonTitleExtractionClient {
-  const responses = createOpenAiResponsesClient(apiKey, options);
+  const responses = createCodexResponsesClient(options);
 
   return {
     async extract(request, context): Promise<AmazonTitleExtractionClientResult> {

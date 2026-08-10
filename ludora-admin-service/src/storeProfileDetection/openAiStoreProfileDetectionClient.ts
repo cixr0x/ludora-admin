@@ -1,4 +1,4 @@
-import { createOpenAiResponsesClient, type OpenAiClientOptions } from '../ai/openAiResponsesClient.js';
+import { createCodexResponsesClient, type CodexResponsesClientOptions } from '../ai/codexResponsesClient.js';
 import {
   systemPromptForStoreProfileDetection,
   userPromptForStoreProfileDetection
@@ -6,10 +6,9 @@ import {
 import type { StoreProfileAiClient, StoreProfileAiResult } from './storeProfileDetectionService.js';
 
 export function createOpenAiStoreProfileDetectionClient(
-  apiKey: string,
-  options: OpenAiClientOptions = {}
+  options: CodexResponsesClientOptions
 ): StoreProfileAiClient {
-  const responses = createOpenAiResponsesClient(apiKey, options);
+  const responses = createCodexResponsesClient(options);
 
   return {
     async detect(request, context): Promise<StoreProfileAiResult> {

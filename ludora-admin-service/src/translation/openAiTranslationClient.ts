@@ -1,9 +1,9 @@
-import { createOpenAiResponsesClient, type OpenAiClientOptions } from '../ai/openAiResponsesClient.js';
+import { createCodexResponsesClient, type CodexResponsesClientOptions } from '../ai/codexResponsesClient.js';
 import { systemPromptForPurpose, userPromptForTranslation } from './translationPrompts.js';
 import type { TranslationClient, TranslationClientResult } from './translationService.js';
 
-export function createOpenAiTranslationClient(apiKey: string, options: OpenAiClientOptions = {}): TranslationClient {
-  const responses = createOpenAiResponsesClient(apiKey, options);
+export function createOpenAiTranslationClient(options: CodexResponsesClientOptions): TranslationClient {
+  const responses = createCodexResponsesClient(options);
 
   return {
     async translate(request, context): Promise<TranslationClientResult> {

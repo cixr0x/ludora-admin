@@ -1,4 +1,4 @@
-import { createOpenAiResponsesClient, type OpenAiClientOptions } from '../ai/openAiResponsesClient.js';
+import { createCodexResponsesClient, type CodexResponsesClientOptions } from '../ai/codexResponsesClient.js';
 import {
   systemPromptForDescriptionGeneration,
   userPromptForDescriptionGeneration
@@ -8,8 +8,8 @@ import type {
   DescriptionGenerationClientResult
 } from './descriptionGenerationService.js';
 
-export function createOpenAiDescriptionGenerationClient(apiKey: string, options: OpenAiClientOptions = {}): DescriptionGenerationClient {
-  const responses = createOpenAiResponsesClient(apiKey, options);
+export function createOpenAiDescriptionGenerationClient(options: CodexResponsesClientOptions): DescriptionGenerationClient {
+  const responses = createCodexResponsesClient(options);
 
   return {
     async generate(request, context): Promise<DescriptionGenerationClientResult> {
