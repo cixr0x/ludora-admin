@@ -1,4 +1,5 @@
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -87,6 +88,167 @@ class FakeContext:
 
 
 class BrowserFetchTests(unittest.TestCase):
+    def _configured_recycling_fetcher(
+        self,
+        *,
+        completed_fetches: int,
+        driver_started_at: float,
+        max_age_seconds: float = 21_600,
+        max_fetches: int = 250,
+    ):
+        old_response = FakeResponse(
+            "https://example.mx/products/old",
+            "<html></html>",
+            "text/html",
+        )
+        next_response = FakeResponse(
+            "https://example.mx/products/catan",
+            "<html></html>",
+            "text/html",
+        )
+        old_page = FakePage(old_response, "<html><body>old</body></html>")
+        next_page = FakePage(next_response, "<html><body><h1>Catan</h1></body></html>")
+        trace_logger = Mock()
+        fetcher = BrowserTextFetcher(
+            trace_logger=trace_logger,
+            max_fetches=max_fetches,
+            max_age_seconds=max_age_seconds,
+        )
+        old_browser = Mock()
+        old_playwright = Mock()
+        fetcher._browser = old_browser
+        fetcher._playwright = old_playwright
+        fetcher._context = FakeContext([old_page])
+        fetcher._page = old_page
+        fetcher._completed_fetches = completed_fetches
+        fetcher._driver_started_at = driver_started_at
+
+        replacement_context = FakeContext([next_page])
+
+        def start_replacement():
+            fetcher._browser = Mock()
+            fetcher._playwright = Mock()
+            fetcher._context = replacement_context
+            fetcher._page = Mock()
+            fetcher._completed_fetches = 0
+            fetcher._driver_started_at = time.monotonic()
+
+        return fetcher, old_browser, old_playwright, replacement_context, trace_logger, start_replacement
+
+    def test_fetch_recycles_before_fetch_251_and_resets_the_count(self):
+        fetcher, old_browser, old_playwright, context, trace, start = (
+            self._configured_recycling_fetcher(completed_fetches=250, driver_started_at=100.0)
+        )
+        with (
+            patch("ludora.browser_fetch.time.monotonic", side_effect=[200.0, 200.0]),
+            patch.object(fetcher, "_start_browser", side_effect=start),
+        ):
+            result = fetcher.fetch("https://example.mx/products/catan")
+
+        self.assertEqual(result.text, "<html><body><h1>Catan</h1></body></html>")
+        old_browser.close.assert_called_once_with()
+        old_playwright.stop.assert_called_once_with()
+        self.assertEqual(len(context.created_pages), 1)
+        self.assertEqual(fetcher._completed_fetches, 1)
+        trace.log.assert_any_call(
+            "browser_fetch.recycle.started",
+            reason="max_fetches",
+            completed_fetches=250,
+            age_seconds=100.0,
+        )
+        trace.log.assert_any_call(
+            "browser_fetch.recycle.completed",
+            reason="max_fetches",
+            completed_fetches=250,
+            age_seconds=100.0,
+        )
+
+    def test_fetch_recycles_a_six_hour_old_driver_below_the_count_limit(self):
+        fetcher, _, _, _, trace, start = self._configured_recycling_fetcher(
+            completed_fetches=10,
+            driver_started_at=100.0,
+        )
+        with (
+            patch("ludora.browser_fetch.time.monotonic", side_effect=[21_700.0, 21_700.0]),
+            patch.object(fetcher, "_start_browser", side_effect=start),
+        ):
+            fetcher.fetch("https://example.mx/products/catan")
+
+        trace.log.assert_any_call(
+            "browser_fetch.recycle.started",
+            reason="max_age",
+            completed_fetches=10,
+            age_seconds=21_600.0,
+        )
+
+    def test_fetch_does_not_recycle_below_both_limits(self):
+        response = FakeResponse("https://example.mx/products/catan", "<html></html>", "text/html")
+        page = FakePage(response, "<html><body><h1>Catan</h1></body></html>")
+        fetcher = BrowserTextFetcher(max_fetches=250, max_age_seconds=21_600)
+        fetcher._context = FakeContext([page])
+        fetcher._driver_started_at = 100.0
+        fetcher._completed_fetches = 249
+
+        with (
+            patch("ludora.browser_fetch.time.monotonic", return_value=21_699.0),
+            patch.object(fetcher, "_start_browser") as start,
+        ):
+            fetcher.fetch("https://example.mx/products/catan")
+
+        start.assert_not_called()
+        self.assertEqual(fetcher._completed_fetches, 250)
+
+    def test_fetch_prefers_count_reason_when_both_limits_are_due(self):
+        fetcher, _, _, _, trace, start = self._configured_recycling_fetcher(
+            completed_fetches=250,
+            driver_started_at=0.0,
+        )
+        with (
+            patch("ludora.browser_fetch.time.monotonic", side_effect=[30_000.0, 30_000.0]),
+            patch.object(fetcher, "_start_browser", side_effect=start),
+        ):
+            fetcher.fetch("https://example.mx/products/catan")
+
+        self.assertEqual(trace.log.call_args_list[0].args, ("browser_fetch.recycle.started",))
+        self.assertEqual(trace.log.call_args_list[0].kwargs["reason"], "max_fetches")
+
+    def test_failed_recycle_start_uses_fetch_failure_contract_and_retries_next_fetch(self):
+        fetcher, _, _, replacement_context, trace, start = self._configured_recycling_fetcher(
+            completed_fetches=250,
+            driver_started_at=100.0,
+        )
+        failed_start = RuntimeError("playwright driver failed to start")
+        start_attempt = 0
+
+        def fail_then_start():
+            nonlocal start_attempt
+            start_attempt += 1
+            if start_attempt == 1:
+                raise failed_start
+            start()
+
+        with (
+            patch("ludora.browser_fetch.time.monotonic", side_effect=[200.0, 200.0, 200.0]),
+            patch.object(fetcher, "_start_browser", side_effect=fail_then_start),
+        ):
+            first_result = fetcher.fetch("https://example.mx/products/catan")
+            first_failure = fetcher.last_failure
+            second_result = fetcher.fetch("https://example.mx/products/catan")
+
+        self.assertIsNone(first_result)
+        self.assertIsNotNone(second_result)
+        self.assertIn("Failed to recycle Playwright browser", first_failure["error"])
+        trace.log.assert_any_call(
+            "browser_fetch.recycle.failed",
+            reason="max_fetches",
+            completed_fetches=250,
+            age_seconds=100.0,
+            error="playwright driver failed to start",
+            error_type="RuntimeError",
+        )
+        self.assertEqual(len(replacement_context.created_pages), 1)
+        self.assertEqual(fetcher._completed_fetches, 1)
+
     def test_browser_user_agent_matches_linux_browser_version(self):
         with patch("ludora.browser_fetch.os.name", "posix"):
             user_agent = _browser_user_agent(None, browser_version="140.0.7339.41")
@@ -399,6 +561,7 @@ class BrowserFetchTests(unittest.TestCase):
             timeout_ms=12_345,
             url="https://example.mx/products/catan",
         )
+        self.assertEqual(fetcher._completed_fetches, 1)
 
     def test_fetch_captures_context_new_page_failure(self):
         class FailingContext:

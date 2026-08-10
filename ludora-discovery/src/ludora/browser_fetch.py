@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import unicodedata
 from collections.abc import Callable
 from html import unescape
@@ -45,9 +46,20 @@ def fetch_sitemap_text_with_browser(url: str, timeout_ms: int = 30_000) -> Fetch
 
 
 class BrowserTextFetcher:
-    def __init__(self, timeout_ms: int = 30_000, trace_logger: TraceLogger | None = None) -> None:
+    def __init__(
+        self,
+        timeout_ms: int = 30_000,
+        trace_logger: TraceLogger | None = None,
+        *,
+        max_fetches: int | None = None,
+        max_age_seconds: float | None = None,
+    ) -> None:
         self.timeout_ms = timeout_ms
         self.trace_logger = trace_logger
+        self.max_fetches = max_fetches
+        self.max_age_seconds = max_age_seconds
+        self._completed_fetches = 0
+        self._driver_started_at: float | None = None
         self._playwright = None
         self._browser = None
         self._context = None
@@ -59,6 +71,10 @@ class BrowserTextFetcher:
         self.last_failure: dict[str, object] | None = None
 
     def __enter__(self) -> BrowserTextFetcher:
+        self._start_browser()
+        return self
+
+    def _start_browser(self) -> None:
         try:
             from playwright.sync_api import Error as PlaywrightError
             from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
@@ -68,23 +84,45 @@ class BrowserTextFetcher:
 
         self._playwright_error = PlaywrightError
         self._playwright_timeout_error = PlaywrightTimeoutError
-        self._playwright = sync_playwright().start()
-        chrome_path = _chrome_executable_path()
-        self._chrome_path = chrome_path
-        self._browser = self._playwright.chromium.launch(
-            executable_path=chrome_path,
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--no-first-run",
-                "--no-default-browser-check",
-            ],
-        )
-        self._browser_version = str(getattr(self._browser, "version", "") or "")
-        self._context = self._create_context()
-        self._page = self._context.new_page()
-        return self
+        playwright = sync_playwright().start()
+        browser = None
+        try:
+            chrome_path = _chrome_executable_path()
+            browser = playwright.chromium.launch(
+                executable_path=chrome_path,
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
+                    "--no-first-run",
+                    "--no-default-browser-check",
+                ],
+            )
+            self._chrome_path = chrome_path
+            self._browser_version = str(getattr(browser, "version", "") or "")
+            self._browser = browser
+            self._playwright = playwright
+            self._context = self._create_context()
+            self._page = self._context.new_page()
+        except Exception:
+            if browser is not None:
+                try:
+                    browser.close()
+                except PlaywrightError:
+                    pass
+            try:
+                playwright.stop()
+            except PlaywrightError:
+                pass
+            self._browser = None
+            self._playwright = None
+            self._context = None
+            self._page = None
+            self._chrome_path = None
+            self._browser_version = None
+            raise
+        self._completed_fetches = 0
+        self._driver_started_at = time.monotonic()
 
     def _create_context(self):
         if self._browser is None:
@@ -115,11 +153,65 @@ class BrowserTextFetcher:
         self._context = self._create_context()
         self._page = self._context.new_page()
 
+    def _stop_browser(self) -> None:
+        browser = self._browser
+        playwright = self._playwright
+        self._browser = None
+        self._playwright = None
+        self._context = None
+        self._page = None
+        self._chrome_path = None
+        self._browser_version = None
+        if browser is not None:
+            try:
+                browser.close()
+            except self._playwright_error:
+                pass
+        if playwright is not None:
+            try:
+                playwright.stop()
+            except self._playwright_error:
+                pass
+
     def __exit__(self, exc_type, exc, traceback) -> None:
-        if self._browser is not None:
-            self._browser.close()
-        if self._playwright is not None:
-            self._playwright.stop()
+        self._stop_browser()
+
+    def _recycle_details(self) -> tuple[str, float] | None:
+        if self._driver_started_at is None:
+            return None
+        age_seconds = max(0.0, time.monotonic() - self._driver_started_at)
+        if self.max_fetches is not None and self._completed_fetches >= self.max_fetches:
+            return "max_fetches", age_seconds
+        if self.max_age_seconds is not None and age_seconds >= self.max_age_seconds:
+            return "max_age", age_seconds
+        return None
+
+    def _recycle_if_due(self) -> None:
+        details = self._recycle_details()
+        if details is None:
+            return
+        reason, age_seconds = details
+        fields = {
+            "reason": reason,
+            "completed_fetches": self._completed_fetches,
+            "age_seconds": age_seconds,
+        }
+        if self.trace_logger is not None:
+            self.trace_logger.log("browser_fetch.recycle.started", **fields)
+        self._stop_browser()
+        try:
+            self._start_browser()
+        except Exception as exc:
+            if self.trace_logger is not None:
+                self.trace_logger.log(
+                    "browser_fetch.recycle.failed",
+                    **fields,
+                    error=str(exc),
+                    error_type=type(exc).__name__,
+                )
+            raise BrowserFetchUnavailable(f"Failed to recycle Playwright browser: {exc}") from exc
+        if self.trace_logger is not None:
+            self.trace_logger.log("browser_fetch.recycle.completed", **fields)
 
     def fetch(
         self,
@@ -128,14 +220,17 @@ class BrowserTextFetcher:
         before_navigation: Callable[[str], None] | None = None,
         cancellation_token: CancellationToken | None = None,
     ) -> FetchResult | None:
-        if self._context is None and self._page is None:
-            raise BrowserFetchUnavailable("Browser fetcher has not been started.")
-
         self.last_failure = None
         page = None
-        close_page_after_fetch = self._context is not None
+        close_page_after_fetch = False
         amazon_resource_counts = None
+        count_fetch = False
         try:
+            self._recycle_if_due()
+            if self._context is None and self._page is None:
+                raise BrowserFetchUnavailable("Browser fetcher has not been started.")
+            count_fetch = True
+            close_page_after_fetch = self._context is not None
             page = self._context.new_page() if self._context is not None else self._page
             if page is None:
                 raise BrowserFetchUnavailable("Browser fetcher has not been started.")
@@ -190,6 +285,7 @@ class BrowserTextFetcher:
             raise
         except (
             AmazonStoreSearchIncomplete,
+            BrowserFetchUnavailable,
             self._playwright_error,
             self._playwright_timeout_error,
             OSError,
@@ -207,6 +303,8 @@ class BrowserTextFetcher:
                 self.trace_logger.log("browser_fetch.failed", **failure)
             return None
         finally:
+            if count_fetch:
+                self._completed_fetches += 1
             if close_page_after_fetch and page is not None:
                 try:
                     page.close()
