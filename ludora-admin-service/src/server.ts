@@ -5,9 +5,12 @@ import { createDatabase } from './db.js';
 import { createApp } from './app.js';
 import { createAmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
 import { createOpenAiAmazonTitleExtractionClient } from './amazonTitleExtraction/openAiAmazonTitleExtractionClient.js';
+import { createAiBggMatchingService } from './aiBggMatching/aiBggMatchingService.js';
+import { createCodexAiBggMatchingClient } from './aiBggMatching/codexAiBggMatchingClient.js';
 import { createBggClient } from './bgg/bggClient.js';
 import { createCachedBggClient } from './bgg/cachedBggClient.js';
 import { createBggItemImporter } from './bgg/bggItemImporter.js';
+import { createBggMatchCache } from './bgg/bggMatchCache.js';
 import { createContinuousItemUpdateWorkerManager } from './continuousItemUpdateWorkerManager.js';
 import { createDescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import {
@@ -49,14 +52,17 @@ if (!config.databaseUrl) {
 }
 
 const database = createDatabase(config.databaseUrl);
+const bggMatchCache = createBggMatchCache(database);
 const rawBggClient = config.bggApiToken
   ? createBggClient({
       apiToken: config.bggApiToken,
       baseUrl: config.bggApiBaseUrl
-    })
+  })
   : undefined;
-const bggClient = rawBggClient ? createCachedBggClient(database, rawBggClient) : undefined;
+const bggClient = rawBggClient ? createCachedBggClient(database, rawBggClient, bggMatchCache) : undefined;
 const codexOptions = { baseURL: config.codexApiBaseUrl };
+const aiBggMatchingClient = createCodexAiBggMatchingClient({ baseURL: config.codexApiBaseUrl });
+const aiBggMatchingService = createAiBggMatchingService(aiBggMatchingClient, { model: config.codexAiModel });
 const amazonTitleExtractionClient = createOpenAiAmazonTitleExtractionClient(codexOptions);
 const amazonTitleExtractionService = createAmazonTitleExtractionService(amazonTitleExtractionClient, { model: config.codexAiModel });
 const translationClient = createOpenAiTranslationClient(codexOptions);
@@ -72,7 +78,12 @@ const storeProfileDetectionService = createStoreProfileDetectionService({
   model: config.codexAiModel
 });
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
-const itemMatchingService = createItemMatchingService(database, bggClient, translationService, bggItemImporter);
+const itemMatchingService = createItemMatchingService(database, {
+  aiBggMatchingService,
+  bggClient,
+  bggItemImporter,
+  bggMatchCache
+});
 const localOperationsClient =
   config.discoveryRunner.mode === 'local'
     ? createLocalDiscoveryOperationsClient({

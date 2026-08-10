@@ -1,11 +1,11 @@
-import type { BggClient, BggThingResult } from '../bgg/bggClient.js';
+import type { AiBggMatchingService } from '../aiBggMatching/aiBggMatchingService.js';
+import type { BggClient } from '../bgg/bggClient.js';
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
+import type { BggCachedMatch, BggMatchCache } from '../bgg/bggMatchCache.js';
 import type { BggSearchItem } from '../bgg/bggParser.js';
 import type { Database } from '../db.js';
 import { nullTraceLogger, type TraceLogger } from '../trace.js';
-import type { TranslationService } from '../translation/translationService.js';
 import {
-  normalizeTitle,
   normalizeTitleVariants,
   scoreBggThing,
   scoreLocalItem,
@@ -43,6 +43,7 @@ type ConfirmBoardgameOptions = {
 
 type DiscoveryItemCandidateRow = {
   id: number;
+  image_url?: string | null;
   item_type?: string | null;
   language?: string | null;
   max_players?: number | null;
@@ -52,6 +53,7 @@ type DiscoveryItemCandidateRow = {
 };
 
 type GeneratedMatchCandidate = {
+  accepted: boolean;
   bggId: number | null;
   itemId: number | null;
   matchReasons: string[];
@@ -66,16 +68,20 @@ const matchCandidateSelect = `
   match_score, match_reasons, status, raw_payload, created_at, updated_at
 `;
 
-const BGG_SEARCH_ITEM_TYPES = ['boardgame', 'boardgameexpansion'];
-const BGG_SEARCH_TYPE = BGG_SEARCH_ITEM_TYPES.join(',');
 const AUTO_MATCH_SCORE_THRESHOLD = 0.9;
+
+export type ItemMatchingDependencies = {
+  aiBggMatchingService?: AiBggMatchingService;
+  bggClient?: BggClient;
+  bggItemImporter?: BggItemImporter;
+  bggMatchCache: BggMatchCache;
+};
 
 export function createItemMatchingService(
   database: Database,
-  bggClient?: BggClient,
-  translationService?: TranslationService,
-  bggItemImporter?: BggItemImporter
+  dependencies: ItemMatchingDependencies
 ): ItemMatchingService {
+  const { aiBggMatchingService, bggClient, bggItemImporter, bggMatchCache } = dependencies;
   return {
     async confirmBoardgameAndMatch(
       discoveryItemCandidateId: number,
@@ -103,7 +109,7 @@ export function createItemMatchingService(
       try {
         traceLog(traceLogger, 'item_matcher.local_match.start', { candidate_id: discoveryItemCandidateId });
         const localMatches = await generateLocalMatches(database, candidate);
-        const localMatch = bestMatchAboveThreshold(localMatches);
+        const localMatch = bestAcceptedMatch(localMatches);
         traceLog(traceLogger, 'item_matcher.local_match.completed', {
           best_item_id: localMatch?.itemId ?? null,
           best_score: localMatch?.matchScore ?? null,
@@ -132,23 +138,13 @@ export function createItemMatchingService(
           return;
         }
 
-        if (!bggClient) {
-          await markStoreItemProcessingError(
-            database,
-            discoveryItemCandidateId,
-            'BGG client is not configured',
-            isAdminConfirmation
-          );
-          traceLog(traceLogger, 'item_matcher.failed', {
-            candidate_id: discoveryItemCandidateId,
-            error: 'BGG client is not configured'
-          });
-          return;
-        }
-
         traceLog(traceLogger, 'item_matcher.bgg_match.start', { candidate_id: discoveryItemCandidateId });
-        const bggMatches = await generateBggMatches(database, candidate, bggClient, translationService, traceLogger);
-        const bggMatch = bestMatchAboveThreshold(bggMatches);
+        const bggMatches = await generateBggMatches(candidate, {
+          aiBggMatchingService,
+          bggClient,
+          bggMatchCache
+        }, traceLogger);
+        const bggMatch = bestAcceptedMatch(bggMatches);
         traceLog(traceLogger, 'item_matcher.bgg_match.completed', {
           best_bgg_id: bggMatch?.bggId ?? null,
           best_score: bggMatch?.matchScore ?? null,
@@ -244,10 +240,14 @@ export function createItemMatchingService(
 
     async generateMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]> {
       const candidate = await loadDiscoveryItemCandidate(database, discoveryItemCandidateId);
+      const localMatches = await generateLocalMatches(database, candidate);
+      const bggMatches = hasAcceptedMatch(localMatches)
+        ? []
+        : await generateBggMatches(candidate, { aiBggMatchingService, bggClient, bggMatchCache });
       const generated = [
-        ...(await generateLocalMatches(database, candidate)),
-        ...(await generateBggMatches(database, candidate, bggClient, translationService))
-      ].filter((match) => match.matchScore >= 0.3);
+        ...localMatches,
+        ...bggMatches
+      ].filter((match) => match.accepted || match.matchScore >= 0.3);
 
       await database.query(
         `
@@ -309,9 +309,10 @@ export function createItemMatchingService(
   };
 }
 
-function bestMatchAboveThreshold(matches: GeneratedMatchCandidate[]): GeneratedMatchCandidate | null {
-  const match = [...matches].sort((left, right) => right.matchScore - left.matchScore)[0];
-  return match && match.matchScore >= AUTO_MATCH_SCORE_THRESHOLD ? match : null;
+function bestAcceptedMatch(matches: GeneratedMatchCandidate[]): GeneratedMatchCandidate | null {
+  return [...matches]
+    .filter((match) => match.accepted)
+    .sort((left, right) => right.matchScore - left.matchScore)[0] ?? null;
 }
 
 function shouldConfirmBoardgameMatch(match: GeneratedMatchCandidate, isAdminConfirmation: boolean): boolean {
@@ -420,7 +421,7 @@ async function markStoreItemProcessingError(
 async function loadDiscoveryItemCandidate(database: Database, discoveryItemCandidateId: number): Promise<DiscoveryItemCandidateRow> {
   const result = await database.query(
     `
-    select id, title, publisher, item_type, min_players, max_players, language
+    select id, title, image_url, publisher, item_type, min_players, max_players, language
     from store_items
     where id = $1
     `,
@@ -462,6 +463,7 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
     const item = localItemFromRow(row as Record<string, unknown>);
     const score = scoreLocalItem(discoveryCandidateForMatch(candidate), item);
     return {
+      accepted: score.matchScore >= AUTO_MATCH_SCORE_THRESHOLD,
       bggId: item.bggId ?? null,
       itemId: item.id,
       matchReasons: score.matchReasons,
@@ -474,411 +476,134 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
 }
 
 async function generateBggMatches(
-  database: Database,
   candidate: DiscoveryItemCandidateRow,
-  bggClient?: BggClient,
-  translationService?: TranslationService,
+  dependencies: Pick<ItemMatchingDependencies, 'aiBggMatchingService' | 'bggClient' | 'bggMatchCache'>,
   traceLogger: TraceLogger = nullTraceLogger
 ): Promise<GeneratedMatchCandidate[]> {
-  const originalQueries = dedupeStrings([candidate.title]);
   traceLog(traceLogger, 'item_matcher.bgg_cache.start', {
     candidate_id: candidate.id,
-    phase: 'original',
-    query_count: originalQueries.length
+    query: candidate.title
   });
-  const originalCacheMatches = await generateBggCacheMatches(database, candidate, originalQueries, originalQueries);
+  const cached = await dependencies.bggMatchCache.lookup(candidate.title);
+  const cacheMatches = cached.matches.map((match) => generatedCacheMatch(candidate, match));
   traceLog(traceLogger, 'item_matcher.bgg_cache.completed', {
+    accepted_match: hasAcceptedMatch(cacheMatches),
+    cache_hit: cached.cacheHit,
     candidate_id: candidate.id,
-    auto_match: hasAcceptedMatch(originalCacheMatches),
-    match_count: originalCacheMatches.length,
-    phase: 'original'
+    match_count: cacheMatches.length
   });
-  if (hasAcceptedMatch(originalCacheMatches)) {
-    return originalCacheMatches;
-  }
-
-  if (!bggClient) {
-    return originalCacheMatches;
-  }
-
-  let originalMatches = mergeMatchesByBggId([
-    ...originalCacheMatches,
-    ...(await searchBggMatches(database, candidate, bggClient, originalQueries, originalQueries, traceLogger))
-  ]);
-  if (hasAcceptedMatch(originalMatches)) {
-    return originalMatches;
-  }
-
-  originalMatches = mergeMatchesByBggId([
-    ...originalMatches,
-    ...(await searchBggMatches(database, candidate, bggClient, originalQueries, originalQueries, traceLogger, true))
-  ]);
-  if (hasAcceptedMatch(originalMatches)) {
-    return originalMatches;
-  }
-
-  const translatedQueries = await translatedBggSearchQueries(candidate, translationService, traceLogger);
-  if (translatedQueries.length === 0) {
-    return originalMatches;
-  }
-
-  const titleVariants = [...originalQueries, ...translatedQueries];
-  traceLog(traceLogger, 'item_matcher.bgg_cache.start', {
-    candidate_id: candidate.id,
-    phase: 'translated',
-    query_count: translatedQueries.length
-  });
-  const translatedCacheMatches = await generateBggCacheMatches(database, candidate, translatedQueries, titleVariants);
-  traceLog(traceLogger, 'item_matcher.bgg_cache.completed', {
-    candidate_id: candidate.id,
-    auto_match: hasAcceptedMatch(translatedCacheMatches),
-    match_count: translatedCacheMatches.length,
-    phase: 'translated'
-  });
-  let cacheMatches = mergeMatchesByBggId([...originalMatches, ...translatedCacheMatches]);
-  if (hasAcceptedMatch(translatedCacheMatches)) {
-    return cacheMatches;
-  }
-
-  let translatedMatches = await searchBggMatches(database, candidate, bggClient, translatedQueries, titleVariants, traceLogger);
-  cacheMatches = mergeMatchesByBggId([...cacheMatches, ...translatedMatches]);
   if (hasAcceptedMatch(cacheMatches)) {
     return cacheMatches;
   }
 
-  translatedMatches = await searchBggMatches(
-    database,
-    candidate,
-    bggClient,
-    translatedQueries,
-    titleVariants,
-    traceLogger,
-    true
-  );
+  const aiMatch = await generateAiBggMatch(candidate, dependencies, traceLogger);
+  return aiMatch ? mergeMatchesByBggId([...cacheMatches, aiMatch]) : cacheMatches;
+}
 
-  return mergeMatchesByBggId([...cacheMatches, ...translatedMatches]);
+function generatedCacheMatch(
+  candidate: DiscoveryItemCandidateRow,
+  cached: BggCachedMatch
+): GeneratedMatchCandidate {
+  const score = scoreBggThing(discoveryCandidateForMatch(candidate), bggThingFromSearchItem(cached.item));
+  return {
+    accepted: cached.verifiedByAi || score.matchScore >= AUTO_MATCH_SCORE_THRESHOLD,
+    bggId: cached.item.bggId,
+    itemId: null,
+    matchReasons: cached.verifiedByAi
+      ? ['AI-verified BGG cache association', ...score.matchReasons]
+      : score.matchReasons,
+    matchScore: cached.verifiedByAi
+      ? Math.max(score.matchScore, AUTO_MATCH_SCORE_THRESHOLD)
+      : score.matchScore,
+    matchedName: cached.item.name,
+    rawPayload: {
+      search_result: cached.item,
+      source: cached.verifiedByAi ? 'ai_match_cache' : 'bgg_cache'
+    },
+    source: 'BGG'
+  };
+}
+
+async function generateAiBggMatch(
+  candidate: DiscoveryItemCandidateRow,
+  dependencies: Pick<ItemMatchingDependencies, 'aiBggMatchingService' | 'bggClient' | 'bggMatchCache'>,
+  traceLogger: TraceLogger
+): Promise<GeneratedMatchCandidate | null> {
+  if (!dependencies.aiBggMatchingService) {
+    return null;
+  }
+
+  traceLog(traceLogger, 'item_matcher.ai_match.start', {
+    candidate_id: candidate.id,
+    has_image: nonEmptyStringOrNull(candidate.image_url) !== null,
+    item_name: candidate.title
+  });
+  try {
+    const decision = await dependencies.aiBggMatchingService.findMatch({
+      itemName: candidate.title,
+      imageUrl: nonEmptyStringOrNull(candidate.image_url)
+    });
+    traceLog(traceLogger, 'item_matcher.ai_match.completed', {
+      bgg_id: decision?.bggId ?? null,
+      candidate_id: candidate.id,
+      confidence: decision?.confidence ?? null,
+      match_found: decision !== null
+    });
+    if (!decision) {
+      traceLog(traceLogger, 'item_matcher.ai_match.no_match', {
+        candidate_id: candidate.id
+      });
+      return null;
+    }
+
+    if (!dependencies.bggClient) {
+      throw new Error('BGG client is not configured');
+    }
+    const thing = await dependencies.bggClient.fetchThing(decision.bggId);
+    const validated = Boolean(thing && thing.details.bggId === decision.bggId);
+    traceLog(traceLogger, 'item_matcher.ai_match.validation.completed', {
+      bgg_id: decision.bggId,
+      candidate_id: candidate.id,
+      validated
+    });
+    if (!thing || !validated) {
+      throw new Error(`AI BGG match could not validate BGG ID ${decision.bggId}`);
+    }
+
+    const searchItem: BggSearchItem = {
+      bggId: thing.details.bggId,
+      name: thing.details.name,
+      type: thing.details.type,
+      yearPublished: thing.details.yearPublished
+    };
+    await dependencies.bggMatchCache.recordAiMatch([candidate.title, thing.details.name], searchItem);
+    traceLog(traceLogger, 'item_matcher.ai_match.cache.completed', {
+      bgg_id: decision.bggId,
+      candidate_id: candidate.id,
+      query_count: 2
+    });
+
+    return {
+      accepted: true,
+      bggId: decision.bggId,
+      itemId: null,
+      matchReasons: ['AI-validated BGG match', decision.reasoning],
+      matchScore: decision.confidence,
+      matchedName: thing.details.name,
+      rawPayload: { ai_match: decision, thing: thing.details },
+      source: 'BGG'
+    };
+  } catch (error) {
+    traceLog(traceLogger, 'item_matcher.ai_match.failed', {
+      candidate_id: candidate.id,
+      error: error instanceof Error ? error.message : 'AI BGG matching failed'
+    });
+    throw error;
+  }
 }
 
 function hasAcceptedMatch(matches: GeneratedMatchCandidate[]): boolean {
-  return matches.some((match) => match.matchScore >= AUTO_MATCH_SCORE_THRESHOLD);
-}
-
-async function generateBggCacheMatches(
-  database: Database,
-  candidate: DiscoveryItemCandidateRow,
-  searchQueries: string[],
-  titleVariants: string[]
-): Promise<GeneratedMatchCandidate[]> {
-  const namePatterns = bggCacheNamePatterns(searchQueries);
-  if (namePatterns.length === 0) {
-    return [];
-  }
-
-  const namePredicates = namePatterns.map((_, index) => `name ilike $${index + 2} escape '\\'`).join('\n       or ');
-  const cacheRows = await database.query(
-    `
-    select bgg_id, name, item_type, year_published, result_json
-    from bgg_search_cache
-    where item_type = any($1::text[])
-      and (
-        ${namePredicates}
-      )
-    order by year_published desc nulls last, bgg_id desc
-    limit 20
-    `,
-    [BGG_SEARCH_ITEM_TYPES, ...namePatterns]
-  );
-
-  const searchResults = selectSearchResultsForScoring(dedupeSearchResults(bggSearchItems(cacheRows.rows)), titleVariants).slice(0, 10);
-  return searchResults.map((searchResult) => {
-    const score = scoreBggThingWithTitleVariants(candidate, titleVariants, bggThingFromSearchItem(searchResult));
-    return {
-      bggId: searchResult.bggId,
-      itemId: null,
-      matchReasons: score.matchReasons,
-      matchScore: score.matchScore,
-      matchedName: searchResult.name,
-      rawPayload: bggCacheRawPayload(searchResult),
-      source: 'BGG' as const
-    };
-  });
-}
-
-async function searchBggMatches(
-  database: Database,
-  candidate: DiscoveryItemCandidateRow,
-  bggClient: BggClient,
-  searchQueries: string[],
-  titleVariants: string[],
-  traceLogger: TraceLogger = nullTraceLogger,
-  forceRefresh = false
-): Promise<GeneratedMatchCandidate[]> {
-  const searchResults: BggSearchItem[] = [];
-  for (const query of searchQueries) {
-    searchResults.push(...(await cachedBggSearch(database, bggClient, query, traceLogger, forceRefresh)));
-  }
-  const uniqueSearchResults = selectSearchResultsForScoring(dedupeSearchResults(searchResults), titleVariants).slice(0, 10);
-  const matches: GeneratedMatchCandidate[] = [];
-
-  for (const searchResult of uniqueSearchResults) {
-    traceLog(traceLogger, 'item_matcher.bgg_thing_fetch.start', {
-      bgg_id: searchResult.bggId,
-      candidate_id: candidate.id,
-      name: searchResult.name
-    });
-    const thing = await bggClient.fetchThing(searchResult.bggId);
-    if (!thing) {
-      traceLog(traceLogger, 'item_matcher.bgg_thing_fetch.completed', {
-        bgg_id: searchResult.bggId,
-        candidate_id: candidate.id,
-        found: false,
-        name: searchResult.name
-      });
-      continue;
-    }
-    traceLog(traceLogger, 'item_matcher.bgg_thing_fetch.completed', {
-      bgg_id: searchResult.bggId,
-      candidate_id: candidate.id,
-      found: true,
-      name: thing.details.name
-    });
-    const score = scoreBggThingWithTitleVariants(candidate, titleVariants, thing.details);
-    matches.push({
-      bggId: thing.details.bggId,
-      itemId: null,
-      matchReasons: score.matchReasons,
-      matchScore: score.matchScore,
-      matchedName: thing.details.name,
-      rawPayload: bggRawPayload(searchResult, thing),
-      source: 'BGG'
-    });
-  }
-
-  return matches;
-}
-
-async function cachedBggSearch(
-  database: Database,
-  bggClient: BggClient,
-  query: string,
-  traceLogger: TraceLogger = nullTraceLogger,
-  forceRefresh = false
-): Promise<BggSearchItem[]> {
-  const normalizedQuery = normalizeTitle(query);
-  if (!normalizedQuery) {
-    return [];
-  }
-
-  traceLog(traceLogger, 'item_matcher.bgg_search.start', {
-    normalized_query: normalizedQuery,
-    query
-  });
-  if (forceRefresh) {
-    traceLog(traceLogger, 'item_matcher.bgg_search.api_start', {
-      normalized_query: normalizedQuery,
-      query,
-      refresh: true
-    });
-    const results = await (bggClient.searchFresh?.(query) ?? bggClient.search(query));
-    traceLog(traceLogger, 'item_matcher.bgg_search.completed', {
-      normalized_query: normalizedQuery,
-      query,
-      result_count: results.length,
-      source: 'api_refresh'
-    });
-    return results;
-  }
-
-  const cachedQuery = await database.query(
-    `
-    select id
-    from bgg_search_queries
-    where normalized_query = $1
-      and search_type = $2
-    limit 1
-    `,
-    [normalizedQuery, BGG_SEARCH_TYPE]
-  );
-
-  const cachedQueryId = numberOrNull((cachedQuery.rows[0] as Record<string, unknown> | undefined)?.id);
-  if (cachedQueryId !== null) {
-    const cachedResults = await database.query(
-      `
-      select
-        c.bgg_id,
-        c.name,
-        c.item_type,
-        c.year_published
-      from bgg_search_query_results qr
-      join bgg_search_cache c on c.id = qr.cache_id
-      where qr.query_id = $1
-      order by qr.result_rank asc
-      `,
-      [cachedQueryId]
-    );
-    const results = bggSearchItems(cachedResults.rows);
-    traceLog(traceLogger, 'item_matcher.bgg_search.completed', {
-      normalized_query: normalizedQuery,
-      query,
-      result_count: results.length,
-      source: 'cache'
-    });
-    return results;
-  }
-
-  traceLog(traceLogger, 'item_matcher.bgg_search.api_start', {
-    normalized_query: normalizedQuery,
-    query
-  });
-  const results = await bggClient.search(query);
-  traceLog(traceLogger, 'item_matcher.bgg_search.completed', {
-    normalized_query: normalizedQuery,
-    query,
-    result_count: results.length,
-    source: 'api'
-  });
-  const queryWrite = await database.query(
-    `
-    insert into bgg_search_queries (
-      query,
-      normalized_query,
-      search_type,
-      result_count,
-      fetched_at,
-      updated_at
-    )
-    values ($1, $2, $3, $4, now(), now())
-    on conflict (normalized_query, search_type) do update set
-      query = excluded.query,
-      result_count = excluded.result_count,
-      fetched_at = excluded.fetched_at,
-      updated_at = now()
-    returning id
-    `,
-    [query, normalizedQuery, BGG_SEARCH_TYPE, results.length]
-  );
-  const queryId = numberOrNull((queryWrite.rows[0] as Record<string, unknown> | undefined)?.id);
-  if (queryId === null) {
-    throw new Error('Failed to write BGG search query cache');
-  }
-
-  await database.query(
-    `
-    delete from bgg_search_query_results
-    where query_id = $1
-    `,
-    [queryId]
-  );
-
-  for (const [index, result] of results.entries()) {
-    const resultWrite = await database.query(
-      `
-      insert into bgg_search_cache (
-        bgg_id,
-        name,
-        item_type,
-        year_published,
-        result_json,
-        updated_at
-      )
-      values ($1, $2, $3, $4, $5::jsonb, now())
-      on conflict (bgg_id) do update set
-        name = excluded.name,
-        item_type = excluded.item_type,
-        year_published = excluded.year_published,
-        result_json = excluded.result_json,
-        updated_at = now()
-      returning id
-      `,
-      [result.bggId, result.name, result.type, result.yearPublished, JSON.stringify(result)]
-    );
-    const cacheId = numberOrNull((resultWrite.rows[0] as Record<string, unknown> | undefined)?.id);
-    if (cacheId === null) {
-      throw new Error('Failed to write BGG search result cache');
-    }
-    await database.query(
-      `
-      insert into bgg_search_query_results (
-        query_id,
-        cache_id,
-        result_rank
-      )
-      values ($1, $2, $3)
-      on conflict (query_id, cache_id) do update set
-        result_rank = excluded.result_rank
-      `,
-      [queryId, cacheId, index]
-    );
-  }
-
-  return results;
-}
-
-function selectSearchResultsForScoring(searchResults: BggSearchItem[], titleVariants: string[]): BggSearchItem[] {
-  const normalizedTitleVariants = new Set(titleVariants.map(normalizeTitle).filter(Boolean));
-  const exactMatches = searchResults.filter((item) => normalizedTitleVariants.has(normalizeTitle(item.name)));
-
-  if (exactMatches.length <= 1) {
-    return searchResults;
-  }
-
-  return [exactMatches.sort(compareNewestBggSearchItem)[0]];
-}
-
-function compareNewestBggSearchItem(left: BggSearchItem, right: BggSearchItem): number {
-  if (left.yearPublished !== null && right.yearPublished !== null && left.yearPublished !== right.yearPublished) {
-    return right.yearPublished - left.yearPublished;
-  }
-  return right.bggId - left.bggId;
-}
-
-async function translatedBggSearchQueries(
-  candidate: DiscoveryItemCandidateRow,
-  translationService?: TranslationService,
-  traceLogger: TraceLogger = nullTraceLogger
-): Promise<string[]> {
-  if (!translationService) {
-    traceLog(traceLogger, 'item_matcher.translation.skipped', {
-      candidate_id: candidate.id,
-      reason: 'translation service is not configured'
-    });
-    return [];
-  }
-
-  try {
-    traceLog(traceLogger, 'item_matcher.translation.start', {
-      candidate_id: candidate.id,
-      source_language: languageCodeForTranslation(candidate.language),
-      title: candidate.title
-    });
-    const translated = await translationService.translate({
-      purpose: 'BGG_SEARCH_QUERY',
-      sourceField: 'title',
-      sourceId: candidate.id,
-      sourceLanguage: languageCodeForTranslation(candidate.language),
-      sourceType: 'discovery_item_candidate',
-      targetLanguage: 'en',
-      text: candidate.title
-    });
-    const queries = dedupeStrings([translated.translatedText, ...translated.alternates]);
-    traceLog(traceLogger, 'item_matcher.translation.completed', {
-      candidate_id: candidate.id,
-      from_cache: translated.fromCache,
-      model: translated.model,
-      query_count: queries.length
-    });
-    return queries;
-  } catch {
-    traceLog(traceLogger, 'item_matcher.translation.failed', {
-      candidate_id: candidate.id
-    });
-    return [];
-  }
-}
-
-function languageCodeForTranslation(value?: string | null): string {
-  const normalized = value?.trim().toLowerCase();
-  return normalized || 'auto';
+  return matches.some((match) => match.accepted);
 }
 
 function discoveryCandidateForMatch(candidate: DiscoveryItemCandidateRow): DiscoveryCandidateForMatch {
@@ -889,25 +614,6 @@ function discoveryCandidateForMatch(candidate: DiscoveryItemCandidateRow): Disco
     publisher: candidate.publisher,
     title: candidate.title
   };
-}
-
-function scoreBggThingWithTitleVariants(
-  candidate: DiscoveryItemCandidateRow,
-  titleVariants: string[],
-  thing: BggThingForMatch
-) {
-  const baseCandidate = discoveryCandidateForMatch(candidate);
-  const scores = titleVariants.map((title, index) => {
-    const score = scoreBggThing({ ...baseCandidate, title }, thing);
-    return index === 0
-      ? score
-      : {
-          matchReasons: ['translated title variant evaluated', ...score.matchReasons],
-          matchScore: score.matchScore
-        };
-  });
-
-  return scores.sort((left, right) => right.matchScore - left.matchScore)[0];
 }
 
 function localItemFromRow(row: Record<string, unknown>): LocalItemForMatch {
@@ -930,56 +636,19 @@ function localItemFromRow(row: Record<string, unknown>): LocalItemForMatch {
   return item;
 }
 
-function dedupeSearchResults(items: BggSearchItem[]): BggSearchItem[] {
-  const seen = new Set<number>();
-  const deduped: BggSearchItem[] = [];
-  for (const item of items) {
-    if (seen.has(item.bggId)) {
-      continue;
-    }
-    seen.add(item.bggId);
-    deduped.push(item);
-  }
-  return deduped;
-}
-
 function mergeMatchesByBggId(matches: GeneratedMatchCandidate[]): GeneratedMatchCandidate[] {
   const merged = new Map<number | null, GeneratedMatchCandidate>();
   for (const match of matches) {
     const existing = merged.get(match.bggId);
-    if (!existing || match.matchScore > existing.matchScore) {
+    if (
+      !existing ||
+      (match.accepted && !existing.accepted) ||
+      (match.accepted === existing.accepted && match.matchScore > existing.matchScore)
+    ) {
       merged.set(match.bggId, match);
     }
   }
   return [...merged.values()].sort((left, right) => right.matchScore - left.matchScore);
-}
-
-function dedupeStrings(values: string[]): string[] {
-  const seen = new Set<string>();
-  const deduped: string[] = [];
-  for (const value of values.map((item) => item.trim()).filter(Boolean)) {
-    const key = value.toLowerCase();
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(value);
-  }
-  return deduped;
-}
-
-function bggRawPayload(searchResult: BggSearchItem, thing: BggThingResult): unknown {
-  return {
-    search_result: searchResult,
-    thing: thing.details
-  };
-}
-
-function bggCacheRawPayload(searchResult: BggSearchItem): unknown {
-  return {
-    search_result: searchResult,
-    source: 'bgg_search_cache'
-  };
 }
 
 function bggThingFromSearchItem(searchResult: BggSearchItem): BggThingForMatch {
@@ -993,20 +662,6 @@ function bggThingFromSearchItem(searchResult: BggSearchItem): BggThingForMatch {
     type: searchResult.type,
     yearPublished: searchResult.yearPublished
   };
-}
-
-function bggCacheNamePatterns(searchQueries: string[]): string[] {
-  return dedupeStrings(
-    searchQueries
-      .flatMap((query) => normalizeTitleVariants(query))
-      .map((query) => query.trim())
-      .filter(Boolean)
-      .map((query) => `%${query.split(' ').map(escapeLikePattern).join('%')}%`)
-  );
-}
-
-function escapeLikePattern(value: string): string {
-  return value.replace(/[\\%_]/g, '\\$&');
 }
 
 function stringList(value: unknown): string[] {
@@ -1024,33 +679,6 @@ function stringList(value: unknown): string[] {
   return [];
 }
 
-function bggSearchItems(value: unknown): BggSearchItem[] {
-  const parsed = typeof value === 'string' ? parseJson(value, []) : value;
-  if (!Array.isArray(parsed)) {
-    return [];
-  }
-
-  return parsed
-    .map((item) => {
-      const row = (item ?? {}) as Record<string, unknown>;
-      return {
-        bggId: numberOrNull(row.bggId ?? row.bgg_id) ?? 0,
-        name: String(row.name ?? ''),
-        type: String(row.type ?? row.item_type ?? ''),
-        yearPublished: numberOrNull(row.yearPublished ?? row.year_published)
-      };
-    })
-    .filter((item) => item.bggId > 0 && item.name);
-}
-
-function parseJson(value: string, fallback: unknown): unknown {
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return fallback;
-  }
-}
-
 function numberOrNull(value: unknown): number | null {
   if (value === null || value === undefined || value === '') {
     return null;
@@ -1064,6 +692,11 @@ function stringOrNull(value: unknown): string | null {
     return null;
   }
   return String(value);
+}
+
+function nonEmptyStringOrNull(value: string | null | undefined): string | null {
+  const normalized = value?.trim();
+  return normalized || null;
 }
 
 function traceLog(traceLogger: TraceLogger, event: string, fields: Record<string, unknown> = {}): void {
