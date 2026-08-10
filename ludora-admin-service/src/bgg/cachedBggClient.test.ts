@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { Database } from '../db.js';
 import type { BggThingXmlClient } from './bggClient.js';
+import type { BggMatchCache } from './bggMatchCache.js';
 import type { BggSearchItem } from './bggParser.js';
 import { createCachedBggClient } from './cachedBggClient.js';
 
@@ -92,6 +93,7 @@ describe('cached BGG client', () => {
 
   it('returns cached search results without calling the upstream BGG client', async () => {
     const { database, queries } = fakeDatabase([
+      [],
       [{ id: 91 }],
       [
         {
@@ -112,9 +114,10 @@ describe('cached BGG client', () => {
     const results = await createCachedBggClient(database, upstream).search('Coffee Rush');
 
     expect(results).toEqual([{ bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 }]);
-    expect(queries).toHaveLength(2);
+    expect(queries).toHaveLength(5);
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('from bgg_search_queries');
-    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('from bgg_search_query_results');
+    expect(normalizeSql(queries[1]?.sql ?? '')).toContain('from bgg_search_queries');
+    expect(normalizeSql(queries[2]?.sql ?? '')).toContain('from bgg_search_query_results');
   });
 
   it('bypasses cached search results when a fresh upstream search is requested', async () => {
@@ -168,6 +171,8 @@ describe('cached BGG client', () => {
   it('returns thing cache search results before calling the upstream BGG search API', async () => {
     const { database, queries } = fakeDatabase([
       [],
+      [],
+      [],
       [
         {
           bgg_id: '377061',
@@ -188,7 +193,7 @@ describe('cached BGG client', () => {
 
     expect(results).toEqual([{ bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 }]);
     expect(queries.some((query) => normalizeSql(query.sql).includes('from bgg_thing_cache'))).toBe(true);
-    expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into bgg_search_queries'))).toBe(true);
+    expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into bgg_search_queries'))).toBe(false);
   });
 
   it('does not call upstream search for empty normalized queries', async () => {
@@ -204,6 +209,33 @@ describe('cached BGG client', () => {
 
     expect(results).toEqual([]);
     expect(queries).toEqual([]);
+  });
+
+  it('returns a trusted cache match without calling the upstream BGG search API', async () => {
+    const { database } = fakeDatabase([]);
+    const upstream = fakeUpstreamClient(
+      async () => coffeeRushXml,
+      async () => {
+        throw new Error('BGG search API should not be called when the match cache has a result');
+      }
+    );
+    const matchCache: BggMatchCache = {
+      lookup: async () => ({
+        cacheHit: true,
+        matches: [{
+          item: { bggId: 115746, name: 'War of the Ring: Second Edition', type: 'boardgame', yearPublished: 2011 },
+          verifiedByAi: true
+        }]
+      }),
+      recordAiMatch: async () => undefined,
+      recordSearch: async () => undefined
+    };
+
+    const results = await createCachedBggClient(database, upstream, matchCache).search('La Guerra del Anillo');
+
+    expect(results).toEqual([
+      { bggId: 115746, name: 'War of the Ring: Second Edition', type: 'boardgame', yearPublished: 2011 }
+    ]);
   });
 });
 
