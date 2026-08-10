@@ -102,14 +102,15 @@ chmod 600 \
   /opt/ludora/ludora-admin/ludora-admin-ui/.env.production
 ```
 
-The admin-service `.env` must contain the existing application credentials plus these production values:
+The admin-service `.env` must contain the existing application credentials plus these production values. All non-embedding AI calls use the private loopback CodexAPI service; do not configure an official OpenAI Responses or Chat Completions fallback:
 
 ```dotenv
 NODE_ENV=production
 HOST=127.0.0.1
 PORT=4001
 CORS_ORIGIN=https://admin.ludora.bobbycrimson.com
-OPENAI_BASE_URL=http://127.0.0.1:3001/v1
+CODEX_API_BASE_URL=http://127.0.0.1:3001/v1
+CODEX_AI_MODEL=gpt-5.6-terra
 LUDORA_DISCOVERY_RUNNER=local
 LUDORA_DISCOVERY_PACKAGE_DIR=/opt/ludora/ludora-admin/ludora-discovery
 LUDORA_DISCOVERY_PYTHON=/opt/ludora/ludora-admin/ludora-discovery/.venv/bin/python
@@ -124,6 +125,8 @@ LUDORA_WEB_BOT_AUTH_IDENTITY_ORIGIN=https://admin.ludora.bobbycrimson.com
 LUDORA_WEB_BOT_AUTH_CONTACT_EMAIL=robertorojasmo@gmail.com
 LUDORA_WEB_BOT_AUTH_PRIVATE_JWK_PATH=/etc/ludora/web-bot-auth/private-key.jwk
 ```
+
+The discovery `.env` uses the same `CODEX_API_BASE_URL` and configures its intentional direct CodexAPI classifier with `CODEX_CLASSIFIER_MODEL=gpt-5.4-mini`. Configure official OpenAI only for embeddings: `OPENAI_API_KEY=<embeddings only>` and `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`. `OPENAI_BASE_URL` and `OPENAI_TRANSLATION_MODEL` are compatibility aliases for the loopback CodexAPI URL and shared Codex model; they never select official OpenAI for generative calls.
 
 The continuous updater is a supervised Python child of admin-service. It claims
 one due item at a time, uses a five-minute expiring lease, and schedules a
@@ -304,7 +307,7 @@ The script fails closed unless all of these conditions hold:
 
 If SQL files under `database/` changed between the deployed and expected revisions, the script stops before fast-forwarding the checkout or changing the running application and lists the files. It never executes SQL. Only after the exact SQL has been shown and the required DDL/DML approval and execution workflow has been completed may an operator rerun with `-AllowDatabasePatchPresence`; that switch only acknowledges the files and does not apply them.
 
-After a successful fast-forward, the script runs component-specific installs, builds, activation, and restarts, plus opt-in tests when `-RunTests` is present. It then verifies the exact remote HEAD, clean tracked state, active services, the effective nginx static root and API upstream, loopback health, listener bindings, HTTPS, HTTP redirect, authenticated read-only stores access, and optional UI marker. UI builds use a staging directory and activate only after the Vite build succeeds, so a failed build does not empty nginx's live `dist`. The script also confirms from the workstation that ports `3001` and `4001` are not externally reachable.
+After a successful fast-forward, the script runs component-specific installs, builds, activation, and restarts, plus opt-in tests when `-RunTests` is present. It then verifies the exact remote HEAD, clean tracked state, active services, the effective nginx static root and API upstream, the required CodexAPI loopback health check, admin-service loopback health, listener bindings, HTTPS, HTTP redirect, authenticated read-only stores access, and optional UI marker. UI builds use a staging directory and activate only after the Vite build succeeds, so a failed build does not empty nginx's live `dist`. The script also confirms from the workstation that ports `3001` and `4001` are not externally reachable.
 
 The script does not stage, commit, push, reset, clean, bootstrap the VM, deploy `codexapi`, or automatically roll back. Preserve its structured `DEPLOY_STEP`, `DEPLOY_STATUS`, and `DEPLOY_RESULT` output when diagnosing a failure. Use the manual commands below only for focused recovery or when the script itself is unavailable.
 
@@ -565,6 +568,8 @@ curl -fsS http://127.0.0.1:4001/health
 sudo nginx -t
 ss -ltnp | grep -E ':(80|443|3001|4001)\b'
 ```
+
+The CodexAPI health request is required for every production verification because every non-embedding AI path depends on the private loopback service.
 
 Expected listeners:
 

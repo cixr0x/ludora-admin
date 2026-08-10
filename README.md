@@ -48,19 +48,21 @@ When a task changes the database shape or requires data backfill:
 
 ### Admin AI Flow
 
-OpenAI-backed admin features use the shared OpenAI Responses client in `ludora-admin-service/src/ai/openAiResponsesClient.ts`. Current callers include translation, description generation, product detail extraction, and Amazon title extraction.
+All non-embedding admin AI features use the private loopback CodexAPI service. The OpenAI-compatible SDK is only the transport to CodexAPI; it is not permission to fall back to the official OpenAI Responses or Chat Completions APIs. Current callers include translation, description generation, product-detail extraction, Amazon title extraction, store-profile detection, and the AI BGG matcher.
 
-Configure those calls in `ludora-admin-service/.env`:
+Configure generative calls in `ludora-admin-service/.env`, and the existing direct discovery classifier in `ludora-discovery/.env`:
 
 ```text
-OPENAI_API_KEY=your_openai_or_codexapi_key
-OPENAI_TRANSLATION_MODEL=gpt-5.4-nano
-OPENAI_BASE_URL=http://127.0.0.1:3001/v1
+CODEX_API_BASE_URL=http://127.0.0.1:3001/v1
+CODEX_AI_MODEL=gpt-5.6-terra
+CODEX_CLASSIFIER_MODEL=gpt-5.4-mini
+OPENAI_API_KEY=<embeddings only>
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```
 
-`OPENAI_API_KEY` enables the AI-backed services. `OPENAI_BASE_URL` is optional: leave it unset to use the official OpenAI API, or set it to a local Codex/OpenAI-compatible `/v1` endpoint. `OPENAI_TRANSLATION_MODEL` is currently the shared text model setting for the admin AI clients.
+`CODEX_API_BASE_URL` must remain a private loopback CodexAPI `/v1` URL. `CODEX_AI_MODEL` configures admin-service generative calls; `CODEX_CLASSIFIER_MODEL` configures the intentional direct CodexAPI classifier. `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL` are only for item embeddings, because CodexAPI has no embeddings endpoint. `OPENAI_BASE_URL` and `OPENAI_TRANSLATION_MODEL` remain loopback compatibility aliases only; do not use either as a way to select official OpenAI.
 
-New AI requests should be implemented in admin-service with this same flow. Discovery package code should call admin-service endpoints for new AI tasks instead of adding separate API-key handling. More detail is in `docs/ai-api-flow.md`.
+New AI requests should be implemented in admin-service with this same flow. Discovery package code should call admin-service endpoints for new AI tasks instead of adding separate API-key handling. The AI BGG matcher first checks the local and BGG caches, then validates an AI-found BGG ID and caches the verified association before normal BGG import. More detail is in `docs/ai-api-flow.md`.
 
 ### Local Cover Workflow
 

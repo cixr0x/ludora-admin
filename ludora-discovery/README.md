@@ -98,16 +98,15 @@ Product-detail requests are globally start-paced at three seconds across a disco
 
 Shopify discovery enumerates product URLs from the sitemap and fetches each product detail through signed Storefront GraphQL only. It has no HTML fallback and does not use GraphQL for product enumeration. A null Shopify product is skipped and logged. A failed store does not stop the remaining stores in the batch, but any store failure causes the parent batch to fail after all stores have run.
 
-Item discovery uses the AI classifier by default. It calls the OpenAI-compatible `/responses` endpoint, stores the returned reasoning in `classification_reasons`, and fails the discovery run if the classifier request or response contract fails. This uses the same `OPENAI_BASE_URL` toggle as admin-service AI calls, although the classifier itself runs inside the Python discovery operation:
+Item discovery uses the AI classifier by default. It calls the private loopback CodexAPI `/responses` endpoint, stores the returned reasoning in `classification_reasons`, and fails the discovery run if the classifier request or response contract fails. The OpenAI-compatible request format is transport-only; do not add an official OpenAI Responses or Chat Completions fallback. The classifier itself runs inside the Python discovery operation as the intentional existing direct CodexAPI caller:
 
 ```text
 AI_ENABLED_CLASSIFIER=true
-OPENAI_API_KEY=your_openai_or_codexapi_key
-OPENAI_BASE_URL=http://127.0.0.1:3001/v1
-OPENAI_CLASSIFIER_MODEL=gpt-5.4-mini
+CODEX_API_BASE_URL=http://127.0.0.1:3001/v1
+CODEX_CLASSIFIER_MODEL=gpt-5.4-mini
 ```
 
-Set `AI_ENABLED_CLASSIFIER=false` to use the older heuristic classifier.
+`OPENAI_BASE_URL` and `OPENAI_CLASSIFIER_MODEL` are legacy loopback compatibility aliases only. Set `AI_ENABLED_CLASSIFIER=false` to use the older heuristic classifier.
 
 Amazon store item discovery calls the admin-service AI endpoint to normalize Amazon product titles before saving `store_items`. The route is `POST /admin/ai/amazon-title-extractions`, and it uses the shared admin-service AI configuration described in `..\docs\ai-api-flow.md`.
 
@@ -118,9 +117,9 @@ Amazon supports two platform modes:
 - `amazon`: `website_url` is an Amazon Stores page. Discovery builds the store search URL from the page ID.
 - `amazon_brand`: `website_url` is an Amazon search URL such as `https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming`. Discovery crawls up to 5 result pages and only stores detail pages whose Amazon `Marca` value matches the configured store `name`.
 
-Item embeddings use the official OpenAI embeddings endpoint only. CodexAPI does not support embeddings, so `OPENAI_BASE_URL` is not used for embedding runs; configure `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL`.
+Item embeddings use the official OpenAI embeddings endpoint only. CodexAPI does not support embeddings, so `CODEX_API_BASE_URL` and its legacy aliases are not used for embedding runs; configure `OPENAI_API_KEY=<embeddings only>` and `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`.
 
-For new AI-backed discovery tasks, add the prompt and OpenAI client to admin-service, expose an admin endpoint, and call that endpoint from Python. The direct Python classifier is an existing operation internal that still uses the OpenAI-compatible Responses endpoint toggle; embeddings remain OpenAI-only by design.
+For new AI-backed discovery tasks, add the prompt and CodexAPI client to admin-service, expose an admin endpoint, and call that endpoint from Python. The direct Python classifier is the existing intentional CodexAPI caller; embeddings remain official-OpenAI-only by design. AI BGG matching is owned by admin-service: it checks local and BGG cache candidates first, validates any CodexAPI decision against a BGG thing, records the verified title association in the cache, and then performs the normal BGG import.
 
 Classifier results with `LIKELY_NON_BOARDGAME` and confidence greater than `60` are auto-confirmed as not boardgames.
 

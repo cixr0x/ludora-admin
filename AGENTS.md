@@ -46,6 +46,12 @@ Every database change must have a focused incremental SQL patch in `database/pat
 
 ## AI API Flow
 
-Use `docs/ai-api-flow.md` for new AI requests. Admin-service owns prompts, routes, and OpenAI Responses clients through `ludora-admin-service/src/ai/openAiResponsesClient.ts`. Discovery code that needs a new AI task should call an admin-service endpoint and should reuse the existing admin `.env` values instead of creating a separate key flow.
+Use `docs/ai-api-flow.md` for new AI requests. Admin-service owns prompts, routes, and OpenAI-compatible Responses clients through `ludora-admin-service/src/ai/`. All non-embedding AI requests must use the private CodexAPI service at
+`http://127.0.0.1:3001/v1`. Do not add a direct OpenAI Responses or Chat
+Completions fallback. The OpenAI-compatible SDK is transport-only. Direct
+OpenAI access is allowed only for embeddings because CodexAPI does not expose
+an embeddings endpoint.
+
+Discovery code that needs a new AI task should call an admin-service endpoint and reuse the existing admin `.env` values instead of creating a separate key flow. The item classifier is the intentional existing direct CodexAPI caller; it must use the same private loopback service rather than an admin-service route.
 
 Do not run DDL or DML SQL commands without user confirmation.

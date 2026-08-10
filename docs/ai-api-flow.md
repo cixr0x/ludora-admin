@@ -1,21 +1,27 @@
 # Admin AI API Flow
 
-Admin-service is the source of truth for new Ludora AI requests. Add prompts, service logic, route wiring, and OpenAI Responses clients under `ludora-admin-service/src`, and reuse the shared client helper at `ludora-admin-service/src/ai/openAiResponsesClient.ts`.
+Admin-service is the source of truth for new Ludora AI requests. Add prompts, service logic, route wiring, and OpenAI-compatible Responses clients under `ludora-admin-service/src`, and reuse the shared CodexAPI client helpers under `ludora-admin-service/src/ai/`.
+
+All non-embedding AI requests must use the private CodexAPI service at `http://127.0.0.1:3001/v1`. Do not add a direct OpenAI Responses or Chat Completions fallback. The OpenAI-compatible SDK is transport-only: it connects to CodexAPI and does not authorize official OpenAI generative calls. Direct OpenAI credentials and API access are allowed only for embeddings because CodexAPI does not expose an embeddings endpoint.
 
 ## Configuration
 
-Admin AI clients read the existing admin-service environment:
+Configure the admin-service generative clients and the intentional direct discovery classifier as follows:
 
 ```text
-OPENAI_API_KEY=your_openai_or_codexapi_key
-OPENAI_BASE_URL=http://127.0.0.1:3001/v1
-OPENAI_TRANSLATION_MODEL=gpt-5.4-nano
+CODEX_API_BASE_URL=http://127.0.0.1:3001/v1
+CODEX_AI_MODEL=gpt-5.6-terra
+CODEX_CLASSIFIER_MODEL=gpt-5.4-mini
+OPENAI_API_KEY=<embeddings only>
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 LUDORA_INTERNAL_API_TOKEN=optional_shared_internal_token
 ```
 
-- `OPENAI_API_KEY` enables the AI-backed admin services. If it is missing, routes that require AI return `503`.
-- `OPENAI_BASE_URL` is optional. Leave it unset for the official OpenAI API. Set it to a local Codex/OpenAI-compatible `/v1` endpoint for local runs.
-- `OPENAI_TRANSLATION_MODEL` is currently the shared text model setting for admin translation, description generation, product details extraction, and Amazon title extraction.
+- `CODEX_API_BASE_URL` is required for non-embedding AI and must resolve to the private loopback CodexAPI `/v1` service. It defaults to that loopback address and rejects a non-loopback target.
+- `CODEX_AI_MODEL` is the shared admin-service model for translation, description generation, product-detail extraction, Amazon title extraction, store-profile detection, and AI BGG matching.
+- `CODEX_CLASSIFIER_MODEL` is the model for the existing direct Python item-classifier caller. That caller uses CodexAPI directly by design; new discovery AI tasks still go through an admin-service endpoint.
+- `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL` are embeddings-only settings. Do not configure an OpenAI key for any generative request.
+- `OPENAI_BASE_URL` and `OPENAI_TRANSLATION_MODEL` are legacy compatibility aliases for the loopback CodexAPI base URL and shared Codex model respectively. They never select the official OpenAI API.
 - `LUDORA_INTERNAL_API_TOKEN` is optional for normal local admin operations. When unset, admin-service generates a process-local token and passes it to the local discovery subprocess. Configure it explicitly only when another internal process must call protected admin routes. Internal callers send it as `X-Ludora-Internal-Token`.
 
 ## Current Admin AI Callers
@@ -25,8 +31,9 @@ LUDORA_INTERNAL_API_TOKEN=optional_shared_internal_token
 - `POST /admin/discovery/item-candidates/:id/product-details`
 - `POST /admin/ai/amazon-title-extractions`
 - `POST /admin/store-profile-detections` (website metadata first, AI only for unresolved store fields)
+- AI BGG matching after local and cached BGG candidates cannot produce an accepted match
 
-Each OpenAI-backed client should call `createOpenAiResponsesClient(apiKey, { baseURL })` instead of constructing its own SDK instance. Keep request and response contracts structured with Responses JSON schema output.
+Each non-embedding client must call the shared CodexAPI transport helper instead of constructing a direct OpenAI client or fallback. Keep request and response contracts structured with Responses JSON schema output.
 
 ## Discovery Integration
 
@@ -34,6 +41,12 @@ The discovery package is invoked by admin-service for normal operations. For new
 
 Discovery-to-admin calls are protected by the same admin auth middleware as browser routes. Python internal callers must use `LUDORA_ADMIN_API_URL` plus `LUDORA_INTERNAL_API_TOKEN`; local admin-service runs inject the token automatically. Internal call failures should raise and fail the discovery run so the operations `error` field records the cause instead of silently keeping partial or unnormalized data.
 
-The item classifier is an existing Python operation internal that uses the same OpenAI-compatible Responses endpoint configuration: `OPENAI_API_KEY`, optional `OPENAI_BASE_URL`, and `OPENAI_CLASSIFIER_MODEL`. It is aligned with the same local-CodexAPI-vs-OpenAI endpoint flow, but it does not call through an admin-service route or the TypeScript shared helper.
+The item classifier is an existing Python operation internal that uses `CODEX_API_BASE_URL` and `CODEX_CLASSIFIER_MODEL` to call CodexAPI directly. It is an intentional exception to the admin-service route boundary, not an exception to the private-CodexAPI-only provider rule. `OPENAI_BASE_URL` and `OPENAI_CLASSIFIER_MODEL` are loopback compatibility aliases only.
 
-Item embeddings are intentionally different. CodexAPI does not support embeddings, so embedding runs use the official OpenAI embeddings endpoint only, with `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL`. `OPENAI_BASE_URL` does not apply to embeddings.
+Item embeddings are intentionally different. CodexAPI does not support embeddings, so embedding runs use the official OpenAI embeddings endpoint only, with `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL`. `CODEX_API_BASE_URL` and its legacy aliases do not apply to embeddings.
+
+## AI BGG matcher and BGG cache/import flow
+
+When a confirmed store item has no accepted local-catalog match, matching checks the BGG cache first. Cached AI-verified associations are accepted; ordinary cached search results still receive the normal deterministic score. Only when neither provides an accepted match does the AI BGG matcher call CodexAPI. The structured prompt requires the model to search BGG, account for Spanish-to-English titles, compare a store cover with the BGG cover when available, and return no match for a cover conflict or uncertain result.
+
+A positive AI decision is not imported blindly. Admin-service fetches the returned BGG thing, verifies that the fetched BGG ID matches the decision, then stores an AI-verified cache association for both the store title and canonical BGG title. Future matching can reuse that association without another AI request. The normal BGG importer then uses the cached thing when available (or fetches it), upserts the canonical item and BGG metadata, and preserves the BGG taxonomy, people, publisher, alias, parent, and implementation relationships. A missing or invalid BGG validation result fails the match rather than creating an item.
