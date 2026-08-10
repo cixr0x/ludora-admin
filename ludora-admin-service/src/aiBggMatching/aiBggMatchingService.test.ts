@@ -1,0 +1,168 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+import {
+  createCodexAiBggMatchingClient
+} from './codexAiBggMatchingClient.js';
+import {
+  createAiBggMatchingService,
+  type AiBggMatchDecision
+} from './aiBggMatchingService.js';
+import {
+  systemPromptForAiBggMatch,
+  userPromptForAiBggMatch
+} from './aiBggMatchingPrompts.js';
+
+const responsesCreate = vi.fn();
+
+vi.mock('../ai/codexResponsesClient.js', () => ({
+  createCodexResponsesClient: vi.fn(() => ({ create: responsesCreate }))
+}));
+
+function decisionFixture(overrides: Partial<AiBggMatchDecision> = {}): AiBggMatchDecision {
+  return {
+    matchFound: false,
+    bggId: null,
+    matchedName: null,
+    bggUrl: null,
+    bggImageUrl: null,
+    nameAssessment: 'NO_MATCH',
+    coverAssessment: 'UNAVAILABLE',
+    confidence: 0.2,
+    reasoning: 'No reliable BGG result.',
+    ...overrides
+  };
+}
+
+describe('AI BGG matching prompts', () => {
+  it('sends only itemName and imageUrl as dynamic product data', () => {
+    const payload = JSON.parse(userPromptForAiBggMatch({
+      itemName: 'La Guerra del Anillo',
+      imageUrl: 'https://store.mx/guerra-del-anillo.jpg'
+    }));
+
+    expect(payload).toEqual({
+      itemName: 'La Guerra del Anillo',
+      imageUrl: 'https://store.mx/guerra-del-anillo.jpg'
+    });
+    expect(Object.keys(payload)).toEqual(['itemName', 'imageUrl']);
+  });
+
+  it('places Spanish and cover behavior in the fixed prompt', () => {
+    const prompt = systemPromptForAiBggMatch();
+
+    expect(prompt).toContain('Spanish');
+    expect(prompt).toContain('store item cover');
+    expect(prompt).toContain('BGG cover');
+    expect(prompt).toContain('conflict');
+  });
+});
+
+describe('AI BGG matching service', () => {
+  it('accepts a Spanish name match when the image is unavailable', async () => {
+    const decision = decisionFixture({
+      matchFound: true,
+      bggId: 115746,
+      matchedName: 'War of the Ring: Second Edition',
+      bggUrl: 'https://boardgamegeek.com/boardgame/115746/war-ring-second-edition',
+      nameAssessment: 'MATCH',
+      coverAssessment: 'UNAVAILABLE'
+    });
+    const service = createAiBggMatchingService({ findMatch: async () => decision }, { model: 'gpt-5.6-terra' });
+
+    await expect(service.findMatch({ itemName: 'La Guerra del Anillo', imageUrl: null })).resolves.toEqual(decision);
+  });
+
+  it('rejects a positive decision with a conflicting cover', async () => {
+    const service = createAiBggMatchingService({
+      findMatch: async () => decisionFixture({
+        matchFound: true,
+        bggId: 13,
+        matchedName: 'Catan',
+        bggUrl: 'https://boardgamegeek.com/boardgame/13/catan',
+        nameAssessment: 'MATCH',
+        coverAssessment: 'CONFLICT'
+      })
+    }, { model: 'gpt-5.6-terra' });
+
+    await expect(service.findMatch({ itemName: 'Catan', imageUrl: 'https://store.mx/catan.jpg' }))
+      .rejects.toThrow('AI BGG match cannot accept a cover conflict');
+  });
+
+  it('converts a valid no-match decision to null', async () => {
+    const service = createAiBggMatchingService({
+      findMatch: async () => decisionFixture()
+    }, { model: 'gpt-5.6-terra' });
+
+    await expect(service.findMatch({ itemName: 'Unknown game', imageUrl: null })).resolves.toBeNull();
+  });
+
+  it('rejects a positive decision without a positive integer BGG id', async () => {
+    const service = createAiBggMatchingService({
+      findMatch: async () => decisionFixture({
+        matchFound: true,
+        bggId: 0,
+        matchedName: 'Catan',
+        bggUrl: 'https://boardgamegeek.com/boardgame/13/catan',
+        nameAssessment: 'MATCH'
+      })
+    }, { model: 'gpt-5.6-terra' });
+
+    await expect(service.findMatch({ itemName: 'Catan', imageUrl: null }))
+      .rejects.toThrow('AI BGG match requires a positive integer BGG id');
+  });
+
+  it('rejects confidence outside the zero-to-one range', async () => {
+    const service = createAiBggMatchingService({
+      findMatch: async () => decisionFixture({ confidence: 1.1 })
+    }, { model: 'gpt-5.6-terra' });
+
+    await expect(service.findMatch({ itemName: 'Catan', imageUrl: null }))
+      .rejects.toThrow('AI BGG match confidence must be between 0 and 1');
+  });
+
+  it('rejects a non-finite confidence value', async () => {
+    const service = createAiBggMatchingService({
+      findMatch: async () => decisionFixture({ confidence: Number.NaN })
+    }, { model: 'gpt-5.6-terra' });
+
+    await expect(service.findMatch({ itemName: 'Catan', imageUrl: null }))
+      .rejects.toThrow('AI BGG match confidence must be between 0 and 1');
+  });
+});
+
+describe('Codex AI BGG matching client', () => {
+  beforeEach(() => {
+    responsesCreate.mockReset();
+  });
+
+  it('requests the strict BGG decision schema and parses the response output', async () => {
+    const decision = decisionFixture({
+      matchFound: true,
+      bggId: 13,
+      matchedName: 'Catan',
+      bggUrl: 'https://boardgamegeek.com/boardgame/13/catan',
+      nameAssessment: 'MATCH',
+      coverAssessment: 'MATCH'
+    });
+    responsesCreate.mockResolvedValueOnce({ output_text: JSON.stringify(decision) });
+    const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1' });
+
+    await expect(client.findMatch({ itemName: 'Catan', imageUrl: null }, { model: 'gpt-5.6-terra' }))
+      .resolves.toEqual(decision);
+
+    expect(responsesCreate).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'gpt-5.6-terra',
+      text: expect.objectContaining({
+        format: expect.objectContaining({
+          name: 'ai_bgg_match_decision',
+          strict: true,
+          type: 'json_schema',
+          schema: expect.objectContaining({
+            additionalProperties: false,
+            required: expect.arrayContaining(['matchFound', 'bggId', 'coverAssessment'])
+          })
+        })
+      })
+    }));
+  });
+});
