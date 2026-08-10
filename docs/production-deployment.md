@@ -139,6 +139,14 @@ coordinator lock for manual updates. The pause is process-local, so restarting
 admin-service starts the automatic worker again when it is enabled by
 configuration.
 
+The continuous worker recycles its complete Playwright browser and Node driver
+after 250 browser fallback fetches or six hours, whichever occurs first. The
+recycle happens between item fetches and preserves the worker session, database
+connection, coordinator lock, and current job. Review
+`browser_fetch.recycle.started`, `browser_fetch.recycle.completed`, and
+`browser_fetch.recycle.failed` entries in the item-update trace when validating
+the lifecycle in production.
+
 ### Daily item-discovery schedule
 
 With `LUDORA_DAILY_ITEM_DISCOVERY_ENABLED=true`, admin-service automatically

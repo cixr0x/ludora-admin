@@ -32,6 +32,8 @@ from ludora.webfetch import PerHostRequestThrottle
 
 
 WORKER_NAME = "continuous"
+BROWSER_RECYCLE_MAX_FETCHES = 250
+BROWSER_RECYCLE_MAX_AGE_SECONDS = 6 * 60 * 60
 ITEM_FAILURE_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 PLATFORM_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
@@ -44,6 +46,14 @@ class _ContextTraceLogger:
 
     def log(self, event: str, **fields: object) -> None:
         self.delegate.log(event, **{**self.context, **fields})
+
+
+def _create_continuous_browser_session(trace_logger: TraceLogger) -> BrowserTextFetcher:
+    return BrowserTextFetcher(
+        trace_logger=trace_logger,
+        max_fetches=BROWSER_RECYCLE_MAX_FETCHES,
+        max_age_seconds=BROWSER_RECYCLE_MAX_AGE_SECONDS,
+    )
 
 
 def run_continuous_update_worker(
@@ -130,7 +140,7 @@ def _run_worker_session(
         trace_logger = create_item_update_trace_logger(connection, run_id=run_id, job_id=job_id)
         browser_fetcher = None
         if browser_fetch_enabled:
-            browser_session = BrowserTextFetcher(trace_logger=trace_logger)
+            browser_session = _create_continuous_browser_session(trace_logger)
             browser_fetcher = browser_session.__enter__().fetch
         _log(
             "worker.session.started",

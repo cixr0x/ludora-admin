@@ -8,7 +8,13 @@ from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.continuous_update_worker import _ContextTraceLogger, _process_claim
+from ludora.continuous_update_worker import (
+    BROWSER_RECYCLE_MAX_AGE_SECONDS,
+    BROWSER_RECYCLE_MAX_FETCHES,
+    _ContextTraceLogger,
+    _create_continuous_browser_session,
+    _process_claim,
+)
 from ludora.database import ClaimedStoreItemUpdate, ItemCandidateUpsertResult
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import TransientProductFetchError
@@ -39,6 +45,17 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             store_name="Example",
         )
         self.now = datetime(2026, 8, 4, 18, 0, tzinfo=timezone.utc)
+
+    def test_continuous_browser_session_uses_bounded_playwright_lifetime(self):
+        trace_logger = Mock()
+
+        session = _create_continuous_browser_session(trace_logger)
+
+        self.assertIs(session.trace_logger, trace_logger)
+        self.assertEqual(BROWSER_RECYCLE_MAX_FETCHES, 250)
+        self.assertEqual(BROWSER_RECYCLE_MAX_AGE_SECONDS, 21_600)
+        self.assertEqual(session.max_fetches, 250)
+        self.assertEqual(session.max_age_seconds, 21_600)
 
     def test_context_trace_logger_adds_update_attempt_fields(self):
         delegate = Mock()
