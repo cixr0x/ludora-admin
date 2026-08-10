@@ -75,6 +75,28 @@ class AdminItemMatcherTests(unittest.TestCase):
         self.assertEqual(request.headers["X-ludora-trace-run-id"], "run-123")
         self.assertNotIn("X-ludora-trace-path", request.headers)
 
+    def test_accepts_confirmed_processing_error_from_successful_admin_response(self):
+        repository = Mock()
+        record = DiscoveryItemCandidateRecord(
+            store_id=12,
+            source_url="https://store.mx/products/catan",
+            title="Catan",
+            is_boardgame=True,
+            is_boardgame_confirmed=False,
+        )
+
+        with patch("ludora.admin_matching.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = (
+                b'{"data":{"id":42,"is_boardgame":true,"is_boardgame_confirmed":true,'
+                b'"processing_error":"AI cache write failed"}}'
+            )
+
+            AdminItemMatcher("http://admin.test", repository).process_candidate(42, record)
+
+        repository.mark_item_candidate_processing_error.assert_not_called()
+        self.assertTrue(record.is_boardgame)
+        self.assertTrue(record.is_boardgame_confirmed)
+
     def test_skips_non_boardgame_candidates(self):
         repository = Mock()
         record = DiscoveryItemCandidateRecord(

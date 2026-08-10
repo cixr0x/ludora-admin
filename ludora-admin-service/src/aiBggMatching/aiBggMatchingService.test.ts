@@ -73,19 +73,21 @@ describe('AI BGG matching service', () => {
   });
 
   it('rejects a positive decision with a conflicting cover', async () => {
-    const service = createAiBggMatchingService({
-      findMatch: async () => decisionFixture({
+    const client = {
+      findMatch: vi.fn().mockResolvedValue(decisionFixture({
         matchFound: true,
         bggId: 13,
         matchedName: 'Catan',
         bggUrl: 'https://boardgamegeek.com/boardgame/13/catan',
         nameAssessment: 'MATCH',
         coverAssessment: 'CONFLICT'
-      })
-    }, { model: 'gpt-5.6-terra' });
+      }))
+    };
+    const service = createAiBggMatchingService(client, { model: 'gpt-5.6-terra' });
 
     await expect(service.findMatch({ itemName: 'Catan', imageUrl: 'https://store.mx/catan.jpg' }))
       .rejects.toThrow('AI BGG match cannot accept a cover conflict');
+    expect(client.findMatch).toHaveBeenCalledOnce();
   });
 
   it('converts a valid no-match decision to null', async () => {
@@ -104,12 +106,12 @@ describe('AI BGG matching service', () => {
     ['a matching name assessment', { nameAssessment: 'MATCH' as const }],
     ['a matching cover assessment', { coverAssessment: 'MATCH' as const }]
   ])('rejects a no-match decision paired with %s before the caller can cache or import it', async (_label, overrides) => {
-    const service = createAiBggMatchingService({
-      findMatch: async () => decisionFixture(overrides)
-    }, { model: 'gpt-5.6-terra' });
+    const client = { findMatch: vi.fn().mockResolvedValue(decisionFixture(overrides)) };
+    const service = createAiBggMatchingService(client, { model: 'gpt-5.6-terra' });
 
     await expect(service.findMatch({ itemName: 'Unknown game', imageUrl: null }))
       .rejects.toThrow('Invalid AI BGG match decision: no-match decisions must have null identity fields and NO_MATCH or UNAVAILABLE assessments');
+    expect(client.findMatch).toHaveBeenCalledOnce();
   });
 
   it('rejects a positive decision without a positive integer BGG id', async () => {

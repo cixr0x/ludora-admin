@@ -209,6 +209,22 @@ class ConfigTests(unittest.TestCase):
             "http://127.0.0.1:3001/v1",
         )
 
+    def test_codex_api_base_url_accepts_and_normalizes_legacy_loopback_fallback(self):
+        self.assertEqual(
+            resolve_codex_api_base_url(
+                env={"OPENAI_BASE_URL": "http://localhost:3001/v1/"},
+                dotenv_path=Path("missing.env"),
+            ),
+            "http://localhost:3001/v1",
+        )
+
+    def test_codex_api_base_url_rejects_remote_legacy_fallback(self):
+        with self.assertRaisesRegex(ValueError, "must target loopback CodexAPI"):
+            resolve_codex_api_base_url(
+                env={"OPENAI_BASE_URL": "https://api.openai.com/v1"},
+                dotenv_path=Path("missing.env"),
+            )
+
     def test_codex_api_base_url_rejects_official_openai(self):
         with self.assertRaisesRegex(ValueError, "must target loopback CodexAPI"):
             resolve_codex_api_base_url(env={"CODEX_API_BASE_URL": "https://api.openai.com/v1"})

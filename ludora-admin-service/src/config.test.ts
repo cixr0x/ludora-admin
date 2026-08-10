@@ -195,7 +195,7 @@ describe('loadConfig', () => {
   });
 
   it('accepts the legacy base URL only when it is loopback', () => {
-    vi.stubEnv('OPENAI_BASE_URL', 'http://localhost:3001/v1');
+    vi.stubEnv('OPENAI_BASE_URL', 'http://localhost:3001/v1/');
 
     expect(loadConfig().codexApiBaseUrl).toBe('http://localhost:3001/v1');
   });

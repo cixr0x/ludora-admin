@@ -29,7 +29,8 @@ describe('OpenAI product details extraction client', () => {
 
     expect(OpenAI).toHaveBeenCalledWith({
       apiKey: 'codexapi-local',
-      baseURL: 'http://127.0.0.1:3001/v1'
+      baseURL: 'http://127.0.0.1:3001/v1',
+      maxRetries: 0
     });
   });
 

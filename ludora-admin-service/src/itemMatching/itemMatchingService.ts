@@ -1,4 +1,4 @@
-import type { AiBggMatchingService } from '../aiBggMatching/aiBggMatchingService.js';
+import type { AiBggMatchFound, AiBggMatchingService } from '../aiBggMatching/aiBggMatchingService.js';
 import type { BggClient } from '../bgg/bggClient.js';
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import type { BggCachedMatch, BggMatchCache } from '../bgg/bggMatchCache.js';
@@ -541,15 +541,15 @@ async function generateAiBggMatch(
     has_image: imageUrl !== null,
     item_name: candidate.title
   });
+  let decision: AiBggMatchFound | null | undefined;
   try {
-    const decision = await dependencies.aiBggMatchingService.findMatch({
+    decision = await dependencies.aiBggMatchingService.findMatch({
       itemName: candidate.title,
       imageUrl
     });
     traceLog(traceLogger, 'item_matcher.ai_match.completed', {
-      bgg_id: decision?.bggId ?? null,
+      ...aiDecisionTraceFields(decision),
       candidate_id: candidate.id,
-      confidence: decision?.confidence ?? null,
       match_found: decision !== null
     });
     if (!decision) {
@@ -602,11 +602,22 @@ async function generateAiBggMatch(
     };
   } catch (error) {
     traceLog(traceLogger, 'item_matcher.ai_match.failed', {
+      ...aiDecisionTraceFields(decision),
       candidate_id: candidate.id,
       error: error instanceof Error ? error.message : 'AI BGG matching failed'
     });
     throw error;
   }
+}
+
+function aiDecisionTraceFields(decision: AiBggMatchFound | null | undefined): Record<string, unknown> {
+  return {
+    bgg_id: decision?.bggId ?? null,
+    matched_name: decision?.matchedName ?? null,
+    name_assessment: decision?.nameAssessment ?? null,
+    cover_assessment: decision?.coverAssessment ?? null,
+    confidence: decision?.confidence ?? null
+  };
 }
 
 function hasAcceptedMatch(matches: GeneratedMatchCandidate[]): boolean {
