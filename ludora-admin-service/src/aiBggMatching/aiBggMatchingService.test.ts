@@ -54,6 +54,7 @@ describe('AI BGG matching prompts', () => {
     expect(prompt).toContain('store item cover');
     expect(prompt).toContain('BGG cover');
     expect(prompt).toContain('conflict');
+    expect(prompt).toContain('exact primary title shown on BGG');
   });
 });
 

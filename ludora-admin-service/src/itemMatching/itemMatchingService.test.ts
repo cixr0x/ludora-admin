@@ -302,6 +302,39 @@ describe('item matching service', () => {
     expect(linkUpdate(updates)).toBeUndefined();
   });
 
+  it('rejects an AI identity whose resolved BGG name contradicts the AI result', async () => {
+    const updates: RecordedQuery[] = [];
+    const cache = matchCache();
+    const importer = itemImporter(88);
+    const database = matchingDatabase(
+      storeItemCandidate({ title: 'Coffee Rush' }),
+      [],
+      { onStoreItemUpdate: (query) => updates.push(query) }
+    );
+
+    await createItemMatchingService(database, dependencies({
+      ai: aiService(aiMatchFound({
+        bggId: 402794,
+        bggUrl: 'https://boardgamegeek.com/boardgame/402794/coffee-rush',
+        matchedName: 'Coffee Rush'
+      })),
+      bggClient: clientWithThing(bggThingDetails({
+        bggId: 402794,
+        name: 'Dígalo con Memes: Pack de Expansión #2'
+      })),
+      cache,
+      importer
+    })).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(processingErrorUpdate(updates)?.params).toEqual([
+      'AI BGG match name did not match BGG ID 402794',
+      42
+    ]);
+    expect(cache.recordAiMatch).not.toHaveBeenCalled();
+    expect(importer.importBggId).not.toHaveBeenCalled();
+    expect(linkUpdate(updates)).toBeUndefined();
+  });
+
   it('records a processing error when CodexAPI fails', async () => {
     const updates: RecordedQuery[] = [];
     const database = matchingDatabase(

@@ -579,14 +579,27 @@ async function generateAiBggMatch(
       throw new Error('BGG client is not configured');
     }
     const thing = await dependencies.bggClient.fetchThing(decision.bggId);
-    const validated = Boolean(thing && thing.details.bggId === decision.bggId);
+    const idValidated = Boolean(thing && thing.details.bggId === decision.bggId);
+    const nameValidated = Boolean(
+      thing && idValidated && bggThingContainsAiMatchedName(
+        decision.matchedName,
+        thing.details.name,
+        thing.details.alternateNames
+      )
+    );
+    const validated = idValidated && nameValidated;
     traceLog(traceLogger, 'item_matcher.ai_match.validation.completed', {
       bgg_id: decision.bggId,
       candidate_id: candidate.id,
+      id_validated: idValidated,
+      name_validated: nameValidated,
       validated
     });
-    if (!thing || !validated) {
+    if (!thing || !idValidated) {
       throw new Error(`AI BGG match could not validate BGG ID ${decision.bggId}`);
+    }
+    if (!nameValidated) {
+      throw new Error(`AI BGG match name did not match BGG ID ${decision.bggId}`);
     }
 
     const searchItem: BggSearchItem = {
@@ -624,6 +637,17 @@ async function generateAiBggMatch(
     });
     throw error;
   }
+}
+
+function bggThingContainsAiMatchedName(
+  aiMatchedName: string,
+  primaryName: string,
+  alternateNames: string[]
+): boolean {
+  const aiNameVariants = new Set(normalizeTitleVariants(aiMatchedName));
+  return [primaryName, ...alternateNames].some((name) =>
+    normalizeTitleVariants(name).some((variant) => aiNameVariants.has(variant))
+  );
 }
 
 function aiDecisionTraceFields(decision: AiBggMatchFound | null | undefined): Record<string, unknown> {
