@@ -55,6 +55,8 @@ describe('AI BGG matching prompts', () => {
     expect(prompt).toContain('BGG cover');
     expect(prompt).toContain('conflict');
     expect(prompt).toContain('exact primary title shown on BGG');
+    expect(prompt).toContain('open the public imageUrl using your web and image tools');
+    expect(prompt).toContain('do not expect the store cover to be attached');
   });
 });
 
@@ -171,36 +173,28 @@ describe('Codex AI BGG matching client', () => {
 
     expect(responsesCreate).toHaveBeenCalledWith(expect.objectContaining({
       model: 'gpt-5.6-terra',
-      tools: [{ type: 'web_search' }],
       input: [{
         role: 'user',
-        content: [
-          {
-            type: 'input_text',
-            text: JSON.stringify({
-              itemName: 'Catan',
-              imageUrl: 'https://store.mx/catan.jpg'
-            })
-          },
-          {
-            type: 'input_image',
-            image_url: 'https://store.mx/catan.jpg',
-            detail: 'high'
-          }
-        ]
+        content: [{
+          type: 'input_text',
+          text: JSON.stringify({
+            itemName: 'Catan',
+            imageUrl: 'https://store.mx/catan.jpg'
+          })
+        }]
       }],
       text: expect.objectContaining({
         format: expect.objectContaining({
           name: 'ai_bgg_match_decision',
           strict: true,
-          type: 'json_schema',
-          schema: expect.objectContaining({
-            additionalProperties: false,
-            required: expect.arrayContaining(['matchFound', 'bggId', 'coverAssessment'])
-          })
+          type: 'json_schema'
         })
       })
     }));
+
+    const sent = responsesCreate.mock.calls[0]?.[0];
+    expect(sent).not.toHaveProperty('tools');
+    expect(JSON.stringify(sent)).not.toContain('input_image');
   });
 
   it.each([
@@ -214,7 +208,7 @@ describe('Codex AI BGG matching client', () => {
       .resolves.toEqual(decisionFixture());
 
     const request = responsesCreate.mock.calls[0]?.[0];
-    expect(request).toMatchObject({ tools: [{ type: 'web_search' }] });
+    expect(request).not.toHaveProperty('tools');
     expect(request.input).toEqual([{
       role: 'user',
       content: [{

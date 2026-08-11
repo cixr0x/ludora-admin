@@ -1,5 +1,3 @@
-import OpenAI from 'openai';
-
 import {
   createCodexResponsesClient,
   type CodexResponsesClientOptions
@@ -38,18 +36,13 @@ export function createCodexAiBggMatchingClient(
 
   return {
     async findMatch(request, context): Promise<AiBggMatchDecision> {
-      const content: OpenAI.Responses.ResponseInputContent[] = [
-        { type: 'input_text', text: userPromptForAiBggMatch(request) }
-      ];
-      if (request.imageUrl?.trim()) {
-        content.push({ type: 'input_image', image_url: request.imageUrl.trim(), detail: 'high' });
-      }
-
       const response = await responses.create({
         model: context.model,
         instructions: systemPromptForAiBggMatch(),
-        input: [{ role: 'user', content }],
-        tools: [{ type: 'web_search' }],
+        input: [{
+          role: 'user',
+          content: [{ type: 'input_text', text: userPromptForAiBggMatch(request) }]
+        }],
         text: {
           format: {
             type: 'json_schema',
