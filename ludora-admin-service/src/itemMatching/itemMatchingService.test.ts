@@ -289,6 +289,7 @@ describe('item matching service', () => {
       { onStoreItemUpdate: (query) => updates.push(query) }
     );
     const bggClient = clientWithThing(null);
+    vi.mocked(bggClient.searchFresh!).mockResolvedValueOnce([]);
 
     await createItemMatchingService(database, dependencies({
       ai: aiService(aiMatchFound()),
@@ -302,10 +303,29 @@ describe('item matching service', () => {
     expect(linkUpdate(updates)).toBeUndefined();
   });
 
-  it('rejects an AI identity whose resolved BGG name contradicts the AI result', async () => {
+  it('corrects a hallucinated AI ID through an exact authenticated BGG title search', async () => {
     const updates: RecordedQuery[] = [];
     const cache = matchCache();
     const importer = itemImporter(88);
+    const bggClient: BggClient = {
+      fetchThing: vi.fn(async (bggId) => ({
+        details: bggId === 402794
+          ? bggThingDetails({
+              bggId: 402794,
+              name: 'Dígalo con Memes: Pack de Expansión #2'
+            })
+          : bggThingDetails({
+              bggId: 377061,
+              name: 'Coffee Rush',
+              yearPublished: 2023
+            }),
+        rawXml: '<items />'
+      })),
+      search: vi.fn().mockRejectedValue(new Error('Cached search must not resolve an AI identity')),
+      searchFresh: vi.fn().mockResolvedValue([
+        bggSearchItem(377061, 'Coffee Rush', 2023)
+      ])
+    };
     const database = matchingDatabase(
       storeItemCandidate({ title: 'Coffee Rush' }),
       [],
@@ -318,10 +338,54 @@ describe('item matching service', () => {
         bggUrl: 'https://boardgamegeek.com/boardgame/402794/coffee-rush',
         matchedName: 'Coffee Rush'
       })),
-      bggClient: clientWithThing(bggThingDetails({
+      bggClient,
+      cache,
+      importer
+    })).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(bggClient.fetchThing).toHaveBeenNthCalledWith(1, 402794);
+    expect(bggClient.searchFresh).toHaveBeenCalledWith('Coffee Rush');
+    expect(bggClient.fetchThing).toHaveBeenNthCalledWith(2, 377061);
+    expect(cache.recordAiMatch).toHaveBeenCalledWith(
+      ['Coffee Rush', 'Coffee Rush'],
+      { bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 },
+      { imageUrl: 'https://store.mx/coffee-rush.jpg' }
+    );
+    expect(importer.importBggId).toHaveBeenCalledWith(377061);
+    expect(processingErrorUpdate(updates)).toBeUndefined();
+    expect(linkUpdate(updates)).toBeDefined();
+  });
+
+  it('rejects a hallucinated AI ID when BGG has no unique exact title result', async () => {
+    const updates: RecordedQuery[] = [];
+    const cache = matchCache();
+    const importer = itemImporter(88);
+    const bggClient: BggClient = {
+      fetchThing: vi.fn().mockResolvedValue({
+        details: bggThingDetails({
+          bggId: 402794,
+          name: 'Dígalo con Memes: Pack de Expansión #2'
+        }),
+        rawXml: '<items />'
+      }),
+      search: vi.fn().mockRejectedValue(new Error('Cached search must not resolve an AI identity')),
+      searchFresh: vi.fn().mockResolvedValue([
+        bggSearchItem(398366, 'Coffee Rush: Piece of Cake', 2024)
+      ])
+    };
+    const database = matchingDatabase(
+      storeItemCandidate({ title: 'Coffee Rush' }),
+      [],
+      { onStoreItemUpdate: (query) => updates.push(query) }
+    );
+
+    await createItemMatchingService(database, dependencies({
+      ai: aiService(aiMatchFound({
         bggId: 402794,
-        name: 'Dígalo con Memes: Pack de Expansión #2'
+        bggUrl: 'https://boardgamegeek.com/boardgame/402794/coffee-rush',
+        matchedName: 'Coffee Rush'
       })),
+      bggClient,
       cache,
       importer
     })).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });

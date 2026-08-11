@@ -574,32 +574,64 @@ async function generateAiBggMatch(
       });
       return null;
     }
+    const aiBggId = decision.bggId;
+    const aiMatchedName = decision.matchedName;
 
     if (!dependencies.bggClient) {
       throw new Error('BGG client is not configured');
     }
-    const thing = await dependencies.bggClient.fetchThing(decision.bggId);
-    const idValidated = Boolean(thing && thing.details.bggId === decision.bggId);
-    const nameValidated = Boolean(
+    let attemptedBggId = aiBggId;
+    let thing = await dependencies.bggClient.fetchThing(attemptedBggId);
+    let idValidated = Boolean(thing && thing.details.bggId === attemptedBggId);
+    let nameValidated = Boolean(
       thing && idValidated && bggThingContainsAiMatchedName(
-        decision.matchedName,
+        aiMatchedName,
         thing.details.name,
         thing.details.alternateNames
       )
     );
+    if (!idValidated || !nameValidated) {
+      const searchResults = dependencies.bggClient.searchFresh
+        ? await dependencies.bggClient.searchFresh(aiMatchedName)
+        : await dependencies.bggClient.search(aiMatchedName);
+      const exactBggIds = [...new Set(
+        searchResults
+          .filter((result) => bggThingContainsAiMatchedName(
+            aiMatchedName,
+            result.name,
+            []
+          ))
+          .map((result) => result.bggId)
+          .filter((bggId) => Number.isInteger(bggId) && bggId > 0)
+      )];
+      if (exactBggIds.length === 1) {
+        attemptedBggId = exactBggIds[0]!;
+        thing = await dependencies.bggClient.fetchThing(attemptedBggId);
+        idValidated = Boolean(thing && thing.details.bggId === attemptedBggId);
+        nameValidated = Boolean(
+          thing && idValidated && bggThingContainsAiMatchedName(
+            aiMatchedName,
+            thing.details.name,
+            thing.details.alternateNames
+          )
+        );
+      }
+    }
     const validated = idValidated && nameValidated;
     traceLog(traceLogger, 'item_matcher.ai_match.validation.completed', {
-      bgg_id: decision.bggId,
+      ai_bgg_id: aiBggId,
+      bgg_id: attemptedBggId,
       candidate_id: candidate.id,
+      corrected_bgg_id: attemptedBggId !== aiBggId,
       id_validated: idValidated,
       name_validated: nameValidated,
       validated
     });
     if (!thing || !idValidated) {
-      throw new Error(`AI BGG match could not validate BGG ID ${decision.bggId}`);
+      throw new Error(`AI BGG match could not validate BGG ID ${attemptedBggId}`);
     }
     if (!nameValidated) {
-      throw new Error(`AI BGG match name did not match BGG ID ${decision.bggId}`);
+      throw new Error(`AI BGG match name did not match BGG ID ${aiBggId}`);
     }
 
     const searchItem: BggSearchItem = {
@@ -614,14 +646,14 @@ async function generateAiBggMatch(
       { imageUrl }
     );
     traceLog(traceLogger, 'item_matcher.ai_match.cache.completed', {
-      bgg_id: decision.bggId,
+      bgg_id: thing.details.bggId,
       candidate_id: candidate.id,
       query_count: 2
     });
 
     return {
       accepted: true,
-      bggId: decision.bggId,
+      bggId: thing.details.bggId,
       itemId: null,
       matchReasons: ['AI-validated BGG match', decision.reasoning],
       matchScore: decision.confidence,
