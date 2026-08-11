@@ -17,6 +17,13 @@ Do not choose another port automatically. If one of these ports is busy, report 
 - Follow `docs/production-deployment.md` for provisioning, routine deployment, rollback, and verification.
 - For routine `ludora-admin` deployments, run `ops/Deploy-LudoraAdmin.ps1` from the local repository with the full expected commit SHA. Let its default `Auto` mode select the affected admin component, build and deploy it without test suites, and complete production verification. Pass `-RunTests` only when tests were explicitly requested.
 - Do not reconstruct the routine remote command sequence manually unless the deploy script is unavailable or its reported failed step requires focused recovery. The script does not commit/push code, apply SQL, bootstrap the VM, or deploy the sibling `codexapi` repository.
+- Deploy the sibling `codexapi` repository only through the concise CodexAPI
+  procedure in `docs/production-deployment.md`: require an exact approved
+  commit and clean checkout, stop the service before changing the checkout or
+  npm artifacts, install/test/build, install the checked-in
+  `deploy/codexapi.service`, then verify startup attestation and loopback health.
+  On failure, keep it stopped and explicitly rebuild the recorded previous
+  commit; do not add an automatic deployment or rollback controller.
 - Instance: `ludora-admin-img-20260714-105613`
 - GCP project: `ludora-501213`
 - Zone: `us-central1-a`
@@ -31,7 +38,9 @@ Do not choose another port automatically. If one of these ports is busy, report 
 - Codex API unit: `codexapi.service`, bound to `127.0.0.1:3001`
 - nginx site: `/etc/nginx/sites-available/ludora-admin`; it serves the admin UI and proxies `/api/` to the admin service.
 - Keep Codex API loopback-only. Never add an nginx route or GCP firewall rule for port `3001`.
-- Run application services as `robertorojas87`.
+- Run `ludora-admin-service.service` as `robertorojas87`. Run
+  `codexapi.service` only as the dedicated `codexapi` system account with its
+  home, Codex home, and empty workspace under `/var/lib/codexapi`.
 - Do not use the automatically created `mcp13` account for deployment or service ownership.
 
 ## Completion

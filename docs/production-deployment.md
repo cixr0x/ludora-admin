@@ -78,7 +78,9 @@ nginx
 - Do not apply `database/schema.sql` to an existing database.
 - Before any DDL or DML, provide the exact focused incremental SQL patch and wait for explicit user approval.
 - Read-only database verification is allowed. Do not use a mutating endpoint as a smoke test.
-- Run services as `robertorojas87`, not `root` or `mcp13`.
+- Run `ludora-admin-service.service` as `robertorojas87` and
+  `codexapi.service` as its dedicated `codexapi` system account. Do not run
+  either application service as `root` or `mcp13`.
 - Keep the fixed ports: Codex API `3001`, admin service `4001`, HTTP `80`, and HTTPS `443`.
 - If a required port is occupied by an unexpected process, report the owner before stopping anything.
 - Preserve unrelated worktree changes. Stage and commit only deployment-related repository files.
@@ -234,7 +236,11 @@ https://admin.ludora.bobbycrimson.com/.well-known/http-message-signatures-direct
 https://admin.ludora.bobbycrimson.com/crawler
 ```
 
-`codexapi` does not require a repository `.env` in production. Its non-secret runtime settings live in its systemd unit.
+`codexapi` does not require a repository `.env` in production. The checked-in
+`deploy/codexapi.service` fixes `HOME=/var/lib/codexapi`,
+`CODEX_HOME=/var/lib/codexapi/home`,
+`CODEX_WORKSPACE=/var/lib/codexapi/workspace`, `HOST=127.0.0.1`, and
+`PORT=3001`.
 
 ## Preflight
 
@@ -251,19 +257,28 @@ git -C /opt/ludora/codexapi status --short
 
 Do not pull over unexpected tracked changes.
 
-Confirm the Codex CLI login for the service account without printing credentials:
+Confirm the Codex CLI login for the dedicated service account without printing
+credentials:
 
 ```bash
-sudo -u robertorojas87 env HOME=/home/robertorojas87 codex login status
+sudo -u codexapi env \
+  HOME=/var/lib/codexapi \
+  CODEX_HOME=/var/lib/codexapi/home \
+  /opt/ludora/codexapi/node_modules/.bin/codex login status
 ```
 
 For a new or expired login on the headless VM:
 
 ```bash
-codex login --device-auth
+sudo -u codexapi env \
+  HOME=/var/lib/codexapi \
+  CODEX_HOME=/var/lib/codexapi/home \
+  /opt/ludora/codexapi/node_modules/.bin/codex login --device-auth
 ```
 
-Complete the displayed device flow in a local browser while logged in as `robertorojas87` on the VM shell. Do not run the login with `sudo`.
+Complete the displayed device flow in a local browser. Run only the pinned
+package-local CLI as `codexapi`; never copy another user's `auth.json` or expose
+credential contents while provisioning the account.
 
 ## Automated Routine Admin Deployment
 
@@ -348,19 +363,50 @@ cd /opt/ludora/ludora-admin/ludora-discovery
 
 ## Routine Codex API Deployment
 
-Use this when `codexapi` changes:
+Use this when `codexapi` changes. Start with the exact full commit SHA that was
+reviewed and approved. The checkout must be clean, and the approved commit must
+be the fetched `origin/main` revision. Record the current full SHA as the
+previous known commit before making any change.
 
 ```bash
+set -euo pipefail
 cd /opt/ludora/codexapi
-git pull --ff-only
+
+CODEXAPI_COMMIT='<approved full 40-character commit SHA>'
+git status --short
+test -z "$(git status --porcelain)"
+git fetch origin main
+test "$(git rev-parse origin/main)" = "$CODEXAPI_COMMIT"
+PREVIOUS_CODEXAPI_COMMIT="$(git rev-parse HEAD)"
+printf 'Previous CodexAPI commit: %s\n' "$PREVIOUS_CODEXAPI_COMMIT"
+
+# Keep the service stopped if checkout, install, test, or build fails.
+sudo systemctl stop codexapi.service
+git checkout main
+git merge --ff-only "$CODEXAPI_COMMIT"
+test "$(git rev-parse HEAD)" = "$CODEXAPI_COMMIT"
+test -z "$(git status --porcelain)"
 npm ci
 npm test
 npm run build
-sudo systemctl restart codexapi.service
+test -z "$(git status --porcelain)"
+
+sudo install -o root -g root -m 0644 \
+  deploy/codexapi.service /etc/systemd/system/codexapi.service
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/codexapi.service
+sudo systemctl start codexapi.service
+sudo systemctl is-active codexapi.service
 curl -fsS http://127.0.0.1:3001/health
+sudo journalctl -u codexapi.service -n 30 --no-pager
 ```
 
-Restarting `codexapi` causes a short interruption only for admin AI requests. The admin service itself does not need a restart unless its code or environment changed.
+The health response must report `status: "ok"`, capability policy
+`codexapi-constrained-v1`, Codex CLI version `0.147.0`, and `checked: true`.
+Confirm `ss -ltnp` shows only `127.0.0.1:3001`. If any command before service
+start fails, leave CodexAPI stopped and use the explicit previous-commit
+recovery procedure under **Rollback**. The admin service itself does not need a
+restart unless its code or environment changed.
 
 ## Full VM Bootstrap
 
@@ -375,11 +421,10 @@ sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
   nodejs npm \
   python3-venv python3-pip \
   nginx certbot python3-certbot-nginx
-
-sudo npm install -g @openai/codex@latest
 ```
 
-Node.js 20 or newer is required.
+Node.js 20 or newer is required. Do not install a global Codex CLI; the
+CodexAPI package lock supplies the pinned package-local executable.
 
 ### 2. Create the deployment root and clone repositories
 
@@ -388,9 +433,19 @@ sudo install -d -o robertorojas87 -g robertorojas87 -m 0755 /opt/ludora
 cd /opt/ludora
 git clone --branch main --single-branch https://github.com/cixr0x/ludora-admin.git
 git clone --branch main --single-branch https://github.com/cixr0x/codexapi.git
+
+sudo useradd --system --home-dir /var/lib/codexapi \
+  --create-home --shell /usr/sbin/nologin codexapi
+sudo install -d -o codexapi -g codexapi -m 0700 \
+  /var/lib/codexapi \
+  /var/lib/codexapi/home \
+  /var/lib/codexapi/workspace
 ```
 
-Copy the real environment files into the locations listed above, then apply mode `600`.
+The deployment user owns the read-only CodexAPI checkout; the `codexapi`
+service account owns only its runtime home and empty workspace under
+`/var/lib/codexapi`. Copy the real Ludora environment files into the locations
+listed above, then apply mode `600`.
 
 ### 3. Create discovery virtual environment
 
@@ -423,35 +478,31 @@ npm run build
 
 The UI build must happen after `.env.production` is present.
 
-### 5. Install systemd units
+### 5. Authenticate CodexAPI and install systemd units
 
-Create `/etc/systemd/system/codexapi.service`:
+Authenticate the dedicated identity with the pinned package-local executable.
+Complete the displayed device flow manually; do not copy credentials from the
+deployment user or another account:
 
-```ini
-[Unit]
-Description=Ludora local Codex-compatible API
-After=network-online.target
-Wants=network-online.target
+```bash
+sudo -u codexapi env \
+  HOME=/var/lib/codexapi \
+  CODEX_HOME=/var/lib/codexapi/home \
+  /opt/ludora/codexapi/node_modules/.bin/codex login --device-auth
+sudo -u codexapi env \
+  HOME=/var/lib/codexapi \
+  CODEX_HOME=/var/lib/codexapi/home \
+  /opt/ludora/codexapi/node_modules/.bin/codex login status
+```
 
-[Service]
-Type=simple
-User=robertorojas87
-Group=robertorojas87
-WorkingDirectory=/opt/ludora/codexapi
-Environment=HOME=/home/robertorojas87
-Environment=PATH=/usr/local/bin:/usr/bin:/bin
-Environment=HOST=127.0.0.1
-Environment=PORT=3001
-Environment=CODEX_WORKSPACE=/opt/ludora/codexapi
-Environment=CODEX_BACKEND=exec
-Environment=CODEX_CALL_LOGGING=false
-ExecStart=/usr/bin/node /opt/ludora/codexapi/dist/src/server.js
-Restart=on-failure
-RestartSec=5
-TimeoutStopSec=30
+Install the exact unit checked into the approved CodexAPI revision instead of
+recreating it inline:
 
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo install -o root -g root -m 0644 \
+  /opt/ludora/codexapi/deploy/codexapi.service \
+  /etc/systemd/system/codexapi.service
+sudo systemd-analyze verify /etc/systemd/system/codexapi.service
 ```
 
 Create `/etc/systemd/system/ludora-admin-service.service`:
@@ -484,10 +535,16 @@ Enable the services:
 ```bash
 sudo systemctl daemon-reload
 sudo systemctl enable --now codexapi.service
+sudo systemctl is-active codexapi.service
 curl -fsS http://127.0.0.1:3001/health
+sudo journalctl -u codexapi.service -n 30 --no-pager
 sudo systemctl enable --now ludora-admin-service.service
 curl -fsS http://127.0.0.1:4001/health
 ```
+
+Before enabling admin-service, confirm the CodexAPI health response contains the
+same startup-attestation fields required by the routine deployment and that
+`ss -ltnp` shows CodexAPI only on `127.0.0.1:3001`.
 
 ### 6. Configure nginx before TLS
 
@@ -694,13 +751,54 @@ Check:
 Check:
 
 ```bash
-sudo -u robertorojas87 env HOME=/home/robertorojas87 codex login status
+sudo -u codexapi env \
+  HOME=/var/lib/codexapi \
+  CODEX_HOME=/var/lib/codexapi/home \
+  /opt/ludora/codexapi/node_modules/.bin/codex login status
 sudo journalctl -u codexapi.service -n 100 --no-pager
 ```
 
 Do not expose `codexapi` publicly as a workaround.
 
-### Rollback
+### CodexAPI previous-commit recovery
+
+If a CodexAPI deployment fails, keep the service stopped and explicitly rebuild
+the full previous commit SHA printed before deployment. This is a manual,
+operator-selected recovery; it is not an automatic rollback mechanism.
+
+```bash
+set -euo pipefail
+cd /opt/ludora/codexapi
+
+CODEXAPI_PREVIOUS_COMMIT='<previous full 40-character commit SHA>'
+test -z "$(git status --porcelain)"
+git fetch origin
+git cat-file -e "${CODEXAPI_PREVIOUS_COMMIT}^{commit}"
+
+sudo systemctl stop codexapi.service
+git checkout --detach "$CODEXAPI_PREVIOUS_COMMIT"
+test "$(git rev-parse HEAD)" = "$CODEXAPI_PREVIOUS_COMMIT"
+npm ci
+npm test
+npm run build
+test -z "$(git status --porcelain)"
+
+sudo install -o root -g root -m 0644 \
+  deploy/codexapi.service /etc/systemd/system/codexapi.service
+sudo systemctl daemon-reload
+sudo systemd-analyze verify /etc/systemd/system/codexapi.service
+sudo systemctl start codexapi.service
+sudo systemctl is-active codexapi.service
+curl -fsS http://127.0.0.1:3001/health
+sudo journalctl -u codexapi.service -n 30 --no-pager
+```
+
+Verify the same startup-attestation fields and loopback-only listener required by
+the routine deployment. The checkout is intentionally detached at the recovered
+commit; the next approved forward deployment checks out `main` and fast-forwards
+it to an exact approved `origin/main` revision.
+
+### Ludora admin rollback
 
 Use Git history as the source of truth:
 
