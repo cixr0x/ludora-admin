@@ -1559,6 +1559,281 @@ describe('ListingCandidatesPage', () => {
     await user.click(within(storeItemSection!).getByRole('button', { name: 'Approve listing' }));
     expect(await screen.findByText('Listing status: LISTED')).toBeInTheDocument();
   }, 10_000);
+
+  it.each([
+    { itemId: 77, scenario: 'when a catalog item is already linked' },
+    { itemId: null, scenario: 'when no catalog item is linked' }
+  ])('shows Match AI in store item review $scenario', async ({ itemId }) => {
+    const candidate = {
+      id: '920',
+      image_url: 'https://store.mx/cafe-barista.jpg',
+      item_id: itemId,
+      listing_status: 'PENDING',
+      source_url: 'https://store.mx/products/cafe-barista',
+      title: 'Cafe Barista'
+    };
+    const linkedItem = {
+      bgg_id: 377061,
+      canonical_name: 'Coffee Rush',
+      canonical_name_es: 'Cafe Barista',
+      description: 'Complete customer orders in a busy coffee shop.',
+      id: 77,
+      image_url: 'https://images.example/coffee-rush.jpg',
+      item_type: 'base_game'
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings/920' && !init?.method) {
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([], 200, { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77' && !init?.method) {
+        return jsonResponse(linkedItem);
+      }
+      if (path === '/items/77/relationships' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/store-items' && !init?.method) {
+        return jsonResponse([candidate]);
+      }
+      if (path === '/items/77/taxonomy' && !init?.method) {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+
+    expect(await screen.findByRole('button', { name: 'Match AI' })).toBeEnabled();
+  });
+
+  it('does not show Match AI in the standard store item detail', async () => {
+    const candidate = {
+      id: '920',
+      item_id: 77,
+      listing_status: 'PENDING',
+      source_url: 'https://store.mx/products/cafe-barista',
+      title: 'Cafe Barista'
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings/920' && !init?.method) {
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([], 200, { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77' && !init?.method) {
+        return jsonResponse({ canonical_name: 'Coffee Rush', id: 77 });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage selectedCandidateId="920" />);
+
+    expect(await screen.findByText('Coffee Rush')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Match AI' })).not.toBeInTheDocument();
+  });
+
+  it('replaces an existing linked item with a validated manual AI match', async () => {
+    const user = userEvent.setup();
+    let candidate: Record<string, unknown> = {
+      id: '920',
+      image_url: 'https://store.mx/guerra-del-anillo.jpg',
+      item_id: 77,
+      listing_status: 'PENDING',
+      match_source: 'LOCAL',
+      source_url: 'https://store.mx/products/guerra-del-anillo',
+      title: 'La Guerra del Anillo'
+    };
+    const items: Record<string, Record<string, unknown>> = {
+      '77': { bgg_id: 377061, canonical_name: 'Coffee Rush', id: 77, image_url: 'https://images.example/coffee.jpg' },
+      '88': {
+        bgg_id: 115746,
+        canonical_name: 'War of the Ring: Second Edition',
+        id: 88,
+        image_url: 'https://images.example/war-of-the-ring.jpg'
+      }
+    };
+    let resolveMatch!: (response: Response) => void;
+    const pendingMatch = new Promise<Response>((resolve) => {
+      resolveMatch = resolve;
+    });
+    let matchRequestCount = 0;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings/920/match-ai' && init?.method === 'POST') {
+        matchRequestCount += 1;
+        return pendingMatch;
+      }
+      if (path === '/discovery/listings/920' && !init?.method) {
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([], 200, { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      const itemMatch = path.match(/^\/items\/(77|88)$/);
+      if (itemMatch && !init?.method) {
+        return jsonResponse(items[itemMatch[1]]);
+      }
+      if (/^\/items\/(77|88)\/relationships$/.test(path) && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (/^\/items\/(77|88)\/store-items$/.test(path) && !init?.method) {
+        return jsonResponse([candidate]);
+      }
+      if (/^\/items\/(77|88)\/taxonomy$/.test(path) && !init?.method) {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+
+    const matchButton = await screen.findByRole('button', { name: 'Match AI' });
+    await user.click(matchButton);
+    expect(await screen.findByRole('button', { name: 'Matching...' })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Matching...' }));
+    expect(matchRequestCount).toBe(1);
+
+    candidate = {
+      ...candidate,
+      item_id: 88,
+      match_source: 'BGG',
+      matched_bgg_id: 115746,
+      matched_name: 'War of the Ring: Second Edition'
+    };
+    resolveMatch(
+      jsonResponse({
+        candidate,
+        result: {
+          status: 'matched',
+          item_id: 88,
+          bgg_id: 115746,
+          matched_name: 'War of the Ring: Second Edition'
+        }
+      })
+    );
+
+    expect(await screen.findByText('AI matched War of the Ring: Second Edition.')).toBeInTheDocument();
+    expect((await screen.findAllByText('War of the Ring: Second Edition')).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: 'War of the Ring: Second Edition' })).toHaveAttribute('href', '#items?id=88');
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/listings/920/match-ai', {
+      credentials: 'include',
+      method: 'POST'
+    });
+  }, 10_000);
+
+  it('preserves the existing linked item when manual AI finds no match', async () => {
+    const user = userEvent.setup();
+    const candidate = {
+      id: '920',
+      image_url: 'https://store.mx/cafe-barista.jpg',
+      item_id: 77,
+      listing_status: 'PENDING',
+      match_source: 'LOCAL',
+      source_url: 'https://store.mx/products/cafe-barista',
+      title: 'Cafe Barista'
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings/920/match-ai' && init?.method === 'POST') {
+        return jsonResponse({ candidate, result: { status: 'not_found' } });
+      }
+      if (path === '/discovery/listings/920' && !init?.method) {
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([], 200, { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77' && !init?.method) {
+        return jsonResponse({ bgg_id: 377061, canonical_name: 'Coffee Rush', id: 77 });
+      }
+      if (path === '/items/77/relationships' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/store-items' && !init?.method) {
+        return jsonResponse([candidate]);
+      }
+      if (path === '/items/77/taxonomy' && !init?.method) {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Match AI' }));
+
+    const noMatchMessage = await screen.findByText('AI did not find a reliable BGG match.');
+    expect(noMatchMessage.closest('[role="alert"]')).toHaveClass('MuiAlert-colorInfo');
+    expect(screen.getByRole('link', { name: 'Coffee Rush' })).toHaveAttribute('href', '#items?id=77');
+  });
+
+  it('preserves the existing linked item when manual AI matching fails', async () => {
+    const user = userEvent.setup();
+    const candidate = {
+      id: '920',
+      image_url: 'https://store.mx/cafe-barista.jpg',
+      item_id: 77,
+      listing_status: 'PENDING',
+      match_source: 'LOCAL',
+      source_url: 'https://store.mx/products/cafe-barista',
+      title: 'Cafe Barista'
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings/920/match-ai' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: { message: 'Manual AI item matching is not configured' } }), {
+          headers: { 'Content-Type': 'application/json' },
+          status: 503
+        });
+      }
+      if (path === '/discovery/listings/920' && !init?.method) {
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([], 200, { page: 0, page_size: 100, total: 0 });
+      }
+      if (path === '/discovery/listings/920/additional-items' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77' && !init?.method) {
+        return jsonResponse({ bgg_id: 377061, canonical_name: 'Coffee Rush', id: 77 });
+      }
+      if (path === '/items/77/relationships' && !init?.method) {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/store-items' && !init?.method) {
+        return jsonResponse([candidate]);
+      }
+      if (path === '/items/77/taxonomy' && !init?.method) {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Match AI' }));
+
+    expect(await screen.findByText('AI matching could not be completed.')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Coffee Rush' })).toHaveAttribute('href', '#items?id=77');
+  });
 });
 
 function jsonResponse(data: unknown, status = 200, meta?: unknown) {

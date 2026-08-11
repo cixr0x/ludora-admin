@@ -38,6 +38,7 @@ import {
   type AdminRecord,
   type CreateItemFromCandidateInput,
   type LocalCoverWorkflow,
+  type ManualAiBggMatchResult,
   type StoreItemListingStatus
 } from '../api/client';
 import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
@@ -842,6 +843,22 @@ export function ListingCandidatesPage({
     table.refresh();
   }
 
+  function handleManualAiMatch(candidate: AdminRecord, result: ManualAiBggMatchResult) {
+    const id = field(candidate, ['id'], '');
+    setRows((currentRows) =>
+      currentRows.map((row, index) => (field(row, ['id'], String(index)) === id ? candidate : row))
+    );
+    setSelectedCandidate(candidate);
+    if (result.status === 'matched') {
+      setLinkedItemRefreshToken((currentToken) => currentToken + 1);
+      setSaveMessage(`AI matched ${result.matched_name}.`);
+    } else {
+      setSaveMessage('');
+    }
+    setSaveError('');
+    table.refresh();
+  }
+
   async function openNextPendingReview(currentCandidateId: string) {
     if (detailMode !== 'review' || !onOpenCandidate) {
       return;
@@ -1200,6 +1217,7 @@ export function ListingCandidatesPage({
           onDelete={handleDeleteCandidate}
           onLinkedItemUpdated={() => setLinkedItemRefreshToken((currentToken) => currentToken + 1)}
           onLinkedItemSaved={detailMode === 'review' ? reloadPage : undefined}
+          onManualAiMatch={detailMode === 'review' ? handleManualAiMatch : undefined}
           onPrimaryItemAssociated={handlePrimaryItemAssociated}
           onSave={handleSaveCandidate}
           onSetListingStatus={handleSetListingStatus}
@@ -1264,6 +1282,7 @@ function ItemCandidateForm({
   onDelete,
   onLinkedItemUpdated,
   onLinkedItemSaved,
+  onManualAiMatch,
   onPrimaryItemAssociated,
   onSave,
   onSetListingStatus,
@@ -1291,6 +1310,7 @@ function ItemCandidateForm({
   onDelete: () => Promise<boolean>;
   onLinkedItemUpdated: () => void;
   onLinkedItemSaved?: () => void;
+  onManualAiMatch?: (candidate: AdminRecord, result: ManualAiBggMatchResult) => void;
   onPrimaryItemAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
   onSetListingStatus: (candidate: AdminRecord, listingStatus: StoreItemListingStatus) => void;
@@ -1674,6 +1694,7 @@ function ItemCandidateForm({
 
         <PrimaryItemSection
           itemId={itemId}
+          onAiMatch={onManualAiMatch}
           onItemLoaded={detailMode === 'review' ? setLinkedItemPreview : undefined}
           onItemUpdated={onLinkedItemUpdated}
           refreshToken={detailMode === 'review' ? linkedItemRefreshToken : 0}
@@ -1973,6 +1994,7 @@ function ReviewCoverComparison({
 
 function PrimaryItemSection({
   itemId,
+  onAiMatch,
   onItemLoaded,
   onItemUpdated,
   onAssociated,
@@ -1982,6 +2004,7 @@ function PrimaryItemSection({
   storeItemTitle
 }: {
   itemId: string;
+  onAiMatch?: (candidate: AdminRecord, result: ManualAiBggMatchResult) => void;
   onItemLoaded?: (item: AdminRecord | null) => void;
   onItemUpdated: (item: AdminRecord) => void;
   onAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
@@ -1994,8 +2017,10 @@ function PrimaryItemSection({
   const [copyMessage, setCopyMessage] = useState('');
   const [copyTargetField, setCopyTargetField] = useState<'image_url' | 'image_url_es'>('image_url');
   const [error, setError] = useState('');
+  const [aiMatchMessage, setAiMatchMessage] = useState('');
   const [isAssociating, setIsAssociating] = useState(false);
   const [isCopyingCover, setIsCopyingCover] = useState(false);
+  const [isMatchingWithAi, setIsMatchingWithAi] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [item, setItem] = useState<AdminRecord | null>(null);
   const [loadState, setLoadState] = useState<LoadState>(itemId ? 'loading' : 'ready');
@@ -2065,6 +2090,27 @@ function PrimaryItemSection({
     }
   }
 
+  async function handleAiMatch() {
+    if (!storeItemId || !onAiMatch || isMatchingWithAi) {
+      return;
+    }
+
+    setIsMatchingWithAi(true);
+    setError('');
+    setAiMatchMessage('');
+    try {
+      const response = await adminApi.matchItemCandidateWithAi(storeItemId);
+      onAiMatch(response.candidate, response.result);
+      if (response.result.status === 'not_found') {
+        setAiMatchMessage('AI did not find a reliable BGG match.');
+      }
+    } catch {
+      setError('AI matching could not be completed.');
+    } finally {
+      setIsMatchingWithAi(false);
+    }
+  }
+
   async function handleCopyCover() {
     if (!canCopyCover) {
       return;
@@ -2104,21 +2150,36 @@ function PrimaryItemSection({
                 Primary catalog item for this store item.
               </Typography>
             </Box>
-            <Button
-              disabled={!storeItemId || loadState === 'loading'}
-              startIcon={<AddCircleIcon />}
-              type="button"
-              variant="outlined"
-              onClick={() => {
-                setError('');
-                setIsSearchOpen(true);
-              }}
-            >
-              {itemId ? 'Change linked item' : 'Link item'}
-            </Button>
+            <Stack direction={{ sm: 'row', xs: 'column' }} spacing={1}>
+              {onAiMatch ? (
+                <Button
+                  disabled={!storeItemId || isMatchingWithAi || isAssociating}
+                  startIcon={isMatchingWithAi ? <CircularProgress size={18} /> : <AutoFixHighIcon />}
+                  type="button"
+                  variant="contained"
+                  onClick={() => void handleAiMatch()}
+                >
+                  {isMatchingWithAi ? 'Matching...' : 'Match AI'}
+                </Button>
+              ) : null}
+              <Button
+                disabled={!storeItemId || loadState === 'loading' || isMatchingWithAi}
+                startIcon={<AddCircleIcon />}
+                type="button"
+                variant="outlined"
+                onClick={() => {
+                  setError('');
+                  setAiMatchMessage('');
+                  setIsSearchOpen(true);
+                }}
+              >
+                {itemId ? 'Change linked item' : 'Link item'}
+              </Button>
+            </Stack>
           </Stack>
 
           {!itemId ? <Alert severity="info">No primary catalog item is linked.</Alert> : null}
+          {aiMatchMessage ? <Alert severity="info">{aiMatchMessage}</Alert> : null}
           {error && !isSearchOpen ? <Alert severity="error">{error}</Alert> : null}
           {copyError ? <Alert severity="error">{copyError}</Alert> : null}
           {copyMessage ? <Alert severity="success">{copyMessage}</Alert> : null}
