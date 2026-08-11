@@ -17,6 +17,20 @@ type ErrorResponse = {
 
 export type AdminRecord = Record<string, unknown>;
 
+export type ManualAiBggMatchResult =
+  | {
+      status: 'matched';
+      item_id: number;
+      bgg_id: number;
+      matched_name: string;
+    }
+  | { status: 'not_found' };
+
+export type ManualAiBggMatchResponse = {
+  candidate: AdminRecord;
+  result: ManualAiBggMatchResult;
+};
+
 export type StoreItemDiscoveryTraceEntry = {
   created_at: string;
   event: string;
@@ -643,6 +657,10 @@ export const adminApi = {
     }),
   confirmItemCandidateBoardgame: (id: string) =>
     fetchData<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/confirm-boardgame`, {
+      method: 'POST'
+    }),
+  matchItemCandidateWithAi: (id: string) =>
+    fetchData<ManualAiBggMatchResponse>(`/discovery/listings/${encodeURIComponent(id)}/match-ai`, {
       method: 'POST'
     }),
   associateItemCandidate: (id: string, itemId: string) =>

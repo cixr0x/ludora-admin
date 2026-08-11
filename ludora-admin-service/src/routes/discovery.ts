@@ -3,7 +3,7 @@ import { Router } from 'express';
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import { parseBggThingResponse } from '../bgg/bggParser.js';
 import type { Database } from '../db.js';
-import type { ItemMatchingService } from '../itemMatching/itemMatchingService.js';
+import type { ItemMatchingService, ManualAiItemMatchResult } from '../itemMatching/itemMatchingService.js';
 import {
   hasMissingProductDetails,
   type ProductDetails,
@@ -2135,6 +2135,52 @@ export function createDiscoveryRouter(
       }
 
       response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.post('/discovery/listings/:id/match-ai', async (request, response, next) => {
+    try {
+      if (!itemMatchingService?.matchWithAi) {
+        throw httpError(503, 'Manual AI item matching is not configured');
+      }
+
+      const candidateId = integerPathParam(request.params.id);
+      const traceLogger = createTraceLoggerFromHeaders(request.headers, database);
+      let matchResult: ManualAiItemMatchResult;
+      try {
+        matchResult = await itemMatchingService.matchWithAi(candidateId, {
+          ...(traceLogger ? { traceLogger } : {})
+        });
+      } finally {
+        await traceLogger?.flush?.();
+      }
+
+      const result = await database.query(
+        `select ${itemCandidateSelect}
+         from store_items
+         where id = $1`,
+        [candidateId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Item candidate not found');
+      }
+
+      response.json({
+        data: {
+          candidate: result.rows[0],
+          result: matchResult.status === 'matched'
+            ? {
+                status: 'matched',
+                item_id: matchResult.itemId,
+                bgg_id: matchResult.bggId,
+                matched_name: matchResult.matchedName
+              }
+            : { status: 'not_found' }
+        }
+      });
     } catch (error) {
       next(error);
     }

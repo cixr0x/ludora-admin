@@ -3337,6 +3337,136 @@ describe('ludora admin service', () => {
     expect(traceQuery?.params).toEqual(['run-123', 'item_matcher.test', expect.stringContaining('"candidate_id":42')]);
   });
 
+  it('runs manual AI matching and returns the refreshed matched candidate', async () => {
+    const row = {
+      id: 42,
+      is_boardgame: true,
+      is_boardgame_confirmed: true,
+      item_id: 88,
+      match_source: 'BGG',
+      matched_bgg_id: 115746,
+      matched_name: 'War of the Ring: Second Edition',
+      listing_status: 'PENDING',
+      title: 'La Guerra del Anillo'
+    };
+    const calls: Array<{
+      id: number;
+      options: { traceLogger?: { log(event: string, fields?: Record<string, unknown>): void } } | undefined;
+    }> = [];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return normalizeSql(sql).startsWith('insert into store_item_discovery_trace_log') ? { rows: [] } : { rows: [row] };
+      }
+    };
+    const itemMatchingService: ItemMatchingService = {
+      generateMatchCandidates: async () => [],
+      listMatchCandidates: async () => [],
+      matchWithAi: async (id, options) => {
+        calls.push({ id, options });
+        options?.traceLogger?.log('item_matcher.manual_ai.test', { candidate_id: id });
+        return {
+          status: 'matched',
+          itemId: 88,
+          bggId: 115746,
+          matchedName: 'War of the Ring: Second Edition'
+        };
+      }
+    };
+
+    const response = await request(createApp({ database, itemMatchingService }))
+      .post('/discovery/listings/42/match-ai')
+      .set('X-Ludora-Trace-Run-Id', 'run-manual-ai');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: {
+        candidate: row,
+        result: {
+          status: 'matched',
+          item_id: 88,
+          bgg_id: 115746,
+          matched_name: 'War of the Ring: Second Edition'
+        }
+      }
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatchObject({
+      id: 42,
+      options: { traceLogger: expect.objectContaining({ log: expect.any(Function) }) }
+    });
+    const candidateQuery = queries.find((query) => normalizeSql(query.sql).includes('from store_items'));
+    expect(candidateQuery?.params).toEqual([42]);
+    const traceQuery = queries.find((query) => normalizeSql(query.sql).startsWith('insert into store_item_discovery_trace_log'));
+    expect(traceQuery?.params).toEqual([
+      'run-manual-ai',
+      'item_matcher.manual_ai.test',
+      expect.stringContaining('"candidate_id":42')
+    ]);
+  });
+
+  it('returns a manual AI no-match without replacing the candidate', async () => {
+    const row = {
+      id: 42,
+      item_id: 77,
+      match_source: 'LOCAL',
+      matched_bgg_id: 377061,
+      matched_name: 'Coffee Rush',
+      listing_status: 'PENDING',
+      title: 'Cafe Barista'
+    };
+    const database: Database = { query: async () => ({ rows: [row] }) };
+    const itemMatchingService: ItemMatchingService = {
+      generateMatchCandidates: async () => [],
+      listMatchCandidates: async () => [],
+      matchWithAi: async () => ({ status: 'not_found' })
+    };
+
+    const response = await request(createApp({ database, itemMatchingService }))
+      .post('/discovery/listings/42/match-ai');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      data: {
+        candidate: row,
+        result: { status: 'not_found' }
+      }
+    });
+  });
+
+  it('rejects manual AI matching when the matching operation is unavailable', async () => {
+    const database: Database = { query: async () => ({ rows: [] }) };
+    const itemMatchingService: ItemMatchingService = {
+      generateMatchCandidates: async () => [],
+      listMatchCandidates: async () => []
+    };
+
+    const response = await request(createApp({ database, itemMatchingService }))
+      .post('/discovery/listings/42/match-ai');
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: { message: 'Manual AI item matching is not configured' }
+    });
+  });
+
+  it('validates the candidate ID before manual AI matching', async () => {
+    const database: Database = { query: async () => ({ rows: [] }) };
+    const matchWithAi = vi.fn();
+    const itemMatchingService: ItemMatchingService = {
+      generateMatchCandidates: async () => [],
+      listMatchCandidates: async () => [],
+      matchWithAi
+    };
+
+    const response = await request(createApp({ database, itemMatchingService }))
+      .post('/discovery/listings/not-a-number/match-ai');
+
+    expect(response.status).toBe(400);
+    expect(matchWithAi).not.toHaveBeenCalled();
+  });
+
   it('lists item match candidates through the item matching service', async () => {
     const rows = [
       {

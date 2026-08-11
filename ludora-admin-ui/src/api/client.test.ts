@@ -1145,6 +1145,38 @@ describe('fetchRows', () => {
     });
   });
 
+  it('requests manual AI matching with a bodyless POST request', async () => {
+    const response = {
+      candidate: {
+        id: '3365',
+        item_id: 88,
+        match_source: 'BGG',
+        matched_bgg_id: 115746,
+        matched_name: 'War of the Ring: Second Edition',
+        title: 'La Guerra del Anillo'
+      },
+      result: {
+        status: 'matched',
+        item_id: 88,
+        bgg_id: 115746,
+        matched_name: 'War of the Ring: Second Edition'
+      }
+    };
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: response }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(adminApi.matchItemCandidateWithAi('3365')).resolves.toEqual(response);
+
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365/match-ai', {
+      method: 'POST'
+    });
+  });
+
   it('updates store item listing status with a PATCH request', async () => {
     const itemCandidate = { id: '3365', item_id: 77, listing_status: 'LISTED', title: 'Kitchen Rush' };
     const { adminApi } = await importClient();
