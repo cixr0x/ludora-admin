@@ -34,10 +34,27 @@ export type ItemMatchingService = {
   ): Promise<void>;
   generateMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]>;
   listMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]>;
+  matchWithAi?(
+    discoveryItemCandidateId: number,
+    options?: ManualAiMatchOptions
+  ): Promise<ManualAiItemMatchResult>;
 };
+
+export type ManualAiItemMatchResult =
+  | {
+      status: 'matched';
+      itemId: number;
+      bggId: number;
+      matchedName: string;
+    }
+  | { status: 'not_found' };
 
 type ConfirmBoardgameOptions = {
   confirmationSource?: 'admin' | 'automated';
+  traceLogger?: TraceLogger;
+};
+
+type ManualAiMatchOptions = {
   traceLogger?: TraceLogger;
 };
 
@@ -250,6 +267,60 @@ export function createItemMatchingService(
           candidate_id: discoveryItemCandidateId,
           error: message
         });
+      }
+    },
+
+    async matchWithAi(
+      discoveryItemCandidateId: number,
+      options: ManualAiMatchOptions = {}
+    ): Promise<ManualAiItemMatchResult> {
+      const traceLogger = options.traceLogger ?? nullTraceLogger;
+      const candidate = await loadDiscoveryItemCandidate(database, discoveryItemCandidateId);
+      if (!aiBggMatchingService || !bggClient || !bggItemImporter) {
+        throw httpError(503, 'Manual AI item matching is not configured');
+      }
+
+      traceLog(traceLogger, 'item_matcher.manual_ai.start', {
+        candidate_id: discoveryItemCandidateId
+      });
+      try {
+        const match = await generateAiBggMatch(
+          candidate,
+          { aiBggMatchingService, bggClient, bggMatchCache },
+          traceLogger
+        );
+        if (!match?.bggId) {
+          traceLog(traceLogger, 'item_matcher.manual_ai.completed', {
+            candidate_id: discoveryItemCandidateId,
+            result: 'not_found'
+          });
+          return { status: 'not_found' };
+        }
+
+        const itemId = await bggItemImporter.importBggId(match.bggId);
+        if (!itemId) {
+          throw new Error('BGG item could not be imported');
+        }
+
+        await linkStoreItemMatch(database, discoveryItemCandidateId, match, itemId, true);
+        traceLog(traceLogger, 'item_matcher.manual_ai.completed', {
+          bgg_id: match.bggId,
+          candidate_id: discoveryItemCandidateId,
+          item_id: itemId,
+          result: 'matched'
+        });
+        return {
+          status: 'matched',
+          itemId,
+          bggId: match.bggId,
+          matchedName: match.matchedName
+        };
+      } catch (error) {
+        traceLog(traceLogger, 'item_matcher.manual_ai.failed', {
+          candidate_id: discoveryItemCandidateId,
+          error: error instanceof Error ? error.message : 'Manual AI item matching failed'
+        });
+        throw error;
       }
     },
 

@@ -143,6 +143,203 @@ describe('item matching service', () => {
     ]);
   });
 
+  it('forces a fresh AI match for an already-linked store item', async () => {
+    const queries: RecordedQuery[] = [];
+    const updates: RecordedQuery[] = [];
+    const database = matchingDatabase(
+      storeItemCandidate({
+        image_url: 'https://store.mx/guerra-del-anillo.jpg',
+        item_id: 77,
+        match_source: 'LOCAL',
+        title: 'La Guerra del Anillo'
+      }),
+      [localItemRow()],
+      {
+        onQuery: (query) => queries.push(query),
+        onStoreItemUpdate: (query) => updates.push(query)
+      }
+    );
+    const ai = aiService(aiMatchFound());
+    const cache = matchCache({
+      cacheHit: true,
+      matches: [{ item: bggSearchItem(999, 'Wrong Game', 2010), verifiedByAi: true }]
+    });
+    const importer = itemImporter(88);
+    const service = createItemMatchingService(
+      database,
+      dependencies({ ai, bggClient: clientWithThing(bggThingDetails()), cache, importer })
+    );
+
+    const result = await service.matchWithAi?.(42);
+
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(queries.some((query) => normalizeSql(query.sql).includes('from items'))).toBe(false);
+    expect(ai.findMatch).toHaveBeenCalledOnce();
+    expect(ai.findMatch).toHaveBeenCalledWith({
+      itemName: 'La Guerra del Anillo',
+      imageUrl: 'https://store.mx/guerra-del-anillo.jpg'
+    });
+    expect(cache.recordAiMatch).toHaveBeenCalledWith(
+      ['La Guerra del Anillo', 'War of the Ring: Second Edition'],
+      { bggId: 115746, name: 'War of the Ring: Second Edition', type: 'boardgame', yearPublished: 2011 },
+      { imageUrl: 'https://store.mx/guerra-del-anillo.jpg' }
+    );
+    expect(importer.importBggId).toHaveBeenCalledWith(115746);
+    expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([
+      88,
+      'BGG',
+      115746,
+      'War of the Ring: Second Edition',
+      0.83
+    ]);
+    expect(result).toEqual({
+      status: 'matched',
+      itemId: 88,
+      bggId: 115746,
+      matchedName: 'War of the Ring: Second Edition'
+    });
+  });
+
+  it('allows a manual AI match without a store item image', async () => {
+    const ai = aiService(aiMatchFound());
+    const service = createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ image_url: null, title: 'Coffee Rush' })),
+      dependencies({
+        ai,
+        bggClient: clientWithThing(bggThingDetails()),
+        importer: itemImporter(88)
+      })
+    );
+
+    const result = await service.matchWithAi?.(42);
+
+    expect(ai.findMatch).toHaveBeenCalledWith({ itemName: 'Coffee Rush', imageUrl: null });
+    expect(result).toMatchObject({ status: 'matched', itemId: 88, bggId: 115746 });
+  });
+
+  it('preserves the current association when manual AI finds no match', async () => {
+    const queries: RecordedQuery[] = [];
+    const updates: RecordedQuery[] = [];
+    const cache = matchCache();
+    const importer = itemImporter(88);
+    const service = createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ item_id: 77, match_source: 'LOCAL', title: 'Unknown Game' }), [], {
+        onQuery: (query) => queries.push(query),
+        onStoreItemUpdate: (query) => updates.push(query)
+      }),
+      dependencies({ ai: aiService(null), bggClient: clientWithThing(bggThingDetails()), cache, importer })
+    );
+
+    const result = await service.matchWithAi?.(42);
+
+    expect(result).toEqual({ status: 'not_found' });
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(cache.recordAiMatch).not.toHaveBeenCalled();
+    expect(importer.importBggId).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+    expect(queries).toHaveLength(1);
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain('from store_items');
+  });
+
+  it('preserves the current association when the manual AI request fails', async () => {
+    const updates: RecordedQuery[] = [];
+    const service = createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ item_id: 77 }), [], {
+        onStoreItemUpdate: (query) => updates.push(query)
+      }),
+      dependencies({
+        ai: aiServiceRejecting(new Error('CodexAPI unavailable')),
+        bggClient: clientWithThing(bggThingDetails()),
+        importer: itemImporter(88)
+      })
+    );
+
+    await expect(service.matchWithAi?.(42)).rejects.toThrow('CodexAPI unavailable');
+    expect(linkUpdate(updates)).toBeUndefined();
+  });
+
+  it('preserves the current association when BGG validation fails', async () => {
+    const updates: RecordedQuery[] = [];
+    const bggClient = clientWithThing(null);
+    vi.mocked(bggClient.searchFresh!).mockResolvedValue([]);
+    const service = createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ item_id: 77 }), [], {
+        onStoreItemUpdate: (query) => updates.push(query)
+      }),
+      dependencies({ ai: aiService(aiMatchFound()), bggClient, importer: itemImporter(88) })
+    );
+
+    await expect(service.matchWithAi?.(42)).rejects.toThrow('could not validate');
+    expect(linkUpdate(updates)).toBeUndefined();
+  });
+
+  it('preserves the current association when positive cache persistence fails', async () => {
+    const updates: RecordedQuery[] = [];
+    const cache = matchCache();
+    vi.mocked(cache.recordAiMatch).mockRejectedValue(new Error('Cache failed'));
+    const importer = itemImporter(88);
+    const service = createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ item_id: 77 }), [], {
+        onStoreItemUpdate: (query) => updates.push(query)
+      }),
+      dependencies({
+        ai: aiService(aiMatchFound()),
+        bggClient: clientWithThing(bggThingDetails()),
+        cache,
+        importer
+      })
+    );
+
+    await expect(service.matchWithAi?.(42)).rejects.toThrow('Cache failed');
+    expect(importer.importBggId).not.toHaveBeenCalled();
+    expect(linkUpdate(updates)).toBeUndefined();
+  });
+
+  it('preserves the current association when the BGG import fails', async () => {
+    const updates: RecordedQuery[] = [];
+    const service = createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ item_id: 77 }), [], {
+        onStoreItemUpdate: (query) => updates.push(query)
+      }),
+      dependencies({
+        ai: aiService(aiMatchFound()),
+        bggClient: clientWithThing(bggThingDetails()),
+        importer: itemImporterRejecting(new Error('Import failed'))
+      })
+    );
+
+    await expect(service.matchWithAi?.(42)).rejects.toThrow('Import failed');
+    expect(linkUpdate(updates)).toBeUndefined();
+  });
+
+  it.each(['AI matcher', 'BGG client', 'BGG importer'] as const)(
+    'rejects manual matching when the %s is not configured',
+    async (missingDependency) => {
+      const updates: RecordedQuery[] = [];
+      const configuredDependencies = dependencies({
+        ai: aiService(aiMatchFound()),
+        bggClient: clientWithThing(bggThingDetails()),
+        importer: itemImporter(88)
+      });
+      if (missingDependency === 'AI matcher') {
+        delete configuredDependencies.aiBggMatchingService;
+      } else if (missingDependency === 'BGG client') {
+        delete configuredDependencies.bggClient;
+      } else {
+        delete configuredDependencies.bggItemImporter;
+      }
+      const service = createItemMatchingService(
+        matchingDatabase(storeItemCandidate({ item_id: 77 }), [], {
+          onStoreItemUpdate: (query) => updates.push(query)
+        }),
+        configuredDependencies
+      );
+
+      await expect(service.matchWithAi?.(42)).rejects.toMatchObject({ status: 503 });
+      expect(linkUpdate(updates)).toBeUndefined();
+    }
+  );
+
   it('records the normal no-match state when AI finds no match', async () => {
     const updates: RecordedQuery[] = [];
     const database = matchingDatabase(
@@ -807,6 +1004,10 @@ function aiService(result: AiBggMatchFound | null = null): AiBggMatchingService 
   return { findMatch: vi.fn().mockResolvedValue(result) };
 }
 
+function aiServiceRejecting(error: Error): AiBggMatchingService {
+  return { findMatch: vi.fn().mockRejectedValue(error) };
+}
+
 function matchCache(result: Awaited<ReturnType<BggMatchCache['lookup']>> = { cacheHit: false, matches: [] }): BggMatchCache {
   return {
     lookup: vi.fn().mockResolvedValue(result),
@@ -825,6 +1026,10 @@ function clientWithThing(details: BggThingDetails | null): BggClient {
 
 function itemImporter(itemId: number | null): BggItemImporter {
   return { importBggId: vi.fn().mockResolvedValue(itemId) };
+}
+
+function itemImporterRejecting(error: Error): BggItemImporter {
+  return { importBggId: vi.fn().mockRejectedValue(error) };
 }
 
 function aiMatchFound(overrides: Partial<AiBggMatchFound> = {}): AiBggMatchFound {
