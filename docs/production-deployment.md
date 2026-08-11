@@ -395,18 +395,28 @@ sudo install -o root -g root -m 0644 \
   deploy/codexapi.service /etc/systemd/system/codexapi.service
 sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/codexapi.service
+
+verify_codexapi_startup() {
+  sudo systemctl is-active --quiet codexapi.service &&
+    curl -fsS http://127.0.0.1:3001/health |
+      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-constrained-v1" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
+    test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
+    ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)'
+}
+
 sudo systemctl start codexapi.service
-sudo systemctl is-active codexapi.service
-curl -fsS http://127.0.0.1:3001/health
-sudo journalctl -u codexapi.service -n 30 --no-pager
+if ! verify_codexapi_startup; then
+  sudo systemctl stop codexapi.service
+  exit 1
+fi
 ```
 
-The health response must report `status: "ok"`, capability policy
-`codexapi-constrained-v1`, Codex CLI version `0.147.0`, and `checked: true`.
-Confirm `ss -ltnp` shows only `127.0.0.1:3001`. If any command before service
-start fails, leave CodexAPI stopped and use the explicit previous-commit
-recovery procedure under **Rollback**. The admin service itself does not need a
-restart unless its code or environment changed.
+The verification function requires `status: "ok"`, capability policy
+`codexapi-constrained-v1`, Codex CLI version `0.147.0`, `checked: true`, and
+exactly one `127.0.0.1:3001` listener. Any failed post-start check stops the
+service before the shell exits. Use the explicit previous-commit recovery
+procedure under **Rollback**. The admin service itself does not need a restart
+unless its code or environment changed.
 
 ## Full VM Bootstrap
 
@@ -787,16 +797,27 @@ sudo install -o root -g root -m 0644 \
   deploy/codexapi.service /etc/systemd/system/codexapi.service
 sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/codexapi.service
+
+verify_codexapi_startup() {
+  sudo systemctl is-active --quiet codexapi.service &&
+    curl -fsS http://127.0.0.1:3001/health |
+      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-constrained-v1" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
+    test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
+    ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)'
+}
+
 sudo systemctl start codexapi.service
-sudo systemctl is-active codexapi.service
-curl -fsS http://127.0.0.1:3001/health
-sudo journalctl -u codexapi.service -n 30 --no-pager
+if ! verify_codexapi_startup; then
+  sudo systemctl stop codexapi.service
+  exit 1
+fi
 ```
 
 Verify the same startup-attestation fields and loopback-only listener required by
-the routine deployment. The checkout is intentionally detached at the recovered
-commit; the next approved forward deployment checks out `main` and fast-forwards
-it to an exact approved `origin/main` revision.
+the routine deployment. A failed recovery verification also leaves the service
+stopped. The checkout is intentionally detached at the recovered commit; the
+next approved forward deployment checks out `main` and fast-forwards it to an
+exact approved `origin/main` revision.
 
 ### Ludora admin rollback
 

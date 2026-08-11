@@ -22,8 +22,9 @@ Do not choose another port automatically. If one of these ports is busy, report 
   commit and clean checkout, stop the service before changing the checkout or
   npm artifacts, install/test/build, install the checked-in
   `deploy/codexapi.service`, then verify startup attestation and loopback health.
-  On failure, keep it stopped and explicitly rebuild the recorded previous
-  commit; do not add an automatic deployment or rollback controller.
+  If any post-start verification fails, immediately stop `codexapi.service`
+  before explicitly rebuilding the recorded previous commit. Do not add an
+  automatic deployment or rollback controller.
 - Instance: `ludora-admin-img-20260714-105613`
 - GCP project: `ludora-501213`
 - Zone: `us-central1-a`
