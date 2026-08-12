@@ -55,6 +55,26 @@ Describe 'CodexAPI production runbook contract' {
         $routine | Should Match "stat -c '%a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
     }
 
+    It 'waits for bounded CodexAPI health readiness before listener and boundary verification' {
+        foreach ($section in @($routine, $recovery)) {
+            $startup = [regex]::Match($section, '(?s)verify_codexapi_startup\(\) \{.*?^\}', [System.Text.RegularExpressions.RegexOptions]::Multiline)
+            $startup.Success | Should Be $true
+            $startup.Value | Should Match 'for attempt in \$\(seq 1 40\)'
+            $startup.Value | Should Match 'sudo systemctl is-active --quiet codexapi\.service \|\| return 1'
+            $startup.Value | Should Match 'curl -fsS http://127\.0\.0\.1:3001/health'
+            $startup.Value | Should Match 'sleep 0\.5'
+            $startup.Value | Should Match 'return 1'
+            $startup.Value | Should Not Match '(?s)^\s*sudo systemctl is-active --quiet codexapi\.service\s*&&\s*curl'
+
+            $health = $startup.Value.IndexOf('curl -fsS http://127.0.0.1:3001/health', [StringComparison]::Ordinal)
+            $listener = $startup.Value.IndexOf("ss -H -ltn 'sport = :3001'", [StringComparison]::Ordinal)
+            ($health -ge 0 -and $listener -gt $health) | Should Be $true
+        }
+
+        $routine | Should Not Match '(?m)^sleep [1-9][0-9]*$'
+        $recovery | Should Not Match '(?m)^sleep [1-9][0-9]*$'
+    }
+
     It 'orders routine CodexAPI deployment through verification before admin deployment and the database-free canary' {
         $stop = $routine.IndexOf('sudo systemctl stop codexapi.service', [StringComparison]::Ordinal)
         $checkout = $routine.IndexOf('git checkout main', [StringComparison]::Ordinal)

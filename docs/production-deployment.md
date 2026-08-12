@@ -404,11 +404,17 @@ sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/codexapi.service
 
 verify_codexapi_startup() {
-  sudo systemctl is-active --quiet codexapi.service &&
-    curl -fsS http://127.0.0.1:3001/health |
-      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
-    test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
-    ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)'
+  for attempt in $(seq 1 40); do
+    sudo systemctl is-active --quiet codexapi.service || return 1
+    if curl -fsS http://127.0.0.1:3001/health |
+      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
+      test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
+        ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)' || return 1
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
 }
 
 verify_codexapi_boundary() {
@@ -914,11 +920,17 @@ sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/codexapi.service
 
 verify_codexapi_startup() {
-  sudo systemctl is-active --quiet codexapi.service &&
-    curl -fsS http://127.0.0.1:3001/health |
-      EXPECTED_CODEXAPI_CAPABILITY_POLICY="$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== process.env.EXPECTED_CODEXAPI_CAPABILITY_POLICY || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
-    test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
-    ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)'
+  for attempt in $(seq 1 40); do
+    sudo systemctl is-active --quiet codexapi.service || return 1
+    if curl -fsS http://127.0.0.1:3001/health |
+      EXPECTED_CODEXAPI_CAPABILITY_POLICY="$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== process.env.EXPECTED_CODEXAPI_CAPABILITY_POLICY || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
+      test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
+        ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)' || return 1
+      return 0
+    fi
+    sleep 0.5
+  done
+  return 1
 }
 
 verify_codexapi_boundary() {
