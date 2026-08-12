@@ -46,13 +46,15 @@ function Invoke-CodexApiReadinessHarness {
     param(
         [Parameter(Mandatory = $true)][string]$Section,
         [Parameter(Mandatory = $true)][string]$Scenario,
-        [Parameter(Mandatory = $true)][string]$ExpectedPolicy
+        [Parameter(Mandatory = $true)][string]$ExpectedPolicy,
+        [string]$HealthPolicy = $ExpectedPolicy
     )
 
     $gitBash = 'C:\Program Files\Git\bin\bash.exe'
     if (-not (Test-Path -LiteralPath $gitBash)) {
         throw "Git Bash is required for readiness tests: $gitBash"
     }
+    $node = Get-Command node -CommandType Application -ErrorAction Stop
 
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ludora-codexapi-readiness-{0}" -f [guid]::NewGuid())
     [System.IO.Directory]::CreateDirectory($tempRoot) | Out-Null
@@ -68,6 +70,7 @@ function Invoke-CodexApiReadinessHarness {
     [System.IO.File]::WriteAllText($sleepCountPath, '0', $utf8)
 
     $bashFunctionPath = ConvertTo-GitBashPath -Path $functionPath
+    $bashNodePath = ConvertTo-GitBashPath -Path $node.Source
     [System.IO.File]::WriteAllText($harnessPath, @'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -114,12 +117,7 @@ curl() {
   esac
 }
 node() {
-  local body
-  body="$(cat)"
-  [[ "$body" == *'"status":"ok"'* &&
-    "$body" == *"\"capabilityPolicy\":\"$HEALTH_POLICY\""* &&
-    "$body" == *'"version":"0.147.0"'* &&
-    "$body" == *'"checked":true'* ]]
+  "$REAL_NODE" "$@"
 }
 ss() {
   printf 'ss %s\n' "$*" >> "$TRACE_FILE"
@@ -133,6 +131,7 @@ sleep() {
   printf 'sleep %s\n' "$*" >> "$TRACE_FILE"
 }
 source "$READINESS_FUNCTION"
+unset EXPECTED_CODEXAPI_CAPABILITY_POLICY
 CODEXAPI_PREVIOUS_CAPABILITY_POLICY="$EXPECTED_POLICY"
 if ! verify_codexapi_startup; then
   printf 'READINESS_RESULT=nonzero\n'
@@ -145,12 +144,13 @@ printf 'GUARDED_CALLER_REACHED=yes\n'
 
     $environment = @{
         'READINESS_FUNCTION' = $bashFunctionPath
+        'REAL_NODE' = $bashNodePath
         'TRACE_FILE' = (ConvertTo-GitBashPath -Path $tracePath)
         'CURL_COUNT' = (ConvertTo-GitBashPath -Path $curlCountPath)
         'SLEEP_COUNT' = (ConvertTo-GitBashPath -Path $sleepCountPath)
         'SCENARIO' = $Scenario
         'EXPECTED_POLICY' = $ExpectedPolicy
-        'HEALTH_POLICY' = $ExpectedPolicy
+        'HEALTH_POLICY' = $HealthPolicy
     }
     $previousEnvironment = @{}
     try {
@@ -423,7 +423,7 @@ Describe 'CodexAPI production runbook contract' {
             $result.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
             $result.CurlCount | Should Be 40
             $result.SleepCount | Should Be 39
-            ($result.ElapsedMilliseconds -lt 3000) | Should Be $true
+            ($result.ElapsedMilliseconds -lt 15000) | Should Be $true
             @($result.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 0
         }
     }
@@ -453,7 +453,21 @@ Describe 'CodexAPI production runbook contract' {
         ($matching.ElapsedMilliseconds -lt 3000) | Should Be $true
         $wrong.Output | Should Match 'READINESS_RESULT=nonzero'
         $wrong.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
-        ($wrong.ElapsedMilliseconds -lt 3000) | Should Be $true
+        ($wrong.ElapsedMilliseconds -lt 15000) | Should Be $true
+    }
+
+    It 'runs the recovery parser with the selected policy environment wiring' {
+        $assignment = 'EXPECTED_CODEXAPI_CAPABILITY_POLICY="$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" '
+        $withoutPolicyWiring = $recovery.Replace($assignment, '')
+        $wrongPolicyWiring = $recovery.Replace($assignment, 'EXPECTED_CODEXAPI_CAPABILITY_POLICY="wrong-policy" ')
+
+        $matching = Invoke-CodexApiReadinessHarness -Section $recovery -Scenario third-success -ExpectedPolicy 'selected-recovery-policy' -HealthPolicy 'selected-recovery-policy'
+        $without = Invoke-CodexApiReadinessHarness -Section $withoutPolicyWiring -Scenario third-success -ExpectedPolicy 'selected-recovery-policy' -HealthPolicy 'selected-recovery-policy'
+        $wrong = Invoke-CodexApiReadinessHarness -Section $wrongPolicyWiring -Scenario third-success -ExpectedPolicy 'selected-recovery-policy' -HealthPolicy 'selected-recovery-policy'
+
+        $matching.Output | Should Match 'READINESS_RESULT=zero'
+        $without.Output | Should Match 'READINESS_RESULT=nonzero'
+        $wrong.Output | Should Match 'READINESS_RESULT=nonzero'
     }
 
     It 'orders routine CodexAPI deployment through verification before admin deployment and the database-free canary' {
