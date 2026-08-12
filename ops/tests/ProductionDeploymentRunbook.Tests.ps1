@@ -91,6 +91,7 @@ Describe 'CodexAPI production runbook contract' {
         $recovery | Should Match 'EXPECTED_CODEXAPI_CAPABILITY_POLICY="\$CODEXAPI_PREVIOUS_CAPABILITY_POLICY"'
         $recovery | Should Not Match 'codexapi-capable-isolated-v2'
         $recovery | Should Match 'systemctl show .*codexapi\.service'
+        $recovery | Should Match '(?s)systemctl show codexapi\.service\s+\\?\s*--property=User.*--property=ReadOnlyPaths.*--property=InaccessiblePaths'
         $recovery | Should Match 'ProtectHome=yes'
         $recovery | Should Match 'ReadOnlyPaths=/opt/ludora/codexapi'
         $recovery | Should Match 'InaccessiblePaths=.*opt/ludora/ludora-admin'

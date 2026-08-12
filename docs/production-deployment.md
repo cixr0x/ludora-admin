@@ -854,7 +854,7 @@ verify_codexapi_boundary() {
   local unit
   unit="$(sudo systemctl show codexapi.service \
     --property=User --property=Group --property=ProtectSystem --property=ProtectHome \
-    --property=CapabilityBoundingSet --property=ReadWritePaths --property=InaccessiblePaths)" &&
+    --property=CapabilityBoundingSet --property=ReadOnlyPaths --property=ReadWritePaths --property=InaccessiblePaths)" &&
     grep -Fx 'User=codexapi' <<<"$unit" &&
     grep -Fx 'Group=codexapi' <<<"$unit" &&
     grep -Fx 'ProtectSystem=strict' <<<"$unit" &&
