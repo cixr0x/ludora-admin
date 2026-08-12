@@ -368,6 +368,11 @@ reviewed and approved. The checkout must be clean, and the approved commit must
 be the fetched `origin/main` revision. Record the current full SHA as the
 previous known commit before making any change.
 
+Before push or deployment, run the full `npm test` gate at the exact reviewed
+CodexAPI SHA. That gate includes the hermetic isolation-canary tests. The VM
+procedure below repeats the candidate test/build gate, but it does not replace
+the pre-push review gate. Never deploy an abbreviated or unreviewed SHA.
+
 ```bash
 set -euo pipefail
 cd /opt/ludora/codexapi
@@ -430,6 +435,14 @@ if ! verify_codexapi_boundary; then
   sudo systemctl stop codexapi.service
   exit 1
 fi
+
+# Candidate/pre-admin activation isolation gate. Run as root and keep output private.
+CODEXAPI_ISOLATION_OUTPUT=''
+if ! CODEXAPI_ISOLATION_OUTPUT="$(sudo npm run --silent verify:isolation 2>/dev/null && printf '\036')" ||
+  test "$CODEXAPI_ISOLATION_OUTPUT" != $'{"status":"ok","isolation":"verified"}\n\036'; then
+  sudo systemctl stop codexapi.service
+  exit 1
+fi
 ```
 
 The verification function requires `status: "ok"`, capability policy
@@ -442,17 +455,44 @@ and root paths, and an exact mode-`0400` runtime profile matching the checked-in
 service before the shell exits. Use the explicit previous-commit recovery
 procedure under **Rollback**.
 
-After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure. Once that revision is active, run the database-free regression canary from the admin-service checkout:
+The live isolation command runs only after health, listener, systemd, unit, and
+profile verification succeeds. It runs as root because it must probe the real
+service boundary. `--silent` suppresses the npm banner, stderr is not logged,
+and stdout must be exactly one JSON line:
+`{"status":"ok","isolation":"verified"}`. A command failure or output mismatch
+leaves CodexAPI stopped before any admin-service deployment.
+
+After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure. Target its exact full SHA. Once that revision is active, run the database-free regression canary and final live isolation gate:
 
 ```bash
 cd /opt/ludora/ludora-admin/ludora-admin-service
 sudo systemctl is-active --quiet ludora-admin-service.service
-npm run verify:ai-bgg
+
+AI_BGG_OUTPUT=''
+if ! AI_BGG_OUTPUT="$(npm run --silent verify:ai-bgg 2>/dev/null && printf '\036')" ||
+  test "$AI_BGG_OUTPUT" != $'{"status":"ok","bggId":296354}\n\036'; then
+  sudo systemctl stop ludora-admin-service.service
+  sudo systemctl stop codexapi.service
+  exit 1
+fi
+
+cd /opt/ludora/codexapi
+# Final post-deployment isolation gate. Run as root and keep output private.
+CODEXAPI_ISOLATION_OUTPUT=''
+if ! CODEXAPI_ISOLATION_OUTPUT="$(sudo npm run --silent verify:isolation 2>/dev/null && printf '\036')" ||
+  test "$CODEXAPI_ISOLATION_OUTPUT" != $'{"status":"ok","isolation":"verified"}\n\036'; then
+  sudo systemctl stop ludora-admin-service.service
+  sudo systemctl stop codexapi.service
+  exit 1
+fi
 ```
 
 The canary calls only the loopback AI BGG matcher with the fixed Bomberos En
 Accion regression fixture. It does not import, cache, link, or write store
-items, and it does not use database commands.
+items, and it does not use database commands. The BGG output must be exactly
+`{"status":"ok","bggId":296354}` before the second isolation gate runs. If
+either post-admin gate fails, leave both services stopped and use the rollback
+procedures below; do not expose canary output, marker paths, or secrets.
 
 ## Full VM Bootstrap
 
@@ -920,6 +960,31 @@ verification also leaves the service stopped.
 The checkout is intentionally detached at the recovered commit; the next
 approved forward deployment checks out `main` and fast-forwards it to an exact
 approved `origin/main` revision.
+
+After restoring the exact selected admin revision through **Ludora admin
+rollback**, verify both selected SHAs and then run the live isolation canary
+only when the restored CodexAPI revision owns that script:
+
+```bash
+set -euo pipefail
+cd /opt/ludora/codexapi
+
+if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(Object.hasOwn(scripts, "verify:isolation") ? 0 : 1)'; then
+  CODEXAPI_ISOLATION_OUTPUT=''
+  if ! CODEXAPI_ISOLATION_OUTPUT="$(sudo npm run --silent verify:isolation 2>/dev/null && printf '\036')" ||
+    test "$CODEXAPI_ISOLATION_OUTPUT" != $'{"status":"ok","isolation":"verified"}\n\036'; then
+    sudo systemctl stop ludora-admin-service.service
+    sudo systemctl stop codexapi.service
+    exit 1
+  fi
+fi
+```
+
+The historical revision
+`5332ab156fa37350a3addd2b385692264fc17c3c` does not own `verify:isolation`.
+For that revision, recovery verifies its owned static and systemd contract and
+skips that unavailable future canary. A revision that owns the script must pass
+the exact-output gate; failure leaves both restored services stopped.
 
 ### Ludora admin rollback
 

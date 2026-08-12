@@ -67,14 +67,41 @@ Describe 'CodexAPI production runbook contract' {
         $startupVerification = $routine.IndexOf('if ! verify_codexapi_startup; then', [StringComparison]::Ordinal)
         $boundaryVerification = $routine.IndexOf('if ! verify_codexapi_boundary; then', [StringComparison]::Ordinal)
         $adminDeployment = $routine.IndexOf('After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure.', [StringComparison]::Ordinal)
-        $canary = $routine.IndexOf('npm run verify:ai-bgg', [StringComparison]::Ordinal)
+        $canary = $routine.IndexOf('npm run --silent verify:ai-bgg', [StringComparison]::Ordinal)
 
         ($stop -ge 0 -and $checkout -gt $stop -and $npmInstall -gt $checkout -and $npmBuild -gt $npmInstall -and
             $unitInstall -gt $npmBuild -and $profileInstall -gt $unitInstall -and $unitVerify -gt $profileInstall -and
             $start -gt $unitVerify -and $startupVerification -gt $start -and $boundaryVerification -gt $startupVerification -and
             $adminDeployment -gt $boundaryVerification -and $canary -gt $adminDeployment) | Should Be $true
-        $routine | Should Match 'npm run verify:ai-bgg'
+        $routine | Should Match 'npm run --silent verify:ai-bgg'
         $routine | Should Not Match '(?i)psql|database/schema\.sql|database/patches|LUDORA_DATABASE_URL'
+    }
+
+    It 'documents the exact reviewed SHA and hermetic isolation tests before VM deployment' {
+        $routine | Should Match 'exact reviewed\s+CodexAPI SHA'
+        $routine | Should Match '(?s)Before push or deployment.*full `npm test`.*hermetic isolation-canary tests'
+    }
+
+    It 'runs exact-output live isolation gates before admin activation and after the BGG canary' {
+        $boundaryVerification = $routine.IndexOf('if ! verify_codexapi_boundary; then', [StringComparison]::Ordinal)
+        $firstIsolationCommand = $routine.IndexOf('sudo npm run --silent verify:isolation', [StringComparison]::Ordinal)
+        $adminDeployment = $routine.IndexOf('After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure.', [StringComparison]::Ordinal)
+        $bggCommand = $routine.IndexOf('npm run --silent verify:ai-bgg', [StringComparison]::Ordinal)
+        $secondIsolationCommand = $routine.LastIndexOf('sudo npm run --silent verify:isolation', [StringComparison]::Ordinal)
+
+        ($boundaryVerification -ge 0 -and $firstIsolationCommand -gt $boundaryVerification -and
+            $adminDeployment -gt $firstIsolationCommand -and $bggCommand -gt $adminDeployment -and
+            $secondIsolationCommand -gt $bggCommand -and $secondIsolationCommand -gt $firstIsolationCommand) | Should Be $true
+        ([regex]::Matches($routine, [regex]::Escape('sudo npm run --silent verify:isolation')).Count) | Should Be 2
+        ([regex]::Matches($routine, [regex]::Escape("printf '\036'")).Count) | Should Be 3
+        $routine | Should Match 'test "\$AI_BGG_OUTPUT" != \$''\{"status":"ok","bggId":296354\}\\n\\036'''
+        ([regex]::Matches($routine, 'test "\$CODEXAPI_ISOLATION_OUTPUT" != \$''\{"status":"ok","isolation":"verified"\}\\n\\036''').Count) | Should Be 2
+    }
+
+    It 'stops the appropriate services when a live isolation gate fails' {
+        $routine | Should Match '(?s)# Candidate/pre-admin activation isolation gate\..*sudo npm run --silent verify:isolation.*test "\$CODEXAPI_ISOLATION_OUTPUT" != \$''\{"status":"ok","isolation":"verified"\}\\n\\036''; then\s+sudo systemctl stop codexapi\.service\s+exit 1'
+        $routine | Should Match '(?s)# Final post-deployment isolation gate\..*sudo npm run --silent verify:isolation.*test "\$CODEXAPI_ISOLATION_OUTPUT" != \$''\{"status":"ok","isolation":"verified"\}\\n\\036''; then\s+sudo systemctl stop ludora-admin-service\.service\s+sudo systemctl stop codexapi\.service\s+exit 1'
+        $routine | Should Match 'leave both services stopped and use the rollback\s+procedures'
     }
 
     It 'stops the service when post-start verification fails in deployment and recovery' {
@@ -144,6 +171,14 @@ Describe 'CodexAPI production runbook contract' {
         ($stop -ge 0 -and $checkout -gt $stop -and $npmInstall -gt $checkout -and $npmBuild -gt $npmInstall -and
             $unitInstall -gt $npmBuild -and $profileInstall -gt $unitInstall -and $unitVerify -gt $profileInstall -and
             $start -gt $unitVerify -and $startupVerification -gt $start -and $boundaryVerification -gt $startupVerification) | Should Be $true
+    }
+
+    It 'runs recovery isolation only when the selected revision owns the script' {
+        $recovery | Should Match 'After restoring the exact selected admin revision'
+        $recovery | Should Match '(?s)if node -e .*verify:isolation.*then.*sudo npm run --silent verify:isolation.*\{"status":"ok","isolation":"verified"\}.*sudo systemctl stop ludora-admin-service\.service\s+sudo systemctl stop codexapi\.service\s+exit 1\s+fi'
+        $recovery | Should Match '5332ab156fa37350a3addd2b385692264fc17c3c.*does not own `verify:isolation`'
+        $recovery | Should Match 'skips that unavailable future canary'
+        $recovery | Should Not Match '(?i)psql|database/schema\.sql|database/patches|LUDORA_DATABASE_URL'
     }
 
     It 'provides explicit previous-commit recovery before npm mutation' {
