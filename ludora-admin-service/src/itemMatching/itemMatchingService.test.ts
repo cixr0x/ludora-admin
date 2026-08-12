@@ -38,12 +38,14 @@ describe('item matching service', () => {
     );
     const ai = aiService();
     const cache = matchCache();
-    const service = createItemMatchingService(database, dependencies({ ai, cache }));
+    const bggClient = clientWithThing(null);
+    const service = createItemMatchingService(database, dependencies({ ai, bggClient, cache }));
 
     await service.confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
     expect(ai.findMatch).not.toHaveBeenCalled();
     expect(cache.lookup).not.toHaveBeenCalled();
+    expect(bggClient.searchFresh).not.toHaveBeenCalled();
     expect(linkUpdate(updates)?.params?.slice(0, 4)).toEqual([77, 'LOCAL', 377061, 'Coffee Rush']);
   });
 
@@ -87,19 +89,22 @@ describe('item matching service', () => {
       matches: [{ item: bggSearchItem(377061, 'Coffee Rush', 2023), verifiedByAi: false }]
     });
     const importer = itemImporter(88);
+    const bggClient = clientWithThing(null);
 
-    await createItemMatchingService(database, dependencies({ ai, cache, importer }))
+    await createItemMatchingService(database, dependencies({ ai, bggClient, cache, importer }))
       .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
     expect(cache.lookup).toHaveBeenCalledWith('Coffee Rush', {
       imageUrl: 'https://store.mx/coffee-rush.jpg'
     });
+    expect(bggClient.searchFresh).not.toHaveBeenCalled();
     expect(ai.findMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).toHaveBeenCalledWith(377061);
   });
 
   it('uses an accepted fresh BGG result before AI', async () => {
     const updates: RecordedQuery[] = [];
+    const events: TraceEvent[] = [];
     const ai = aiService(null);
     const cache = matchCache({
       cacheHit: true,
@@ -120,7 +125,10 @@ describe('item matching service', () => {
     });
 
     await createItemMatchingService(database, dependencies({ ai, bggClient, cache, importer }))
-      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+      .confirmBoardgameAndMatch?.(42, {
+        confirmationSource: 'automated',
+        traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
+      });
 
     expect(bggClient.searchFresh).toHaveBeenCalledOnce();
     expect(bggClient.searchFresh).toHaveBeenCalledWith('Coffee Rush');
@@ -128,6 +136,93 @@ describe('item matching service', () => {
     expect(ai.findMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).toHaveBeenCalledWith(377061);
     expect(linkUpdate(updates)?.params?.slice(0, 4)).toEqual([88, 'BGG', 377061, 'Coffee Rush']);
+    expect(traceFields(events, 'item_matcher.bgg_live_search.completed')).toEqual({
+      accepted_bgg_id: 377061,
+      accepted_match: true,
+      candidate_id: 42,
+      evaluated_count: 1,
+      result_count: 1
+    });
+    expect(events.map(({ event }) => event)).not.toContain('item_matcher.ai_match.start');
+  });
+
+  it('prioritizes an exact live title beyond the first ten search results', async () => {
+    const unrelated = Array.from({ length: 11 }, (_, index) =>
+      bggSearchItem(1000 + index, `Different Game ${index}`, 2000 + index)
+    );
+    const exact = bggSearchItem(377061, 'Coffee Rush', 2023);
+    const bggClient = clientWithFreshSearch(
+      [...unrelated, exact],
+      new Map([[377061, bggThingDetails({ bggId: 377061, name: 'Coffee Rush', yearPublished: 2023 })]])
+    );
+    const ai = aiService(null);
+
+    await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ title: 'Coffee Rush' })),
+      dependencies({ ai, bggClient, cache: matchCache(), importer: itemImporter(88) })
+    ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(bggClient.fetchThing).toHaveBeenCalledTimes(1);
+    expect(bggClient.fetchThing).toHaveBeenCalledWith(377061);
+    expect(ai.findMatch).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates live IDs and evaluates at most ten Things', async () => {
+    const searchResults = [
+      bggSearchItem(1000, 'Different Game 0', 2000),
+      bggSearchItem(1000, 'Different Game 0', 2000),
+      ...Array.from({ length: 11 }, (_, index) =>
+        bggSearchItem(1001 + index, `Different Game ${index + 1}`, 2001 + index)
+      )
+    ];
+    const things = new Map<number, BggThingDetails | null>(
+      searchResults.map((result) => [
+        result.bggId,
+        bggThingDetails({ bggId: result.bggId, name: result.name, maxPlayers: null, minPlayers: null })
+      ])
+    );
+    const bggClient = clientWithFreshSearch(searchResults, things);
+
+    await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ title: 'Unmatched Store Title' })),
+      dependencies({ ai: aiService(null), bggClient, cache: matchCache() })
+    ).generateMatchCandidates(42);
+
+    expect(bggClient.fetchThing).toHaveBeenCalledTimes(10);
+    expect(vi.mocked(bggClient.fetchThing).mock.calls.filter(([id]) => id === 1000)).toHaveLength(1);
+  });
+
+  it('accepts a live match from a full Thing alternate name', async () => {
+    const ai = aiService(null);
+    const bggClient = clientWithFreshSearch(
+      [bggSearchItem(115746, 'War of the Ring: Second Edition', 2011)],
+      new Map([[115746, bggThingDetails({ alternateNames: ['La Guerra del Anillo'] })]])
+    );
+
+    await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ title: 'La Guerra del Anillo' })),
+      dependencies({ ai, bggClient, cache: matchCache(), importer: itemImporter(88) })
+    ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(ai.findMatch).not.toHaveBeenCalled();
+  });
+
+  it('rejects an exact live title when the BGG Thing type conflicts', async () => {
+    const ai = aiService(null);
+    const bggClient = clientWithFreshSearch(
+      [bggSearchItem(377061, 'Coffee Rush', 2023)],
+      new Map([[
+        377061,
+        bggThingDetails({ bggId: 377061, name: 'Coffee Rush', type: 'boardgameexpansion' })
+      ]])
+    );
+
+    await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ item_type: 'base_game', title: 'Coffee Rush' })),
+      dependencies({ ai, bggClient, cache: matchCache() })
+    ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(ai.findMatch).toHaveBeenCalledOnce();
   });
 
   it('continues to AI when fresh BGG results stay below the deterministic threshold', async () => {
@@ -160,6 +255,33 @@ describe('item matching service', () => {
     ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
     expect(ai.findMatch).toHaveBeenCalledOnce();
+  });
+
+  it('continues to AI and traces a sanitized failure when a live Thing fetch fails', async () => {
+    const events: TraceEvent[] = [];
+    const ai = aiService(null);
+    const bggClient = clientWithFreshSearch(
+      [bggSearchItem(377061, 'Coffee Rush', 2023)],
+      new Map()
+    );
+    vi.mocked(bggClient.fetchThing).mockRejectedValueOnce(new Error('private upstream response text'));
+
+    await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ title: 'Coffee Rush' })),
+      dependencies({ ai, bggClient, cache: matchCache() })
+    ).confirmBoardgameAndMatch?.(42, {
+      confirmationSource: 'automated',
+      traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
+    });
+
+    expect(ai.findMatch).toHaveBeenCalledOnce();
+    expect(traceFields(events, 'item_matcher.bgg_live_search.failed')).toEqual({
+      bgg_id: 377061,
+      candidate_id: 42,
+      error: 'BGG Thing fetch failed',
+      stage: 'thing_fetch'
+    });
+    expect(JSON.stringify(events)).not.toContain('private upstream response text');
   });
 
   it('continues to AI without using cached search when searchFresh is unavailable', async () => {
@@ -245,14 +367,17 @@ describe('item matching service', () => {
       matches: [{ item: bggSearchItem(999, 'Wrong Game', 2010), verifiedByAi: true }]
     });
     const importer = itemImporter(88);
+    const bggClient = clientWithThing(bggThingDetails());
     const service = createItemMatchingService(
       database,
-      dependencies({ ai, bggClient: clientWithThing(bggThingDetails()), cache, importer })
+      dependencies({ ai, bggClient, cache, importer })
     );
 
     const result = await service.matchWithAi?.(42);
 
     expect(cache.lookup).not.toHaveBeenCalled();
+    expect(bggClient.searchFresh).not.toHaveBeenCalled();
+    expect(bggClient.search).not.toHaveBeenCalled();
     expect(queries.some((query) => normalizeSql(query.sql).includes('from items'))).toBe(false);
     expect(ai.findMatch).toHaveBeenCalledOnce();
     expect(ai.findMatch).toHaveBeenCalledWith({
@@ -819,6 +944,27 @@ describe('item matching service', () => {
     expect(updates).toEqual([]);
   });
 
+  it('stages rejected live BGG evidence without linking it', async () => {
+    const updates: RecordedQuery[] = [];
+    const thing = bggThingDetails({ bggId: 377061, name: 'Coffee Rush' });
+    const bggClient = clientWithFreshSearch(
+      [bggSearchItem(377061, 'Coffee Rush', 2023)],
+      new Map([[377061, thing]])
+    );
+
+    const result = await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ title: 'Coffee Rush Deluxe' }), [], {
+        onStoreItemUpdate: (query) => updates.push(query)
+      }),
+      dependencies({ ai: aiService(null), bggClient, cache: matchCache() })
+    ).generateMatchCandidates(42);
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ bgg_id: 377061, source: 'BGG', status: 'PENDING' });
+    expect(result[0].raw_payload).toMatchObject({ source: 'live_bgg_search', thing });
+    expect(updates).toEqual([]);
+  });
+
   it('uses and records a name-only AI result when candidate image_url is empty', async () => {
     const ai = aiService(aiMatchFound());
     const cache = matchCache();
@@ -904,7 +1050,7 @@ describe('item matching service', () => {
 
     await createItemMatchingService(database, dependencies({
       ai: aiService(null),
-      bggClient: clientWithThing(bggThingDetails()),
+      bggClient: clientWithFreshSearch([], new Map()),
       cache: matchCache(),
       importer: itemImporter(88)
     })).confirmBoardgameAndMatch?.(42, { traceLogger: noMatchLogger });
@@ -930,6 +1076,13 @@ describe('item matching service', () => {
       matched_name: null,
       name_assessment: null
     });
+    const eventNames = noMatchEvents.map(({ event }) => event);
+    expect(eventNames.indexOf('item_matcher.bgg_cache.completed')).toBeLessThan(
+      eventNames.indexOf('item_matcher.bgg_live_search.start')
+    );
+    expect(eventNames.indexOf('item_matcher.bgg_live_search.completed')).toBeLessThan(
+      eventNames.indexOf('item_matcher.ai_match.start')
+    );
   });
 
   it.each([
