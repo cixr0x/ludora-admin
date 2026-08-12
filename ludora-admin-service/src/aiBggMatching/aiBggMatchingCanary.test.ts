@@ -9,7 +9,7 @@ function matchingDecision(overrides: Partial<AiBggMatchDecision> = {}): AiBggMat
     bggId: 296354,
     matchedName: 'Rhino Hero: Firefighter',
     bggUrl: 'https://boardgamegeek.com/boardgame/296354',
-    bggImageUrl: 'https://cf.geekdo-images.com/firefighter.jpg',
+    bggImageUrl: null,
     nameAssessment: 'MATCH',
     coverAssessment: 'MATCH',
     confidence: 0.95,
@@ -19,7 +19,7 @@ function matchingDecision(overrides: Partial<AiBggMatchDecision> = {}): AiBggMat
 }
 
 describe('AI BGG matching canary', () => {
-  it('verifies the exact Bomberos production regression without database access', async () => {
+  it('accepts the exact Bomberos production regression without a diagnostic image URL', async () => {
     const findMatch = vi.fn().mockResolvedValue(matchingDecision());
 
     await expect(verifyAiBggMatchingCanary({ findMatch }, 'gpt-5.6-terra'))
@@ -54,10 +54,7 @@ describe('AI BGG matching canary', () => {
       reasoning: 'Wrong title.'
     }],
     ['an unavailable cover assessment', matchingDecision({ coverAssessment: 'UNAVAILABLE' })],
-    ['a conflicting cover assessment', matchingDecision({ coverAssessment: 'CONFLICT' })],
-    ['a missing BGG image URL', matchingDecision({ bggImageUrl: null })],
-    ['a blank BGG image URL', matchingDecision({ bggImageUrl: '   ' })],
-    ['a non-BGG image URL', matchingDecision({ bggImageUrl: 'https://store.example/firefighter.jpg' })]
+    ['a conflicting cover assessment', matchingDecision({ coverAssessment: 'CONFLICT' })]
   ])('fails closed for %s', async (_label, decision) => {
     await expect(verifyAiBggMatchingCanary({ findMatch: async () => decision }, 'gpt-5.6-terra'))
       .rejects.toThrow('AI BGG canary expected BGG ID 296354.');

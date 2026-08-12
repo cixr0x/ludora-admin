@@ -503,7 +503,9 @@ fi
 
 The canary calls only the loopback AI BGG matcher with the fixed Bomberos En
 Accion regression fixture. It does not import, cache, link, or write store
-items, and it does not use database commands. The BGG output must be exactly
+items, and it does not use database commands. Acceptance requires BGG ID
+`296354` and `coverAssessment=MATCH`; `bggImageUrl` may be null because it is
+diagnostic evidence, not the match decision. The CLI output must be exactly
 `{"status":"ok","bggId":296354}` before the second isolation gate runs. If
 the admin-service directory or active-service check fails, the explicit guards
 stop both services and exit before either canary without relying on caller shell

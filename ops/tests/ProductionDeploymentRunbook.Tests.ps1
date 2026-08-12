@@ -661,3 +661,14 @@ Describe 'CodexAPI production runbook contract' {
         $runbook | Should Not Match 'codexapi-deploy\.mjs|deployment-journal|/opt/ludora/releases|immutable release'
     }
 }
+
+Describe 'AI BGG production canary runbook contract' {
+    $routine = Get-RunbookSection `
+        -StartHeading '## Routine Codex API Deployment' `
+        -EndHeading '## Full VM Bootstrap'
+
+    It 'requires the fixed BGG identity and matching cover assessment without an image URL gate' {
+        $routine | Should Match '(?s)fixed Bomberos En\s+Accion regression fixture.*BGG ID\s+`296354`.*`coverAssessment=MATCH`'
+        $routine | Should Not Match '(?is)requires?\s+(?:a\s+)?public\s+(?:Geekdo|BGG)\s+image URL'
+    }
+}
