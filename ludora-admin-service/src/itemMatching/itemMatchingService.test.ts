@@ -98,6 +98,86 @@ describe('item matching service', () => {
     expect(importer.importBggId).toHaveBeenCalledWith(377061);
   });
 
+  it('uses an accepted fresh BGG result before AI', async () => {
+    const updates: RecordedQuery[] = [];
+    const ai = aiService(null);
+    const cache = matchCache({
+      cacheHit: true,
+      matches: [{ item: bggSearchItem(999, 'Coffee Rush: Expansion', 2024), verifiedByAi: false }]
+    });
+    const freshThing = bggThingDetails({
+      bggId: 377061,
+      name: 'Coffee Rush',
+      yearPublished: 2023
+    });
+    const bggClient = clientWithFreshSearch(
+      [bggSearchItem(377061, 'Coffee Rush', 2023)],
+      new Map([[377061, freshThing]])
+    );
+    const importer = itemImporter(88);
+    const database = matchingDatabase(storeItemCandidate({ title: 'Coffee Rush' }), [], {
+      onStoreItemUpdate: (query) => updates.push(query)
+    });
+
+    await createItemMatchingService(database, dependencies({ ai, bggClient, cache, importer }))
+      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(bggClient.searchFresh).toHaveBeenCalledOnce();
+    expect(bggClient.searchFresh).toHaveBeenCalledWith('Coffee Rush');
+    expect(bggClient.search).not.toHaveBeenCalled();
+    expect(ai.findMatch).not.toHaveBeenCalled();
+    expect(importer.importBggId).toHaveBeenCalledWith(377061);
+    expect(linkUpdate(updates)?.params?.slice(0, 4)).toEqual([88, 'BGG', 377061, 'Coffee Rush']);
+  });
+
+  it('continues to AI when fresh BGG results stay below the deterministic threshold', async () => {
+    const ai = aiService(aiMatchFound());
+    const bggClient = clientWithFreshSearch(
+      [bggSearchItem(999, 'War Ring Card Game', 2010)],
+      new Map([
+        [999, bggThingDetails({ bggId: 999, name: 'War Ring Card Game', type: 'boardgame' })],
+        [115746, bggThingDetails()]
+      ])
+    );
+
+    await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ title: 'La Guerra del Anillo' })),
+      dependencies({ ai, bggClient, cache: matchCache(), importer: itemImporter(88) })
+    ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(bggClient.searchFresh).toHaveBeenCalledWith('La Guerra del Anillo');
+    expect(ai.findMatch).toHaveBeenCalledOnce();
+  });
+
+  it('continues to AI when fresh BGG search fails', async () => {
+    const ai = aiService(aiMatchFound());
+    const bggClient = clientWithFreshSearch([], new Map([[115746, bggThingDetails()]]));
+    vi.mocked(bggClient.searchFresh!).mockRejectedValueOnce(new Error('BGG temporarily unavailable'));
+
+    await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ title: 'La Guerra del Anillo' })),
+      dependencies({ ai, bggClient, cache: matchCache(), importer: itemImporter(88) })
+    ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(ai.findMatch).toHaveBeenCalledOnce();
+  });
+
+  it('continues to AI without using cached search when searchFresh is unavailable', async () => {
+    const ai = aiService(aiMatchFound());
+    const bggClient: BggClient = {
+      fetchThing: vi.fn().mockResolvedValue({ details: bggThingDetails(), rawXml: '<items />' }),
+      search: vi.fn().mockRejectedValue(new Error('Cached search must remain unused'))
+    };
+
+    await createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ title: 'La Guerra del Anillo' })),
+      dependencies({ ai, bggClient, cache: matchCache(), importer: itemImporter(88) })
+    ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(bggClient.search).not.toHaveBeenCalled();
+    expect(ai.findMatch).toHaveBeenCalledOnce();
+  });
+
   it('validates, caches, imports, and links an AI match after no accepted cache result', async () => {
     const updates: RecordedQuery[] = [];
     const database = matchingDatabase(
@@ -486,7 +566,9 @@ describe('item matching service', () => {
       { onStoreItemUpdate: (query) => updates.push(query) }
     );
     const bggClient = clientWithThing(null);
-    vi.mocked(bggClient.searchFresh!).mockResolvedValueOnce([]);
+    vi.mocked(bggClient.searchFresh!)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
 
     await createItemMatchingService(database, dependencies({
       ai: aiService(aiMatchFound()),
@@ -519,9 +601,9 @@ describe('item matching service', () => {
         rawXml: '<items />'
       })),
       search: vi.fn().mockRejectedValue(new Error('Cached search must not resolve an AI identity')),
-      searchFresh: vi.fn().mockResolvedValue([
-        bggSearchItem(377061, 'Coffee Rush', 2023)
-      ])
+      searchFresh: vi.fn()
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([bggSearchItem(377061, 'Coffee Rush', 2023)])
     };
     const database = matchingDatabase(
       storeItemCandidate({ title: 'Coffee Rush' }),
@@ -781,6 +863,8 @@ describe('item matching service', () => {
       'item_matcher.bgg_match.start',
       'item_matcher.bgg_cache.start',
       'item_matcher.bgg_cache.completed',
+      'item_matcher.bgg_live_search.start',
+      'item_matcher.bgg_live_search.failed',
       'item_matcher.ai_match.start',
       'item_matcher.ai_match.completed',
       'item_matcher.ai_match.validation.completed',
@@ -791,7 +875,7 @@ describe('item matching service', () => {
       'item_matcher.link.completed',
       'item_matcher.confirm.completed'
     ]);
-    expect(events[9]?.fields).toMatchObject({
+    expect(events[11]?.fields).toMatchObject({
       bgg_id: 115746,
       candidate_id: 42,
       confidence: 0.83,
@@ -800,9 +884,9 @@ describe('item matching service', () => {
       matched_name: 'War of the Ring: Second Edition',
       name_assessment: 'MATCH'
     });
-    expect(events[10]?.fields).toMatchObject({ bgg_id: 115746, candidate_id: 42, validated: true });
-    expect(events[11]?.fields).toMatchObject({ bgg_id: 115746, candidate_id: 42, query_count: 2 });
-    expect(events[14]?.fields).toMatchObject({ bgg_id: 115746, item_id: 88 });
+    expect(events[12]?.fields).toMatchObject({ bgg_id: 115746, candidate_id: 42, validated: true });
+    expect(events[13]?.fields).toMatchObject({ bgg_id: 115746, candidate_id: 42, query_count: 2 });
+    expect(events[16]?.fields).toMatchObject({ bgg_id: 115746, item_id: 88 });
   });
 
   it('logs AI no-match and failure events', async () => {
@@ -1021,6 +1105,20 @@ function clientWithThing(details: BggThingDetails | null): BggClient {
     fetchThing: vi.fn().mockResolvedValue(details ? { details, rawXml: '<items />' } : null),
     search: vi.fn().mockRejectedValue(new Error('Live BGG search must not be used by item matching')),
     searchFresh: vi.fn().mockRejectedValue(new Error('Fresh BGG search must not be used by item matching'))
+  };
+}
+
+function clientWithFreshSearch(
+  searchResults: BggSearchItem[],
+  things: Map<number, BggThingDetails | null>
+): BggClient {
+  return {
+    fetchThing: vi.fn(async (bggId) => {
+      const details = things.get(bggId) ?? null;
+      return details ? { details, rawXml: '<items />' } : null;
+    }),
+    search: vi.fn().mockRejectedValue(new Error('Cached BGG search must not be used by live matching')),
+    searchFresh: vi.fn().mockResolvedValue(searchResults)
   };
 }
 

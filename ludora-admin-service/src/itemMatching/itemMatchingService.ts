@@ -6,6 +6,7 @@ import type { BggSearchItem } from '../bgg/bggParser.js';
 import type { Database } from '../db.js';
 import { nullTraceLogger, type TraceLogger } from '../trace.js';
 import {
+  normalizeTitle,
   normalizeTitleVariants,
   scoreBggThing,
   scoreLocalItem,
@@ -89,6 +90,7 @@ const matchCandidateSelect = `
 `;
 
 const AUTO_MATCH_SCORE_THRESHOLD = 0.9;
+const MAX_LIVE_BGG_THING_FETCHES = 10;
 
 export type ItemMatchingDependencies = {
   aiBggMatchingService?: AiBggMatchingService;
@@ -585,8 +587,132 @@ async function generateBggMatches(
     return cacheMatches;
   }
 
+  const liveMatches = await generateLiveBggMatches(candidate, dependencies.bggClient, traceLogger);
+  const deterministicMatches = mergeMatchesByBggId([...cacheMatches, ...liveMatches]);
+  if (hasAcceptedMatch(deterministicMatches)) {
+    return deterministicMatches;
+  }
+
   const aiMatch = await generateAiBggMatch(candidate, dependencies, traceLogger);
-  return aiMatch ? mergeMatchesByBggId([...cacheMatches, aiMatch]) : cacheMatches;
+  return aiMatch
+    ? mergeMatchesByBggId([...deterministicMatches, aiMatch])
+    : deterministicMatches;
+}
+
+function prioritizeLiveBggSearchResults(
+  searchResults: BggSearchItem[],
+  candidateTitle: string
+): BggSearchItem[] {
+  const exactTitles = new Set(normalizeTitleVariants(candidateTitle));
+  const seen = new Set<number>();
+  const exact: BggSearchItem[] = [];
+  const remaining: BggSearchItem[] = [];
+
+  for (const result of searchResults) {
+    if (!Number.isInteger(result.bggId) || result.bggId <= 0 || seen.has(result.bggId)) {
+      continue;
+    }
+    seen.add(result.bggId);
+    (exactTitles.has(normalizeTitle(result.name)) ? exact : remaining).push(result);
+  }
+
+  return [...exact, ...remaining].slice(0, MAX_LIVE_BGG_THING_FETCHES);
+}
+
+async function generateLiveBggMatches(
+  candidate: DiscoveryItemCandidateRow,
+  bggClient: BggClient | undefined,
+  traceLogger: TraceLogger
+): Promise<GeneratedMatchCandidate[]> {
+  traceLog(traceLogger, 'item_matcher.bgg_live_search.start', {
+    candidate_id: candidate.id,
+    query: candidate.title
+  });
+
+  if (!bggClient?.searchFresh) {
+    traceLog(traceLogger, 'item_matcher.bgg_live_search.failed', {
+      candidate_id: candidate.id,
+      error: 'Fresh BGG search is not configured',
+      stage: 'search'
+    });
+    return [];
+  }
+
+  let searchResults: BggSearchItem[];
+  try {
+    searchResults = await bggClient.searchFresh(candidate.title);
+  } catch {
+    traceLog(traceLogger, 'item_matcher.bgg_live_search.failed', {
+      candidate_id: candidate.id,
+      error: 'Live BGG search failed',
+      stage: 'search'
+    });
+    return [];
+  }
+
+  const selected = prioritizeLiveBggSearchResults(searchResults, candidate.title);
+  const matches: GeneratedMatchCandidate[] = [];
+
+  for (const searchResult of selected) {
+    traceLog(traceLogger, 'item_matcher.bgg_thing_fetch.start', {
+      bgg_id: searchResult.bggId,
+      candidate_id: candidate.id,
+      source: 'live_bgg_search'
+    });
+
+    let thing: Awaited<ReturnType<BggClient['fetchThing']>>;
+    try {
+      thing = await bggClient.fetchThing(searchResult.bggId);
+    } catch {
+      traceLog(traceLogger, 'item_matcher.bgg_live_search.failed', {
+        bgg_id: searchResult.bggId,
+        candidate_id: candidate.id,
+        error: 'BGG Thing fetch failed',
+        stage: 'thing_fetch'
+      });
+      return matches;
+    }
+
+    traceLog(traceLogger, 'item_matcher.bgg_thing_fetch.completed', {
+      bgg_id: searchResult.bggId,
+      candidate_id: candidate.id,
+      found: thing !== null,
+      source: 'live_bgg_search'
+    });
+    if (!thing) {
+      continue;
+    }
+
+    const score = scoreBggThing(discoveryCandidateForMatch(candidate), thing.details);
+    const match: GeneratedMatchCandidate = {
+      accepted: score.matchScore >= AUTO_MATCH_SCORE_THRESHOLD,
+      bggId: thing.details.bggId,
+      itemId: null,
+      matchReasons: score.matchReasons,
+      matchScore: score.matchScore,
+      matchedName: thing.details.name,
+      rawPayload: {
+        search_result: searchResult,
+        source: 'live_bgg_search',
+        thing: thing.details
+      },
+      source: 'BGG'
+    };
+    matches.push(match);
+    if (match.accepted) {
+      break;
+    }
+  }
+
+  const accepted = bestAcceptedMatch(matches);
+  traceLog(traceLogger, 'item_matcher.bgg_live_search.completed', {
+    accepted_bgg_id: accepted?.bggId ?? null,
+    accepted_match: accepted !== null,
+    candidate_id: candidate.id,
+    evaluated_count: matches.length,
+    result_count: searchResults.length
+  });
+  return matches;
 }
 
 function generatedCacheMatch(
