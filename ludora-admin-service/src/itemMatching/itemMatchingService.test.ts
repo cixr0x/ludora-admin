@@ -245,6 +245,7 @@ describe('item matching service', () => {
   });
 
   it('continues to AI when fresh BGG search fails', async () => {
+    const events: TraceEvent[] = [];
     const ai = aiService(aiMatchFound());
     const bggClient = clientWithFreshSearch([], new Map([[115746, bggThingDetails()]]));
     vi.mocked(bggClient.searchFresh!).mockRejectedValueOnce(new Error('BGG temporarily unavailable'));
@@ -252,9 +253,18 @@ describe('item matching service', () => {
     await createItemMatchingService(
       matchingDatabase(storeItemCandidate({ title: 'La Guerra del Anillo' })),
       dependencies({ ai, bggClient, cache: matchCache(), importer: itemImporter(88) })
-    ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+    ).confirmBoardgameAndMatch?.(42, {
+      confirmationSource: 'automated',
+      traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
+    });
 
+    expect(bggClient.search).not.toHaveBeenCalled();
     expect(ai.findMatch).toHaveBeenCalledOnce();
+    expect(traceFields(events, 'item_matcher.bgg_live_search.failed')).toEqual({
+      candidate_id: 42,
+      error: 'Live BGG search failed',
+      stage: 'search'
+    });
   });
 
   it('continues to AI and traces a sanitized failure when a live Thing fetch fails', async () => {
@@ -285,6 +295,7 @@ describe('item matching service', () => {
   });
 
   it('continues to AI without using cached search when searchFresh is unavailable', async () => {
+    const events: TraceEvent[] = [];
     const ai = aiService(aiMatchFound());
     const bggClient: BggClient = {
       fetchThing: vi.fn().mockResolvedValue({ details: bggThingDetails(), rawXml: '<items />' }),
@@ -294,10 +305,18 @@ describe('item matching service', () => {
     await createItemMatchingService(
       matchingDatabase(storeItemCandidate({ title: 'La Guerra del Anillo' })),
       dependencies({ ai, bggClient, cache: matchCache(), importer: itemImporter(88) })
-    ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+    ).confirmBoardgameAndMatch?.(42, {
+      confirmationSource: 'automated',
+      traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
+    });
 
     expect(bggClient.search).not.toHaveBeenCalled();
     expect(ai.findMatch).toHaveBeenCalledOnce();
+    expect(traceFields(events, 'item_matcher.bgg_live_search.failed')).toEqual({
+      candidate_id: 42,
+      error: 'Fresh BGG search is not configured',
+      stage: 'search'
+    });
   });
 
   it('validates, caches, imports, and links an AI match after no accepted cache result', async () => {
@@ -1077,12 +1096,17 @@ describe('item matching service', () => {
       name_assessment: null
     });
     const eventNames = noMatchEvents.map(({ event }) => event);
-    expect(eventNames.indexOf('item_matcher.bgg_cache.completed')).toBeLessThan(
-      eventNames.indexOf('item_matcher.bgg_live_search.start')
-    );
-    expect(eventNames.indexOf('item_matcher.bgg_live_search.completed')).toBeLessThan(
-      eventNames.indexOf('item_matcher.ai_match.start')
-    );
+    const cacheCompletedIndex = eventNames.indexOf('item_matcher.bgg_cache.completed');
+    const liveSearchStartIndex = eventNames.indexOf('item_matcher.bgg_live_search.start');
+    const liveSearchCompletedIndex = eventNames.indexOf('item_matcher.bgg_live_search.completed');
+    const aiMatchStartIndex = eventNames.indexOf('item_matcher.ai_match.start');
+    expect(cacheCompletedIndex).toBeGreaterThanOrEqual(0);
+    expect(liveSearchStartIndex).toBeGreaterThanOrEqual(0);
+    expect(liveSearchCompletedIndex).toBeGreaterThanOrEqual(0);
+    expect(aiMatchStartIndex).toBeGreaterThanOrEqual(0);
+    expect(cacheCompletedIndex).toBeLessThan(liveSearchStartIndex);
+    expect(liveSearchStartIndex).toBeLessThan(liveSearchCompletedIndex);
+    expect(liveSearchCompletedIndex).toBeLessThan(aiMatchStartIndex);
   });
 
   it.each([
