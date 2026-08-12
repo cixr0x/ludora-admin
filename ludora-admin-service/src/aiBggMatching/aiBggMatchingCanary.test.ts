@@ -1,20 +1,26 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { verifyAiBggMatchingCanary } from './aiBggMatchingCanary.js';
+import type { AiBggMatchDecision } from './aiBggMatchingService.js';
+
+function matchingDecision(overrides: Partial<AiBggMatchDecision> = {}): AiBggMatchDecision {
+  return {
+    matchFound: true,
+    bggId: 296354,
+    matchedName: 'Rhino Hero: Firefighter',
+    bggUrl: 'https://boardgamegeek.com/boardgame/296354',
+    bggImageUrl: 'https://cf.geekdo-images.com/firefighter.jpg',
+    nameAssessment: 'MATCH',
+    coverAssessment: 'MATCH',
+    confidence: 0.95,
+    reasoning: 'Spanish HABA product and cover match.',
+    ...overrides
+  };
+}
 
 describe('AI BGG matching canary', () => {
   it('verifies the exact Bomberos production regression without database access', async () => {
-    const findMatch = vi.fn().mockResolvedValue({
-      matchFound: true,
-      bggId: 296354,
-      matchedName: 'Rhino Hero: Firefighter',
-      bggUrl: 'https://boardgamegeek.com/boardgame/296354',
-      bggImageUrl: 'https://cf.geekdo-images.com/firefighter.jpg',
-      nameAssessment: 'MATCH',
-      coverAssessment: 'MATCH',
-      confidence: 0.95,
-      reasoning: 'Spanish HABA product and cover match.'
-    });
+    const findMatch = vi.fn().mockResolvedValue(matchingDecision());
 
     await expect(verifyAiBggMatchingCanary({ findMatch }, 'gpt-5.6-terra'))
       .resolves.toMatchObject({ bggId: 296354, matchFound: true });
@@ -46,7 +52,12 @@ describe('AI BGG matching canary', () => {
       coverAssessment: 'MATCH' as const,
       confidence: 0.95,
       reasoning: 'Wrong title.'
-    }]
+    }],
+    ['an unavailable cover assessment', matchingDecision({ coverAssessment: 'UNAVAILABLE' })],
+    ['a conflicting cover assessment', matchingDecision({ coverAssessment: 'CONFLICT' })],
+    ['a missing BGG image URL', matchingDecision({ bggImageUrl: null })],
+    ['a blank BGG image URL', matchingDecision({ bggImageUrl: '   ' })],
+    ['a non-BGG image URL', matchingDecision({ bggImageUrl: 'https://store.example/firefighter.jpg' })]
   ])('fails closed for %s', async (_label, decision) => {
     await expect(verifyAiBggMatchingCanary({ findMatch: async () => decision }, 'gpt-5.6-terra'))
       .rejects.toThrow('AI BGG canary expected BGG ID 296354.');

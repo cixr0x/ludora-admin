@@ -96,8 +96,37 @@ Describe 'CodexAPI production runbook contract' {
         $recovery | Should Match 'ReadOnlyPaths=/opt/ludora/codexapi'
         $recovery | Should Match 'InaccessiblePaths=.*opt/ludora/ludora-admin'
         $recovery | Should Match 'InaccessiblePaths=.*home'
-        $recovery | Should Match 'cmp -s deploy/codexapi-runtime\.config\.toml /var/lib/codexapi/home/codexapi-runtime\.config\.toml'
-        $recovery | Should Match "stat -c '%a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
+        $recovery | Should Match 'cmp -s deploy/codexapi\.service /etc/systemd/system/codexapi\.service'
+    }
+
+    It 'supports the known first-rollout recovery revision without a runtime profile' {
+        $recovery | Should Match '5332ab156fa37350a3addd2b385692264fc17c3c'
+        $recovery | Should Match 'codexapi-constrained-v1'
+        $recovery | Should Not Match '(?m)^test -f deploy/codexapi-runtime\.config\.toml$'
+
+        $profileIf = $recovery.IndexOf('if test -f deploy/codexapi-runtime.config.toml; then', [StringComparison]::Ordinal)
+        $profileElse = $recovery.IndexOf('else', [StringComparison]::Ordinal)
+        $noProfileReference = $recovery.IndexOf("! grep -Fq 'codexapi-runtime.config.toml' deploy/codexapi.service", [StringComparison]::Ordinal)
+        $profileRemove = $recovery.IndexOf('sudo rm -f /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
+        $profileAbsent = $recovery.IndexOf('test ! -e /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
+
+        ($profileIf -ge 0 -and $profileElse -gt $profileIf -and $noProfileReference -gt $profileElse -and
+            $profileRemove -gt $noProfileReference -and $profileAbsent -gt $profileRemove) | Should Be $true
+    }
+
+    It 'installs and verifies the selected revision runtime profile when present' {
+        $profileIf = $recovery.IndexOf('if test -f deploy/codexapi-runtime.config.toml; then', [StringComparison]::Ordinal)
+        $preinstallContract = $recovery.IndexOf("grep -Fx 'ExecStartPre=/usr/bin/install -m 0400 /opt/ludora/codexapi/deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml' deploy/codexapi.service", [StringComparison]::Ordinal)
+        $profileInstall = $recovery.IndexOf('sudo install -o codexapi -g codexapi -m 0400', [StringComparison]::Ordinal)
+        $profileInstallPath = $profileInstall + $recovery.Substring($profileInstall).IndexOf('deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
+        $profilePresent = $recovery.IndexOf('CODEXAPI_RUNTIME_PROFILE_PRESENT=true', [StringComparison]::Ordinal)
+        $conditionalVerification = $recovery.IndexOf('if test "$CODEXAPI_RUNTIME_PROFILE_PRESENT" = true; then', [StringComparison]::Ordinal)
+        $profileCompare = $recovery.IndexOf('cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
+        $profileMode = $recovery.IndexOf("stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml", [StringComparison]::Ordinal)
+
+        ($profileIf -ge 0 -and $preinstallContract -gt $profileIf -and $profileInstall -gt $preinstallContract -and
+            $profileInstallPath -gt $profileInstall -and $profilePresent -gt $profileInstallPath -and $conditionalVerification -gt $profilePresent -and
+            $profileCompare -gt $conditionalVerification -and $profileMode -gt $profileCompare) | Should Be $true
     }
 
     It 'orders recovery through the selected revision unit/profile and fail-closed verification' {

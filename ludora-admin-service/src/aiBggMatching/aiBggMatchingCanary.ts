@@ -12,9 +12,30 @@ export async function verifyAiBggMatchingCanary(
 ): Promise<AiBggMatchDecision> {
   const decision = await client.findMatch(BOMBEROS_REQUEST, { model });
 
-  if (!decision.matchFound || decision.bggId !== EXPECTED_BGG_ID) {
+  if (
+    !decision.matchFound ||
+    decision.bggId !== EXPECTED_BGG_ID ||
+    decision.coverAssessment !== 'MATCH' ||
+    !isPublicBggImageUrl(decision.bggImageUrl)
+  ) {
     throw new Error('AI BGG canary expected BGG ID 296354.');
   }
 
   return decision;
+}
+
+function isPublicBggImageUrl(value: string | null): boolean {
+  if (!value?.trim()) {
+    return false;
+  }
+
+  try {
+    const url = new URL(value);
+    return url.protocol === 'https:' && (
+      url.hostname === 'geekdo-images.com' ||
+      url.hostname.endsWith('.geekdo-images.com')
+    );
+  } catch {
+    return false;
+  }
 }

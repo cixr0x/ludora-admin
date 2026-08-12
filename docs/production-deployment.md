@@ -812,6 +812,18 @@ If a CodexAPI deployment fails, keep the service stopped and explicitly rebuild
 the full previous commit SHA printed before deployment. This is a manual,
 operator-selected recovery; it is not an automatic rollback mechanism.
 
+For the first capable-isolated rollout, the recorded previous revision and its
+reviewed health policy are:
+
+```text
+CODEXAPI_PREVIOUS_COMMIT=5332ab156fa37350a3addd2b385692264fc17c3c
+CODEXAPI_PREVIOUS_CAPABILITY_POLICY=codexapi-constrained-v1
+```
+
+That historical revision has a checked-in systemd unit but no checked-in
+runtime profile. The recovery procedure below handles both that layout and
+newer revisions that include the profile.
+
 ```bash
 set -euo pipefail
 cd /opt/ludora/codexapi
@@ -829,7 +841,6 @@ sudo systemctl stop codexapi.service
 git checkout --detach "$CODEXAPI_PREVIOUS_COMMIT"
 test "$(git rev-parse HEAD)" = "$CODEXAPI_PREVIOUS_COMMIT"
 test -f deploy/codexapi.service
-test -f deploy/codexapi-runtime.config.toml
 npm ci
 npm test
 npm run build
@@ -837,8 +848,19 @@ test -z "$(git status --porcelain)"
 
 sudo install -o root -g root -m 0644 \
   deploy/codexapi.service /etc/systemd/system/codexapi.service
-sudo install -o codexapi -g codexapi -m 0400 \
-  deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml
+
+CODEXAPI_RUNTIME_PROFILE_PRESENT=false
+if test -f deploy/codexapi-runtime.config.toml; then
+  grep -Fx 'ExecStartPre=/usr/bin/install -m 0400 /opt/ludora/codexapi/deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml' deploy/codexapi.service
+  sudo install -o codexapi -g codexapi -m 0400 \
+    deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml
+  CODEXAPI_RUNTIME_PROFILE_PRESENT=true
+else
+  ! grep -Fq 'codexapi-runtime.config.toml' deploy/codexapi.service
+  sudo rm -f /var/lib/codexapi/home/codexapi-runtime.config.toml
+  test ! -e /var/lib/codexapi/home/codexapi-runtime.config.toml
+fi
+
 sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/codexapi.service
 
@@ -854,17 +876,23 @@ verify_codexapi_boundary() {
   local unit
   unit="$(sudo systemctl show codexapi.service \
     --property=User --property=Group --property=ProtectSystem --property=ProtectHome \
-    --property=CapabilityBoundingSet --property=ReadOnlyPaths --property=ReadWritePaths --property=InaccessiblePaths)" &&
-    grep -Fx 'User=codexapi' <<<"$unit" &&
-    grep -Fx 'Group=codexapi' <<<"$unit" &&
-    grep -Fx 'ProtectSystem=strict' <<<"$unit" &&
-    grep -Fx 'ProtectHome=yes' <<<"$unit" &&
-    grep -Fx 'ReadOnlyPaths=/opt/ludora/codexapi' <<<"$unit" &&
-    grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" &&
-    grep -Eq '^InaccessiblePaths=.*(/opt/ludora/ludora-admin)( |$)' <<<"$unit" &&
-    grep -Eq '^InaccessiblePaths=.*(/home)(/| |$)' <<<"$unit" &&
+    --property=CapabilityBoundingSet --property=ReadOnlyPaths --property=ReadWritePaths --property=InaccessiblePaths)" || return 1
+  grep -Fx 'User=codexapi' <<<"$unit" || return 1
+  grep -Fx 'Group=codexapi' <<<"$unit" || return 1
+  grep -Fx 'ProtectSystem=strict' <<<"$unit" || return 1
+  grep -Fx 'ProtectHome=yes' <<<"$unit" || return 1
+  grep -Fx 'ReadOnlyPaths=/opt/ludora/codexapi' <<<"$unit" || return 1
+  grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" || return 1
+  grep -Eq '^InaccessiblePaths=.*(/opt/ludora/ludora-admin)( |$)' <<<"$unit" || return 1
+  grep -Eq '^InaccessiblePaths=.*(/home)(/| |$)' <<<"$unit" || return 1
+  cmp -s deploy/codexapi.service /etc/systemd/system/codexapi.service || return 1
+
+  if test "$CODEXAPI_RUNTIME_PROFILE_PRESENT" = true; then
     cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
-    test "$(stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 400
+      test "$(stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 400
+  else
+    test ! -e /var/lib/codexapi/home/codexapi-runtime.config.toml
+  fi
 }
 
 sudo systemctl start codexapi.service
@@ -878,13 +906,17 @@ if ! verify_codexapi_boundary; then
 fi
 ```
 
-The selected commit supplies both the installed unit and runtime profile. Set
-`CODEXAPI_PREVIOUS_CAPABILITY_POLICY` to that revision's reviewed health policy
-(for example, an older constrained revision may not report the current capable
-policy). Recovery verifies the dedicated user/group, loopback listener, strict
-system/home protection, read-only CodexAPI checkout, persistent writable
-runtime path, and inaccessible admin/home paths without assuming newer exact
-path lists. A failed recovery verification also leaves the service stopped.
+The selected commit always supplies the installed unit and may supply a runtime
+profile. Set `CODEXAPI_PREVIOUS_CAPABILITY_POLICY` to that revision's reviewed
+health policy. A profile-bearing revision must contain the checked-in
+`ExecStartPre` installation contract and is verified byte-for-byte at mode
+`0400`. For a revision without a profile, recovery rejects a unit that refers
+to one and removes any newer installed profile before startup. Recovery always
+verifies the installed unit against the detached revision plus the dedicated
+user/group, loopback listener, strict system/home protection, read-only
+CodexAPI checkout, persistent writable runtime path, and inaccessible
+admin/home paths without assuming newer exact path lists. A failed recovery
+verification also leaves the service stopped.
 The checkout is intentionally detached at the recovered commit; the next
 approved forward deployment checks out `main` and fast-forwards it to an exact
 approved `origin/main` revision.
