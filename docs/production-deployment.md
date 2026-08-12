@@ -430,8 +430,8 @@ verify_codexapi_boundary() {
     grep -Fx 'ProtectHome=yes' <<<"$unit" &&
     grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" &&
     grep -Fx 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root' <<<"$unit" &&
-    cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
-    test "$(stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 400
+    sudo cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
+    test "$(sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 'codexapi:codexapi 400'
 }
 
 sudo systemctl start codexapi.service
@@ -953,8 +953,8 @@ verify_codexapi_boundary() {
   cmp -s deploy/codexapi.service /etc/systemd/system/codexapi.service || return 1
 
   if test "$CODEXAPI_RUNTIME_PROFILE_PRESENT" = true; then
-    cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
-      test "$(stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 400
+    sudo cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
+      test "$(sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 'codexapi:codexapi 400'
   else
     test ! -e /var/lib/codexapi/home/codexapi-runtime.config.toml
   fi

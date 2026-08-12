@@ -193,6 +193,143 @@ printf 'GUARDED_CALLER_REACHED=yes\n'
     }
 }
 
+function Get-CodexApiBoundaryFunction {
+    param([Parameter(Mandatory = $true)][string]$Section)
+
+    $match = [regex]::Match(
+        $Section,
+        '(?s)verify_codexapi_boundary\(\) \{.*?^\}',
+        [System.Text.RegularExpressions.RegexOptions]::Multiline
+    )
+    if (-not $match.Success) {
+        throw 'Missing verify_codexapi_boundary function.'
+    }
+
+    $match.Value
+}
+
+function Invoke-CodexApiProfileBoundaryHarness {
+    param(
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][bool]$RuntimeProfilePresent
+    )
+
+    $gitBash = 'C:\Program Files\Git\bin\bash.exe'
+    if (-not (Test-Path -LiteralPath $gitBash)) {
+        throw "Git Bash is required for boundary tests: $gitBash"
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ludora-codexapi-boundary-{0}" -f [guid]::NewGuid())
+    $stubDirectory = Join-Path $tempRoot 'bin'
+    [System.IO.Directory]::CreateDirectory($stubDirectory) | Out-Null
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+    $functionPath = Join-Path $tempRoot 'boundary-function.sh'
+    $harnessPath = Join-Path $tempRoot 'run-boundary.sh'
+    $tracePath = Join-Path $tempRoot 'trace.log'
+    [System.IO.File]::WriteAllText($functionPath, (Get-CodexApiBoundaryFunction -Section $Section), $utf8)
+
+    $stubs = @{
+        'sudo' = @'
+#!/usr/bin/env bash
+AS_SUDO=true "$@"
+'@
+        'systemctl' = @'
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "$TRACE_FILE"
+cat <<'UNIT'
+User=codexapi
+Group=codexapi
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/opt/ludora/codexapi
+ReadWritePaths=/var/lib/codexapi
+InaccessiblePaths=/opt/ludora/ludora-admin /home /root
+UNIT
+'@
+        'grep' = @'
+#!/usr/bin/env bash
+exec /usr/bin/grep "$@"
+'@
+        'cmp' = @'
+#!/usr/bin/env bash
+if [[ "$*" == *codexapi-runtime.config.toml* ]]; then
+  if [ "${AS_SUDO:-}" != true ]; then
+    printf 'cmp: Permission denied\n' >&2
+    exit 2
+  fi
+  printf 'sudo cmp %s\n' "$*" >> "$TRACE_FILE"
+  exit 0
+fi
+printf 'direct cmp %s\n' "$*" >> "$TRACE_FILE"
+exit 0
+'@
+        'stat' = @'
+#!/usr/bin/env bash
+if [ "${AS_SUDO:-}" != true ]; then
+  printf 'stat: Permission denied\n' >&2
+  exit 1
+fi
+printf 'sudo stat %s\n' "$*" >> "$TRACE_FILE"
+printf 'codexapi:codexapi 400\n'
+'@
+    }
+    foreach ($stub in $stubs.GetEnumerator()) {
+        [System.IO.File]::WriteAllText((Join-Path $stubDirectory $stub.Key), $stub.Value, $utf8)
+    }
+
+    $bashStubDirectory = ConvertTo-GitBashPath -Path $stubDirectory
+    $bashFunctionPath = ConvertTo-GitBashPath -Path $functionPath
+    [System.IO.File]::WriteAllText($harnessPath, @'
+#!/usr/bin/env bash
+set -euo pipefail
+PATH="$STUB_DIRECTORY:$PATH"
+source "$BOUNDARY_FUNCTION"
+CODEXAPI_RUNTIME_PROFILE_PRESENT="$RUNTIME_PROFILE_PRESENT"
+if ! verify_codexapi_boundary; then
+  printf 'BOUNDARY_RESULT=nonzero\n'
+else
+  printf 'BOUNDARY_RESULT=zero\n'
+fi
+printf 'GUARDED_CALLER_REACHED=yes\n'
+'@, $utf8)
+    $bashHarnessPath = ConvertTo-GitBashPath -Path $harnessPath
+    $environment = @{
+        'STUB_DIRECTORY' = $bashStubDirectory
+        'BOUNDARY_FUNCTION' = $bashFunctionPath
+        'TRACE_FILE' = (ConvertTo-GitBashPath -Path $tracePath)
+        'RUNTIME_PROFILE_PRESENT' = $RuntimeProfilePresent.ToString().ToLowerInvariant()
+    }
+    $previousEnvironment = @{}
+    try {
+        foreach ($entry in $environment.GetEnumerator()) {
+            $previousEnvironment[$entry.Key] = [System.Environment]::GetEnvironmentVariable($entry.Key, 'Process')
+            [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+        }
+        & $gitBash -c 'chmod +x "$1"/*' bash $bashStubDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not make Git Bash boundary stubs executable.'
+        }
+        $output = (& $gitBash --noprofile --norc $bashHarnessPath 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        foreach ($entry in $previousEnvironment.GetEnumerator()) {
+            [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+        }
+    }
+
+    try {
+        [pscustomobject]@{
+            ExitCode = $exitCode
+            Output = $output
+            Trace = if (Test-Path -LiteralPath $tracePath) { [System.IO.File]::ReadAllLines($tracePath) } else { @() }
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Describe 'CodexAPI production runbook contract' {
     $routine = Get-RunbookSection `
         -StartHeading '## Routine Codex API Deployment' `
@@ -227,8 +364,32 @@ Describe 'CodexAPI production runbook contract' {
         $routine | Should Not Match 'ProtectHome=true'
         $routine | Should Match 'ReadWritePaths=/var/lib/codexapi'
         $routine | Should Match 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root'
-        $routine | Should Match 'cmp -s deploy/codexapi-runtime\.config\.toml /var/lib/codexapi/home/codexapi-runtime\.config\.toml'
-        $routine | Should Match "stat -c '%a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
+        $routine | Should Match 'sudo cmp -s deploy/codexapi-runtime\.config\.toml /var/lib/codexapi/home/codexapi-runtime\.config\.toml'
+        $routine | Should Match "sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
+    }
+
+    It 'verifies readable runtime profiles through sudo with exact owner and mode' {
+        foreach ($section in @($routine, $recovery)) {
+            $boundary = Get-CodexApiBoundaryFunction -Section $section
+            $boundary | Should Match 'sudo cmp -s deploy/codexapi-runtime\.config\.toml /var/lib/codexapi/home/codexapi-runtime\.config\.toml'
+            $boundary | Should Match "sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
+            $boundary | Should Match 'codexapi:codexapi 400'
+            $boundary | Should Not Match '(?m)^\s*cmp -s deploy/codexapi-runtime\.config\.toml'
+            $boundary | Should Not Match "(?m)^\s*test .*stat -c '%a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
+        }
+    }
+
+    It 'executes profile boundary checks as sudo without exposing profile contents' {
+        foreach ($section in @($routine, $recovery)) {
+            $result = Invoke-CodexApiProfileBoundaryHarness -Section $section -RuntimeProfilePresent $true
+
+            $result.ExitCode | Should Be 0
+            $result.Output | Should Match 'BOUNDARY_RESULT=zero'
+            $result.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
+            $result.Output | Should Not Match '(?i)profile|secret|token'
+            ($result.Trace -contains 'sudo cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml') | Should Be $true
+            @($result.Trace | Where-Object { $_ -match '^sudo stat -c %U:%G %a /var/lib/codexapi/home/codexapi-runtime\.config\.toml$' }).Count | Should Be 1
+        }
     }
 
     It 'retries the routine readiness function until the third valid health contract before listener checks' {
@@ -403,8 +564,8 @@ Describe 'CodexAPI production runbook contract' {
         $profileInstallPath = $profileInstall + $recovery.Substring($profileInstall).IndexOf('deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
         $profilePresent = $recovery.IndexOf('CODEXAPI_RUNTIME_PROFILE_PRESENT=true', [StringComparison]::Ordinal)
         $conditionalVerification = $recovery.IndexOf('if test "$CODEXAPI_RUNTIME_PROFILE_PRESENT" = true; then', [StringComparison]::Ordinal)
-        $profileCompare = $recovery.IndexOf('cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
-        $profileMode = $recovery.IndexOf("stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml", [StringComparison]::Ordinal)
+        $profileCompare = $recovery.IndexOf('sudo cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
+        $profileMode = $recovery.IndexOf("sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime.config.toml", [StringComparison]::Ordinal)
 
         ($profileIf -ge 0 -and $preinstallContract -gt $profileIf -and $profileInstall -gt $preinstallContract -and
             $profileInstallPath -gt $profileInstall -and $profilePresent -gt $profileInstallPath -and $conditionalVerification -gt $profilePresent -and
