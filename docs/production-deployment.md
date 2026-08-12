@@ -465,8 +465,14 @@ leaves CodexAPI stopped before any admin-service deployment.
 After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure. Target its exact full SHA. Once that revision is active, run the database-free regression canary and final live isolation gate:
 
 ```bash
-cd /opt/ludora/ludora-admin/ludora-admin-service
-sudo systemctl is-active --quiet ludora-admin-service.service
+if ! cd /opt/ludora/ludora-admin/ludora-admin-service; then
+  sudo systemctl stop ludora-admin-service.service codexapi.service
+  exit 1
+fi
+if ! sudo systemctl is-active --quiet ludora-admin-service.service; then
+  sudo systemctl stop ludora-admin-service.service codexapi.service
+  exit 1
+fi
 
 AI_BGG_OUTPUT=''
 if ! AI_BGG_OUTPUT="$(npm run --silent verify:ai-bgg 2>/dev/null && printf '\036')" ||
@@ -491,8 +497,11 @@ The canary calls only the loopback AI BGG matcher with the fixed Bomberos En
 Accion regression fixture. It does not import, cache, link, or write store
 items, and it does not use database commands. The BGG output must be exactly
 `{"status":"ok","bggId":296354}` before the second isolation gate runs. If
-either post-admin gate fails, leave both services stopped and use the rollback
-procedures below; do not expose canary output, marker paths, or secrets.
+the admin-service directory or active-service check fails, the explicit guards
+stop both services and exit before either canary without relying on caller shell
+options. If either post-admin gate fails, leave both services stopped and use
+the rollback procedures below; do not expose canary output, marker paths, or
+secrets.
 
 ## Full VM Bootstrap
 
@@ -969,21 +978,39 @@ only when the restored CodexAPI revision owns that script:
 set -euo pipefail
 cd /opt/ludora/codexapi
 
-if node -e 'const scripts = require("./package.json").scripts ?? {}; process.exit(Object.hasOwn(scripts, "verify:isolation") ? 0 : 1)'; then
-  CODEXAPI_ISOLATION_OUTPUT=''
-  if ! CODEXAPI_ISOLATION_OUTPUT="$(sudo npm run --silent verify:isolation 2>/dev/null && printf '\036')" ||
-    test "$CODEXAPI_ISOLATION_OUTPUT" != $'{"status":"ok","isolation":"verified"}\n\036'; then
-    sudo systemctl stop ludora-admin-service.service
-    sudo systemctl stop codexapi.service
-    exit 1
-  fi
+CODEXAPI_ISOLATION_OWNERSHIP=''
+if ! CODEXAPI_ISOLATION_OWNERSHIP="$(node -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync("./package.json", "utf8")); if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) throw new Error("invalid package.json"); const scripts = pkg.scripts; if (scripts !== undefined && (!scripts || typeof scripts !== "object" || Array.isArray(scripts))) throw new Error("invalid package scripts"); process.stdout.write(Object.hasOwn(scripts ?? {}, "verify:isolation") ? "present" : "absent"); process.exitCode = 0;' 2>/dev/null)"; then
+  sudo systemctl stop ludora-admin-service.service codexapi.service
+  exit 1
 fi
+
+case "$CODEXAPI_ISOLATION_OWNERSHIP" in
+  present)
+    CODEXAPI_ISOLATION_OUTPUT=''
+    if ! CODEXAPI_ISOLATION_OUTPUT="$(sudo npm run --silent verify:isolation 2>/dev/null && printf '\036')" ||
+      test "$CODEXAPI_ISOLATION_OUTPUT" != $'{"status":"ok","isolation":"verified"}\n\036'; then
+      sudo systemctl stop ludora-admin-service.service codexapi.service
+      exit 1
+    fi
+    ;;
+  absent)
+    ;;
+  *)
+    sudo systemctl stop ludora-admin-service.service codexapi.service
+    exit 1
+    ;;
+esac
 ```
 
-The historical revision
-`5332ab156fa37350a3addd2b385692264fc17c3c` does not own `verify:isolation`.
+The Node probe's success path exits zero after emitting exactly `present` or
+`absent`. The historical revision
+`5332ab156fa37350a3addd2b385692264fc17c3c` produces the exact `absent` probe
+result because it does not own `verify:isolation`.
 For that revision, recovery verifies its owned static and systemd contract and
-skips that unavailable future canary. A revision that owns the script must pass
+skips that unavailable future canary. Only an exact confirmed `absent` result
+may skip it. A probe failure, including exit `127` when `node` is unavailable,
+an unreadable or malformed package, or unexpected probe output stops both
+services and exits nonzero. A revision that reports exact `present` must pass
 the exact-output gate; failure leaves both restored services stopped.
 
 ### Ludora admin rollback

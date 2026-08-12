@@ -87,21 +87,34 @@ Describe 'CodexAPI production runbook contract' {
         $firstIsolationCommand = $routine.IndexOf('sudo npm run --silent verify:isolation', [StringComparison]::Ordinal)
         $adminDeployment = $routine.IndexOf('After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure.', [StringComparison]::Ordinal)
         $bggCommand = $routine.IndexOf('npm run --silent verify:ai-bgg', [StringComparison]::Ordinal)
+        $bggComparison = $routine.IndexOf('test "$AI_BGG_OUTPUT" != $''{"status":"ok","bggId":296354}\n\036''', [StringComparison]::Ordinal)
         $secondIsolationCommand = $routine.LastIndexOf('sudo npm run --silent verify:isolation', [StringComparison]::Ordinal)
 
         ($boundaryVerification -ge 0 -and $firstIsolationCommand -gt $boundaryVerification -and
             $adminDeployment -gt $firstIsolationCommand -and $bggCommand -gt $adminDeployment -and
-            $secondIsolationCommand -gt $bggCommand -and $secondIsolationCommand -gt $firstIsolationCommand) | Should Be $true
+            $bggComparison -gt $bggCommand -and $secondIsolationCommand -gt $bggComparison -and
+            $secondIsolationCommand -gt $firstIsolationCommand) | Should Be $true
         ([regex]::Matches($routine, [regex]::Escape('sudo npm run --silent verify:isolation')).Count) | Should Be 2
         ([regex]::Matches($routine, [regex]::Escape("printf '\036'")).Count) | Should Be 3
         $routine | Should Match 'test "\$AI_BGG_OUTPUT" != \$''\{"status":"ok","bggId":296354\}\\n\\036'''
         ([regex]::Matches($routine, 'test "\$CODEXAPI_ISOLATION_OUTPUT" != \$''\{"status":"ok","isolation":"verified"\}\\n\\036''').Count) | Should Be 2
     }
 
+    It 'fail closes before either post-admin canary when admin setup is not ready' {
+        $guardedAdminCd = $routine.IndexOf('if ! cd /opt/ludora/ludora-admin/ludora-admin-service; then', [StringComparison]::Ordinal)
+        $guardedAdminActive = $routine.IndexOf('if ! sudo systemctl is-active --quiet ludora-admin-service.service; then', [StringComparison]::Ordinal)
+        $bggCommand = $routine.IndexOf('npm run --silent verify:ai-bgg', [StringComparison]::Ordinal)
+
+        ($guardedAdminCd -ge 0 -and $guardedAdminActive -gt $guardedAdminCd -and
+            $bggCommand -gt $guardedAdminActive) | Should Be $true
+        $routine | Should Match '(?s)if ! cd /opt/ludora/ludora-admin/ludora-admin-service; then\s+sudo systemctl stop ludora-admin-service\.service codexapi\.service\s+exit 1\s+fi'
+        $routine | Should Match '(?s)if ! sudo systemctl is-active --quiet ludora-admin-service\.service; then\s+sudo systemctl stop ludora-admin-service\.service codexapi\.service\s+exit 1\s+fi'
+    }
+
     It 'stops the appropriate services when a live isolation gate fails' {
         $routine | Should Match '(?s)# Candidate/pre-admin activation isolation gate\..*sudo npm run --silent verify:isolation.*test "\$CODEXAPI_ISOLATION_OUTPUT" != \$''\{"status":"ok","isolation":"verified"\}\\n\\036''; then\s+sudo systemctl stop codexapi\.service\s+exit 1'
         $routine | Should Match '(?s)# Final post-deployment isolation gate\..*sudo npm run --silent verify:isolation.*test "\$CODEXAPI_ISOLATION_OUTPUT" != \$''\{"status":"ok","isolation":"verified"\}\\n\\036''; then\s+sudo systemctl stop ludora-admin-service\.service\s+sudo systemctl stop codexapi\.service\s+exit 1'
-        $routine | Should Match 'leave both services stopped and use the rollback\s+procedures'
+        $routine | Should Match 'leave both services stopped and use\s+the rollback\s+procedures'
     }
 
     It 'stops the service when post-start verification fails in deployment and recovery' {
@@ -175,10 +188,28 @@ Describe 'CodexAPI production runbook contract' {
 
     It 'runs recovery isolation only when the selected revision owns the script' {
         $recovery | Should Match 'After restoring the exact selected admin revision'
-        $recovery | Should Match '(?s)if node -e .*verify:isolation.*then.*sudo npm run --silent verify:isolation.*\{"status":"ok","isolation":"verified"\}.*sudo systemctl stop ludora-admin-service\.service\s+sudo systemctl stop codexapi\.service\s+exit 1\s+fi'
-        $recovery | Should Match '5332ab156fa37350a3addd2b385692264fc17c3c.*does not own `verify:isolation`'
+        $probe = $recovery.IndexOf('if ! CODEXAPI_ISOLATION_OWNERSHIP="$(node -e', [StringComparison]::Ordinal)
+        $present = $recovery.IndexOf('  present)', [StringComparison]::Ordinal)
+        $canary = $recovery.IndexOf('sudo npm run --silent verify:isolation', [StringComparison]::Ordinal)
+        $absent = $recovery.IndexOf('  absent)', [StringComparison]::Ordinal)
+        $unexpected = $recovery.IndexOf('  *)', [StringComparison]::Ordinal)
+
+        ($probe -ge 0 -and $present -gt $probe -and $canary -gt $present -and
+            $absent -gt $canary -and $unexpected -gt $absent) | Should Be $true
+        $recovery | Should Match 'JSON\.parse\(fs\.readFileSync\("\./package\.json", "utf8"\)\)'
+        $recovery | Should Match 'process\.stdout\.write\(Object\.hasOwn\(scripts \?\? \{\}, "verify:isolation"\) \? "present" : "absent"\)'
+        $recovery | Should Match 'process\.exitCode = 0'
+        $recovery | Should Match '(?s)present\).*sudo npm run --silent verify:isolation.*\{"status":"ok","isolation":"verified"\}.*sudo systemctl stop ludora-admin-service\.service codexapi\.service\s+exit 1'
+        $recovery | Should Match '(?s)5332ab156fa37350a3addd2b385692264fc17c3c.*exact `absent`'
         $recovery | Should Match 'skips that unavailable future canary'
         $recovery | Should Not Match '(?i)psql|database/schema\.sql|database/patches|LUDORA_DATABASE_URL'
+    }
+
+    It 'treats probe errors and unexpected ownership output as fail-closed recovery errors' {
+        $recovery | Should Match '(?s)if ! CODEXAPI_ISOLATION_OWNERSHIP="\$\(node -e .*verify:isolation.*\)"; then\s+sudo systemctl stop ludora-admin-service\.service codexapi\.service\s+exit 1\s+fi'
+        $recovery | Should Match '(?s)\*\)\s+sudo systemctl stop ludora-admin-service\.service codexapi\.service\s+exit 1\s+;;'
+        $recovery | Should Match 'including exit `127` when `node` is unavailable'
+        $recovery | Should Match 'unexpected probe output'
     }
 
     It 'provides explicit previous-commit recovery before npm mutation' {
