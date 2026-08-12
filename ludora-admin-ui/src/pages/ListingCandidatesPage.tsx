@@ -915,11 +915,16 @@ export function ListingCandidatesPage({
         listingStatus === 'LISTED' ? 'Store item listing approved.' : 'Store item listing rejected.'
       );
       table.refresh();
-      if (detailMode === 'review' && listingStatus === 'LISTED' && onOpenCandidate) {
+      const shouldOpenNextReview =
+        detailMode === 'review' &&
+        (listingStatus === 'LISTED' || listingStatus === 'REJECTED') &&
+        Boolean(onOpenCandidate);
+      if (shouldOpenNextReview) {
         try {
           await openNextPendingReview(id);
         } catch {
-          setSaveError('Store item listing was approved, but the next review could not be loaded.');
+          const completedAction = listingStatus === 'LISTED' ? 'approved' : 'rejected';
+          setSaveError(`Store item listing was ${completedAction}, but the next review could not be loaded.`);
         }
       }
     } catch {

@@ -142,7 +142,21 @@ describe('App', () => {
     expect(screen.getByDisplayValue('Coffee Rush')).toBeInTheDocument();
   });
 
-  it('opens a store item review and advances to the next pending review after approval', async () => {
+  it.each([
+    {
+      action: 'approval',
+      buttonName: 'Approve listing',
+      savedListingStatus: 'LISTED'
+    },
+    {
+      action: 'rejection',
+      buttonName: 'Reject listing',
+      savedListingStatus: 'REJECTED'
+    }
+  ])('opens a store item review and advances to the next pending review after $action', async ({
+    buttonName,
+    savedListingStatus
+  }) => {
     window.location.hash = '#offer-reviews?id=920';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input));
@@ -150,7 +164,7 @@ describe('App', () => {
         return jsonResponse({ username: 'admin' });
       }
       if (url.pathname === '/discovery/listings/920/listing-status' && init?.method === 'PATCH') {
-        return jsonResponse({ id: '920', item_id: 77, listing_status: 'LISTED', title: 'Cafe Barista' });
+        return jsonResponse({ id: '920', item_id: 77, listing_status: savedListingStatus, title: 'Cafe Barista' });
       }
       if (url.pathname === '/discovery/listings/920') {
         return jsonResponse({
@@ -233,7 +247,7 @@ describe('App', () => {
     expect(screen.queryByLabelText('Publisher')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Back to Review' })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Approve listing' }));
+    fireEvent.click(screen.getByRole('button', { name: buttonName }));
 
     await waitFor(() => expect(window.location.hash).toBe('#offer-reviews?id=921'));
     await waitFor(() => expect(screen.getByLabelText('Title')).toHaveValue('Alpaca Trails'));
