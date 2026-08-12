@@ -8,6 +8,7 @@
     "optimize:external-covers": "tsx src/scripts/optimizeExternalCoverImages.ts",
     "repair:bgg-relationships": "tsx src/scripts/repairBggRelationshipsFromCache.ts",
     "sync:bgg-ratings": "tsx src/scripts/syncBggRatingsFromCache.ts",
+    "verify:ai-bgg": "tsx src/scripts/verifyAiBggMatching.ts",
     "dev": "tsx watch src/server.ts",
     "dev:codex": "node -e \"const {spawn}=require('node:child_process'); const child=spawn('tsx',['watch','src/server.ts'],{stdio:'inherit',shell:true,env:{...process.env,PORT:'4001'}}); child.on('exit',code=>process.exit(code ?? 0));\"",
     "build": "tsc -p tsconfig.json",

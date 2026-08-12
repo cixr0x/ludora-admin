@@ -399,9 +399,24 @@ sudo systemd-analyze verify /etc/systemd/system/codexapi.service
 verify_codexapi_startup() {
   sudo systemctl is-active --quiet codexapi.service &&
     curl -fsS http://127.0.0.1:3001/health |
-      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-constrained-v1" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
+      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
     test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
     ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)'
+}
+
+verify_codexapi_boundary() {
+  local unit
+  unit="$(sudo systemctl show codexapi.service \
+    --property=User --property=Group --property=ProtectSystem --property=ProtectHome \
+    --property=CapabilityBoundingSet --property=ReadWritePaths --property=InaccessiblePaths)" &&
+    grep -Fx 'User=codexapi' <<<"$unit" &&
+    grep -Fx 'Group=codexapi' <<<"$unit" &&
+    grep -Fx 'ProtectSystem=strict' <<<"$unit" &&
+    grep -Fx 'ProtectHome=true' <<<"$unit" &&
+    grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" &&
+    grep -Fx 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root' <<<"$unit" &&
+    cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
+    test "$(stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 400
 }
 
 sudo systemctl start codexapi.service
@@ -409,14 +424,33 @@ if ! verify_codexapi_startup; then
   sudo systemctl stop codexapi.service
   exit 1
 fi
+if ! verify_codexapi_boundary; then
+  sudo systemctl stop codexapi.service
+  exit 1
+fi
 ```
 
 The verification function requires `status: "ok"`, capability policy
-`codexapi-constrained-v1`, Codex CLI version `0.147.0`, `checked: true`, and
-exactly one `127.0.0.1:3001` listener. Any failed post-start check stops the
+`codexapi-capable-isolated-v2`, Codex CLI version `0.147.0`, `checked: true`,
+and exactly one `127.0.0.1:3001` listener. The boundary verification requires
+the dedicated `codexapi` user/group, strict filesystem protections, the sole
+persistent writable `/var/lib/codexapi` service path, inaccessible admin, home,
+and root paths, and an exact mode-`0400` runtime profile matching the checked-in
+`deploy/codexapi-runtime.config.toml`. Any failed post-start check stops the
 service before the shell exits. Use the explicit previous-commit recovery
-procedure under **Rollback**. The admin service itself does not need a restart
-unless its code or environment changed.
+procedure under **Rollback**.
+
+After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure. Once that revision is active, run the database-free regression canary from the admin-service checkout:
+
+```bash
+cd /opt/ludora/ludora-admin/ludora-admin-service
+sudo systemctl is-active --quiet ludora-admin-service.service
+npm run verify:ai-bgg
+```
+
+The canary calls only the loopback AI BGG matcher with the fixed Bomberos En
+Accion regression fixture. It does not import, cache, link, or write store
+items, and it does not use database commands.
 
 ## Full VM Bootstrap
 
@@ -801,9 +835,24 @@ sudo systemd-analyze verify /etc/systemd/system/codexapi.service
 verify_codexapi_startup() {
   sudo systemctl is-active --quiet codexapi.service &&
     curl -fsS http://127.0.0.1:3001/health |
-      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-constrained-v1" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
+      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
     test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
     ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)'
+}
+
+verify_codexapi_boundary() {
+  local unit
+  unit="$(sudo systemctl show codexapi.service \
+    --property=User --property=Group --property=ProtectSystem --property=ProtectHome \
+    --property=CapabilityBoundingSet --property=ReadWritePaths --property=InaccessiblePaths)" &&
+    grep -Fx 'User=codexapi' <<<"$unit" &&
+    grep -Fx 'Group=codexapi' <<<"$unit" &&
+    grep -Fx 'ProtectSystem=strict' <<<"$unit" &&
+    grep -Fx 'ProtectHome=true' <<<"$unit" &&
+    grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" &&
+    grep -Fx 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root' <<<"$unit" &&
+    cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
+    test "$(stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 400
 }
 
 sudo systemctl start codexapi.service
@@ -811,13 +860,18 @@ if ! verify_codexapi_startup; then
   sudo systemctl stop codexapi.service
   exit 1
 fi
+if ! verify_codexapi_boundary; then
+  sudo systemctl stop codexapi.service
+  exit 1
+fi
 ```
 
-Verify the same startup-attestation fields and loopback-only listener required by
-the routine deployment. A failed recovery verification also leaves the service
-stopped. The checkout is intentionally detached at the recovered commit; the
-next approved forward deployment checks out `main` and fast-forwards it to an
-exact approved `origin/main` revision.
+Verify the same startup-attestation fields, runtime-profile mode and contents,
+filesystem boundary, and loopback-only listener required by a routine
+deployment. A failed recovery verification also leaves the service stopped.
+The checkout is intentionally detached at the recovered commit; the next
+approved forward deployment checks out `main` and fast-forwards it to an exact
+approved `origin/main` revision.
 
 ### Ludora admin rollback
 
