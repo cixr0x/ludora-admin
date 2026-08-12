@@ -184,6 +184,13 @@ printf 'GUARDED_CALLER_REACHED=yes\n'
     }
 }
 
+function Test-CodexApiReadinessSleepTrace {
+    param([Parameter(Mandatory = $true)][string[]]$Trace)
+
+    $sleeps = @($Trace | Where-Object { $_ -like 'sleep *' })
+    $sleeps.Count -gt 0 -and @($sleeps | Where-Object { $_ -ne 'sleep 0.5' }).Count -eq 0
+}
+
 function Get-CodexApiBoundaryFunction {
     param([Parameter(Mandatory = $true)][string]$Section)
 
@@ -424,7 +431,19 @@ Describe 'CodexAPI production runbook contract' {
             $result.CurlCount | Should Be 40
             $result.SleepCount | Should Be 39
             ($result.ElapsedMilliseconds -lt 15000) | Should Be $true
+            (Test-CodexApiReadinessSleepTrace -Trace $result.Trace) | Should Be $true
             @($result.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 0
+        }
+    }
+
+    It 'detects a mutated readiness sleep interval in routine and recovery traces' {
+        foreach ($section in @($routine, $recovery)) {
+            $policy = if ($section -eq $routine) { 'codexapi-capable-isolated-v2' } else { 'selected-recovery-policy' }
+            $mutated = $section.Replace('sleep 0.5', 'sleep 1')
+            $result = Invoke-CodexApiReadinessHarness -Section $mutated -Scenario third-success -ExpectedPolicy $policy
+
+            $result.SleepCount | Should Be 2
+            (Test-CodexApiReadinessSleepTrace -Trace $result.Trace) | Should Be $false
         }
     }
 
