@@ -412,7 +412,9 @@ verify_codexapi_startup() {
         ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)' || return 1
       return 0
     fi
-    sleep 0.5
+    if [ "$attempt" -lt 40 ]; then
+      sleep 0.5
+    fi
   done
   return 1
 }
@@ -928,7 +930,9 @@ verify_codexapi_startup() {
         ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)' || return 1
       return 0
     fi
-    sleep 0.5
+    if [ "$attempt" -lt 40 ]; then
+      sleep 0.5
+    fi
   done
   return 1
 }

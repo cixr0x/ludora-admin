@@ -17,6 +17,182 @@ function Get-RunbookSection {
     $runbook.Substring($start, $end - $start)
 }
 
+function Get-CodexApiReadinessFunction {
+    param([Parameter(Mandatory = $true)][string]$Section)
+
+    $match = [regex]::Match(
+        $Section,
+        '(?s)verify_codexapi_startup\(\) \{.*?^\}',
+        [System.Text.RegularExpressions.RegexOptions]::Multiline
+    )
+    if (-not $match.Success) {
+        throw 'Missing verify_codexapi_startup function.'
+    }
+
+    $match.Value
+}
+
+function ConvertTo-GitBashPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    if ($Path -notmatch '^[A-Za-z]:\\') {
+        throw "Expected an absolute Windows path: $Path"
+    }
+
+    ('/{0}/{1}' -f $Path.Substring(0, 1).ToLowerInvariant(), $Path.Substring(3).Replace('\', '/'))
+}
+
+function Invoke-CodexApiReadinessHarness {
+    param(
+        [Parameter(Mandatory = $true)][string]$Section,
+        [Parameter(Mandatory = $true)][string]$Scenario,
+        [Parameter(Mandatory = $true)][string]$ExpectedPolicy
+    )
+
+    $gitBash = 'C:\Program Files\Git\bin\bash.exe'
+    if (-not (Test-Path -LiteralPath $gitBash)) {
+        throw "Git Bash is required for readiness tests: $gitBash"
+    }
+
+    $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ludora-codexapi-readiness-{0}" -f [guid]::NewGuid())
+    $stubDirectory = Join-Path $tempRoot 'bin'
+    [System.IO.Directory]::CreateDirectory($stubDirectory) | Out-Null
+    $utf8 = [System.Text.UTF8Encoding]::new($false)
+
+    $functionPath = Join-Path $tempRoot 'readiness-function.sh'
+    $harnessPath = Join-Path $tempRoot 'run-readiness.sh'
+    $tracePath = Join-Path $tempRoot 'trace.log'
+    $curlCountPath = Join-Path $tempRoot 'curl-count'
+    $sleepCountPath = Join-Path $tempRoot 'sleep-count'
+    [System.IO.File]::WriteAllText($functionPath, (Get-CodexApiReadinessFunction -Section $Section), $utf8)
+    [System.IO.File]::WriteAllText($curlCountPath, '0', $utf8)
+    [System.IO.File]::WriteAllText($sleepCountPath, '0', $utf8)
+
+    $stubs = @{
+        'sudo' = @'
+#!/usr/bin/env bash
+"$@"
+'@
+        'systemctl' = @'
+#!/usr/bin/env bash
+printf 'systemctl %s\n' "$*" >> "$TRACE_FILE"
+if [ "$1" = is-active ] && [ "$2" = --quiet ]; then
+  case "$SCENARIO" in
+    inactive-after-failure|malformed-then-inactive|wrong-policy-then-inactive)
+      if [ "$(cat "$CURL_COUNT")" -gt 0 ]; then
+        exit 3
+      fi
+      ;;
+  esac
+  exit 0
+fi
+exit 0
+'@
+        'curl' = @'
+#!/usr/bin/env bash
+count="$(cat "$CURL_COUNT")"
+count=$((count + 1))
+printf '%s' "$count" > "$CURL_COUNT"
+printf 'curl %s\n' "$count" >> "$TRACE_FILE"
+case "$SCENARIO" in
+  third-success)
+    if [ "$count" -lt 3 ]; then
+      exit 22
+    fi
+    printf '{"status":"ok","capabilityPolicy":"%s","codexCli":{"version":"0.147.0","checked":true}}' "$HEALTH_POLICY"
+    ;;
+  malformed|malformed-then-inactive)
+    printf '{not-json'
+    ;;
+  wrong-policy|wrong-policy-then-inactive)
+    printf '{"status":"ok","capabilityPolicy":"wrong-policy","codexCli":{"version":"0.147.0","checked":true}}'
+    ;;
+  all-fail)
+    exit 22
+    ;;
+  *)
+    printf 'Unknown scenario: %s\n' "$SCENARIO" >&2
+    exit 64
+    ;;
+esac
+'@
+        'ss' = @'
+#!/usr/bin/env bash
+printf 'ss %s\n' "$*" >> "$TRACE_FILE"
+printf 'LISTEN 0 4096 127.0.0.1:3001 0.0.0.0:*\n'
+'@
+        'sleep' = @'
+#!/usr/bin/env bash
+count="$(cat "$SLEEP_COUNT")"
+count=$((count + 1))
+printf '%s' "$count" > "$SLEEP_COUNT"
+printf 'sleep %s\n' "$*" >> "$TRACE_FILE"
+'@
+    }
+    foreach ($stub in $stubs.GetEnumerator()) {
+        [System.IO.File]::WriteAllText((Join-Path $stubDirectory $stub.Key), $stub.Value, $utf8)
+    }
+
+    $bashStubDirectory = ConvertTo-GitBashPath -Path $stubDirectory
+    $bashFunctionPath = ConvertTo-GitBashPath -Path $functionPath
+    [System.IO.File]::WriteAllText($harnessPath, @'
+#!/usr/bin/env bash
+set -euo pipefail
+PATH="$STUB_DIRECTORY:$PATH"
+source "$READINESS_FUNCTION"
+CODEXAPI_PREVIOUS_CAPABILITY_POLICY="$EXPECTED_POLICY"
+if ! verify_codexapi_startup; then
+  printf 'READINESS_RESULT=nonzero\n'
+else
+  printf 'READINESS_RESULT=zero\n'
+fi
+printf 'GUARDED_CALLER_REACHED=yes\n'
+'@, $utf8)
+    $bashHarnessPath = ConvertTo-GitBashPath -Path $harnessPath
+
+    $environment = @{
+        'STUB_DIRECTORY' = $bashStubDirectory
+        'READINESS_FUNCTION' = $bashFunctionPath
+        'TRACE_FILE' = (ConvertTo-GitBashPath -Path $tracePath)
+        'CURL_COUNT' = (ConvertTo-GitBashPath -Path $curlCountPath)
+        'SLEEP_COUNT' = (ConvertTo-GitBashPath -Path $sleepCountPath)
+        'SCENARIO' = $Scenario
+        'EXPECTED_POLICY' = $ExpectedPolicy
+        'HEALTH_POLICY' = $ExpectedPolicy
+    }
+    $previousEnvironment = @{}
+    try {
+        foreach ($entry in $environment.GetEnumerator()) {
+            $previousEnvironment[$entry.Key] = [System.Environment]::GetEnvironmentVariable($entry.Key, 'Process')
+            [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+        }
+        & $gitBash -c 'chmod +x "$1"/*' bash $bashStubDirectory
+        if ($LASTEXITCODE -ne 0) {
+            throw 'Could not make Git Bash readiness stubs executable.'
+        }
+        $output = (& $gitBash --noprofile --norc $bashHarnessPath 2>&1 | Out-String)
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        foreach ($entry in $previousEnvironment.GetEnumerator()) {
+            [System.Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+        }
+    }
+
+    try {
+        [pscustomobject]@{
+            ExitCode = $exitCode
+            Output = $output
+            Trace = if (Test-Path -LiteralPath $tracePath) { [System.IO.File]::ReadAllLines($tracePath) } else { @() }
+            CurlCount = [int][System.IO.File]::ReadAllText($curlCountPath)
+            SleepCount = [int][System.IO.File]::ReadAllText($sleepCountPath)
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
 Describe 'CodexAPI production runbook contract' {
     $routine = Get-RunbookSection `
         -StartHeading '## Routine Codex API Deployment' `
@@ -55,24 +231,70 @@ Describe 'CodexAPI production runbook contract' {
         $routine | Should Match "stat -c '%a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
     }
 
-    It 'waits for bounded CodexAPI health readiness before listener and boundary verification' {
+    It 'retries the routine readiness function until the third valid health contract before listener checks' {
+        $result = Invoke-CodexApiReadinessHarness -Section $routine -Scenario third-success -ExpectedPolicy 'codexapi-capable-isolated-v2'
+
+        $result.ExitCode | Should Be 0
+        $result.Output | Should Match 'READINESS_RESULT=zero'
+        $result.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
+        $result.CurlCount | Should Be 3
+        $result.SleepCount | Should Be 2
+        @($result.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 2
+        $firstListener = [array]::IndexOf($result.Trace, @($result.Trace | Where-Object { $_ -like 'ss *' })[0])
+        $lastHealth = [array]::IndexOf($result.Trace, 'curl 3')
+        ($firstListener -gt $lastHealth) | Should Be $true
+    }
+
+    It 'fails fast after an unsuccessful health attempt when CodexAPI becomes inactive' {
         foreach ($section in @($routine, $recovery)) {
-            $startup = [regex]::Match($section, '(?s)verify_codexapi_startup\(\) \{.*?^\}', [System.Text.RegularExpressions.RegexOptions]::Multiline)
-            $startup.Success | Should Be $true
-            $startup.Value | Should Match 'for attempt in \$\(seq 1 40\)'
-            $startup.Value | Should Match 'sudo systemctl is-active --quiet codexapi\.service \|\| return 1'
-            $startup.Value | Should Match 'curl -fsS http://127\.0\.0\.1:3001/health'
-            $startup.Value | Should Match 'sleep 0\.5'
-            $startup.Value | Should Match 'return 1'
-            $startup.Value | Should Not Match '(?s)^\s*sudo systemctl is-active --quiet codexapi\.service\s*&&\s*curl'
+            $policy = if ($section -eq $routine) { 'codexapi-capable-isolated-v2' } else { 'selected-recovery-policy' }
+            $result = Invoke-CodexApiReadinessHarness -Section $section -Scenario inactive-after-failure -ExpectedPolicy $policy
 
-            $health = $startup.Value.IndexOf('curl -fsS http://127.0.0.1:3001/health', [StringComparison]::Ordinal)
-            $listener = $startup.Value.IndexOf("ss -H -ltn 'sport = :3001'", [StringComparison]::Ordinal)
-            ($health -ge 0 -and $listener -gt $health) | Should Be $true
+            $result.ExitCode | Should Be 0
+            $result.Output | Should Match 'READINESS_RESULT=nonzero'
+            $result.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
+            $result.CurlCount | Should Be 1
+            $result.SleepCount | Should Be 1
+            @($result.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 0
         }
+    }
 
-        $routine | Should Not Match '(?m)^sleep [1-9][0-9]*$'
-        $recovery | Should Not Match '(?m)^sleep [1-9][0-9]*$'
+    It 'bounds active failed readiness attempts with sleeps only between attempts' {
+        foreach ($section in @($routine, $recovery)) {
+            $policy = if ($section -eq $routine) { 'codexapi-capable-isolated-v2' } else { 'selected-recovery-policy' }
+            $result = Invoke-CodexApiReadinessHarness -Section $section -Scenario all-fail -ExpectedPolicy $policy
+
+            $result.ExitCode | Should Be 0
+            $result.Output | Should Match 'READINESS_RESULT=nonzero'
+            $result.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
+            $result.CurlCount | Should Be 40
+            $result.SleepCount | Should Be 39
+            @($result.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 0
+        }
+    }
+
+    It 'rejects malformed and wrong-policy health from the extracted readiness functions' {
+        foreach ($scenario in @('malformed-then-inactive', 'wrong-policy-then-inactive')) {
+            $routineResult = Invoke-CodexApiReadinessHarness -Section $routine -Scenario $scenario -ExpectedPolicy 'codexapi-capable-isolated-v2'
+            $routineResult.Output | Should Match 'READINESS_RESULT=nonzero'
+            $routineResult.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
+            @($routineResult.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 0
+
+            $recoveryResult = Invoke-CodexApiReadinessHarness -Section $recovery -Scenario $scenario -ExpectedPolicy 'selected-recovery-policy'
+            $recoveryResult.Output | Should Match 'READINESS_RESULT=nonzero'
+            $recoveryResult.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
+            @($recoveryResult.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 0
+        }
+    }
+
+    It 'uses the selected recovery capability policy for an otherwise valid health contract' {
+        $matching = Invoke-CodexApiReadinessHarness -Section $recovery -Scenario third-success -ExpectedPolicy 'selected-recovery-policy'
+        $wrong = Invoke-CodexApiReadinessHarness -Section $recovery -Scenario wrong-policy -ExpectedPolicy 'selected-recovery-policy'
+
+        $matching.Output | Should Match 'READINESS_RESULT=zero'
+        $matching.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
+        $wrong.Output | Should Match 'READINESS_RESULT=nonzero'
+        $wrong.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
     }
 
     It 'orders routine CodexAPI deployment through verification before admin deployment and the database-free canary' {
