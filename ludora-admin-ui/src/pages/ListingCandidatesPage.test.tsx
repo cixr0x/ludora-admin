@@ -723,6 +723,10 @@ describe('ListingCandidatesPage', () => {
     expect(
       await within(dialog).findByRole('button', { name: 'Associate with Kitchen Rush: Mejora del Restaurante' })
     ).toBeInTheDocument();
+    const itemSearchRequest = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .find((url) => url.pathname === '/items');
+    expect(itemSearchRequest?.searchParams.get('page_size')).toBe('50');
     if (currentItemId) {
       expect(within(dialog).queryByRole('button', { name: 'Associate with Kitchen Rush' })).not.toBeInTheDocument();
     }
@@ -894,6 +898,10 @@ describe('ListingCandidatesPage', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Add Additional Item' });
     expect(within(dialog).getByRole('textbox', { name: 'Search catalog items' })).toHaveValue('Kitchen Rush Bundle');
     expect(await within(dialog).findByRole('button', { name: 'Add Kitchen Rush: Restaurant Upgrade' })).toBeInTheDocument();
+    const itemSearchRequest = fetchMock.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .find((url) => url.pathname === '/items');
+    expect(itemSearchRequest?.searchParams.get('page_size')).toBe('50');
     expect(within(dialog).queryByRole('button', { name: 'Add Kitchen Rush' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Add Kitchen Rush: Piece of Cake' })).not.toBeInTheDocument();
 

@@ -1,0 +1,1 @@
+export const CATALOG_ITEM_SEARCH_LIMIT = 50;

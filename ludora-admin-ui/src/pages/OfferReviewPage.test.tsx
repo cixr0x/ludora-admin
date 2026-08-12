@@ -95,7 +95,7 @@ describe('OfferReviewPage', () => {
     };
     const catalogItems = [
       catalogItem,
-      ...Array.from({ length: 19 }, (_, index) => ({
+      ...Array.from({ length: 49 }, (_, index) => ({
         canonical_name: `Aeterna Match ${index + 2}`,
         canonical_name_es: '',
         id: 78 + index,
@@ -121,7 +121,7 @@ describe('OfferReviewPage', () => {
         );
       }
       if (url.pathname.endsWith('/items') && !init?.method) {
-        return new Response(JSON.stringify({ data: catalogItems, meta: { page: 0, page_size: 20, total: 20 } }), {
+        return new Response(JSON.stringify({ data: catalogItems, meta: { page: 0, page_size: 50, total: 50 } }), {
           headers: { 'Content-Type': 'application/json' },
           status: 200
         });
@@ -156,7 +156,7 @@ describe('OfferReviewPage', () => {
     expect(within(dialog).getByLabelText('Search catalog items')).toHaveValue('Aeterna');
     expect(within(dialog).getByText('Currently associated with item 11')).toBeInTheDocument();
     expect(await within(dialog).findByText('Aeterna: Edicion en Espanol')).toBeInTheDocument();
-    expect(within(dialog).getAllByRole('button', { name: /^Associate with / })).toHaveLength(20);
+    expect(within(dialog).getAllByRole('button', { name: /^Associate with / })).toHaveLength(50);
     expect(within(dialog).getByText('Eternal · Item 77')).toBeInTheDocument();
     expect(within(dialog).getByRole('img', { name: 'Aeterna: Edicion en Espanol cover' })).toHaveAttribute(
       'src',
@@ -165,7 +165,7 @@ describe('OfferReviewPage', () => {
 
     const itemSearchRequest = fetchMock.mock.calls.find(([input]) => new URL(String(input)).pathname.endsWith('/items'));
     expect(String(itemSearchRequest?.[0])).toContain('filter_name=Aeterna');
-    expect(String(itemSearchRequest?.[0])).toContain('page_size=20');
+    expect(String(itemSearchRequest?.[0])).toContain('page_size=50');
 
     await user.click(within(dialog).getByRole('button', { name: 'Associate with Aeterna: Edicion en Espanol' }));
 

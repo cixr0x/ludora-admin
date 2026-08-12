@@ -44,13 +44,13 @@ import {
 import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
+import { CATALOG_ITEM_SEARCH_LIMIT } from '../components/catalogItemSearch';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 import { ItemsPage } from './ItemsPage';
 
 type LoadState = 'loading' | 'ready' | 'error';
 type ViewMode = 'form' | 'table';
 type DetailMode = 'standard' | 'review';
-const ADDITIONAL_ITEM_SEARCH_LIMIT = 20;
 
 type ItemCandidateDetailField = {
   fieldType?: 'boolean';
@@ -2545,7 +2545,7 @@ function CatalogItemSearchDialog({
         .getItemsPage({
           filters: { name: searchQuery },
           page: 0,
-          pageSize: ADDITIONAL_ITEM_SEARCH_LIMIT,
+          pageSize: CATALOG_ITEM_SEARCH_LIMIT,
           sortColumnId: 'canonical_name',
           sortDirection: 'asc'
         })

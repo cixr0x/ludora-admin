@@ -27,9 +27,8 @@ import {
 import { adminApi, type AdminRecord, type StoreItemListingStatus } from '../api/client';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
+import { CATALOG_ITEM_SEARCH_LIMIT } from '../components/catalogItemSearch';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
-
-const ITEM_ASSOCIATION_SEARCH_LIMIT = 20;
 
 function field(record: AdminRecord, keys: string[], fallback = '-') {
   const value = keys.map((key) => record[key]).find((candidate) => candidate !== undefined && candidate !== null && candidate !== '');
@@ -786,7 +785,7 @@ function ItemAssociationDialog({
         .getItemsPage({
           filters: { name: searchQuery },
           page: 0,
-          pageSize: ITEM_ASSOCIATION_SEARCH_LIMIT,
+          pageSize: CATALOG_ITEM_SEARCH_LIMIT,
           sortColumnId: 'canonical_name',
           sortDirection: 'asc'
         })
