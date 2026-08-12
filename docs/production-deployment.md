@@ -393,6 +393,8 @@ test -z "$(git status --porcelain)"
 
 sudo install -o root -g root -m 0644 \
   deploy/codexapi.service /etc/systemd/system/codexapi.service
+sudo install -o codexapi -g codexapi -m 0400 \
+  deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml
 sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/codexapi.service
 
@@ -412,7 +414,7 @@ verify_codexapi_boundary() {
     grep -Fx 'User=codexapi' <<<"$unit" &&
     grep -Fx 'Group=codexapi' <<<"$unit" &&
     grep -Fx 'ProtectSystem=strict' <<<"$unit" &&
-    grep -Fx 'ProtectHome=true' <<<"$unit" &&
+    grep -Fx 'ProtectHome=yes' <<<"$unit" &&
     grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" &&
     grep -Fx 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root' <<<"$unit" &&
     cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
@@ -815,6 +817,10 @@ set -euo pipefail
 cd /opt/ludora/codexapi
 
 CODEXAPI_PREVIOUS_COMMIT='<previous full 40-character commit SHA>'
+# Provide or derive this from the selected revision's reviewed health contract.
+CODEXAPI_PREVIOUS_CAPABILITY_POLICY='<expected health capability policy for selected commit>'
+test -n "$CODEXAPI_PREVIOUS_CAPABILITY_POLICY"
+test "$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" != '<expected health capability policy for selected commit>'
 test -z "$(git status --porcelain)"
 git fetch origin
 git cat-file -e "${CODEXAPI_PREVIOUS_COMMIT}^{commit}"
@@ -822,6 +828,8 @@ git cat-file -e "${CODEXAPI_PREVIOUS_COMMIT}^{commit}"
 sudo systemctl stop codexapi.service
 git checkout --detach "$CODEXAPI_PREVIOUS_COMMIT"
 test "$(git rev-parse HEAD)" = "$CODEXAPI_PREVIOUS_COMMIT"
+test -f deploy/codexapi.service
+test -f deploy/codexapi-runtime.config.toml
 npm ci
 npm test
 npm run build
@@ -829,13 +837,15 @@ test -z "$(git status --porcelain)"
 
 sudo install -o root -g root -m 0644 \
   deploy/codexapi.service /etc/systemd/system/codexapi.service
+sudo install -o codexapi -g codexapi -m 0400 \
+  deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml
 sudo systemctl daemon-reload
 sudo systemd-analyze verify /etc/systemd/system/codexapi.service
 
 verify_codexapi_startup() {
   sudo systemctl is-active --quiet codexapi.service &&
     curl -fsS http://127.0.0.1:3001/health |
-      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
+      EXPECTED_CODEXAPI_CAPABILITY_POLICY="$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== process.env.EXPECTED_CODEXAPI_CAPABILITY_POLICY || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });' &&
     test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
     ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)'
 }
@@ -848,9 +858,11 @@ verify_codexapi_boundary() {
     grep -Fx 'User=codexapi' <<<"$unit" &&
     grep -Fx 'Group=codexapi' <<<"$unit" &&
     grep -Fx 'ProtectSystem=strict' <<<"$unit" &&
-    grep -Fx 'ProtectHome=true' <<<"$unit" &&
+    grep -Fx 'ProtectHome=yes' <<<"$unit" &&
+    grep -Fx 'ReadOnlyPaths=/opt/ludora/codexapi' <<<"$unit" &&
     grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" &&
-    grep -Fx 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root' <<<"$unit" &&
+    grep -Eq '^InaccessiblePaths=.*(/opt/ludora/ludora-admin)( |$)' <<<"$unit" &&
+    grep -Eq '^InaccessiblePaths=.*(/home)(/| |$)' <<<"$unit" &&
     cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
     test "$(stat -c '%a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 400
 }
@@ -866,9 +878,13 @@ if ! verify_codexapi_boundary; then
 fi
 ```
 
-Verify the same startup-attestation fields, runtime-profile mode and contents,
-filesystem boundary, and loopback-only listener required by a routine
-deployment. A failed recovery verification also leaves the service stopped.
+The selected commit supplies both the installed unit and runtime profile. Set
+`CODEXAPI_PREVIOUS_CAPABILITY_POLICY` to that revision's reviewed health policy
+(for example, an older constrained revision may not report the current capable
+policy). Recovery verifies the dedicated user/group, loopback listener, strict
+system/home protection, read-only CodexAPI checkout, persistent writable
+runtime path, and inaccessible admin/home paths without assuming newer exact
+path lists. A failed recovery verification also leaves the service stopped.
 The checkout is intentionally detached at the recovered commit; the next
 approved forward deployment checks out `main` and fast-forwards it to an exact
 approved `origin/main` revision.

@@ -47,19 +47,32 @@ Describe 'CodexAPI production runbook contract' {
         $routine | Should Match 'systemctl show .*codexapi\.service'
         $routine | Should Match 'User=codexapi'
         $routine | Should Match 'ProtectSystem=strict'
-        $routine | Should Match 'ProtectHome=true'
+        $routine | Should Match 'ProtectHome=yes'
+        $routine | Should Not Match 'ProtectHome=true'
         $routine | Should Match 'ReadWritePaths=/var/lib/codexapi'
         $routine | Should Match 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root'
         $routine | Should Match 'cmp -s deploy/codexapi-runtime\.config\.toml /var/lib/codexapi/home/codexapi-runtime\.config\.toml'
         $routine | Should Match "stat -c '%a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
     }
 
-    It 'deploys the admin service and runs the database-free BGG canary only after CodexAPI verification' {
-        $verified = $routine.IndexOf('if ! verify_codexapi_startup; then', [StringComparison]::Ordinal)
+    It 'orders routine CodexAPI deployment through verification before admin deployment and the database-free canary' {
+        $stop = $routine.IndexOf('sudo systemctl stop codexapi.service', [StringComparison]::Ordinal)
+        $checkout = $routine.IndexOf('git checkout main', [StringComparison]::Ordinal)
+        $npmInstall = $routine.IndexOf('npm ci', [StringComparison]::Ordinal)
+        $npmBuild = $routine.IndexOf('npm run build', [StringComparison]::Ordinal)
+        $unitInstall = $routine.IndexOf('deploy/codexapi.service /etc/systemd/system/codexapi.service', [StringComparison]::Ordinal)
+        $profileInstall = $routine.IndexOf('deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
+        $unitVerify = $routine.IndexOf('sudo systemd-analyze verify /etc/systemd/system/codexapi.service', [StringComparison]::Ordinal)
+        $start = $routine.IndexOf('sudo systemctl start codexapi.service', [StringComparison]::Ordinal)
+        $startupVerification = $routine.IndexOf('if ! verify_codexapi_startup; then', [StringComparison]::Ordinal)
+        $boundaryVerification = $routine.IndexOf('if ! verify_codexapi_boundary; then', [StringComparison]::Ordinal)
         $adminDeployment = $routine.IndexOf('After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure.', [StringComparison]::Ordinal)
         $canary = $routine.IndexOf('npm run verify:ai-bgg', [StringComparison]::Ordinal)
 
-        ($verified -ge 0 -and $adminDeployment -gt $verified -and $canary -gt $adminDeployment) | Should Be $true
+        ($stop -ge 0 -and $checkout -gt $stop -and $npmInstall -gt $checkout -and $npmBuild -gt $npmInstall -and
+            $unitInstall -gt $npmBuild -and $profileInstall -gt $unitInstall -and $unitVerify -gt $profileInstall -and
+            $start -gt $unitVerify -and $startupVerification -gt $start -and $boundaryVerification -gt $startupVerification -and
+            $adminDeployment -gt $boundaryVerification -and $canary -gt $adminDeployment) | Should Be $true
         $routine | Should Match 'npm run verify:ai-bgg'
         $routine | Should Not Match '(?i)psql|database/schema\.sql|database/patches|LUDORA_DATABASE_URL'
     }
@@ -72,11 +85,35 @@ Describe 'CodexAPI production runbook contract' {
         $agents | Should Match '(?s)post-start verification fails.*stop `codexapi\.service`'
     }
 
-    It 'applies capable isolated health and runtime-profile verification during recovery' {
-        $recovery | Should Match 'codexapi-capable-isolated-v2'
+    It 'makes recovery revision-aware while preserving core CodexAPI isolation checks' {
+        $recovery | Should Match "CODEXAPI_PREVIOUS_CAPABILITY_POLICY='<expected health capability policy for selected commit>'"
+        $recovery | Should Match 'test "\$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" != ''<expected health capability policy for selected commit>'''
+        $recovery | Should Match 'EXPECTED_CODEXAPI_CAPABILITY_POLICY="\$CODEXAPI_PREVIOUS_CAPABILITY_POLICY"'
+        $recovery | Should Not Match 'codexapi-capable-isolated-v2'
         $recovery | Should Match 'systemctl show .*codexapi\.service'
+        $recovery | Should Match 'ProtectHome=yes'
+        $recovery | Should Match 'ReadOnlyPaths=/opt/ludora/codexapi'
+        $recovery | Should Match 'InaccessiblePaths=.*opt/ludora/ludora-admin'
+        $recovery | Should Match 'InaccessiblePaths=.*home'
         $recovery | Should Match 'cmp -s deploy/codexapi-runtime\.config\.toml /var/lib/codexapi/home/codexapi-runtime\.config\.toml'
         $recovery | Should Match "stat -c '%a' /var/lib/codexapi/home/codexapi-runtime\.config\.toml"
+    }
+
+    It 'orders recovery through the selected revision unit/profile and fail-closed verification' {
+        $stop = $recovery.IndexOf('sudo systemctl stop codexapi.service', [StringComparison]::Ordinal)
+        $checkout = $recovery.IndexOf('git checkout --detach "$CODEXAPI_PREVIOUS_COMMIT"', [StringComparison]::Ordinal)
+        $npmInstall = $recovery.IndexOf('npm ci', [StringComparison]::Ordinal)
+        $npmBuild = $recovery.IndexOf('npm run build', [StringComparison]::Ordinal)
+        $unitInstall = $recovery.IndexOf('deploy/codexapi.service /etc/systemd/system/codexapi.service', [StringComparison]::Ordinal)
+        $profileInstall = $recovery.IndexOf('deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
+        $unitVerify = $recovery.IndexOf('sudo systemd-analyze verify /etc/systemd/system/codexapi.service', [StringComparison]::Ordinal)
+        $start = $recovery.IndexOf('sudo systemctl start codexapi.service', [StringComparison]::Ordinal)
+        $startupVerification = $recovery.IndexOf('if ! verify_codexapi_startup; then', [StringComparison]::Ordinal)
+        $boundaryVerification = $recovery.IndexOf('if ! verify_codexapi_boundary; then', [StringComparison]::Ordinal)
+
+        ($stop -ge 0 -and $checkout -gt $stop -and $npmInstall -gt $checkout -and $npmBuild -gt $npmInstall -and
+            $unitInstall -gt $npmBuild -and $profileInstall -gt $unitInstall -and $unitVerify -gt $profileInstall -and
+            $start -gt $unitVerify -and $startupVerification -gt $start -and $boundaryVerification -gt $startupVerification) | Should Be $true
     }
 
     It 'provides explicit previous-commit recovery before npm mutation' {
