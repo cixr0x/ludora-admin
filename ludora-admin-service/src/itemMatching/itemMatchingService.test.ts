@@ -15,7 +15,7 @@ import type { TraceLogger } from '../trace.js';
 import { createItemMatchingService } from './itemMatchingService.js';
 
 describe('item matching service', () => {
-  it('selects image_url when loading the candidate for matching', async () => {
+  it('loads image and store context for matching', async () => {
     const queries: RecordedQuery[] = [];
     const database = matchingDatabase(storeItemCandidate(), [], {
       onQuery: (query) => queries.push(query)
@@ -25,8 +25,9 @@ describe('item matching service', () => {
 
     const candidateQuery = queries.find((query) => normalizeSql(query.sql).includes('from store_items'));
     expect(normalizeSql(candidateQuery?.sql ?? '')).toContain(
-      'select id, title, image_url, publisher, item_type, min_players, max_players, language, is_boardgame_confirmed, match_source, processing_error'
+      'select si.id, si.title, si.image_url, si.publisher, si.item_type, si.min_players, si.max_players, si.language, si.is_boardgame_confirmed, si.match_source, si.processing_error, s.name as store_name'
     );
+    expect(normalizeSql(candidateQuery?.sql ?? '')).toContain('left join stores s on s.id = si.store_id');
   });
 
   it('does not call AI when a local item is accepted', async () => {
@@ -47,6 +48,41 @@ describe('item matching service', () => {
     expect(cache.lookup).not.toHaveBeenCalled();
     expect(bggClient.searchFresh).not.toHaveBeenCalled();
     expect(linkUpdate(updates)?.params?.slice(0, 4)).toEqual([77, 'LOCAL', 377061, 'Coffee Rush']);
+  });
+
+  it('retrieves token candidates and accepts a local title surrounded by listing context', async () => {
+    const queries: RecordedQuery[] = [];
+    const updates: RecordedQuery[] = [];
+    const database = matchingDatabase(
+      storeItemCandidate({
+        publisher: 'Devir',
+        store_name: 'Amazon México',
+        title: 'Amazon México Devir Catan Juego de Mesa Edición en Español Original'
+      }),
+      [localItemRow({
+        bgg_id: 13,
+        canonical_name: 'Catan',
+        id: 13,
+        normalized_name: 'catan',
+        publishers: ['Devir']
+      })],
+      {
+        onQuery: (query) => queries.push(query),
+        onStoreItemUpdate: (query) => updates.push(query)
+      }
+    );
+    const ai = aiService();
+    const cache = matchCache();
+
+    await createItemMatchingService(database, dependencies({ ai, cache }))
+      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    const localQuery = queries.find((query) => normalizeSql(query.sql).startsWith('with local_names as'));
+    expect(normalizeSql(localQuery?.sql ?? '')).toContain("string_to_array(normalized_match_name, ' ') && $2::text[]");
+    expect(localQuery?.params?.[1]).toEqual(['catan']);
+    expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([13, 'LOCAL', 13, 'Catan', 0.92]);
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(ai.findMatch).not.toHaveBeenCalled();
   });
 
   it('uses a trusted Spanish cache association without AI', async () => {
@@ -1427,12 +1463,13 @@ function storeItemCandidate(overrides: Record<string, unknown> = {}): Record<str
     min_players: 2,
     processing_error: '',
     publisher: 'Korea Boardgames',
+    store_name: 'Korea Boardgames Store',
     title: 'Coffee Rush',
     ...overrides
   };
 }
 
-function localItemRow(): Record<string, unknown> {
+function localItemRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     aliases: [],
     bgg_id: 377061,
@@ -1441,7 +1478,9 @@ function localItemRow(): Record<string, unknown> {
     id: 77,
     item_type: 'base_game',
     normalized_name: 'coffee rush',
-    normalized_name_es: null
+    normalized_name_es: null,
+    publishers: ['Korea Boardgames'],
+    ...overrides
   };
 }
 

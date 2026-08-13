@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeTitleVariants, scoreBggThing, scoreLocalItem } from './itemMatcher.js';
+import { localMatchSearchTokens, normalizeTitleVariants, scoreBggThing, scoreLocalItem } from './itemMatcher.js';
 
 describe('item matcher', () => {
   it('scores exact BGG alternate name matches as strong matches', () => {
@@ -66,6 +66,79 @@ describe('item matcher', () => {
 
     expect(result.matchScore).toBeGreaterThanOrEqual(0.9);
     expect(result.matchReasons).toContain('exact local alias match');
+  });
+
+  it('scores reordered local title words above the automatic threshold', () => {
+    const result = scoreLocalItem(
+      { title: 'Middle-earth Duel: The Lord of the Rings', itemType: 'base_game' },
+      {
+        aliases: [],
+        id: 11,
+        itemType: 'base_game',
+        name: 'The Lord of the Rings: Duel for Middle-earth',
+        normalizedName: 'the lord of the rings duel for middle earth'
+      }
+    );
+
+    expect(result.matchScore).toBe(0.92);
+    expect(result.matchReasons).toContain('order-independent local item name match');
+  });
+
+  it('ignores store, publisher, language, and generic listing context around a complete title', () => {
+    const candidate = {
+      title: 'Amazon México - Devir - CATAN Juego de Mesa Edición en Español Original',
+      itemType: 'base_game',
+      publisher: 'Devir',
+      storeName: 'Amazon México'
+    };
+    const result = scoreLocalItem(
+      candidate,
+      {
+        aliases: [],
+        id: 12,
+        itemType: 'base_game',
+        name: 'Catan',
+        normalizedName: 'catan',
+        publishers: ['Devir']
+      }
+    );
+
+    expect(localMatchSearchTokens(candidate)).toEqual(['catan']);
+    expect(result.matchScore).toBe(0.92);
+    expect(result.matchReasons).toContain('order-independent local item name match');
+    expect(result.matchReasons.some((reason) => reason.startsWith('ignored listing context tokens:'))).toBe(true);
+  });
+
+  it('keeps meaningful product suffixes below the automatic threshold', () => {
+    const result = scoreLocalItem(
+      { title: 'Catan Plus', itemType: 'base_game' },
+      {
+        aliases: [],
+        id: 13,
+        itemType: 'base_game',
+        name: 'Catan',
+        normalizedName: 'catan'
+      }
+    );
+
+    expect(result.matchScore).toBeLessThan(0.9);
+    expect(result.matchReasons).toContain('meaningful extra title token: plus');
+  });
+
+  it('rejects an otherwise strong fuzzy match when the item types conflict', () => {
+    const result = scoreLocalItem(
+      { title: 'Middle-earth Duel: The Lord of the Rings', itemType: 'expansion' },
+      {
+        aliases: [],
+        id: 14,
+        itemType: 'base_game',
+        name: 'The Lord of the Rings: Duel for Middle-earth',
+        normalizedName: 'the lord of the rings duel for middle earth'
+      }
+    );
+
+    expect(result.matchScore).toBe(0.67);
+    expect(result.matchReasons).toContain('item type conflict');
   });
 
   it('scores local matches with language-only edition suffixes as strong matches', () => {

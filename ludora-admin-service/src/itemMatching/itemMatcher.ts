@@ -5,6 +5,7 @@ export type DiscoveryCandidateForMatch = {
   maxPlayers?: number | null;
   minPlayers?: number | null;
   publisher?: string | null;
+  storeName?: string | null;
   title: string;
 };
 
@@ -28,6 +29,7 @@ export type LocalItemForMatch = {
   nameEs?: string;
   normalizedName: string;
   normalizedNameEs?: string;
+  publishers?: string[];
 };
 
 export type MatchScore = {
@@ -53,6 +55,43 @@ const MEANINGFUL_EXTRA_TOKENS = new Set([
   'roll',
   'travel',
   'write'
+]);
+
+const TITLE_STOP_TOKENS = new Set([
+  'a',
+  'al',
+  'an',
+  'and',
+  'con',
+  'de',
+  'del',
+  'el',
+  'en',
+  'for',
+  'la',
+  'las',
+  'los',
+  'of',
+  'or',
+  'para',
+  'the',
+  'un',
+  'una',
+  'y'
+]);
+
+const LISTING_MARKETING_TOKENS = new Set([
+  'nuevo',
+  'nueva',
+  'nuevos',
+  'nuevas',
+  'oficial',
+  'original',
+  'producto',
+  'sellado',
+  'sellada',
+  'sellados',
+  'selladas'
 ]);
 
 export function scoreBggThing(candidate: DiscoveryCandidateForMatch, thing: BggThingForMatch): MatchScore {
@@ -126,12 +165,18 @@ export function scoreLocalItem(candidate: DiscoveryCandidateForMatch, item: Loca
     score = 0.94;
     const reasonSuffix = aliases.includes(candidateTitle) ? '' : ' after ignoring language edition';
     reasons.push(`exact local alias match${reasonSuffix}`);
-  } else if ([canonicalName, ...spanishNames].some((name) => hasTitleOverlap(candidateTitle, name))) {
-    score = 0.55;
-    reasons.push('substring title overlap only');
-    reasons.push(...meaningfulExtraTokenReasons(candidateTitle, canonicalName));
   } else {
-    reasons.push('no exact local name match');
+    const fuzzyMatch = bestLocalTokenMatch(candidate, item, [
+      { label: 'item name', value: canonicalName },
+      ...spanishNames.map((value) => ({ label: 'Spanish item name', value })),
+      ...aliases.map((value) => ({ label: 'alias', value }))
+    ]);
+    if (fuzzyMatch) {
+      score = fuzzyMatch.score;
+      reasons.push(...fuzzyMatch.reasons);
+    } else {
+      reasons.push('no local name token overlap');
+    }
   }
 
   if (itemTypeConflicts(candidate.itemType, item.itemType)) {
@@ -140,6 +185,19 @@ export function scoreLocalItem(candidate: DiscoveryCandidateForMatch, item: Loca
   }
 
   return { matchReasons: reasons, matchScore: clampScore(score) };
+}
+
+export function localMatchSearchTokens(candidate: DiscoveryCandidateForMatch): string[] {
+  const titleTokens = significantTitleTokens(normalizeTitle(candidate.title));
+  const ignoredTokens = ignoredListingTokens(candidate, []);
+  const contentTokens = titleTokens.filter((token) => !ignoredTokens.has(token));
+  const distinctiveTokens = contentTokens.filter((token) => token.length >= 3 || /^\d+$/.test(token));
+  const selected = distinctiveTokens.length > 0
+    ? distinctiveTokens
+    : contentTokens.length > 0
+      ? contentTokens
+      : titleTokens;
+  return selected.slice(0, 12);
 }
 
 export function normalizeTitle(value: string): string {
@@ -185,6 +243,121 @@ const LANGUAGE_TOKENS = new Set([
 ]);
 
 const LANGUAGE_EDITION_FILLER_TOKENS = new Set(['edition', 'edicion', 'en', 'idioma', 'language', 'version']);
+
+type LocalNameTokenMatch = {
+  reasons: string[];
+  score: number;
+};
+
+function bestLocalTokenMatch(
+  candidate: DiscoveryCandidateForMatch,
+  item: LocalItemForMatch,
+  names: Array<{ label: string; value: string }>
+): LocalNameTokenMatch | null {
+  const matches = names
+    .filter(({ value }) => Boolean(value))
+    .map(({ label, value }) => scoreLocalNameTokens(candidate, item, label, value))
+    .filter((match): match is LocalNameTokenMatch => match !== null)
+    .sort((left, right) => right.score - left.score);
+  return matches[0] ?? null;
+}
+
+function scoreLocalNameTokens(
+  candidate: DiscoveryCandidateForMatch,
+  item: LocalItemForMatch,
+  label: string,
+  matchedName: string
+): LocalNameTokenMatch | null {
+  const candidateTokens = significantTitleTokens(normalizeTitle(candidate.title));
+  const matchedTokens = significantTitleTokens(matchedName);
+  if (candidateTokens.length === 0 || matchedTokens.length === 0) {
+    return null;
+  }
+
+  const candidateTokenSet = new Set(candidateTokens);
+  const matchedTokenSet = new Set(matchedTokens);
+  const overlap = matchedTokens.filter((token) => candidateTokenSet.has(token));
+  if (overlap.length === 0) {
+    return null;
+  }
+
+  const ignoredTokens = ignoredListingTokens(candidate, item.publishers ?? []);
+  const extraTokens = candidateTokens.filter((token) => !matchedTokenSet.has(token));
+  const ignoredExtraTokens = extraTokens.filter((token) => ignoredTokens.has(token));
+  const unexpectedExtraTokens = extraTokens.filter((token) => !ignoredTokens.has(token));
+  const missingTokens = matchedTokens.filter((token) => !candidateTokenSet.has(token));
+  const fullCatalogTitleCoverage = missingTokens.length === 0;
+  const strongContainedMatch = fullCatalogTitleCoverage && unexpectedExtraTokens.length === 0;
+
+  const reasons: string[] = [];
+  let score: number;
+  if (strongContainedMatch) {
+    score = 0.92;
+    reasons.push(`order-independent local ${label} match`);
+  } else {
+    const precision = overlap.length / (overlap.length + unexpectedExtraTokens.length);
+    const recall = overlap.length / matchedTokens.length;
+    const tokenF1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
+    score = Math.min(0.89, 0.2 + (0.69 * tokenF1));
+    reasons.push(`local ${label} token overlap: ${overlap.length}/${matchedTokens.length}`);
+  }
+
+  if (ignoredExtraTokens.length > 0) {
+    reasons.push(`ignored listing context tokens: ${ignoredExtraTokens.join(', ')}`);
+  }
+  if (missingTokens.length > 0) {
+    reasons.push(`missing local title tokens: ${missingTokens.join(', ')}`);
+  }
+  for (const token of unexpectedExtraTokens) {
+    reasons.push(
+      MEANINGFUL_EXTRA_TOKENS.has(token)
+        ? `meaningful extra title token: ${token}`
+        : `unexplained extra title token: ${token}`
+    );
+  }
+
+  return { reasons, score };
+}
+
+function significantTitleTokens(normalizedTitle: string): string[] {
+  const tokens = uniqueTokens(normalizedTitle.split(' ').filter(Boolean));
+  const significantTokens = tokens.filter((token) => !TITLE_STOP_TOKENS.has(token));
+  return significantTokens.length > 0 ? significantTokens : tokens;
+}
+
+function ignoredListingTokens(candidate: DiscoveryCandidateForMatch, itemPublishers: string[]): Set<string> {
+  const ignoredTokens = new Set<string>([
+    ...LANGUAGE_TOKENS,
+    ...LANGUAGE_EDITION_FILLER_TOKENS,
+    ...LISTING_MARKETING_TOKENS
+  ]);
+  for (const context of [candidate.publisher, candidate.storeName, ...itemPublishers]) {
+    for (const token of normalizeTitle(context ?? '').split(' ').filter(Boolean)) {
+      ignoredTokens.add(token);
+    }
+  }
+
+  const normalizedCandidateTitle = normalizeTitle(candidate.title);
+  addPhraseTokensWhenPresent(ignoredTokens, normalizedCandidateTitle, ['juego de mesa', 'juegos de mesa']);
+  addPhraseTokensWhenPresent(ignoredTokens, normalizedCandidateTitle, ['board game', 'board games']);
+  addPhraseTokensWhenPresent(ignoredTokens, normalizedCandidateTitle, ['tabletop game', 'tabletop games']);
+  return ignoredTokens;
+}
+
+function addPhraseTokensWhenPresent(target: Set<string>, normalizedTitle: string, phrases: string[]): void {
+  const paddedTitle = ` ${normalizedTitle} `;
+  for (const phrase of phrases) {
+    if (paddedTitle.includes(` ${phrase} `)) {
+      for (const token of phrase.split(' ')) {
+        target.add(token);
+      }
+    }
+  }
+}
+
+function uniqueTokens(tokens: string[]): string[] {
+  return Array.from(new Set(tokens));
+}
 
 function stripLanguageEditionParentheticals(value: string): string {
   return value.replace(/\(([^()]*)\)/g, (segment, content) => {

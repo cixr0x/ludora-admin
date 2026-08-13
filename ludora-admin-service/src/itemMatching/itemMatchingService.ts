@@ -6,6 +6,7 @@ import type { BggSearchItem } from '../bgg/bggParser.js';
 import type { Database } from '../db.js';
 import { nullTraceLogger, type TraceLogger } from '../trace.js';
 import {
+  localMatchSearchTokens,
   normalizeTitle,
   normalizeTitleVariants,
   scoreBggThing,
@@ -70,6 +71,7 @@ type DiscoveryItemCandidateRow = {
   min_players?: number | null;
   processing_error?: string | null;
   publisher?: string | null;
+  store_name?: string | null;
   title: string;
 };
 
@@ -90,6 +92,7 @@ const matchCandidateSelect = `
 `;
 
 const AUTO_MATCH_SCORE_THRESHOLD = 0.9;
+const MAX_LOCAL_MATCH_CANDIDATES = 100;
 const MAX_LIVE_BGG_THING_FETCHES = 10;
 
 export type ItemMatchingDependencies = {
@@ -509,10 +512,11 @@ async function markStoreItemProcessingError(
 async function loadDiscoveryItemCandidate(database: Database, discoveryItemCandidateId: number): Promise<DiscoveryItemCandidateRow> {
   const result = await database.query(
     `
-    select id, title, image_url, publisher, item_type, min_players, max_players, language,
-           is_boardgame_confirmed, match_source, processing_error
-    from store_items
-    where id = $1
+    select si.id, si.title, si.image_url, si.publisher, si.item_type, si.min_players, si.max_players, si.language,
+           si.is_boardgame_confirmed, si.match_source, si.processing_error, s.name as store_name
+    from store_items si
+    left join stores s on s.id = si.store_id
+    where si.id = $1
     `,
     [discoveryItemCandidateId]
   );
@@ -525,8 +529,38 @@ async function loadDiscoveryItemCandidate(database: Database, discoveryItemCandi
 
 async function generateLocalMatches(database: Database, candidate: DiscoveryItemCandidateRow): Promise<GeneratedMatchCandidate[]> {
   const normalizedTitleVariants = normalizeTitleVariants(candidate.title);
+  const searchTokens = localMatchSearchTokens(discoveryCandidateForMatch(candidate));
   const result = await database.query(
     `
+    with local_names as (
+      select id as item_id, normalized_name as normalized_match_name
+      from items
+      where normalized_name <> ''
+      union all
+      select id as item_id, normalized_name_es as normalized_match_name
+      from items
+      where normalized_name_es <> ''
+      union all
+      select item_id, normalized_alias as normalized_match_name
+      from item_aliases
+      where normalized_alias <> ''
+    ),
+    ranked_items as (
+      select
+        item_id,
+        bool_or(normalized_match_name = any($1::text[])) as exact_name_match,
+        max((
+          select count(*)
+          from unnest(string_to_array(normalized_match_name, ' ')) as local_tokens(name_token)
+          where name_token = any($2::text[])
+        )) as token_overlap
+      from local_names
+      where normalized_match_name = any($1::text[])
+         or string_to_array(normalized_match_name, ' ') && $2::text[]
+      group by item_id
+      order by exact_name_match desc, token_overlap desc, item_id
+      limit ${MAX_LOCAL_MATCH_CANDIDATES}
+    )
     select
       i.id,
       i.canonical_name,
@@ -535,17 +569,30 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
       i.normalized_name_es,
       i.item_type,
       i.bgg_id,
-      coalesce(json_agg(distinct ia.alias) filter (where ia.alias is not null), '[]'::json) as aliases
-    from items i
-    left join item_aliases ia on ia.item_id = i.id
-    where i.normalized_name = any($1::text[])
-       or i.normalized_name_es = any($1::text[])
-       or ia.normalized_alias = any($1::text[])
-    group by i.id, i.canonical_name, i.canonical_name_es, i.normalized_name, i.normalized_name_es, i.item_type, i.bgg_id
-    order by i.canonical_name asc
-    limit 20
+      coalesce((
+        select json_agg(distinct ia.alias)
+        from item_aliases ia
+        where ia.item_id = i.id
+      ), '[]'::json) as aliases,
+      coalesce((
+        select json_agg(distinct publisher_name)
+        from (
+          select p.name as publisher_name
+          from item_publishers ip
+          join publishers p on p.id = ip.publisher_id
+          where ip.item_id = i.id
+          union
+          select pa.alias as publisher_name
+          from item_publishers ip
+          join publisher_aliases pa on pa.publisher_id = ip.publisher_id
+          where ip.item_id = i.id
+        ) item_publisher_names
+      ), '[]'::json) as publishers
+    from ranked_items ranked
+    join items i on i.id = ranked.item_id
+    order by ranked.exact_name_match desc, ranked.token_overlap desc, i.canonical_name asc
     `,
-    [normalizedTitleVariants]
+    [normalizedTitleVariants, searchTokens]
   );
 
   return result.rows.map((row) => {
@@ -910,6 +957,7 @@ function discoveryCandidateForMatch(candidate: DiscoveryItemCandidateRow): Disco
     maxPlayers: candidate.max_players,
     minPlayers: candidate.min_players,
     publisher: candidate.publisher,
+    storeName: candidate.store_name,
     title: candidate.title
   };
 }
@@ -921,7 +969,8 @@ function localItemFromRow(row: Record<string, unknown>): LocalItemForMatch {
     id: Number(row.id),
     itemType: stringOrNull(row.item_type),
     name: String(row.canonical_name ?? ''),
-    normalizedName: String(row.normalized_name ?? '')
+    normalizedName: String(row.normalized_name ?? ''),
+    publishers: stringList(row.publishers)
   };
   const nameEs = stringOrNull(row.canonical_name_es)?.trim();
   const normalizedNameEs = stringOrNull(row.normalized_name_es)?.trim();
