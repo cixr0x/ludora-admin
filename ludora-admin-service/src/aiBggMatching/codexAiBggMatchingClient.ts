@@ -6,10 +6,9 @@ import {
   systemPromptForAiBggMatch,
   userPromptForAiBggMatch
 } from './aiBggMatchingPrompts.js';
-import {
-  assertAiBggMatchDecisionConsistency,
-  type AiBggMatchDecision,
-  type AiBggMatchingClient
+import type {
+  AiBggMatchDecision,
+  AiBggMatchingClient
 } from './aiBggMatchingService.js';
 
 export const aiBggMatchSchema = {
@@ -115,8 +114,6 @@ export function parseAiBggMatchDecision(output: string): AiBggMatchDecision {
     confidence,
     reasoning: requiredString(parsed.reasoning, 'reasoning')
   };
-
-  assertAiBggMatchDecisionConsistency(decision);
 
   return decision;
 }

@@ -42,27 +42,21 @@ export function createAiBggMatchingService(
         throw new Error('AI BGG match confidence must be between 0 and 1');
       }
 
-      assertAiBggMatchDecisionConsistency(decision);
-
       if (!decision.matchFound) {
         return null;
       }
 
-      if (decision.coverAssessment === 'CONFLICT') {
-        throw new Error('AI BGG match cannot accept a cover conflict');
-      }
-      if (decision.nameAssessment !== 'MATCH') {
-        throw new Error('AI BGG match requires a matching name assessment');
-      }
       const bggId = decision.bggId;
-      if (typeof bggId !== 'number' || !Number.isInteger(bggId) || bggId <= 0) {
-        throw new Error('AI BGG match requires a positive integer BGG id');
-      }
-      if (!decision.matchedName) {
-        throw new Error('AI BGG match requires a matched name');
-      }
-      if (!decision.bggUrl) {
-        throw new Error('AI BGG match requires a BGG URL');
+      if (
+        decision.coverAssessment === 'CONFLICT' ||
+        decision.nameAssessment !== 'MATCH' ||
+        typeof bggId !== 'number' ||
+        !Number.isInteger(bggId) ||
+        bggId <= 0 ||
+        !decision.matchedName ||
+        !decision.bggUrl
+      ) {
+        return null;
       }
 
       return {
@@ -74,19 +68,6 @@ export function createAiBggMatchingService(
       };
     }
   };
-}
-
-export function assertAiBggMatchDecisionConsistency(decision: AiBggMatchDecision): void {
-  if (!decision.matchFound && (
-    decision.bggId !== null ||
-    decision.matchedName !== null ||
-    decision.bggUrl !== null ||
-    decision.bggImageUrl !== null ||
-    decision.nameAssessment !== 'NO_MATCH' ||
-    decision.coverAssessment !== 'UNAVAILABLE'
-  )) {
-    throw new Error('Invalid AI BGG match decision: no-match decisions must have null identity fields and NO_MATCH or UNAVAILABLE assessments');
-  }
 }
 
 function normalizeDecision(decision: AiBggMatchDecision): AiBggMatchDecision {
