@@ -84,6 +84,46 @@ describe('item matcher', () => {
     expect(result.matchReasons).toContain('order-independent local item name match');
   });
 
+  it('accepts an embedded exact title phrase reinforced by other shared title tokens', () => {
+    const candidate = {
+      title: 'La Expedición Perdida de Arnak Exp | Devir',
+      itemType: 'expansion',
+      publisher: 'Devir'
+    };
+    const result = scoreLocalItem(
+      candidate,
+      {
+        aliases: [],
+        id: 15,
+        itemType: 'expansion',
+        name: 'Las Ruinas perdidas de Arnak: Expansión La Expedición Perdida',
+        normalizedName: 'las ruinas perdidas de arnak expansion la expedicion perdida',
+        publishers: ['Devir']
+      }
+    );
+
+    expect(localMatchSearchTokens(candidate)).toEqual(['expedicion', 'perdida', 'arnak', 'expansion']);
+    expect(result.matchScore).toBeGreaterThanOrEqual(0.9);
+    expect(result.matchReasons).toContain('embedded local item name phrase match: expedicion perdida');
+    expect(result.matchReasons).toContain('additional shared local title tokens: arnak, expansion');
+  });
+
+  it('does not accept a two-word phrase without reinforcing shared title tokens', () => {
+    const result = scoreLocalItem(
+      { title: 'Star Wars Card Game', itemType: 'base_game' },
+      {
+        aliases: [],
+        id: 16,
+        itemType: 'base_game',
+        name: 'Star Wars: Rebellion',
+        normalizedName: 'star wars rebellion'
+      }
+    );
+
+    expect(result.matchScore).toBeLessThan(0.9);
+    expect(result.matchReasons).not.toContain('embedded local item name phrase match: star wars');
+  });
+
   it('ignores store, publisher, language, and generic listing context around a complete title', () => {
     const candidate = {
       title: 'Amazon México - Devir - CATAN Juego de Mesa Edición en Español Original',

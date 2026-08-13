@@ -94,6 +94,10 @@ const LISTING_MARKETING_TOKENS = new Set([
   'selladas'
 ]);
 
+const TITLE_TOKEN_ALIASES = new Map([
+  ['exp', 'expansion']
+]);
+
 export function scoreBggThing(candidate: DiscoveryCandidateForMatch, thing: BggThingForMatch): MatchScore {
   const reasons: string[] = [];
   const candidateTitle = normalizeTitle(candidate.title);
@@ -288,12 +292,24 @@ function scoreLocalNameTokens(
   const missingTokens = matchedTokens.filter((token) => !candidateTokenSet.has(token));
   const fullCatalogTitleCoverage = missingTokens.length === 0;
   const strongContainedMatch = fullCatalogTitleCoverage && unexpectedExtraTokens.length === 0;
+  const comparableCandidateTokens = candidateTokens.filter((token) => !ignoredTokens.has(token));
+  const sharedPhrase = longestSharedContiguousTokenPhrase(comparableCandidateTokens, matchedTokens);
+  const sharedPhraseTokens = new Set(sharedPhrase);
+  const additionalSharedTokens = overlap.filter((token) => !sharedPhraseTokens.has(token));
+  const strongEmbeddedPhraseMatch =
+    sharedPhrase.length >= 2 &&
+    additionalSharedTokens.length >= 1 &&
+    unexpectedExtraTokens.length === 0;
 
   const reasons: string[] = [];
   let score: number;
   if (strongContainedMatch) {
     score = 0.92;
     reasons.push(`order-independent local ${label} match`);
+  } else if (strongEmbeddedPhraseMatch) {
+    score = 0.91;
+    reasons.push(`embedded local ${label} phrase match: ${sharedPhrase.join(' ')}`);
+    reasons.push(`additional shared local title tokens: ${additionalSharedTokens.join(', ')}`);
   } else {
     const precision = overlap.length / (overlap.length + unexpectedExtraTokens.length);
     const recall = overlap.length / matchedTokens.length;
@@ -320,9 +336,36 @@ function scoreLocalNameTokens(
 }
 
 function significantTitleTokens(normalizedTitle: string): string[] {
-  const tokens = uniqueTokens(normalizedTitle.split(' ').filter(Boolean));
+  const tokens = uniqueTokens(
+    normalizedTitle
+      .split(' ')
+      .filter(Boolean)
+      .map((token) => TITLE_TOKEN_ALIASES.get(token) ?? token)
+  );
   const significantTokens = tokens.filter((token) => !TITLE_STOP_TOKENS.has(token));
   return significantTokens.length > 0 ? significantTokens : tokens;
+}
+
+function longestSharedContiguousTokenPhrase(leftTokens: string[], rightTokens: string[]): string[] {
+  let bestStart = 0;
+  let bestLength = 0;
+  for (let leftIndex = 0; leftIndex < leftTokens.length; leftIndex += 1) {
+    for (let rightIndex = 0; rightIndex < rightTokens.length; rightIndex += 1) {
+      let length = 0;
+      while (
+        leftIndex + length < leftTokens.length &&
+        rightIndex + length < rightTokens.length &&
+        leftTokens[leftIndex + length] === rightTokens[rightIndex + length]
+      ) {
+        length += 1;
+      }
+      if (length > bestLength) {
+        bestStart = leftIndex;
+        bestLength = length;
+      }
+    }
+  }
+  return leftTokens.slice(bestStart, bestStart + bestLength);
 }
 
 function ignoredListingTokens(candidate: DiscoveryCandidateForMatch, itemPublishers: string[]): Set<string> {
