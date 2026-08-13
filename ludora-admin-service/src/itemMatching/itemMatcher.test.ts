@@ -124,6 +124,21 @@ describe('item matcher', () => {
     expect(result.matchReasons).not.toContain('embedded local item name phrase match: star wars');
   });
 
+  it('accepts a complete three-word catalog title embedded in otherwise unrecognized listing text', () => {
+    const result = scoreLocalItem(
+      { title: 'Lairs: Deeper Dungeons: Expansion | Kids Table Board Gaming' },
+      {
+        aliases: [],
+        id: 17,
+        name: 'Lairs: Deeper Dungeons',
+        normalizedName: 'lairs deeper dungeons'
+      }
+    );
+
+    expect(result.matchScore).toBe(0.91);
+    expect(result.matchReasons).toContain('complete embedded local item name match: lairs deeper dungeons');
+  });
+
   it('ignores store, publisher, language, and generic listing context around a complete title', () => {
     const candidate = {
       title: 'Amazon México - Devir - CATAN Juego de Mesa Edición en Español Original',

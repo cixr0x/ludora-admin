@@ -296,6 +296,9 @@ function scoreLocalNameTokens(
   const sharedPhrase = longestSharedContiguousTokenPhrase(comparableCandidateTokens, matchedTokens);
   const sharedPhraseTokens = new Set(sharedPhrase);
   const additionalSharedTokens = overlap.filter((token) => !sharedPhraseTokens.has(token));
+  const strongCompleteEmbeddedTitleMatch =
+    matchedTokens.length >= 3 &&
+    sharedPhrase.length === matchedTokens.length;
   const strongEmbeddedPhraseMatch =
     sharedPhrase.length >= 2 &&
     additionalSharedTokens.length >= 1 &&
@@ -306,6 +309,9 @@ function scoreLocalNameTokens(
   if (strongContainedMatch) {
     score = 0.92;
     reasons.push(`order-independent local ${label} match`);
+  } else if (strongCompleteEmbeddedTitleMatch) {
+    score = 0.91;
+    reasons.push(`complete embedded local ${label} match: ${sharedPhrase.join(' ')}`);
   } else if (strongEmbeddedPhraseMatch) {
     score = 0.91;
     reasons.push(`embedded local ${label} phrase match: ${sharedPhrase.join(' ')}`);
