@@ -482,10 +482,29 @@ describe('item matching service', () => {
     expect(linkUpdate(updates)).toBeUndefined();
   });
 
-  it('preserves the current association when BGG validation fails', async () => {
+  it('preserves the current association when manual BGG validation finds no match', async () => {
     const updates: RecordedQuery[] = [];
+    const cache = matchCache();
+    const importer = itemImporter(88);
     const bggClient = clientWithThing(null);
     vi.mocked(bggClient.searchFresh!).mockResolvedValue([]);
+    const service = createItemMatchingService(
+      matchingDatabase(storeItemCandidate({ item_id: 77 }), [], {
+        onStoreItemUpdate: (query) => updates.push(query)
+      }),
+      dependencies({ ai: aiService(aiMatchFound()), bggClient, cache, importer })
+    );
+
+    await expect(service.matchWithAi?.(42)).resolves.toEqual({ status: 'not_found' });
+    expect(cache.recordAiMatch).not.toHaveBeenCalled();
+    expect(importer.importBggId).not.toHaveBeenCalled();
+    expect(updates).toEqual([]);
+  });
+
+  it('preserves the current association when a BGG validation request throws', async () => {
+    const updates: RecordedQuery[] = [];
+    const bggClient = clientWithThing(null);
+    vi.mocked(bggClient.fetchThing).mockRejectedValueOnce(new Error('BGG unavailable'));
     const service = createItemMatchingService(
       matchingDatabase(storeItemCandidate({ item_id: 77 }), [], {
         onStoreItemUpdate: (query) => updates.push(query)
@@ -493,7 +512,7 @@ describe('item matching service', () => {
       dependencies({ ai: aiService(aiMatchFound()), bggClient, importer: itemImporter(88) })
     );
 
-    await expect(service.matchWithAi?.(42)).rejects.toThrow('could not validate');
+    await expect(service.matchWithAi?.(42)).rejects.toThrow('BGG unavailable');
     expect(linkUpdate(updates)).toBeUndefined();
   });
 
@@ -702,8 +721,10 @@ describe('item matching service', () => {
     expect(normalizeSql(updates[1]?.sql ?? '')).toContain("match_source = 'none'");
   });
 
-  it('records a processing error when the returned BGG ID does not resolve', async () => {
+  it('records no match when the returned BGG ID does not resolve', async () => {
     const updates: RecordedQuery[] = [];
+    const cache = matchCache();
+    const importer = itemImporter(88);
     const database = matchingDatabase(
       storeItemCandidate({ title: 'La Guerra del Anillo' }),
       [],
@@ -717,13 +738,15 @@ describe('item matching service', () => {
     await createItemMatchingService(database, dependencies({
       ai: aiService(aiMatchFound()),
       bggClient,
-      cache: matchCache(),
-      importer: itemImporter(88)
+      cache,
+      importer
     })).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
-    const errorUpdate = processingErrorUpdate(updates);
-    expect(errorUpdate?.params).toEqual(['AI BGG match could not validate BGG ID 115746', 42]);
+    expect(processingErrorUpdate(updates)).toBeUndefined();
+    expect(cache.recordAiMatch).not.toHaveBeenCalled();
+    expect(importer.importBggId).not.toHaveBeenCalled();
     expect(linkUpdate(updates)).toBeUndefined();
+    expect(updates.some((query) => normalizeSql(query.sql).includes("match_source = 'none'"))).toBe(true);
   });
 
   it('corrects a hallucinated AI ID through an exact authenticated BGG title search', async () => {
@@ -779,7 +802,7 @@ describe('item matching service', () => {
     expect(linkUpdate(updates)).toBeDefined();
   });
 
-  it('rejects a hallucinated AI ID when BGG has no unique exact title result', async () => {
+  it('records no match for a hallucinated AI ID when BGG has no unique exact title result', async () => {
     const updates: RecordedQuery[] = [];
     const cache = matchCache();
     const importer = itemImporter(88);
@@ -813,13 +836,11 @@ describe('item matching service', () => {
       importer
     })).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
-    expect(processingErrorUpdate(updates)?.params).toEqual([
-      'AI BGG match name did not match BGG ID 402794',
-      42
-    ]);
+    expect(processingErrorUpdate(updates)).toBeUndefined();
     expect(cache.recordAiMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).not.toHaveBeenCalled();
     expect(linkUpdate(updates)).toBeUndefined();
+    expect(updates.some((query) => normalizeSql(query.sql).includes("match_source = 'none'"))).toBe(true);
   });
 
   it('records a processing error when CodexAPI fails', async () => {
@@ -1081,6 +1102,9 @@ describe('item matching service', () => {
     })).confirmBoardgameAndMatch?.(42, { traceLogger: failedLogger });
 
     expect(noMatchEvents.map(({ event }) => event)).toContain('item_matcher.ai_match.no_match');
+    expect(traceFields(noMatchEvents, 'item_matcher.ai_match.no_match')).toMatchObject({
+      reason: 'ai_decision_not_accepted'
+    });
     expect(traceFields(noMatchEvents, 'item_matcher.ai_match.completed')).toMatchObject({
       bgg_id: null,
       confidence: null,
@@ -1119,18 +1143,13 @@ describe('item matching service', () => {
         matchedName: 'Catan',
         nameAssessment: 'MATCH'
       }),
-      expectedError: 'AI BGG match cannot accept a cover conflict',
       label: 'cover conflict'
     },
     {
       decision: aiDecision({ bggId: 13 }),
-      expectedError: 'Invalid AI BGG match decision',
-      label: 'malformed negative decision'
+      label: 'negative decision with leftover identity'
     }
-  ])('logs explicit null evidence and performs no downstream writes for a rejected $label', async ({
-    decision,
-    expectedError
-  }) => {
+  ])('logs no match and performs no downstream writes for a completed $label decision', async ({ decision }) => {
     const events: TraceEvent[] = [];
     const updates: RecordedQuery[] = [];
     const cache = matchCache();
@@ -1155,29 +1174,28 @@ describe('item matching service', () => {
       traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
     });
 
-    expect(processingErrorUpdate(updates)?.params?.[0]).toContain(expectedError);
+    expect(processingErrorUpdate(updates)).toBeUndefined();
     expect(cache.recordAiMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).not.toHaveBeenCalled();
     expect(linkUpdate(updates)).toBeUndefined();
-    expect(traceFields(events, 'item_matcher.ai_match.failed')).toMatchObject({
-      bgg_id: null,
-      confidence: null,
-      cover_assessment: null,
-      matched_name: null,
-      name_assessment: null
+    expect(traceFields(events, 'item_matcher.ai_match.no_match')).toMatchObject({
+      reason: 'ai_decision_not_accepted'
     });
+    expect(traceFields(events, 'item_matcher.ai_match.failed')).toBeUndefined();
   });
 
-  it('retains decision evidence when BGG validation fails', async () => {
+  it('retains decision evidence when BGG validation finds no match', async () => {
     const events: TraceEvent[] = [];
     const cache = matchCache();
     const importer = itemImporter(88);
+    const bggClient = clientWithThing(null);
+    vi.mocked(bggClient.searchFresh!).mockResolvedValue([]);
 
     await createItemMatchingService(
       matchingDatabase(storeItemCandidate({ title: 'La Guerra del Anillo' })),
       dependencies({
         ai: aiService(aiMatchFound()),
-        bggClient: clientWithThing(null),
+        bggClient,
         cache,
         importer
       })
@@ -1187,7 +1205,18 @@ describe('item matching service', () => {
 
     expect(cache.recordAiMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).not.toHaveBeenCalled();
-    expect(traceFields(events, 'item_matcher.ai_match.failed')).toMatchObject(aiTraceEvidence());
+    expect(traceFields(events, 'item_matcher.ai_match.validation.completed')).toMatchObject({
+      ai_bgg_id: 115746,
+      bgg_id: 115746,
+      id_validated: false,
+      name_validated: false,
+      validated: false
+    });
+    expect(traceFields(events, 'item_matcher.ai_match.no_match')).toMatchObject({
+      ...aiTraceEvidence(),
+      reason: 'bgg_identity_unvalidated'
+    });
+    expect(traceFields(events, 'item_matcher.ai_match.failed')).toBeUndefined();
   });
 
   it('retains decision evidence and stops before import when the cache write fails', async () => {

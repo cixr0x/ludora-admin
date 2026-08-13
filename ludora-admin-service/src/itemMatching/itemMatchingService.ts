@@ -767,7 +767,8 @@ async function generateAiBggMatch(
     });
     if (!decision) {
       traceLog(traceLogger, 'item_matcher.ai_match.no_match', {
-        candidate_id: candidate.id
+        candidate_id: candidate.id,
+        reason: 'ai_decision_not_accepted'
       });
       return null;
     }
@@ -825,10 +826,20 @@ async function generateAiBggMatch(
       validated
     });
     if (!thing || !idValidated) {
-      throw new Error(`AI BGG match could not validate BGG ID ${attemptedBggId}`);
+      traceLog(traceLogger, 'item_matcher.ai_match.no_match', {
+        ...aiDecisionTraceFields(decision),
+        candidate_id: candidate.id,
+        reason: 'bgg_identity_unvalidated'
+      });
+      return null;
     }
     if (!nameValidated) {
-      throw new Error(`AI BGG match name did not match BGG ID ${aiBggId}`);
+      traceLog(traceLogger, 'item_matcher.ai_match.no_match', {
+        ...aiDecisionTraceFields(decision),
+        candidate_id: candidate.id,
+        reason: 'bgg_name_mismatch'
+      });
+      return null;
     }
 
     const searchItem: BggSearchItem = {
