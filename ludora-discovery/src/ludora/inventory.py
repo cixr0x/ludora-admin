@@ -6,6 +6,8 @@ from typing import Protocol
 from ludora.amukiri_discovery import crawl_amukiri_inventory, is_amukiri_store_url
 from ludora.cancellation import CancellationToken
 from ludora.catito_discovery import crawl_catito_inventory, is_catito_store_url
+from ludora.demon_discovery import crawl_demon_inventory, is_demon_store_url
+from ludora.dia_d_discovery import crawl_dia_d_inventory, is_dia_d_store_url
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.amazon_discovery import crawl_amazon_brand_inventory, crawl_amazon_store_inventory
 from ludora.product_crawler import (
@@ -112,6 +114,30 @@ def collect_store_inventory(
         )
     if is_catito_store_url(store_url):
         return crawl_catito_inventory(
+            store_url,
+            store_id,
+            repository,
+            limit=limit,
+            item_classifier=item_classifier,
+            item_processor=item_processor,
+            trace_logger=trace_logger,
+            cancellation_token=cancellation_token,
+            before_product_request=before_product_request,
+        )
+    if is_demon_store_url(store_url):
+        return crawl_demon_inventory(
+            store_url,
+            store_id,
+            repository,
+            limit=limit,
+            item_classifier=item_classifier,
+            item_processor=item_processor,
+            trace_logger=trace_logger,
+            cancellation_token=cancellation_token,
+            before_product_request=before_product_request,
+        )
+    if is_dia_d_store_url(store_url):
+        return crawl_dia_d_inventory(
             store_url,
             store_id,
             repository,

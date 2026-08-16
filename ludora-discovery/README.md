@@ -98,6 +98,11 @@ Product-detail requests are globally start-paced at three seconds across a disco
 
 Shopify discovery enumerates product URLs from the sitemap and fetches each product detail through signed Storefront GraphQL only. It has no HTML fallback and does not use GraphQL for product enumeration. A null Shopify product is skipped and logged. A failed store does not stop the remaining stores in the batch, but any store failure causes the parent batch to fail after all stores have run.
 
+Two stores use domain-specific catalog discovery because their public storefronts do not expose compatible product sitemaps:
+
+- `demonjuegosdemesa.com` walks the storefront's `scpp`/`spage` catalog pages with browser request headers, recognizes root-level product URLs, and reads product identity, price, SKU, and availability from schema.org microdata. Blank source product cards are traced and left unpersisted.
+- `diadejuegos.mx` reads category IDs from the public sitemap page, walks the theme's paginated `diadjuegoscms` catalog endpoint, deduplicates category overlap by PrestaShop product ID, and treats the endpoint's explicit price and stock as authoritative over unrelated product-page text.
+
 Item discovery uses the AI classifier by default. It calls the private loopback CodexAPI `/responses` endpoint, stores the returned reasoning in `classification_reasons`, and fails the discovery run if the classifier request or response contract fails. The OpenAI-compatible request format is transport-only; do not add an official OpenAI Responses or Chat Completions fallback. The classifier itself runs inside the Python discovery operation as the intentional existing direct CodexAPI caller:
 
 ```text

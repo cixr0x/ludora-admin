@@ -1751,6 +1751,15 @@ def _extract_refresh_detail_candidate(
     source_listing_url: str,
     platform: str,
 ) -> DiscoveryItemCandidateRecord | None:
+    from ludora.demon_discovery import extract_demon_product_detail_candidate, is_demon_store_url
+
+    if is_demon_store_url(listing_candidate.source_url):
+        return extract_demon_product_detail_candidate(
+            page_html=fetched_detail.text,
+            product_url=fetched_detail.url,
+            store_id=listing_candidate.store_id,
+            source_listing_url=source_listing_url,
+        )
     if platform.strip().casefold() in AMAZON_STORE_PLATFORMS:
         # Imported lazily because amazon_discovery reuses the repository and processor
         # protocols defined in this module.
@@ -1808,13 +1817,19 @@ def _fetch_static_product_detail(
     max_attempts: int = DEFAULT_FETCH_MAX_ATTEMPTS,
 ) -> FetchResult | None:
     resolved_trace_fields = {"fetch_method": "static", **dict(trace_fields or {})}
+    resolved_headers_provider = request_headers_provider
+    if resolved_headers_provider is None:
+        from ludora.demon_discovery import demon_request_headers, is_demon_store_url
+
+        if is_demon_store_url(source_url):
+            resolved_headers_provider = demon_request_headers
 
     def fetch_detail(url: str) -> FetchResult | None:
         if before_request is not None:
             before_request(url)
         return fetch_html(
             url,
-            headers=request_headers_provider(url) if request_headers_provider is not None else None,
+            headers=resolved_headers_provider(url) if resolved_headers_provider is not None else None,
             include_http_error_status=True,
         )
 

@@ -516,18 +516,24 @@ class InventoryTests(unittest.TestCase):
             ("https://www.amazon.com.mx/s?brand=example", "amazon_brand", "crawl_amazon_brand_inventory"),
             ("https://amukiri.mx/", "custom", "crawl_amukiri_inventory"),
             ("https://www.catitogames.com/", "custom", "crawl_catito_inventory"),
+            ("https://demonjuegosdemesa.com/", "custom", "crawl_demon_inventory"),
+            ("https://www.diadejuegos.mx/", "prestashop", "crawl_dia_d_inventory"),
         ]
         with patch("ludora.inventory.crawl_store_product_details", return_value=[]) as generic, patch(
             "ludora.inventory.crawl_amazon_store_inventory", return_value=[]
         ) as amazon, patch("ludora.inventory.crawl_amazon_brand_inventory", return_value=[]) as amazon_brand, patch(
             "ludora.inventory.crawl_amukiri_inventory", return_value=[]
-        ) as amukiri, patch("ludora.inventory.crawl_catito_inventory", return_value=[]) as catito:
+        ) as amukiri, patch("ludora.inventory.crawl_catito_inventory", return_value=[]) as catito, patch(
+            "ludora.inventory.crawl_demon_inventory", return_value=[]
+        ) as demon, patch("ludora.inventory.crawl_dia_d_inventory", return_value=[]) as dia_d:
             crawlers = {
                 "crawl_store_product_details": generic,
                 "crawl_amazon_store_inventory": amazon,
                 "crawl_amazon_brand_inventory": amazon_brand,
                 "crawl_amukiri_inventory": amukiri,
                 "crawl_catito_inventory": catito,
+                "crawl_demon_inventory": demon,
+                "crawl_dia_d_inventory": dia_d,
             }
             for store_url, platform, crawler_name in routes:
                 collect_store_inventory(
@@ -647,6 +653,54 @@ class InventoryTests(unittest.TestCase):
             amukiri_crawler.call_args.args[:3],
             ("https://amukiri.mx/", 12, repository),
         )
+
+    def test_collect_store_inventory_routes_demon_domain_to_custom_crawler(self):
+        repository = FakeRepository()
+        expected_records = [
+            DiscoveryItemCandidateRecord(
+                store_id=20,
+                source_url="https://demonjuegosdemesa.com/Alpha/",
+                title="Alpha",
+            )
+        ]
+
+        with patch("ludora.inventory.crawl_demon_inventory", return_value=expected_records) as crawler, patch(
+            "ludora.inventory.crawl_store_product_details"
+        ) as generic_crawler:
+            records = collect_store_inventory(
+                "https://demonjuegosdemesa.com/",
+                20,
+                repository,
+                platform="custom",
+            )
+
+        self.assertEqual(records, expected_records)
+        generic_crawler.assert_not_called()
+        self.assertEqual(crawler.call_args.args[:3], ("https://demonjuegosdemesa.com/", 20, repository))
+
+    def test_collect_store_inventory_routes_dia_d_domain_to_custom_crawler(self):
+        repository = FakeRepository()
+        expected_records = [
+            DiscoveryItemCandidateRecord(
+                store_id=21,
+                source_url="https://www.diadejuegos.mx/familiares/141-mal-trago.html",
+                title="MAL TRAGO",
+            )
+        ]
+
+        with patch("ludora.inventory.crawl_dia_d_inventory", return_value=expected_records) as crawler, patch(
+            "ludora.inventory.crawl_store_product_details"
+        ) as generic_crawler:
+            records = collect_store_inventory(
+                "https://www.diadejuegos.mx/",
+                21,
+                repository,
+                platform="prestashop",
+            )
+
+        self.assertEqual(records, expected_records)
+        generic_crawler.assert_not_called()
+        self.assertEqual(crawler.call_args.args[:3], ("https://www.diadejuegos.mx/", 21, repository))
 
     def test_collect_store_inventory_enables_browser_fetch_for_godaddy_platform(self):
         repository = FakeRepository()
@@ -1215,6 +1269,44 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.item_records[0].category_confidence, 0.91)
         self.assertEqual(repository.item_records[0].classification_reasons, ["previously confirmed"])
         self.assertEqual(repository.update_change_log_calls, [])
+
+    def test_refresh_demon_item_uses_browser_headers_and_product_microdata(self):
+        existing = DiscoveryItemCandidateRecord(
+            store_id=20,
+            source_url="https://demonjuegosdemesa.com/Dog-Park/",
+            source_listing_url="https://demonjuegosdemesa.com/?scpp=100&spage=1",
+            title="Dog Park",
+            store_sku="6379021812874",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+            listing_status="LISTED",
+        )
+        page_html = """
+        <html><body>
+          <h2>WhatsApp al 5568041896</h2>
+          <div itemtype="https://schema.org/Product" itemscope>
+            <meta itemprop="name" content="Dog Park" />
+            <meta itemprop="sku" content="6379021812874" />
+            <div itemprop="offers" itemtype="https://schema.org/Offer" itemscope>
+              <meta itemprop="priceCurrency" content="MXN" />
+              <meta itemprop="price" content="980" />
+              <link itemprop="availability" href="https://schema.org/InStock" />
+            </div>
+          </div>
+        </body></html>
+        """
+
+        def fetcher(url, **kwargs):
+            self.assertIn("Mozilla/5.0", kwargs["headers"]["User-Agent"])
+            return FetchResult(url=url, text=page_html)
+
+        with patch("ludora.product_crawler.fetch_html", side_effect=fetcher):
+            refreshed = refresh_confirmed_store_item_candidate(existing, platform="custom")
+
+        self.assertEqual(refreshed.title, "Dog Park")
+        self.assertEqual(refreshed.store_sku, "6379021812874")
+        self.assertEqual(refreshed.price, "980.00")
+        self.assertEqual(refreshed.availability, "available")
 
     def test_update_confirmed_store_item_details_rejects_conflicting_store_sku(self):
         detail_html = """
