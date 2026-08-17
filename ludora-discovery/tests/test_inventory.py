@@ -1097,6 +1097,52 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual([event["will_retry"] for event in http_error_events], [True, True, False])
         self.assertEqual(repository.item_records, [])
 
+    def test_crawl_store_product_details_skips_removed_candidate_and_continues(self):
+        removed_url = "https://example.mx/products/removed"
+        valid_url = "https://example.mx/products/catan"
+        detail_html = """
+        <script type="application/ld+json">
+        {"@type": "Product", "name": "Catan"}
+        </script>
+        """
+
+        for status_code in (404, 410):
+            with self.subTest(status_code=status_code):
+                repository = FakeRepository()
+                trace = FakeTraceLogger()
+
+                def fetch_detail(url, **_kwargs):
+                    if url == removed_url:
+                        return FetchResult(url=url, text="", status_code=status_code)
+                    return FetchResult(url=url, text=detail_html)
+
+                with patch(
+                    "ludora.product_crawler.discover_product_urls_from_sitemaps",
+                    return_value=[removed_url, valid_url],
+                ), patch(
+                    "ludora.product_crawler.fetch_html",
+                    side_effect=fetch_detail,
+                ) as fetch_html:
+                    records = crawl_store_product_details(
+                        "https://example.mx/",
+                        12,
+                        repository,
+                        trace_logger=trace,
+                    )
+
+                self.assertEqual(fetch_html.call_count, 2)
+                self.assertEqual([record.title for record in records], ["Catan"])
+                self.assertEqual([record.title for record in repository.item_records], ["Catan"])
+                skipped_events = [
+                    fields
+                    for event, fields in trace.events
+                    if event == "inventory.candidate.detail_fetch.skipped_removed"
+                ]
+                self.assertEqual(len(skipped_events), 1)
+                self.assertEqual(skipped_events[0]["source_url"], removed_url)
+                self.assertEqual(skipped_events[0]["status_code"], status_code)
+                self.assertEqual(skipped_events[0]["reason"], f"http_{status_code}")
+
     def test_crawl_store_product_details_skips_sitemap_candidate_when_parsed_detail_is_rejected(self):
         cookie_html = """
         <html>

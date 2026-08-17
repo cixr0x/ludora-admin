@@ -1450,6 +1450,22 @@ def _fetch_detail_candidate(
     )
     explicitly_throttled = store_item_update_request and last_failure_status_code == 429
     static_fetch_failed = fetched_detail is None or last_failure_status_code is not None
+    if not detect_removed and last_failure_status_code in {404, 410}:
+        trace.log(
+            "inventory.candidate.detail_fetch.skipped_removed",
+            listing_title=listing_candidate.title,
+            message=(
+                "Skipping catalog candidate because its product detail returned "
+                f"HTTP {last_failure_status_code}"
+            ),
+            reason=f"http_{last_failure_status_code}",
+            source_url=listing_candidate.source_url,
+            status_code=last_failure_status_code,
+            store_id=listing_candidate.store_id,
+        )
+        raise ProductDetailRejectedError(
+            f"Product detail skipped (HTTP {last_failure_status_code}): {listing_candidate.source_url}"
+        )
     if last_failure_status_code is not None:
         fetched_detail = None
     if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
