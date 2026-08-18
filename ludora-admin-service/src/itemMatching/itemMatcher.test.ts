@@ -108,6 +108,38 @@ describe('item matcher', () => {
     expect(result.matchReasons).toContain('additional shared local title tokens: arnak, expansion');
   });
 
+  it('accepts a long shared phrase plus another shared token despite ordinary listing noise', () => {
+    const result = scoreLocalItem(
+      { title: 'Batman: El Regreso del Caballero Oscuro (Ed. Deluxe)Español' },
+      {
+        aliases: [],
+        id: 18,
+        name: 'Batman: El Regreso del Caballero Oscuro DELUXE',
+        normalizedName: 'batman el regreso del caballero oscuro deluxe'
+      }
+    );
+
+    expect(result.matchScore).toBe(0.91);
+    expect(result.matchReasons).toContain('embedded local item name phrase match: batman regreso caballero oscuro');
+    expect(result.matchReasons).toContain('additional shared local title tokens: deluxe');
+    expect(result.matchReasons).toContain('unexplained extra title token: ed');
+  });
+
+  it('does not accept the same phrase evidence with an unmatched meaningful product modifier', () => {
+    const result = scoreLocalItem(
+      { title: 'Batman: El Regreso del Caballero Oscuro Junior DELUXE' },
+      {
+        aliases: [],
+        id: 19,
+        name: 'Batman: El Regreso del Caballero Oscuro DELUXE',
+        normalizedName: 'batman el regreso del caballero oscuro deluxe'
+      }
+    );
+
+    expect(result.matchScore).toBeLessThan(0.9);
+    expect(result.matchReasons).toContain('meaningful extra title token: junior');
+  });
+
   it('does not accept a two-word phrase without reinforcing shared title tokens', () => {
     const result = scoreLocalItem(
       { title: 'Star Wars Card Game', itemType: 'base_game' },

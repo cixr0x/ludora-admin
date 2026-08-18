@@ -289,6 +289,9 @@ function scoreLocalNameTokens(
   const extraTokens = candidateTokens.filter((token) => !matchedTokenSet.has(token));
   const ignoredExtraTokens = extraTokens.filter((token) => ignoredTokens.has(token));
   const unexpectedExtraTokens = extraTokens.filter((token) => !ignoredTokens.has(token));
+  const meaningfulUnexpectedExtraTokens = unexpectedExtraTokens.filter((token) =>
+    MEANINGFUL_EXTRA_TOKENS.has(token)
+  );
   const missingTokens = matchedTokens.filter((token) => !candidateTokenSet.has(token));
   const fullCatalogTitleCoverage = missingTokens.length === 0;
   const strongContainedMatch = fullCatalogTitleCoverage && unexpectedExtraTokens.length === 0;
@@ -302,7 +305,7 @@ function scoreLocalNameTokens(
   const strongEmbeddedPhraseMatch =
     sharedPhrase.length >= 2 &&
     additionalSharedTokens.length >= 1 &&
-    unexpectedExtraTokens.length === 0;
+    meaningfulUnexpectedExtraTokens.length === 0;
 
   const reasons: string[] = [];
   let score: number;
