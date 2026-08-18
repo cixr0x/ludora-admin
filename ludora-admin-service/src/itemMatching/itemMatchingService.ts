@@ -142,6 +142,13 @@ export function createItemMatchingService(
         candidate_id: discoveryItemCandidateId,
         is_boardgame_confirmed: isAdminConfirmation
       });
+      if (isAdminConfirmation) {
+        traceLog(traceLogger, 'item_matcher.confirm.completed', {
+          candidate_id: discoveryItemCandidateId,
+          result: 'confirmed_without_matching'
+        });
+        return;
+      }
 
       try {
         traceLog(traceLogger, 'item_matcher.local_match.start', { candidate_id: discoveryItemCandidateId });

@@ -643,8 +643,9 @@ describe('item matching service', () => {
     expect(normalizeSql(noMatch?.sql ?? '')).toContain('is_boardgame_confirmed = false');
   });
 
-  it('runs matching for a fresh admin action and persists its no-match as confirmed', async () => {
+  it('confirms a fresh admin action without running item matching', async () => {
     const updates: RecordedQuery[] = [];
+    const events: TraceEvent[] = [];
     const ai = aiService(null);
     const cache = matchCache();
     const importer = itemImporter(88);
@@ -655,15 +656,24 @@ describe('item matching service', () => {
     );
 
     await createItemMatchingService(database, dependencies({ ai, cache, importer }))
-      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'admin' });
+      .confirmBoardgameAndMatch?.(42, {
+        confirmationSource: 'admin',
+        traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
+      });
 
-    expect(ai.findMatch).toHaveBeenCalledOnce();
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(ai.findMatch).not.toHaveBeenCalled();
     expect(cache.recordAiMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).not.toHaveBeenCalled();
     expect(linkUpdate(updates)).toBeUndefined();
-    const noMatch = updates.find((query) => normalizeSql(query.sql).includes("match_source = 'none'"));
-    expect(normalizeSql(noMatch?.sql ?? '')).toContain('is_boardgame_confirmed = true');
-    expect(noMatch?.params).toEqual([JSON.stringify(['no match above threshold']), 42]);
+    expect(updates).toHaveLength(1);
+    expect(normalizeSql(updates[0]?.sql ?? '')).toContain('is_boardgame = true');
+    expect(normalizeSql(updates[0]?.sql ?? '')).toContain('is_boardgame_confirmed = true');
+    expect(updates[0]?.params).toEqual([42]);
+    expect(traceFields(events, 'item_matcher.confirm.completed')).toEqual({
+      candidate_id: 42,
+      result: 'confirmed_without_matching'
+    });
   });
 
   it('short-circuits an automated re-entry for a persisted confirmed no-match', async () => {
@@ -706,7 +716,7 @@ describe('item matching service', () => {
     });
   });
 
-  it('reruns matching when an admin explicitly reopens a persisted confirmed no-match', async () => {
+  it('does not rerun matching when an admin confirms a persisted no-match', async () => {
     const updates: RecordedQuery[] = [];
     const ai = aiService(null);
     const cache = matchCache();
@@ -724,10 +734,10 @@ describe('item matching service', () => {
     await createItemMatchingService(database, dependencies({ ai, cache }))
       .confirmBoardgameAndMatch?.(42, { confirmationSource: 'admin' });
 
-    expect(cache.lookup).toHaveBeenCalledOnce();
-    expect(ai.findMatch).toHaveBeenCalledOnce();
-    const noMatch = updates.find((query) => normalizeSql(query.sql).includes("match_source = 'none'"));
-    expect(normalizeSql(noMatch?.sql ?? '')).toContain('is_boardgame_confirmed = true');
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(ai.findMatch).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(1);
+    expect(normalizeSql(updates[0]?.sql ?? '')).toContain('is_boardgame_confirmed = true');
   });
 
   it('retries matching for an automated confirmed no-match that has a processing error', async () => {
@@ -900,7 +910,7 @@ describe('item matching service', () => {
     expect(linkUpdate(updates)).toBeUndefined();
   });
 
-  it('keeps an admin-confirmed processing error confirmed and final', async () => {
+  it('clears a prior processing error on manual confirmation without retrying matching', async () => {
     const updates: RecordedQuery[] = [];
     const ai = aiService();
     const cache = matchCache();
@@ -920,11 +930,15 @@ describe('item matching service', () => {
     })).confirmBoardgameAndMatch?.(42, { confirmationSource: 'admin' });
 
     expect(cache.recordAiMatch).not.toHaveBeenCalled();
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(ai.findMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).not.toHaveBeenCalled();
     expect(linkUpdate(updates)).toBeUndefined();
-    const errorUpdate = processingErrorUpdate(updates);
-    expect(normalizeSql(errorUpdate?.sql ?? '')).toContain('is_boardgame_confirmed = true');
-    expect(errorUpdate?.params).toEqual(['CodexAPI unavailable', 42]);
+    expect(processingErrorUpdate(updates)).toBeUndefined();
+    expect(updates).toHaveLength(1);
+    expect(normalizeSql(updates[0]?.sql ?? '')).toContain('is_boardgame_confirmed = true');
+    expect(normalizeSql(updates[0]?.sql ?? '')).toContain("processing_error = ''");
+    expect(updates[0]?.params).toEqual([42]);
   });
 
   it('does not cache or import a failed AI decision', async () => {

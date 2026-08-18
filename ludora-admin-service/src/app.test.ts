@@ -3219,7 +3219,7 @@ describe('ludora admin service', () => {
     expect(queries[0].params).toEqual([3365, 88]);
   });
 
-  it('confirms a store item as boardgame and runs item matching', async () => {
+  it('routes manual boardgame confirmation as an admin action', async () => {
     const row = {
       id: 42,
       is_boardgame: true,
