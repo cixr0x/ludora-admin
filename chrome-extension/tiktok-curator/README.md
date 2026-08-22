@@ -10,16 +10,24 @@ This unpacked Chrome extension adds a small Ludora curation panel on TikTok page
    npm run dev:codex
    ```
 
-2. Open Chrome extensions: `chrome://extensions`.
-3. Enable Developer mode.
-4. Click **Load unpacked** and select this folder:
+2. Start the admin UI from `ludora-admin/ludora-admin-ui`:
+
+   ```powershell
+   npm run dev:codex
+   ```
+
+3. Open `http://127.0.0.1:5173/` in Chrome and sign in. The extension reuses this admin session and never
+   stores the admin password.
+4. Open Chrome extensions: `chrome://extensions`.
+5. Enable Developer mode.
+6. Click **Load unpacked** and select this folder, or click **Reload** if it is already installed:
 
    ```text
    C:\PROJECTS\ludora\ludora-admin\chrome-extension\tiktok-curator
    ```
 
-5. Open `https://www.tiktok.com/`.
-6. In the Ludora TikTok panel:
+7. Open or reload `https://www.tiktok.com/`.
+8. In the Ludora TikTok panel:
    - Click **Load next** to fetch the next item without a TikTok candidate.
    - Click **Search** to open the TikTok search query for that item.
    - Open the best video result.

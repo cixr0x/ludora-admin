@@ -160,6 +160,7 @@
 
     const imageUrl = productImageUrl(currentItem);
     const description = productDescription(currentItem);
+    const names = localizedNames(currentItem);
     itemNode.classList.remove('ludora-tiktok-curator__item--empty');
     itemNode.innerHTML = `
       ${
@@ -168,7 +169,8 @@
           : '<span class="ludora-tiktok-curator__image-placeholder">No image</span>'
       }
       <div class="ludora-tiktok-curator__details">
-        <span class="ludora-tiktok-curator__item-name">${escapeHtml(displayName(currentItem))}</span>
+        <span class="ludora-tiktok-curator__item-name">ES: ${escapeHtml(names.spanish)}</span>
+        <span class="ludora-tiktok-curator__item-name-secondary">EN: ${escapeHtml(names.english)}</span>
         <span class="ludora-tiktok-curator__item-meta">ID ${escapeHtml(String(currentItem.id))} - ${escapeHtml(currentItem.item_type || 'item')}</span>
         ${description ? `<p class="ludora-tiktok-curator__description">${escapeHtml(description)}</p>` : ''}
       </div>
@@ -275,8 +277,12 @@ function searchQuery(item) {
   return `${names.join(' ')} juego de mesa como jugar tutorial`;
 }
 
-function displayName(item) {
-  return item.canonical_name_es || item.canonical_name || `Item ${item.id}`;
+function localizedNames(item) {
+  const fallback = `Item ${item.id}`;
+  return {
+    spanish: String(item.canonical_name_es || '').trim() || fallback,
+    english: String(item.canonical_name || '').trim() || fallback
+  };
 }
 
 function productImageUrl(item) {

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Ludora TikTok Curator",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Speeds up Ludora TikTok tutorial curation from TikTok search and video pages.",
   "permissions": ["storage"],
   "host_permissions": [

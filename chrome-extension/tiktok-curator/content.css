@@ -101,6 +101,13 @@
   font-weight: 700;
 }
 
+.ludora-tiktok-curator__item-name-secondary {
+  display: block;
+  margin-top: 2px;
+  color: #374151;
+  font-weight: 600;
+}
+
 .ludora-tiktok-curator__item-meta {
   display: block;
   margin-top: 2px;

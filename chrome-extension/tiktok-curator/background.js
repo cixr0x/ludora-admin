@@ -94,6 +94,7 @@ async function adminFetch(path, options = {}) {
   const adminUrl = await readAdminUrl();
   const response = await fetch(`${adminUrl.replace(/\/+$/, '')}/${path.replace(/^\/+/, '')}`, {
     ...options,
+    credentials: 'include',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
@@ -101,6 +102,11 @@ async function adminFetch(path, options = {}) {
     }
   });
   const payload = await readJson(response);
+  if (response.status === 401) {
+    throw new Error(
+      `Authentication required. Sign in to Ludora Admin at ${adminLoginUrl(adminUrl)}, then try again.`
+    );
+  }
   if (!response.ok) {
     throw new Error(payload?.error?.message || `Admin service returned ${response.status}`);
   }
@@ -110,6 +116,21 @@ async function adminFetch(path, options = {}) {
 async function readAdminUrl() {
   const stored = await chrome.storage.local.get({ adminUrl: DEFAULT_ADMIN_URL });
   return String(stored.adminUrl || DEFAULT_ADMIN_URL).trim() || DEFAULT_ADMIN_URL;
+}
+
+function adminLoginUrl(adminUrl) {
+  try {
+    const parsed = new URL(adminUrl);
+    if ((parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') && parsed.port === '4001') {
+      parsed.port = '5173';
+    }
+    parsed.pathname = '/';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString().replace(/\/$/, '');
+  } catch {
+    return adminUrl;
+  }
 }
 
 async function readJson(response) {
