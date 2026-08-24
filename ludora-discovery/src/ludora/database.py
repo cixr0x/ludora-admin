@@ -110,6 +110,7 @@ class ClaimedStoreItemUpdate:
 STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS = (
     "original_title",
     "title",
+    "image_url",
     "raw_price",
     "price",
     "price_source",
@@ -729,6 +730,7 @@ class DiscoveryRepository:
                 update store_items
                 set original_title = %s,
                     title = %s,
+                    image_url = %s,
                     raw_price = %s,
                     price = %s,
                     price_source = %s,
@@ -1666,7 +1668,8 @@ def _update_item_candidate_price_availability_sql(*, include_title: bool = True)
     title_assignment = "original_title = %s,\n        title = %s,\n        " if include_title else ""
     return f"""
     update store_items
-    set {title_assignment}raw_price = %s,
+    set {title_assignment}image_url = %s,
+        raw_price = %s,
         price = %s,
         price_source = %s,
         currency = %s,

@@ -180,6 +180,45 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("consecutive_429s = 0", " ".join(sql.casefold().split()))
         self.assertEqual(params, ("continuous", "woocommerce"))
 
+    def test_successful_claimed_update_persists_and_logs_changed_image(self):
+        connection = FakeConnection(fetchone_rows=[(501,)])
+        repository = DiscoveryRepository(connection)
+        existing_record = replace(
+            confirmed_store_item_record(),
+            image_url="https://cdn.example.mx/catan-old.webp",
+        )
+        refreshed_record = replace(
+            existing_record,
+            image_url="https://cdn.example.mx/catan-current.webp",
+        )
+
+        result = repository.complete_claimed_store_item_update(
+            existing_record,
+            refreshed_record,
+            attempt_id=91,
+            job_id=17,
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            run_id="continuous:test",
+            worker_id="worker-1",
+            worker_name="continuous",
+            platform="shopify",
+        )
+
+        update_sql, update_params = connection.cursor_instance.executions[0]
+        self.assertIn("image_url = %s", " ".join(update_sql.casefold().split()))
+        self.assertIn("https://cdn.example.mx/catan-current.webp", update_params)
+        change_entries = [
+            (sql, params)
+            for sql, params in connection.cursor_instance.executions
+            if "insert into store_item_update_change_log" in sql.casefold()
+        ]
+        self.assertEqual(len(change_entries), 1)
+        _change_sql, change_params = change_entries[0]
+        self.assertEqual(change_params[3], "image_url")
+        self.assertEqual(json.loads(change_params[4]), "https://cdn.example.mx/catan-old.webp")
+        self.assertEqual(json.loads(change_params[5]), "https://cdn.example.mx/catan-current.webp")
+        self.assertTrue(result.changed)
+
     def test_new_item_candidates_do_not_assign_an_update_schedule(self):
         insert_sql = " ".join(_insert_item_candidate_sql().casefold().split())
 
@@ -637,7 +676,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("failed", "update failed", completed_at, 99))
         self.assertEqual(connection.commits, 1)
 
-    def test_updates_item_candidate_and_logs_title_and_price_availability_refresh_fields(self):
+    def test_updates_item_candidate_and_logs_image_title_price_and_availability_refresh_fields(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)
         existing_record = DiscoveryItemCandidateRecord(
@@ -684,12 +723,12 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("update store_items", update_sql.casefold())
         self.assertIn("title = %s", update_sql.casefold())
         self.assertNotIn("description = %s", update_sql.casefold())
-        self.assertNotIn("image_url = %s", update_sql.casefold())
+        self.assertIn("image_url = %s", update_sql.casefold())
         self.assertIn("refreshed_date = now()", update_sql.casefold())
         self.assertNotIn("last_updated = now()", update_sql.casefold())
         self.assertIn("next_update_at = null", update_sql.casefold())
         self.assertEqual(update_params[-1], 56)
-        self.assertEqual(len(change_entries), 8)
+        self.assertEqual(len(change_entries), 9)
         self.assertEqual(connection.commits, 1)
         self.assertTrue(result.changed)
         logged_fields = [params[3] for _sql, params in change_entries]
@@ -698,6 +737,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             [
                 "original_title",
                 "title",
+                "image_url",
                 "raw_price",
                 "price",
                 "price_source",
@@ -715,10 +755,12 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads(change_entries[0][1][5]), "Catan Edicion 2026")
         self.assertEqual(json.loads(change_entries[1][1][4]), "Catan")
         self.assertEqual(json.loads(change_entries[1][1][5]), "Catan Nueva Edicion")
-        self.assertEqual(json.loads(change_entries[2][1][4]), "$899")
-        self.assertEqual(json.loads(change_entries[2][1][5]), "$799")
-        self.assertEqual(json.loads(change_entries[3][1][4]), "899.00")
-        self.assertEqual(json.loads(change_entries[3][1][5]), "799.00")
+        self.assertEqual(json.loads(change_entries[2][1][4]), "")
+        self.assertEqual(json.loads(change_entries[2][1][5]), "https://example.mx/catan-new.jpg")
+        self.assertEqual(json.loads(change_entries[3][1][4]), "$899")
+        self.assertEqual(json.loads(change_entries[3][1][5]), "$799")
+        self.assertEqual(json.loads(change_entries[4][1][4]), "899.00")
+        self.assertEqual(json.loads(change_entries[4][1][5]), "799.00")
 
     def test_update_change_log_compares_price_numerically(self):
         connection = FakeConnection()
@@ -792,7 +834,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertNotIn("original_title = %s", update_sql.casefold())
         self.assertNotIn("Amazon merchandising title", update_params)
         self.assertNotIn("Amazon source title", update_params)
-        self.assertEqual(update_params[0], "$799")
+        self.assertEqual(update_params[0], "")
+        self.assertEqual(update_params[1], "$799")
         self.assertEqual(update_params[-1], 56)
         self.assertEqual(
             [params[3] for _sql, params in change_entries],

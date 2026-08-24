@@ -1943,6 +1943,8 @@ def _apply_listing_fallbacks(
     if detail_candidate.availability == "unknown":
         detail_candidate.availability = listing_candidate.availability
         detail_candidate.availability_source = listing_candidate.availability_source
+    if not detail_candidate.image_url:
+        detail_candidate.image_url = listing_candidate.image_url
     return detail_candidate
 
 

@@ -735,6 +735,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
         self.assertEqual(waited_urls, [GRAPHQL_ENDPOINT])
         self.assertEqual(refreshed.title, "Mago: El Despertar 2ª edición")
         self.assertEqual(refreshed.price, "899.00")
+        self.assertEqual(refreshed.image_url, "https://cdn.shopify.com/product.jpg")
         self.assertEqual(refreshed.store_id, 31)
         self.assertEqual(refreshed.store_item_id, 501)
         self.assertEqual(refreshed.item_id, 91)

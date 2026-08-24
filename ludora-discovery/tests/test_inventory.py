@@ -1271,6 +1271,7 @@ class InventoryTests(unittest.TestCase):
           "@type": "Product",
           "name": "Catan Nueva Edicion",
           "description": "Juego de mesa para 3 a 4 jugadores.",
+          "image": "https://cdn.example.mx/catan-current.webp",
           "offers": {"price": "799.00", "priceCurrency": "MXN"}
         }
         </script>
@@ -1280,6 +1281,7 @@ class InventoryTests(unittest.TestCase):
             source_url="https://example.mx/products/catan",
             source_listing_url="https://example.mx/sitemap.xml",
             title="Catan",
+            image_url="https://cdn.example.mx/catan-old.webp",
             item_id=77,
             listing_status="LISTED",
             is_boardgame=True,
@@ -1305,6 +1307,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(records[0].title, "Catan Nueva Edicion")
         self.assertEqual(records[0].original_title, "Catan Nueva Edicion")
         self.assertEqual(records[0].price, "799.00")
+        self.assertEqual(records[0].image_url, "https://cdn.example.mx/catan-current.webp")
         self.assertEqual(len(repository.price_availability_update_calls), 1)
         self.assertEqual(repository.price_availability_update_calls[0][0], existing_record)
         self.assertTrue(repository.price_availability_update_calls[0][2])
@@ -1322,6 +1325,7 @@ class InventoryTests(unittest.TestCase):
             source_url="https://demonjuegosdemesa.com/Dog-Park/",
             source_listing_url="https://demonjuegosdemesa.com/?scpp=100&spage=1",
             title="Dog Park",
+            image_url="https://cdn.example.mx/dog-park-existing.webp",
             store_sku="6379021812874",
             is_boardgame=True,
             is_boardgame_confirmed=True,
@@ -1353,6 +1357,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(refreshed.store_sku, "6379021812874")
         self.assertEqual(refreshed.price, "980.00")
         self.assertEqual(refreshed.availability, "available")
+        self.assertEqual(refreshed.image_url, "https://cdn.example.mx/dog-park-existing.webp")
 
     def test_update_confirmed_store_item_details_rejects_conflicting_store_sku(self):
         detail_html = """
