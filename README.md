@@ -128,6 +128,8 @@ The response contains a calibratable `score` from `0` to `100`; it is not a prob
 
 `matched_region` contains normalized candidate-image coordinates in reference-corner order and may extend outside `0..1` when the reference is only partially visible. When calibrating thresholds, inspect the score together with `inliers`, `inlier_ratio`, reference coverage, and `homography_valid`; repeated logos or typography can otherwise create misleading local matches. Images are downloaded using the service's existing 25 MiB safety limit and processed by the colocated `ludora-discovery` Python package.
 
+Store Item Review Details requests this estimate when the page loads and both images are available. It compares the store item image against the linked item's `image_url_es`, falling back to `image_url`, and displays the score beside the covers without persisting the result.
+
 ## UI
 
 ```powershell

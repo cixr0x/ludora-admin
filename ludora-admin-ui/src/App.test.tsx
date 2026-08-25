@@ -201,6 +201,27 @@ describe('App', () => {
       if (url.pathname === '/admin/discovery/offer-reviews') {
         return jsonResponse([{ candidate_id: 921, candidate_name: 'Alpaca Trails' }]);
       }
+      if (url.pathname === '/admin/image-similarity' && init?.method === 'POST') {
+        return jsonResponse({
+          score: 82.5,
+          method: 'sift_homography_v1',
+          matched_region: null,
+          diagnostics: {
+            reference_dimensions: { width: 400, height: 500 },
+            candidate_dimensions: { width: 1200, height: 900 },
+            reference_keypoints: 200,
+            candidate_keypoints: 600,
+            tentative_matches: 50,
+            inliers: 38,
+            inlier_ratio: 0.76,
+            reference_hull_coverage: 0.4,
+            reference_grid_coverage: 0.7,
+            median_reprojection_error: 0.9,
+            projected_area_ratio: 0.1,
+            homography_valid: true
+          }
+        });
+      }
       if (url.pathname === '/items/77') {
         return jsonResponse({
           bgg_id: 377061,
@@ -251,6 +272,20 @@ describe('App', () => {
 
     await waitFor(() => expect(window.location.hash).toBe('#offer-reviews?id=921'));
     await waitFor(() => expect(screen.getByLabelText('Title')).toHaveValue('Alpaca Trails'));
+    await waitFor(() => {
+      const fallbackRequest = fetchMock.mock.calls.find(([input, requestInit]) => {
+        const requestUrl = new URL(String(input));
+        if (requestUrl.pathname !== '/admin/image-similarity' || requestInit?.method !== 'POST') {
+          return false;
+        }
+        const body = JSON.parse(String(requestInit.body));
+        return body.reference_image_url === 'https://images.example/alpaca-trails.jpg';
+      });
+      expect(fallbackRequest).toBeDefined();
+    });
+    expect(screen.getByRole('status', { name: 'Image similarity' })).toHaveTextContent(
+      'Compared with fallback item image'
+    );
     const nextReviewRequest = fetchMock.mock.calls
       .map(([input]) => new URL(String(input)))
       .find((url) => url.pathname === '/admin/discovery/offer-reviews');

@@ -37,6 +37,7 @@ import {
   adminApi,
   type AdminRecord,
   type CreateItemFromCandidateInput,
+  type ImageSimilarityResult,
   type LocalCoverWorkflow,
   type ManualAiBggMatchResult,
   type StoreItemListingStatus
@@ -51,6 +52,10 @@ import { ItemsPage } from './ItemsPage';
 type LoadState = 'loading' | 'ready' | 'error';
 type ViewMode = 'form' | 'table';
 type DetailMode = 'standard' | 'review';
+type ImageSimilarityState =
+  | { requestKey: string; status: 'idle' | 'loading' }
+  | { requestKey: string; result: ImageSimilarityResult; status: 'ready' }
+  | { message: string; requestKey: string; status: 'error' };
 
 type ItemCandidateDetailField = {
   fieldType?: 'boolean';
@@ -1887,7 +1892,8 @@ function ReviewCoverComparison({
   storeItemTitle: string;
   translationError: string;
 }) {
-  const itemImageUrl = item ? catalogItemImageUrl(item) : '';
+  const itemImage = item ? catalogItemImageSource(item) : { label: 'item image', url: '' };
+  const itemImageUrl = itemImage.url;
   const itemName = item ? reviewItemDisplayName(item) : itemId ? `Item ${itemId}` : 'No linked item';
   const translationGenerated = Boolean(item && field(item, ['description_es'], '').trim());
   const covers = [
@@ -1956,6 +1962,13 @@ function ReviewCoverComparison({
           </Typography>
         </Stack>
       ))}
+      <ReviewImageSimilarity
+        itemImageLabel={itemImage.label}
+        itemImageUrl={itemImageUrl}
+        linkedItemLoaded={Boolean(item)}
+        linkedItemPresent={Boolean(itemId)}
+        storeItemImageUrl={storeItemImageUrl}
+      />
       <Stack alignItems="center" spacing={1} sx={{ gridColumn: '1 / -1' }}>
         {translationGenerated ? (
           <Stack
@@ -1994,6 +2007,118 @@ function ReviewCoverComparison({
         {translationError ? <Alert severity="error">{translationError}</Alert> : null}
       </Stack>
     </Box>
+  );
+}
+
+function ReviewImageSimilarity({
+  itemImageLabel,
+  itemImageUrl,
+  linkedItemLoaded,
+  linkedItemPresent,
+  storeItemImageUrl
+}: {
+  itemImageLabel: string;
+  itemImageUrl: string;
+  linkedItemLoaded: boolean;
+  linkedItemPresent: boolean;
+  storeItemImageUrl: string;
+}) {
+  const requestKey = `${itemImageUrl}\u001f${storeItemImageUrl}`;
+  const [state, setState] = useState<ImageSimilarityState>({ requestKey: '', status: 'idle' });
+
+  useEffect(() => {
+    if (!itemImageUrl || !storeItemImageUrl) {
+      setState({ requestKey, status: 'idle' });
+      return;
+    }
+
+    let ignore = false;
+    setState({ requestKey, status: 'loading' });
+    adminApi
+      .estimateImageSimilarity(itemImageUrl, storeItemImageUrl)
+      .then((result) => {
+        if (!ignore) {
+          setState({ requestKey, result, status: 'ready' });
+        }
+      })
+      .catch((error: unknown) => {
+        if (!ignore) {
+          setState({
+            message: error instanceof Error ? error.message : 'Unknown error',
+            requestKey,
+            status: 'error'
+          });
+        }
+      });
+
+    return () => {
+      ignore = true;
+    };
+  }, [itemImageUrl, requestKey, storeItemImageUrl]);
+
+  const currentState = state.requestKey === requestKey ? state : { requestKey, status: 'loading' as const };
+  let content;
+  if (!storeItemImageUrl) {
+    content = <Typography variant="body2">Similarity unavailable: the store item has no image.</Typography>;
+  } else if (!itemImageUrl) {
+    content = (
+      <Typography variant="body2">
+        {linkedItemPresent && !linkedItemLoaded
+          ? 'Waiting for the linked item image...'
+          : 'Similarity unavailable: the linked item has no image.'}
+      </Typography>
+    );
+  } else if (currentState.status === 'ready') {
+    content = (
+      <>
+        <Typography sx={{ fontWeight: 700 }} variant="body2">
+          Image similarity: {currentState.result.score.toFixed(2)} / 100
+        </Typography>
+        <Typography color="text.secondary" variant="caption">
+          Compared with {itemImageLabel} · {currentState.result.diagnostics.inliers} geometric inliers
+        </Typography>
+      </>
+    );
+  } else if (currentState.status === 'error') {
+    content = (
+      <>
+        <Typography color="warning.main" sx={{ fontWeight: 600 }} variant="body2">
+          Image similarity could not be estimated.
+        </Typography>
+        <Typography color="text.secondary" variant="caption">
+          {currentState.message}
+        </Typography>
+      </>
+    );
+  } else {
+    content = (
+      <Stack alignItems="center" direction="row" spacing={1}>
+        <CircularProgress size={16} />
+        <Typography variant="body2">Estimating image similarity...</Typography>
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack
+      alignItems="center"
+      aria-label="Image similarity"
+      aria-live="polite"
+      role="status"
+      spacing={0.25}
+      sx={{
+        bgcolor: 'grey.50',
+        border: 1,
+        borderColor: 'divider',
+        borderRadius: 1,
+        gridColumn: '1 / -1',
+        px: 1.5,
+        py: 1,
+        textAlign: 'center'
+      }}
+    >
+      {content}
+    </Stack>
   );
 }
 
@@ -2660,7 +2785,15 @@ function reviewItemDisplayName(item: AdminRecord) {
 }
 
 function catalogItemImageUrl(item: AdminRecord) {
-  return field(item, ['image_url_es', 'image_url'], '');
+  return catalogItemImageSource(item).url;
+}
+
+function catalogItemImageSource(item: AdminRecord) {
+  const spanishImageUrl = field(item, ['image_url_es'], '');
+  if (spanishImageUrl) {
+    return { label: 'Spanish item image', url: spanishImageUrl };
+  }
+  return { label: 'fallback item image', url: field(item, ['image_url'], '') };
 }
 
 function itemCandidateInputFromForm(

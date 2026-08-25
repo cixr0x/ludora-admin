@@ -1437,6 +1437,27 @@ describe('ListingCandidatesPage', () => {
       if (path === '/items/77' && !init?.method) {
         return jsonResponse(item);
       }
+      if (path === '/admin/image-similarity' && init?.method === 'POST') {
+        return jsonResponse({
+          score: 84.25,
+          method: 'sift_homography_v1',
+          matched_region: null,
+          diagnostics: {
+            reference_dimensions: { width: 400, height: 500 },
+            candidate_dimensions: { width: 1200, height: 900 },
+            reference_keypoints: 200,
+            candidate_keypoints: 600,
+            tentative_matches: 50,
+            inliers: 42,
+            inlier_ratio: 0.84,
+            reference_hull_coverage: 0.44,
+            reference_grid_coverage: 0.75,
+            median_reprojection_error: 0.8,
+            projected_area_ratio: 0.12,
+            homography_valid: true
+          }
+        });
+      }
       if (path === '/items/77/relationships') {
         return jsonResponse([]);
       }
@@ -1479,6 +1500,17 @@ describe('ListingCandidatesPage', () => {
     expect(linkedItemCover).toHaveStyle({ aspectRatio: '1 / 1' });
     expect(within(coverComparison).getByLabelText('Store item name')).toHaveTextContent('Cafe Barista');
     expect(within(coverComparison).getByLabelText('Item name')).toHaveTextContent('Coffee Rush (Cafe Barista)');
+    const similarityStatus = await within(coverComparison).findByRole('status', { name: 'Image similarity' });
+    expect(similarityStatus).toHaveTextContent('Image similarity: 84.25 / 100');
+    expect(similarityStatus).toHaveTextContent('Compared with Spanish item image · 42 geometric inliers');
+    const similarityRequest = fetchMock.mock.calls.find(
+      ([requestInput, requestInit]) =>
+        pathOf(String(requestInput)) === '/admin/image-similarity' && requestInit?.method === 'POST'
+    );
+    expect(JSON.parse(String(similarityRequest?.[1]?.body))).toEqual({
+      reference_image_url: 'https://images.example/cafe-barista.jpg',
+      candidate_image_url: 'https://store.mx/cafe-barista.jpg'
+    });
     const translationStatus = within(coverComparison).getByRole('status', { name: 'Translation generated' });
     expect(translationStatus).toHaveTextContent('Translation generated');
     expect(within(translationStatus).getByTestId('CheckCircleIcon')).toBeInTheDocument();

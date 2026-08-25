@@ -213,6 +213,26 @@ export type AcceptedCoverFlattening = {
   trim_fraction: number;
 };
 
+export type ImageSimilarityResult = {
+  score: number;
+  method: 'sift_homography_v1';
+  matched_region: Array<{ x: number; y: number }> | null;
+  diagnostics: {
+    reference_dimensions: { width: number; height: number };
+    candidate_dimensions: { width: number; height: number };
+    reference_keypoints: number;
+    candidate_keypoints: number;
+    tentative_matches: number;
+    inliers: number;
+    inlier_ratio: number;
+    reference_hull_coverage: number;
+    reference_grid_coverage: number;
+    median_reprojection_error: number | null;
+    projected_area_ratio: number | null;
+    homography_valid: boolean;
+  };
+};
+
 export type OptimizedCoverImage = {
   applied: boolean;
   field: CoverImageField;
@@ -685,6 +705,11 @@ export const adminApi = {
   updateItemCandidate: (id: string, input: ItemCandidateInput) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`, 'PATCH', input),
   getItem: (id: string) => fetchData<AdminRecord>(`/items/${encodeURIComponent(id)}`),
+  estimateImageSimilarity: (referenceImageUrl: string, candidateImageUrl: string) =>
+    sendJson<ImageSimilarityResult>('/admin/image-similarity', 'POST', {
+      reference_image_url: referenceImageUrl,
+      candidate_image_url: candidateImageUrl
+    }),
   getItemLinkedCandidates: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/candidates`),
   getItemRelationships: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/relationships`),
   getItemStoreItems: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/store-items`),

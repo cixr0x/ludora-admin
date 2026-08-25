@@ -1087,6 +1087,51 @@ describe('fetchRows', () => {
     expectFetch(fetchMock, 'http://127.0.0.1:4001/front-page-preview');
   });
 
+  it('estimates image similarity with the item image as reference', async () => {
+    const result = {
+      score: 84.25,
+      method: 'sift_homography_v1',
+      matched_region: null,
+      diagnostics: {
+        reference_dimensions: { width: 400, height: 500 },
+        candidate_dimensions: { width: 1200, height: 900 },
+        reference_keypoints: 200,
+        candidate_keypoints: 600,
+        tentative_matches: 50,
+        inliers: 42,
+        inlier_ratio: 0.84,
+        reference_hull_coverage: 0.44,
+        reference_grid_coverage: 0.75,
+        median_reprojection_error: 0.8,
+        projected_area_ratio: 0.12,
+        homography_valid: true
+      }
+    } as const;
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: result }), {
+        headers: { 'Content-Type': 'application/json' },
+        status: 200
+      })
+    );
+
+    await expect(
+      adminApi.estimateImageSimilarity(
+        'https://images.example/cafe-barista.jpg',
+        'https://store.mx/cafe-barista.jpg'
+      )
+    ).resolves.toEqual(result);
+
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/image-similarity', {
+      body: JSON.stringify({
+        reference_image_url: 'https://images.example/cafe-barista.jpg',
+        candidate_image_url: 'https://store.mx/cafe-barista.jpg'
+      }),
+      headers: { 'Content-Type': 'application/json' },
+      method: 'POST'
+    });
+  });
+
   it('updates store items with a JSON body', async () => {
     const itemCandidate = { id: '3365', listing_status: 'UNLISTED', title: 'Kitchen Rush Updated' };
     const payload = {
