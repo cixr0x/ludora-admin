@@ -2276,7 +2276,8 @@ describe('ludora admin service', () => {
       null,
       null,
       null,
-      null
+      null,
+      false
     ]);
   });
 
@@ -2451,7 +2452,7 @@ describe('ludora admin service', () => {
 
     const response = await request(createApp({ bggItemImporter, database }))
       .post('/discovery/listings/920/create-item')
-      .send({ bgg_id: '377061', implements: true });
+      .send({ bgg_id: '377061', implements: true, override_description: true });
 
     expect(response.status).toBe(201);
     expect(response.body).toEqual({ data: updatedCandidate });
@@ -2461,18 +2462,40 @@ describe('ludora admin service', () => {
     expect(sql).toContain('insert into item_relationships');
     expect(sql).toContain("'implementation'");
     expect(sql).toContain("'admin'");
+    expect(sql).toContain('when $11::boolean');
+    expect(sql).toContain('select implemented_item.description');
+    expect(sql).toContain('where implemented_item.id = $7::bigint');
     expect(mutation.params).toEqual([
       '920',
       'cafe barista mexico',
       'base_game',
       'local publisher',
       JSON.stringify(['Manual item creation from admin candidate form']),
-      JSON.stringify({ bgg_id: 377061, implements: true, source: 'admin_manual_create_item' }),
+      JSON.stringify({
+        bgg_id: 377061,
+        implements: true,
+        override_description: true,
+        source: 'admin_manual_create_item'
+      }),
       44,
       '377061',
       null,
-      null
+      null,
+      true
     ]);
+  });
+
+  it('rejects a description override without an implementation relationship', async () => {
+    const response = await request(createApp({ database: idleDatabase() }))
+      .post('/discovery/listings/920/create-item')
+      .send({ override_description: true });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: {
+        message: 'override_description requires implements'
+      }
+    });
   });
 
   it('creates a curated item with an extension relationship to an existing item', async () => {
@@ -2526,7 +2549,8 @@ describe('ludora admin service', () => {
       null,
       null,
       55,
-      '55'
+      '55',
+      false
     ]);
   });
 

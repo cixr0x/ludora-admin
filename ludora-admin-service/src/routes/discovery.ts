@@ -1902,7 +1902,14 @@ export function createDiscoveryRouter(
             '',
             null,
             null,
-            candidate.description,
+            case
+              when $11::boolean then (
+                select implemented_item.description
+                from items implemented_item
+                where implemented_item.id = $7::bigint
+              )
+              else candidate.description
+            end,
             candidate.min_players,
             candidate.max_players,
             candidate.min_minutes,
@@ -2013,7 +2020,8 @@ export function createDiscoveryRouter(
           implementedItemId,
           createOptions.implementsBggItem ? String(createOptions.bggId) : null,
           createOptions.extendsItemId,
-          createOptions.extendsItem ? String(createOptions.extendsItemId) : null
+          createOptions.extendsItem ? String(createOptions.extendsItemId) : null,
+          createOptions.overrideDescription
         ]
       );
 
@@ -3201,16 +3209,24 @@ function parseCreateItemFromCandidateOptions(body: unknown): {
   extendsItemId: number | null;
   implementsBggItem: boolean;
   matchPayload: Record<string, unknown>;
+  overrideDescription: boolean;
 } {
   const value = (body ?? {}) as Record<string, unknown>;
   const implementsBggItem = booleanField(value, 'implements');
   const extendsItem = booleanField(value, 'extends');
+  const overrideDescription = booleanField(value, 'override_description');
   const bggId = implementsBggItem ? positiveIntegerBodyField(body, 'bgg_id') : null;
   const extendsItemId = extendsItem ? positiveIntegerBodyField(body, 'extends_item_id') : null;
+  if (overrideDescription && !implementsBggItem) {
+    throw httpError(400, 'override_description requires implements');
+  }
   const matchPayload: Record<string, unknown> = {};
   if (implementsBggItem && bggId !== null) {
     matchPayload.bgg_id = bggId;
     matchPayload.implements = true;
+  }
+  if (overrideDescription) {
+    matchPayload.override_description = true;
   }
   if (extendsItem && extendsItemId !== null) {
     matchPayload.extends = true;
@@ -3222,7 +3238,8 @@ function parseCreateItemFromCandidateOptions(body: unknown): {
     extendsItem,
     extendsItemId,
     implementsBggItem,
-    matchPayload
+    matchPayload,
+    overrideDescription
   };
 }
 

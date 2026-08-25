@@ -1350,6 +1350,7 @@ function ItemCandidateForm({
   const [candidateExtends, setCandidateExtends] = useState(false);
   const [candidateExtendsItemId, setCandidateExtendsItemId] = useState('');
   const [candidateImplements, setCandidateImplements] = useState(false);
+  const [candidateOverrideDescription, setCandidateOverrideDescription] = useState(false);
   const [isGeneratingTranslation, setIsGeneratingTranslation] = useState(false);
   const [linkedItemPreview, setLinkedItemPreview] = useState<AdminRecord | null>(null);
   const [translationError, setTranslationError] = useState('');
@@ -1413,7 +1414,8 @@ function ItemCandidateForm({
       bgg_id: candidateDialogBggId.trim(),
       extends: candidateExtends,
       extends_item_id: candidateExtendsItemId.trim(),
-      implements: candidateImplements
+      implements: candidateImplements,
+      override_description: candidateOverrideDescription
     });
     setIsCandidateDialogOpen(false);
   }
@@ -1617,6 +1619,7 @@ function ItemCandidateForm({
               setCandidateExtends(false);
               setCandidateExtendsItemId('');
               setCandidateImplements(false);
+              setCandidateOverrideDescription(false);
               setIsCandidateDialogOpen(true);
             }}
           >
@@ -1805,9 +1808,28 @@ function ItemCandidateForm({
           <Stack spacing={1.5} sx={{ pt: 1 }}>
             <FormControlLabel
               control={
-                <Checkbox checked={candidateImplements} onChange={(event) => setCandidateImplements(event.target.checked)} />
+                <Checkbox
+                  checked={candidateImplements}
+                  onChange={(event) => {
+                    const checked = event.target.checked;
+                    setCandidateImplements(checked);
+                    if (!checked) {
+                      setCandidateOverrideDescription(false);
+                    }
+                  }}
+                />
               }
               label="Implements"
+            />
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={candidateOverrideDescription}
+                  disabled={!candidateImplements}
+                  onChange={(event) => setCandidateOverrideDescription(event.target.checked)}
+                />
+              }
+              label="Override description"
             />
             <TextField
               fullWidth

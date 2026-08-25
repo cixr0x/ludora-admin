@@ -387,6 +387,7 @@ export type CreateItemFromCandidateInput = {
   extends?: boolean;
   extends_item_id?: string;
   implements?: boolean;
+  override_description?: boolean;
 };
 export type ItemInput = AdminRecord;
 export type ItemRelationshipInput = {
@@ -664,6 +665,7 @@ export const adminApi = {
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}/create-item`, 'POST', {
       bgg_id: input.bgg_id ?? '',
       implements: Boolean(input.implements),
+      ...(input.override_description ? { override_description: true } : {}),
       ...(input.extends
         ? {
             extends: true,

@@ -1270,12 +1270,16 @@ describe('fetchRows', () => {
       })
     );
 
-    await expect(adminApi.createItemFromCandidate('3365', { bgg_id: '223953', implements: true })).resolves.toEqual(
-      itemCandidate
-    );
+    await expect(
+      adminApi.createItemFromCandidate('3365', {
+        bgg_id: '223953',
+        implements: true,
+        override_description: true
+      })
+    ).resolves.toEqual(itemCandidate);
 
     expectFetch(fetchMock, 'http://127.0.0.1:4001/discovery/listings/3365/create-item', {
-      body: JSON.stringify({ bgg_id: '223953', implements: true }),
+      body: JSON.stringify({ bgg_id: '223953', implements: true, override_description: true }),
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });

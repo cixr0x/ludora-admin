@@ -1172,8 +1172,12 @@ describe('ListingCandidatesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create Item from Candidate' }));
     const dialog = await screen.findByRole('dialog', { name: 'Create Item from Candidate' });
     expect(within(dialog).getByLabelText('Implements')).not.toBeChecked();
+    expect(within(dialog).getByLabelText('Override description')).toBeDisabled();
+    expect(within(dialog).getByLabelText('Override description')).not.toBeChecked();
     expect(within(dialog).getByLabelText('BGG ID')).toHaveValue('223953');
     fireEvent.click(within(dialog).getByLabelText('Implements'));
+    expect(within(dialog).getByLabelText('Override description')).toBeEnabled();
+    fireEvent.click(within(dialog).getByLabelText('Override description'));
     fireEvent.click(within(dialog).getByRole('button', { name: 'Create Item' }));
 
     expect(await screen.findByText('Item created from candidate.')).toBeInTheDocument();
@@ -1184,7 +1188,7 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByRole('button', { name: 'Create Item from Candidate' })).toBeEnabled();
 
     expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/discovery/listings/3365/create-item', {
-      body: JSON.stringify({ bgg_id: '223953', implements: true }),
+      body: JSON.stringify({ bgg_id: '223953', implements: true, override_description: true }),
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
