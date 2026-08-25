@@ -10,6 +10,7 @@ import type { Database } from './db.js';
 import type { DiscoveryOperationsClient } from './discoveryOperations.js';
 import type { CoverFlatteningWorkflowManager } from './coverFlatteningWorkflow.js';
 import type { ContinuousItemUpdateWorkerManager } from './continuousItemUpdateWorkerManager.js';
+import type { ImageSimilarityService } from './imageSimilarity/imageSimilarityService.js';
 import type { ItemMatchingService } from './itemMatching/itemMatchingService.js';
 import { createAmazonTitleExtractionRouter } from './routes/amazonTitleExtraction.js';
 import { createAuthRouter } from './routes/auth.js';
@@ -17,6 +18,7 @@ import { createDescriptionGenerationRouter } from './routes/descriptionGeneratio
 import { createCoverFlatteningWorkflowRouter } from './routes/coverFlatteningWorkflow.js';
 import { createDiscoveryRouter } from './routes/discovery.js';
 import { createHealthRouter } from './routes/health.js';
+import { createImageSimilarityRouter } from './routes/imageSimilarity.js';
 import { createLocalCoverWorkflowRouter } from './routes/localCoverWorkflow.js';
 import {
   createOperationsRouter,
@@ -51,6 +53,7 @@ type CreateAppOptions = {
   descriptionGenerationService?: DescriptionGenerationService;
   externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner;
   itemMatchingService?: ItemMatchingService;
+  imageSimilarityService?: ImageSimilarityService;
   localCoverWorkflowManager?: LocalCoverWorkflowManager;
   operationsClient?: DiscoveryOperationsClient;
   productDetailsEnrichmentService?: ProductDetailsEnrichmentService;
@@ -71,6 +74,7 @@ export function createApp({
   descriptionGenerationService,
   externalCoverImageOptimizer,
   itemMatchingService,
+  imageSimilarityService,
   localCoverWorkflowManager,
   operationsClient,
   productDetailsEnrichmentService,
@@ -104,6 +108,9 @@ export function createApp({
   app.use(createDescriptionGenerationRouter(descriptionGenerationService));
   app.use(createTranslationRouter(translationService));
   app.use(createTutorialCurationRouter(database));
+  if (imageSimilarityService) {
+    app.use(createImageSimilarityRouter(imageSimilarityService));
+  }
   if (webBotAuthService && adminAuth) {
     app.use(
       '/admin/web-bot-auth/signatures',

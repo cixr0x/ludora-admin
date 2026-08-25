@@ -205,6 +205,15 @@ python -m pip install -e .
 ludora-collect-stores --dry-run-queries
 ```
 
+Estimate whether a flat reference image appears inside a larger or perspective-distorted candidate image:
+
+```powershell
+$env:PYTHONPATH='src'
+python -m ludora.image_similarity .\reference-cover.jpg .\product-photo.jpg
+```
+
+The command prints the same `sift_homography_v1` JSON result used by the admin service. Its `score` is a calibratable `0..100` signal rather than a probability or a built-in match threshold.
+
 ## Spanish Cover Asset Workflow
 
 Use the cover asset helper when a scraped store image has the right Spanish box art but needs a manual crop/perspective edit.

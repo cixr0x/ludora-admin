@@ -81,6 +81,53 @@ LUDORA_COVER_GIMP_PATH=gimp-3.exe
 
 AWS credentials are read through the AWS SDK standard environment/profile chain.
 
+### Image Similarity
+
+The authenticated admin service can estimate whether a flat reference cover appears inside a larger product image, including when the cover is scaled, rotated, or distorted by perspective:
+
+```http
+POST /admin/image-similarity
+Content-Type: application/json
+
+{
+  "reference_image_url": "https://images.example/reference-cover.jpg",
+  "candidate_image_url": "https://store.example/product-photo.jpg"
+}
+```
+
+The response contains a calibratable `score` from `0` to `100`; it is not a probability or a fixed match/no-match decision. The current `sift_homography_v1` method uses SIFT feature matching followed by a RANSAC homography:
+
+```json
+{
+  "data": {
+    "score": 84.25,
+    "method": "sift_homography_v1",
+    "matched_region": [
+      { "x": 0.12, "y": 0.18 },
+      { "x": 0.72, "y": 0.24 },
+      { "x": 0.67, "y": 0.82 },
+      { "x": 0.15, "y": 0.76 }
+    ],
+    "diagnostics": {
+      "reference_dimensions": { "width": 400, "height": 500 },
+      "candidate_dimensions": { "width": 1200, "height": 900 },
+      "reference_keypoints": 200,
+      "candidate_keypoints": 600,
+      "tentative_matches": 50,
+      "inliers": 42,
+      "inlier_ratio": 0.84,
+      "reference_hull_coverage": 0.44,
+      "reference_grid_coverage": 0.75,
+      "median_reprojection_error": 0.8,
+      "projected_area_ratio": 0.12,
+      "homography_valid": true
+    }
+  }
+}
+```
+
+`matched_region` contains normalized candidate-image coordinates in reference-corner order and may extend outside `0..1` when the reference is only partially visible. When calibrating thresholds, inspect the score together with `inliers`, `inlier_ratio`, reference coverage, and `homography_valid`; repeated logos or typography can otherwise create misleading local matches. Images are downloaded using the service's existing 25 MiB safety limit and processed by the colocated `ludora-discovery` Python package.
+
 ## UI
 
 ```powershell

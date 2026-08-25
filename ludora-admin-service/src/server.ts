@@ -21,6 +21,10 @@ import { createOpenAiDescriptionGenerationClient } from './descriptionGeneration
 import { createDiscoveryOperationsClient } from './discoveryOperationsClient.js';
 import { createNodeExternalCoverImageOptimizerDependencies, optimizeExternalCoverImages } from './externalCoverImageOptimizer.js';
 import { createItemMatchingService } from './itemMatching/itemMatchingService.js';
+import {
+  createImageSimilarityService,
+  createNodeImageSimilarityDependencies
+} from './imageSimilarity/imageSimilarityService.js';
 import { createLocalDiscoveryOperationsClient } from './localDiscoveryOperationsClient.js';
 import { createLocalCoverWorkflowManager, createNodeLocalCoverWorkflowDependencies } from './localCoverWorkflow.js';
 import { createOpenAiProductDetailsExtractionClient } from './productDetailsExtraction/openAiProductDetailsExtractionClient.js';
@@ -128,6 +132,13 @@ const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
 );
 const externalCoverImageOptimizerDependencies = createNodeExternalCoverImageOptimizerDependencies(config.localCoverWorkflow);
+const imageSimilarityService = createImageSimilarityService(
+  createNodeImageSimilarityDependencies({
+    downloadImage: externalCoverImageOptimizerDependencies.downloadImage,
+    packageDir: config.discoveryRunner.packageDir,
+    pythonExecutable: config.discoveryRunner.pythonExecutable
+  })
+);
 const coverFlatteningWorkflowManager = createCoverFlatteningWorkflowManager(
   database,
   createNodeCoverFlatteningWorkflowDependencies({
@@ -149,6 +160,7 @@ const app = createApp({
     run: (options) => optimizeExternalCoverImages(database, externalCoverImageOptimizerDependencies, options)
   },
   itemMatchingService,
+  imageSimilarityService,
   localCoverWorkflowManager,
   operationsClient,
   productDetailsEnrichmentService,
