@@ -124,6 +124,27 @@ class SchemaTests(unittest.TestCase):
                 "insert into store_item_update_platform_cooldown",
                 "select worker_name, 'shopify'",
             ],
+            "20260822_001_materialize_active_item_refresh_queue.sql": [
+                "drop view active_item",
+                "create materialized view active_item as",
+                "create unique index active_item_id_uidx",
+                "create table active_item_refresh_state",
+                "create function request_active_item_refresh()",
+                "create function refresh_active_item_if_needed()",
+                "refresh materialized view concurrently public.active_item",
+                "create trigger request_active_item_refresh_on_items",
+                "create trigger request_active_item_refresh_on_store_item_membership_update",
+                "create trigger request_active_item_refresh_on_additional_items",
+                "create trigger request_active_item_refresh_on_item_relationship_updates",
+            ],
+            "20260822_002_schedule_active_item_refresh.sql": [
+                "current_database() <> 'postgres'",
+                "create extension if not exists pg_cron",
+                "select cron.schedule_in_database",
+                "'ludora-active-item-refresh'",
+                "'ludora_dev'",
+                "'select public.refresh_active_item_if_needed()'",
+            ],
         }
 
         for filename, expected_snippets in expected_patches.items():
@@ -500,12 +521,16 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("store_item_update_change_log_run_id_idx", schema)
         self.assertIn("store_item_update_change_log_store_item_created_idx", schema)
 
-    def test_schema_contains_active_item_view(self):
+    def test_schema_contains_active_item_materialized_view_and_refresh_queue(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()
 
-        self.assertIn("create or replace view active_item as", schema)
-        self.assertLess(schema.index("create table if not exists item_relationships"), schema.index("create or replace view active_item as"))
-        view = schema.split("create or replace view active_item as", 1)[1].split(";", 1)[0]
+        self.assertIn("create materialized view if not exists active_item as", schema)
+        self.assertNotIn("create or replace view active_item as", schema)
+        self.assertLess(
+            schema.index("create table if not exists item_relationships"),
+            schema.index("create materialized view if not exists active_item as"),
+        )
+        view = schema.split("create materialized view if not exists active_item as", 1)[1].split(";", 1)[0]
 
         self.assertIn("catalog_item.*", view)
         self.assertIn("with eligible_item_links as", view)
@@ -526,6 +551,23 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("relationship.item_a_id = catalog_item.id", view)
         self.assertIn("relationship.link_type = 'expansion'", view)
         self.assertIn("relationship.item_b_id = catalog_item.id", view)
+        self.assertIn("with data", view)
+
+        self.assertIn("create unique index if not exists active_item_id_uidx", schema)
+        self.assertIn("on active_item (id)", schema)
+        self.assertIn("create table if not exists active_item_refresh_state", schema)
+        self.assertIn("requested_generation bigint not null default 0", schema)
+        self.assertIn("refreshed_generation bigint not null default 0", schema)
+        self.assertIn("refresh_requested_at timestamptz", schema)
+        self.assertIn("last_refreshed_at timestamptz not null", schema)
+        self.assertIn("create or replace function request_active_item_refresh()", schema)
+        self.assertIn("create or replace function refresh_active_item_if_needed()", schema)
+        self.assertIn("pg_try_advisory_xact_lock", schema)
+        self.assertIn("refresh materialized view concurrently public.active_item", schema)
+        self.assertIn("create trigger request_active_item_refresh_on_items", schema)
+        self.assertIn("create trigger request_active_item_refresh_on_store_item_membership_update", schema)
+        self.assertIn("create trigger request_active_item_refresh_on_additional_items", schema)
+        self.assertIn("create trigger request_active_item_refresh_on_item_relationship_updates", schema)
 
     def test_schema_removes_offers_and_keeps_item_relationships(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()

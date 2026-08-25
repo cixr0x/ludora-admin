@@ -16,6 +16,13 @@ Use the database patch runbook for the approved execution path:
 database/runbooks/apply-database-patches.md
 ```
 
+The `active_item` materialized-view conversion has an additional cross-database
+and Lightsail prerequisite runbook:
+
+```text
+database/runbooks/active-item-materialized-view.md
+```
+
 Optional `psql` example, only when `psql` is installed and `LUDORA_DATABASE_URL` is already loaded in the shell:
 
 ```powershell
