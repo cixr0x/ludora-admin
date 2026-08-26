@@ -295,6 +295,8 @@ def crawl_store_product_details(
                 source_listing_url=source_listing_url,
                 store_id=store_id,
             )
+            if normalized_platform == "woocommerce" and not listing_candidates:
+                raise RuntimeError(f"WooCommerce discovery returned no product candidates: {store_url}")
 
         records = crawl_listing_candidates(
             listing_candidates,

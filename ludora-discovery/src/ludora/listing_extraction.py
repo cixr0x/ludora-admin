@@ -13,6 +13,7 @@ PRODUCT_PATH_MARKERS = (
     "/products/",
     "/producto/",
     "/productos/",
+    "/tienda/",
     "/juego/",
     "/juegos/",
 )

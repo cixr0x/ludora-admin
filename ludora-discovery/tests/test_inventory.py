@@ -330,6 +330,26 @@ class InventoryTests(unittest.TestCase):
 
         fetch_html.assert_not_called()
 
+    def test_collect_store_inventory_rejects_woocommerce_without_product_candidates(self):
+        repository = FakeRepository()
+
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[]), patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url="https://example.mx/", text='<a href="/contacto">Contacto</a>'),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "WooCommerce discovery returned no product candidates: https://example.mx/",
+            ):
+                collect_store_inventory(
+                    "https://example.mx/",
+                    12,
+                    repository,
+                    platform="woocommerce",
+                )
+
+        self.assertEqual(repository.item_records, [])
+
     def test_collect_store_inventory_rejects_shopify_without_signer_before_enumeration(self):
         repository = FakeRepository()
 

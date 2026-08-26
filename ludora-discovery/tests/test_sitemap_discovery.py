@@ -19,6 +19,42 @@ class FakeTraceLogger:
 
 
 class SitemapDiscoveryTests(unittest.TestCase):
+    def test_follows_woocommerce_product_sitemap_with_tienda_product_paths(self):
+        store_url = "https://eldragongeek.com/"
+        product_sitemap_url = "https://eldragongeek.com/post-type-product-sitemap-1.xml"
+        responses = {
+            "https://eldragongeek.com/sitemap.xml": FetchResult(
+                url="https://eldragongeek.com/sitemap_index.xml",
+                text=f"""
+                <sitemapindex>
+                  <sitemap><loc>{product_sitemap_url}</loc></sitemap>
+                </sitemapindex>
+                """,
+            ),
+            product_sitemap_url: FetchResult(
+                url=product_sitemap_url,
+                text="""
+                <urlset>
+                  <url><loc>https://eldragongeek.com/tienda/halo-flashpoint-spartan-edition/</loc></url>
+                  <url><loc>https://eldragongeek.com/tienda/</loc></url>
+                </urlset>
+                """,
+            ),
+        }
+        fetched_urls = []
+
+        def fake_fetcher(url):
+            fetched_urls.append(url)
+            return responses.get(url)
+
+        urls = discover_product_urls_from_sitemaps(store_url, fetcher=fake_fetcher)
+
+        self.assertEqual(
+            urls,
+            ["https://eldragongeek.com/tienda/halo-flashpoint-spartan-edition/"],
+        )
+        self.assertIn(product_sitemap_url, fetched_urls)
+
     def test_follows_product_sitemaps_and_extracts_product_urls(self):
         responses = {
             "https://example.mx/sitemap.xml": """
