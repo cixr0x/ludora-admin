@@ -45,8 +45,38 @@ describe('Codex auto-list evaluation client', () => {
       }
     }));
     const request = responsesCreate.mock.calls[0]?.[0];
-    expect(request.input[0].content[0].text).toContain('https://store.mx/game.jpg');
-    expect(request.input[0].content[0].text).toContain('https://catalog.mx/game-es.jpg');
+    expect(request.input[0].content).toEqual([
+      expect.objectContaining({
+        type: 'input_text',
+        text: expect.stringContaining('https://store.mx/game.jpg')
+      }),
+      { type: 'input_text', text: 'Attached image 1: store item cover.' },
+      { type: 'input_image', image_url: 'https://store.mx/game.jpg', detail: 'high' },
+      { type: 'input_text', text: 'Attached image 2: catalog item cover from image_url_es.' },
+      { type: 'input_image', image_url: 'https://catalog.mx/game-es.jpg', detail: 'high' }
+    ]);
+  });
+
+  it('marks a missing cover in text instead of sending an invalid image URL', async () => {
+    responsesCreate.mockResolvedValue({
+      output_text: JSON.stringify(validDecision({ sameGame: false, verdict: 'NOT PASS' }))
+    });
+    const client = createCodexAutoListEvaluationClient({ baseURL: 'http://127.0.0.1:3001/v1' });
+
+    await client.evaluate({
+      itemImageSource: 'image_url',
+      itemImageUrl: 'https://catalog.mx/game.jpg',
+      itemNameEn: 'Game',
+      itemNameEs: 'Juego',
+      storeItemImageUrl: '',
+      storeItemName: 'Game'
+    }, { model: 'gpt-5.6-terra' });
+
+    const request = responsesCreate.mock.calls[0]?.[0];
+    expect(request.input[0].content).toContainEqual({ type: 'input_text', text: 'Store item cover is missing.' });
+    expect(request.input[0].content.filter((part: { type: string }) => part.type === 'input_image')).toEqual([
+      { type: 'input_image', image_url: 'https://catalog.mx/game.jpg', detail: 'high' }
+    ]);
   });
 
   it.each([
@@ -59,7 +89,11 @@ describe('Codex auto-list evaluation client', () => {
   });
 });
 
-function validDecision() {
+function validDecision(overrides: Partial<ReturnType<typeof baseDecision>> = {}) {
+  return { ...baseDecision(), ...overrides };
+}
+
+function baseDecision() {
   return {
     itemCoverLanguage: 'es',
     languageReasoning: 'Allowed direction.',

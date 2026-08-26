@@ -54,7 +54,7 @@ A positive AI decision is not imported blindly. Admin-service fetches the return
 
 ## Auto-list evaluation test flow
 
-After automated discovery links a store item to a catalog item, admin-service asks CodexAPI to compare the store cover with `items.image_url_es` (falling back to `items.image_url`) and to compare the store title with both catalog names. The prompt passes public image URLs as text because CodexAPI opens them with its own web/image tools; generic `input_image` transport is not used.
+After automated discovery links a store item to a catalog item, admin-service asks CodexAPI to compare the store cover with `items.image_url_es` (falling back to `items.image_url`) and to compare the store title with both catalog names. The request sends the store cover and catalog cover as two ordered `input_image` parts. CodexAPI securely downloads and validates the public JPEG, PNG, or WebP sources, passes both temporary files to Codex, and removes them after the request. The accompanying text labels image 1 as the store cover and image 2 as the catalog cover.
 
 The response is strict structured JSON. It records the same-game image check, both detected cover languages, the name check, a `PASS` or `NOT PASS` verdict, and reasoning in `store_items.auto_list_result`. Application code independently enforces the asymmetric language rule and requires every check to pass. Infrastructure or malformed-response failures are stored with `status: ERROR` and a fail-closed `NOT PASS` verdict.
 

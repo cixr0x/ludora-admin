@@ -50,7 +50,13 @@ export function createCodexAutoListEvaluationClient(
         instructions: systemPromptForAutoListEvaluation(),
         input: [{
           role: 'user',
-          content: [{ type: 'input_text', text: userPromptForAutoListEvaluation(request) }]
+          content: [
+            { type: 'input_text', text: userPromptForAutoListEvaluation(request) },
+            { type: 'input_text', text: 'Attached image 1: store item cover.' },
+            ...imageContent(request.storeItemImageUrl, 'Store item cover is missing.'),
+            { type: 'input_text', text: `Attached image 2: catalog item cover from ${request.itemImageSource}.` },
+            ...imageContent(request.itemImageUrl, 'Catalog item cover is missing.')
+          ]
         }],
         text: {
           format: {
@@ -65,6 +71,12 @@ export function createCodexAutoListEvaluationClient(
       return parseAutoListAiDecision(response.output_text);
     }
   };
+}
+
+function imageContent(imageUrl: string, missingText: string) {
+  return imageUrl
+    ? [{ type: 'input_image' as const, image_url: imageUrl, detail: 'high' as const }]
+    : [{ type: 'input_text' as const, text: missingText }];
 }
 
 const decisionFields = [
