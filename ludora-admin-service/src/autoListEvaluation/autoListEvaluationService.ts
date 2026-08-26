@@ -1,4 +1,10 @@
 import type { Database } from '../db.js';
+import type {
+  ImageSimilarityResult,
+  ImageSimilarityService
+} from '../imageSimilarity/imageSimilarityService.js';
+
+export const AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD = 98;
 
 export type AutoListVerdict = 'PASS' | 'NOT PASS';
 
@@ -27,7 +33,23 @@ export type AutoListEvaluationClient = {
   evaluate(request: AutoListEvaluationRequest, context: { model: string }): Promise<AutoListAiDecision>;
 };
 
+export type AutoListImageSimilarity =
+  | (ImageSimilarityResult & {
+      pass: boolean;
+      reasoning: string;
+      status: 'COMPLETED';
+      threshold: number;
+    })
+  | {
+      pass: false;
+      reasoning: string;
+      score: null;
+      status: 'ERROR';
+      threshold: number;
+    };
+
 export type CompletedAutoListEvaluation = {
+  auto_list_eligible: boolean;
   checks: {
     cover_language: {
       item_language: string;
@@ -45,6 +67,7 @@ export type CompletedAutoListEvaluation = {
     };
   };
   evaluated_at: string;
+  image_similarity: AutoListImageSimilarity;
   inputs: AutoListEvaluationRequest & {
     item_id: number;
     store_item_id: number;
@@ -53,18 +76,20 @@ export type CompletedAutoListEvaluation = {
   reasoning: string;
   status: 'COMPLETED';
   verdict: AutoListVerdict;
-  version: 1;
+  version: 2;
 };
 
 export type ErrorAutoListEvaluation = {
+  auto_list_eligible: false;
   evaluated_at: string;
+  image_similarity: AutoListImageSimilarity;
   item_id: number;
   model: string;
   reasoning: string;
   status: 'ERROR';
   store_item_id: number;
   verdict: 'NOT PASS';
-  version: 1;
+  version: 2;
 };
 
 export type AutoListEvaluationResult = CompletedAutoListEvaluation | ErrorAutoListEvaluation;
@@ -87,7 +112,7 @@ type LinkedStoreItemRow = {
 export function createAutoListEvaluationService(
   database: Database,
   client: AutoListEvaluationClient,
-  options: { model: string; now?: () => Date }
+  options: { imageSimilarityService: ImageSimilarityService; model: string; now?: () => Date }
 ): AutoListEvaluationService {
   const now = options.now ?? (() => new Date());
 
@@ -95,26 +120,57 @@ export function createAutoListEvaluationService(
     async evaluateLinkedStoreItem(storeItemId, itemId): Promise<AutoListEvaluationResult> {
       const input = await loadEvaluationInput(database, storeItemId, itemId);
       const evaluatedAt = now().toISOString();
+      const [decisionOutcome, imageSimilarityOutcome] = await Promise.allSettled([
+        client.evaluate(input, { model: options.model }),
+        estimateImageSimilarity(options.imageSimilarityService, input)
+      ]);
+      const imageSimilarity = imageSimilarityCheck(imageSimilarityOutcome);
 
-      try {
-        const decision = normalizeDecision(await client.evaluate(input, { model: options.model }));
-        const result = completedResult(storeItemId, itemId, input, decision, options.model, evaluatedAt);
-        await storeResult(database, storeItemId, result);
-        return result;
-      } catch (error) {
+      let result: AutoListEvaluationResult;
+      if (decisionOutcome.status === 'rejected') {
         const result: ErrorAutoListEvaluation = {
+          auto_list_eligible: false,
           evaluated_at: evaluatedAt,
+          image_similarity: imageSimilarity,
           item_id: itemId,
           model: options.model,
-          reasoning: error instanceof Error ? error.message : 'Auto-list evaluation failed',
+          reasoning: errorMessage(decisionOutcome.reason, 'Auto-list evaluation failed'),
           status: 'ERROR',
           store_item_id: storeItemId,
           verdict: 'NOT PASS',
-          version: 1
+          version: 2
         };
-        await storeResult(database, storeItemId, result);
+        await storeResult(database, storeItemId, itemId, result);
         return result;
       }
+
+      try {
+        const decision = normalizeDecision(decisionOutcome.value);
+        result = completedResult(
+          storeItemId,
+          itemId,
+          input,
+          decision,
+          imageSimilarity,
+          options.model,
+          evaluatedAt
+        );
+      } catch (error) {
+        result = {
+          auto_list_eligible: false,
+          evaluated_at: evaluatedAt,
+          image_similarity: imageSimilarity,
+          item_id: itemId,
+          model: options.model,
+          reasoning: errorMessage(error, 'Auto-list evaluation failed'),
+          status: 'ERROR',
+          store_item_id: storeItemId,
+          verdict: 'NOT PASS',
+          version: 2
+        };
+      }
+      await storeResult(database, storeItemId, itemId, result);
+      return result;
     }
   };
 }
@@ -163,6 +219,7 @@ function completedResult(
   itemId: number,
   input: AutoListEvaluationRequest,
   decision: AutoListAiDecision,
+  imageSimilarity: AutoListImageSimilarity,
   model: string,
   evaluatedAt: string
 ): CompletedAutoListEvaluation {
@@ -178,6 +235,7 @@ function completedResult(
   }
 
   return {
+    auto_list_eligible: verdict === 'PASS' && imageSimilarity.pass,
     checks: {
       cover_language: {
         item_language: decision.itemCoverLanguage,
@@ -195,6 +253,7 @@ function completedResult(
       }
     },
     evaluated_at: evaluatedAt,
+    image_similarity: imageSimilarity,
     inputs: {
       ...input,
       item_id: itemId,
@@ -204,7 +263,40 @@ function completedResult(
     reasoning: decision.reasoning,
     status: 'COMPLETED',
     verdict,
-    version: 1
+    version: 2
+  };
+}
+
+async function estimateImageSimilarity(
+  service: ImageSimilarityService,
+  input: AutoListEvaluationRequest
+): Promise<ImageSimilarityResult> {
+  if (!input.itemImageUrl || !input.storeItemImageUrl) {
+    throw new Error('Image similarity requires both the catalog and store item covers');
+  }
+  return service.estimate(input.itemImageUrl, input.storeItemImageUrl);
+}
+
+function imageSimilarityCheck(
+  outcome: PromiseSettledResult<ImageSimilarityResult>
+): AutoListImageSimilarity {
+  if (outcome.status === 'rejected') {
+    return {
+      pass: false,
+      reasoning: errorMessage(outcome.reason, 'Image similarity could not be estimated'),
+      score: null,
+      status: 'ERROR',
+      threshold: AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD
+    };
+  }
+  return {
+    ...outcome.value,
+    pass: outcome.value.score >= AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD,
+    reasoning: outcome.value.score >= AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD
+      ? `Image similarity score ${outcome.value.score} meets the required threshold ${AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD}.`
+      : `Image similarity score ${outcome.value.score} is below the required threshold ${AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD}.`,
+    status: 'COMPLETED',
+    threshold: AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD
   };
 }
 
@@ -258,15 +350,29 @@ function normalizedString(value: unknown): string {
 async function storeResult(
   database: Database,
   storeItemId: number,
+  itemId: number,
   result: AutoListEvaluationResult
 ): Promise<void> {
-  await database.query(
+  const stored = await database.query(
     `
     update store_items
     set auto_list_result = $1::jsonb,
+        listing_status = case
+          when $4::boolean and listing_status = 'PENDING' then 'LISTED'
+          else listing_status
+        end,
         last_updated = now()
     where id = $2
+      and item_id = $3
+    returning id
     `,
-    [JSON.stringify(result), storeItemId]
+    [JSON.stringify(result), storeItemId, itemId, result.auto_list_eligible]
   );
+  if (!stored.rows[0]) {
+    throw new Error('Store item match changed before the auto-list result could be stored');
+  }
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim() ? error.message : fallback;
 }

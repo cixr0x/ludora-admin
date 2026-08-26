@@ -1137,6 +1137,9 @@ describe('item matching service', () => {
     expect(events[16]?.fields).toMatchObject({ bgg_id: 115746, item_id: 88 });
     expect(events[18]?.fields).toEqual({ item_id: 88, store_item_id: 42 });
     expect(events[19]?.fields).toEqual({
+      auto_list_eligible: false,
+      image_similarity_pass: false,
+      image_similarity_score: null,
       item_id: 88,
       status: 'ERROR',
       store_item_id: 42,
@@ -1368,14 +1371,22 @@ function aiService(result: AiBggMatchFound | null = null): AiBggMatchingService 
 
 function autoListService(): AutoListEvaluationService {
   const result: AutoListEvaluationResult = {
+    auto_list_eligible: false,
     evaluated_at: '2026-08-25T18:00:00.000Z',
+    image_similarity: {
+      pass: false,
+      reasoning: 'Test image similarity result',
+      score: null,
+      status: 'ERROR',
+      threshold: 98
+    },
     item_id: 77,
     model: 'gpt-5.6-terra',
     reasoning: 'Test result',
     status: 'ERROR',
     store_item_id: 42,
     verdict: 'NOT PASS',
-    version: 1
+    version: 2
   };
   return { evaluateLinkedStoreItem: vi.fn().mockResolvedValue(result) };
 }

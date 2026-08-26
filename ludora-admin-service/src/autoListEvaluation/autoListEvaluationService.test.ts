@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Database } from '../db.js';
+import type {
+  ImageSimilarityResult,
+  ImageSimilarityService
+} from '../imageSimilarity/imageSimilarityService.js';
 import {
+  AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD,
   coverLanguagePass,
   createAutoListEvaluationService,
   type AutoListAiDecision,
@@ -10,11 +15,13 @@ import {
 import { systemPromptForAutoListEvaluation } from './autoListEvaluationPrompts.js';
 
 describe('auto-list evaluation service', () => {
-  it('uses the Spanish item image, stores a structured PASS result, and does not approve listing', async () => {
+  it('uses the Spanish item image and auto-lists when AI passes and similarity is at least 98', async () => {
     const queries: RecordedQuery[] = [];
     const database = evaluationDatabase(linkedRow(), queries);
     const client = evaluationClient(decision());
+    const imageSimilarity = imageSimilarityService(98);
     const service = createAutoListEvaluationService(database, client, {
+      imageSimilarityService: imageSimilarity,
       model: 'gpt-5.6-terra',
       now: () => new Date('2026-08-25T18:00:00.000Z')
     });
@@ -29,23 +36,56 @@ describe('auto-list evaluation service', () => {
       storeItemImageUrl: 'https://store.mx/cafe-barista-en.jpg',
       storeItemName: 'Coffee Rush Board Game'
     }, { model: 'gpt-5.6-terra' });
+    expect(imageSimilarity.estimate).toHaveBeenCalledWith(
+      'https://catalog.mx/cafe-barista-es.jpg',
+      'https://store.mx/cafe-barista-en.jpg'
+    );
     expect(result).toMatchObject({
+      auto_list_eligible: true,
       checks: {
         cover_language: { item_language: 'es', pass: true, store_language: 'en' },
         name_match: { pass: true },
         same_game: { pass: true }
       },
+      image_similarity: {
+        pass: true,
+        score: 98,
+        status: 'COMPLETED',
+        threshold: 98
+      },
       status: 'COMPLETED',
-      verdict: 'PASS'
+      verdict: 'PASS',
+      version: 2
     });
     const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
     expect(normalizeSql(update?.sql ?? '')).toContain('set auto_list_result = $1::jsonb');
-    expect(normalizeSql(update?.sql ?? '')).not.toContain('listing_status');
+    expect(normalizeSql(update?.sql ?? '')).toContain(
+      "when $4::boolean and listing_status = 'pending' then 'listed'"
+    );
     expect(JSON.parse(String(update?.params?.[0]))).toEqual(result);
+    expect(update?.params?.slice(1)).toEqual([42, 77, true]);
   });
 
-  it('falls back to the English item image and rejects Spanish-store to English-item language order', async () => {
-    const database = evaluationDatabase(linkedRow({ item_image_url_es: '' }), []);
+  it('does not auto-list a score below 98 even when all AI checks pass', async () => {
+    const queries: RecordedQuery[] = [];
+    const result = await createAutoListEvaluationService(
+      evaluationDatabase(linkedRow(), queries),
+      evaluationClient(decision()),
+      { imageSimilarityService: imageSimilarityService(97.99), model: 'gpt-5.6-terra' }
+    ).evaluateLinkedStoreItem(42, 77);
+
+    expect(result).toMatchObject({
+      auto_list_eligible: false,
+      image_similarity: { pass: false, score: 97.99, threshold: 98 },
+      verdict: 'PASS'
+    });
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(update?.params?.[3]).toBe(false);
+  });
+
+  it('falls back to the English item image and does not auto-list when the AI language check fails', async () => {
+    const queries: RecordedQuery[] = [];
+    const database = evaluationDatabase(linkedRow({ item_image_url_es: '' }), queries);
     const client = evaluationClient(decision({
       itemCoverLanguage: 'en',
       storeCoverLanguage: 'es',
@@ -53,6 +93,7 @@ describe('auto-list evaluation service', () => {
     }));
 
     const result = await createAutoListEvaluationService(database, client, {
+      imageSimilarityService: imageSimilarityService(100),
       model: 'gpt-5.6-terra'
     }).evaluateLinkedStoreItem(42, 77);
 
@@ -61,10 +102,43 @@ describe('auto-list evaluation service', () => {
       itemImageUrl: 'https://catalog.mx/coffee-rush.jpg'
     }), expect.anything());
     expect(result).toMatchObject({
+      auto_list_eligible: false,
       checks: { cover_language: { pass: false } },
+      image_similarity: { pass: true, score: 100 },
       status: 'COMPLETED',
       verdict: 'NOT PASS'
     });
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(update?.params?.[3]).toBe(false);
+  });
+
+  it('fails closed when image similarity cannot be estimated', async () => {
+    const similarityError = new Error('comparison unavailable');
+    const imageSimilarity: ImageSimilarityService = {
+      estimate: vi.fn().mockRejectedValue(similarityError)
+    };
+    const queries: RecordedQuery[] = [];
+
+    const result = await createAutoListEvaluationService(
+      evaluationDatabase(linkedRow(), queries),
+      evaluationClient(decision()),
+      { imageSimilarityService: imageSimilarity, model: 'gpt-5.6-terra' }
+    ).evaluateLinkedStoreItem(42, 77);
+
+    expect(result).toMatchObject({
+      auto_list_eligible: false,
+      image_similarity: {
+        pass: false,
+        reasoning: 'comparison unavailable',
+        score: null,
+        status: 'ERROR',
+        threshold: 98
+      },
+      status: 'COMPLETED',
+      verdict: 'PASS'
+    });
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(update?.params?.[3]).toBe(false);
   });
 
   it('stores a fail-closed error result when the CodexAPI call fails', async () => {
@@ -75,19 +149,22 @@ describe('auto-list evaluation service', () => {
     };
 
     const result = await createAutoListEvaluationService(database, client, {
+      imageSimilarityService: imageSimilarityService(100),
       model: 'gpt-5.6-terra',
       now: () => new Date('2026-08-25T18:00:00.000Z')
     }).evaluateLinkedStoreItem(42, 77);
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
+      auto_list_eligible: false,
       evaluated_at: '2026-08-25T18:00:00.000Z',
+      image_similarity: { pass: true, score: 100, status: 'COMPLETED', threshold: 98 },
       item_id: 77,
       model: 'gpt-5.6-terra',
       reasoning: 'CodexAPI timed out',
       status: 'ERROR',
       store_item_id: 42,
       verdict: 'NOT PASS',
-      version: 1
+      version: 2
     });
     expect(queries.some(({ sql }) => normalizeSql(sql).includes('auto_list_result = $1::jsonb'))).toBe(true);
   });
@@ -97,6 +174,7 @@ describe('auto-list evaluation service', () => {
     const client = evaluationClient(decision({ nameMatches: false, verdict: 'PASS' }));
 
     const result = await createAutoListEvaluationService(database, client, {
+      imageSimilarityService: imageSimilarityService(100),
       model: 'gpt-5.6-terra'
     }).evaluateLinkedStoreItem(42, 77);
 
@@ -108,6 +186,7 @@ describe('auto-list evaluation service', () => {
   });
 
   it('encodes the exact language asymmetry and conservative unknown handling', () => {
+    expect(AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD).toBe(98);
     expect(coverLanguagePass('es', 'es')).toBe(true);
     expect(coverLanguagePass('en', 'en')).toBe(true);
     expect(coverLanguagePass('en', 'es')).toBe(true);
@@ -143,7 +222,7 @@ function evaluationDatabase(row: Record<string, unknown>, queries: RecordedQuery
   return {
     query: async (sql, params) => {
       queries.push({ params, sql });
-      return normalizeSql(sql).includes('from store_items si') ? { rows: [row] } : { rows: [] };
+      return normalizeSql(sql).includes('from store_items si') ? { rows: [row] } : { rows: [{ id: 42 }] };
     }
   };
 }
@@ -164,6 +243,32 @@ function linkedRow(overrides: Record<string, unknown> = {}): Record<string, unkn
 
 function evaluationClient(result: AutoListAiDecision): AutoListEvaluationClient {
   return { evaluate: vi.fn().mockResolvedValue(result) };
+}
+
+function imageSimilarityService(score: number): ImageSimilarityService {
+  return { estimate: vi.fn().mockResolvedValue(imageSimilarityResult(score)) };
+}
+
+function imageSimilarityResult(score: number): ImageSimilarityResult {
+  return {
+    diagnostics: {
+      candidate_dimensions: { height: 500, width: 400 },
+      candidate_keypoints: 180,
+      homography_valid: true,
+      inlier_ratio: 0.95,
+      inliers: 76,
+      median_reprojection_error: 0.4,
+      projected_area_ratio: 1,
+      reference_dimensions: { height: 500, width: 400 },
+      reference_grid_coverage: 1,
+      reference_hull_coverage: 0.9,
+      reference_keypoints: 200,
+      tentative_matches: 80
+    },
+    matched_region: null,
+    method: 'sift_homography_v1',
+    score
+  };
 }
 
 function decision(overrides: Partial<AutoListAiDecision> = {}): AutoListAiDecision {

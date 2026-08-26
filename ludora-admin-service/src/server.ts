@@ -70,9 +70,6 @@ const codexOptions = { baseURL: config.codexApiBaseUrl };
 const aiBggMatchingClient = createCodexAiBggMatchingClient({ baseURL: config.codexApiBaseUrl });
 const aiBggMatchingService = createAiBggMatchingService(aiBggMatchingClient, { model: config.codexAiModel });
 const autoListEvaluationClient = createCodexAutoListEvaluationClient(codexOptions);
-const autoListEvaluationService = createAutoListEvaluationService(database, autoListEvaluationClient, {
-  model: config.codexAiModel
-});
 const amazonTitleExtractionClient = createOpenAiAmazonTitleExtractionClient(codexOptions);
 const amazonTitleExtractionService = createAmazonTitleExtractionService(amazonTitleExtractionClient, { model: config.codexAiModel });
 const translationClient = createOpenAiTranslationClient(codexOptions);
@@ -88,13 +85,6 @@ const storeProfileDetectionService = createStoreProfileDetectionService({
   model: config.codexAiModel
 });
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
-const itemMatchingService = createItemMatchingService(database, {
-  aiBggMatchingService,
-  autoListEvaluationService,
-  bggClient,
-  bggItemImporter,
-  bggMatchCache
-});
 const localOperationsClient =
   config.discoveryRunner.mode === 'local'
     ? createLocalDiscoveryOperationsClient({
@@ -146,6 +136,17 @@ const imageSimilarityService = createImageSimilarityService(
     pythonExecutable: config.discoveryRunner.pythonExecutable
   })
 );
+const autoListEvaluationService = createAutoListEvaluationService(database, autoListEvaluationClient, {
+  imageSimilarityService,
+  model: config.codexAiModel
+});
+const itemMatchingService = createItemMatchingService(database, {
+  aiBggMatchingService,
+  autoListEvaluationService,
+  bggClient,
+  bggItemImporter,
+  bggMatchCache
+});
 const coverFlatteningWorkflowManager = createCoverFlatteningWorkflowManager(
   database,
   createNodeCoverFlatteningWorkflowDependencies({

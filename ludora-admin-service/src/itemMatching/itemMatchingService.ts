@@ -682,6 +682,9 @@ async function evaluateAutoListResult(
   });
   const result = await service.evaluateLinkedStoreItem(storeItemId, itemId);
   traceLog(traceLogger, 'auto_list_evaluation.completed', {
+    auto_list_eligible: result.auto_list_eligible,
+    image_similarity_pass: result.image_similarity.pass,
+    image_similarity_score: result.image_similarity.score,
     item_id: itemId,
     status: result.status,
     store_item_id: storeItemId,

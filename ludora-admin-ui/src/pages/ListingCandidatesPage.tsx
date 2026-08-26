@@ -291,10 +291,10 @@ function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
             AI Approval Result
           </Typography>
           <Alert severity="info">
-            Not evaluated yet. The AI evaluation runs after a new automated match links this store item to a catalog item.
+            Not evaluated yet. AI approval and image similarity run after a new automated match links this store item to a catalog item.
           </Alert>
           <Typography color="text.secondary" variant="caption">
-            Observation only — this result does not change the listing status.
+            Automatic listing requires AI PASS and an image similarity score of at least 98.
           </Typography>
         </Stack>
       </Paper>
@@ -319,6 +319,9 @@ function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
   const completed = status === 'COMPLETED';
   const passed = completed && verdict === 'PASS';
   const checks = objectValue(result.checks);
+  const imageSimilarity = objectValue(result.image_similarity);
+  const autoListEligible = booleanValue(result, 'auto_list_eligible');
+  const listingStatus = field(candidate, ['listing_status'], '').toUpperCase();
   const languageCheck = objectValue(checks?.cover_language);
   const languageDetails = languageCheck
     ? `Store cover: ${field(languageCheck, ['store_language'], 'und')} · Item cover: ${field(languageCheck, ['item_language'], 'und')}`
@@ -326,6 +329,13 @@ function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
   const displayVerdict = status === 'ERROR' ? 'NOT PASS (ERROR)' : verdict;
   const model = field(result, ['model'], 'Unknown model');
   const evaluatedAt = field(result, ['evaluated_at'], 'Unknown time');
+  const similarityScore = imageSimilarity ? numericField(imageSimilarity, ['score']) : null;
+  const similarityThreshold = imageSimilarity ? numericField(imageSimilarity, ['threshold']) ?? 98 : 98;
+  const similarityDetails = imageSimilarity
+    ? similarityScore === null
+      ? `Required score: ≥ ${similarityThreshold.toFixed(2)} / 100`
+      : `Score used: ${similarityScore.toFixed(2)} / 100 · Required: ≥ ${similarityThreshold.toFixed(2)}`
+    : undefined;
 
   return (
     <Paper aria-labelledby="ai-approval-result-title" component="section" variant="outlined" sx={{ p: 2 }}>
@@ -336,7 +346,9 @@ function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
               AI Approval Result
             </Typography>
             <Typography color="text.secondary" variant="caption">
-              Observation only — this result does not change the listing status.
+              {imageSimilarity
+                ? `Automatic listing requires AI PASS and image similarity ≥ ${similarityThreshold.toFixed(2)}.`
+                : 'Legacy AI-only result — no automatic listing decision was made.'}
             </Typography>
           </Box>
           <Chip color={passed ? 'success' : 'error'} label={displayVerdict} />
@@ -344,17 +356,30 @@ function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
 
         <Alert severity={passed ? 'success' : 'error'}>{field(result, ['reasoning'], 'No overall reasoning was returned.')}</Alert>
 
+        {imageSimilarity ? (
+          <Alert severity={autoListEligible ? 'success' : 'warning'}>
+            {autoListEligible
+              ? listingStatus === 'LISTED'
+                ? 'Auto-list requirements passed and the store item is listed.'
+                : 'Auto-list requirements passed, but only pending items are changed to listed.'
+              : `Not auto-listed: AI PASS and image similarity ≥ ${similarityThreshold.toFixed(2)} are both required.`}
+          </Alert>
+        ) : null}
+
         {completed && checks ? (
           <Box
             sx={{
               display: 'grid',
               gap: 1.5,
-              gridTemplateColumns: { lg: 'repeat(3, minmax(0, 1fr))', xs: '1fr' }
+              gridTemplateColumns: { lg: `repeat(${imageSimilarity ? 4 : 3}, minmax(0, 1fr))`, xs: '1fr' }
             }}
           >
             <AutoListCheckCard check={objectValue(checks.same_game)} label="Same game" />
             <AutoListCheckCard check={languageCheck} details={languageDetails} label="Cover language" />
             <AutoListCheckCard check={objectValue(checks.name_match)} label="Name match" />
+            {imageSimilarity ? (
+              <AutoListCheckCard check={imageSimilarity} details={similarityDetails} label="Image similarity" />
+            ) : null}
           </Box>
         ) : (
           <Alert severity="warning">Individual check results are unavailable because the AI evaluation did not complete.</Alert>

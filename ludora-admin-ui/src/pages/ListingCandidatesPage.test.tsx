@@ -1390,6 +1390,7 @@ describe('ListingCandidatesPage', () => {
     const reloadPage = vi.fn();
     let candidate: Record<string, unknown> = {
       auto_list_result: {
+        auto_list_eligible: false,
         checks: {
           cover_language: {
             item_language: 'es',
@@ -1407,11 +1408,34 @@ describe('ListingCandidatesPage', () => {
           }
         },
         evaluated_at: '2026-08-25T20:15:00.000Z',
+        image_similarity: {
+          diagnostics: {
+            candidate_dimensions: { width: 1200, height: 900 },
+            candidate_keypoints: 600,
+            homography_valid: true,
+            inlier_ratio: 0.84,
+            inliers: 42,
+            median_reprojection_error: 0.8,
+            projected_area_ratio: 0.12,
+            reference_dimensions: { width: 400, height: 500 },
+            reference_grid_coverage: 0.75,
+            reference_hull_coverage: 0.44,
+            reference_keypoints: 200,
+            tentative_matches: 50
+          },
+          matched_region: null,
+          method: 'sift_homography_v1',
+          pass: false,
+          reasoning: 'Image similarity score 84.25 is below the required threshold 98.',
+          score: 84.25,
+          status: 'COMPLETED',
+          threshold: 98
+        },
         model: 'gpt-5.6-terra',
         reasoning: 'All three checks passed.',
         status: 'COMPLETED',
         verdict: 'PASS',
-        version: 1
+        version: 2
       },
       description: 'Run a coffee shop before the customers lose patience.',
       id: '920',
@@ -1514,7 +1538,7 @@ describe('ListingCandidatesPage', () => {
     expect(within(storeItemSection!).queryByLabelText('Publisher')).not.toBeInTheDocument();
     const aiApprovalResult = within(storeItemSection!).getByRole('heading', { name: 'AI Approval Result' }).closest('section');
     expect(aiApprovalResult).not.toBeNull();
-    expect(within(aiApprovalResult!).getByText('PASS', { selector: '.MuiChip-label' })).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('PASS', { selector: '.MuiChip-labelMedium' })).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByText('All three checks passed.')).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByRole('heading', { name: 'Same game' })).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByText('Both covers show the same Coffee Rush game.')).toBeInTheDocument();
@@ -1522,7 +1546,11 @@ describe('ListingCandidatesPage', () => {
     expect(within(aiApprovalResult!).getByText('Store cover: en · Item cover: es')).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByRole('heading', { name: 'Name match' })).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByText('Cafe Barista matches the Spanish catalog name.')).toBeInTheDocument();
-    expect(within(aiApprovalResult!).getByText(/Observation only/)).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByRole('heading', { name: 'Image similarity' })).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('Image similarity score 84.25 is below the required threshold 98.')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('Score used: 84.25 / 100 · Required: ≥ 98.00')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('Not auto-listed: AI PASS and image similarity ≥ 98.00 are both required.')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).queryByText(/Observation only/)).not.toBeInTheDocument();
     const coverComparison = within(storeItemSection!).getByRole('group', {
       name: 'Store item and linked item cover comparison'
     });
