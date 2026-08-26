@@ -1389,6 +1389,30 @@ describe('ListingCandidatesPage', () => {
     const user = userEvent.setup();
     const reloadPage = vi.fn();
     let candidate: Record<string, unknown> = {
+      auto_list_result: {
+        checks: {
+          cover_language: {
+            item_language: 'es',
+            pass: true,
+            reasoning: 'The store cover is English and the catalog cover is Spanish, which is allowed.',
+            store_language: 'en'
+          },
+          name_match: {
+            pass: true,
+            reasoning: 'Cafe Barista matches the Spanish catalog name.'
+          },
+          same_game: {
+            pass: true,
+            reasoning: 'Both covers show the same Coffee Rush game.'
+          }
+        },
+        evaluated_at: '2026-08-25T20:15:00.000Z',
+        model: 'gpt-5.6-terra',
+        reasoning: 'All three checks passed.',
+        status: 'COMPLETED',
+        verdict: 'PASS',
+        version: 1
+      },
       description: 'Run a coffee shop before the customers lose patience.',
       id: '920',
       image_url: 'https://store.mx/cafe-barista.jpg',
@@ -1488,6 +1512,17 @@ describe('ListingCandidatesPage', () => {
       'Run a coffee shop before the customers lose patience.'
     );
     expect(within(storeItemSection!).queryByLabelText('Publisher')).not.toBeInTheDocument();
+    const aiApprovalResult = within(storeItemSection!).getByRole('heading', { name: 'AI Approval Result' }).closest('section');
+    expect(aiApprovalResult).not.toBeNull();
+    expect(within(aiApprovalResult!).getByText('PASS', { selector: '.MuiChip-label' })).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('All three checks passed.')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByRole('heading', { name: 'Same game' })).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('Both covers show the same Coffee Rush game.')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByRole('heading', { name: 'Cover language' })).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('Store cover: en · Item cover: es')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByRole('heading', { name: 'Name match' })).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('Cafe Barista matches the Spanish catalog name.')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText(/Observation only/)).toBeInTheDocument();
     const coverComparison = within(storeItemSection!).getByRole('group', {
       name: 'Store item and linked item cover comparison'
     });

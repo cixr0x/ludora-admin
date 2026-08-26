@@ -13,6 +13,7 @@ import {
   Box,
   Button,
   Checkbox,
+  Chip,
   CircularProgress,
   Dialog,
   DialogActions,
@@ -209,6 +210,162 @@ function booleanValue(record: AdminRecord, key: string) {
     return ['true', '1', 'yes', 'on'].includes(value.trim().toLowerCase());
   }
   return false;
+}
+
+function objectValue(value: unknown): AdminRecord | null {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    return value as AdminRecord;
+  }
+  return null;
+}
+
+function jsonObjectValue(value: unknown): AdminRecord | null {
+  if (typeof value !== 'string') {
+    return objectValue(value);
+  }
+  try {
+    return objectValue(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+function AutoListCheckCard({
+  check,
+  details,
+  label
+}: {
+  check: AdminRecord | null;
+  details?: string;
+  label: string;
+}) {
+  const hasResult = typeof check?.pass === 'boolean';
+  const passed = check?.pass === true;
+  const reasoning = check ? field(check, ['reasoning'], 'No reasoning was returned.') : 'Check result unavailable.';
+
+  return (
+    <Paper component="section" variant="outlined" sx={{ p: 1.5 }}>
+      <Stack spacing={0.75}>
+        <Stack alignItems="center" direction="row" justifyContent="space-between" spacing={1}>
+          <Stack alignItems="center" direction="row" spacing={0.75}>
+            {hasResult ? (
+              passed ? (
+                <CheckCircleIcon color="success" fontSize="small" />
+              ) : (
+                <CancelIcon color="error" fontSize="small" />
+              )
+            ) : null}
+            <Typography component="h4" sx={{ fontWeight: 700 }} variant="body2">
+              {label}
+            </Typography>
+          </Stack>
+          <Chip
+            color={hasResult ? (passed ? 'success' : 'error') : 'default'}
+            label={hasResult ? (passed ? 'PASS' : 'NOT PASS') : 'NOT AVAILABLE'}
+            size="small"
+            variant={hasResult ? 'filled' : 'outlined'}
+          />
+        </Stack>
+        {details ? (
+          <Typography color="text.secondary" variant="caption">
+            {details}
+          </Typography>
+        ) : null}
+        <Typography color="text.secondary" variant="body2">
+          {reasoning}
+        </Typography>
+      </Stack>
+    </Paper>
+  );
+}
+
+function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
+  const rawResult = candidate.auto_list_result;
+  const result = jsonObjectValue(rawResult);
+
+  if (rawResult === undefined || rawResult === null || rawResult === '') {
+    return (
+      <Paper aria-labelledby="ai-approval-result-title" component="section" variant="outlined" sx={{ p: 2 }}>
+        <Stack spacing={1}>
+          <Typography component="h3" id="ai-approval-result-title" sx={{ fontWeight: 700 }} variant="subtitle1">
+            AI Approval Result
+          </Typography>
+          <Alert severity="info">
+            Not evaluated yet. The AI evaluation runs after a new automated match links this store item to a catalog item.
+          </Alert>
+          <Typography color="text.secondary" variant="caption">
+            Observation only — this result does not change the listing status.
+          </Typography>
+        </Stack>
+      </Paper>
+    );
+  }
+
+  if (!result) {
+    return (
+      <Paper aria-labelledby="ai-approval-result-title" component="section" variant="outlined" sx={{ p: 2 }}>
+        <Stack spacing={1}>
+          <Typography component="h3" id="ai-approval-result-title" sx={{ fontWeight: 700 }} variant="subtitle1">
+            AI Approval Result
+          </Typography>
+          <Alert severity="error">The stored AI approval result could not be read.</Alert>
+        </Stack>
+      </Paper>
+    );
+  }
+
+  const status = field(result, ['status'], 'UNKNOWN').toUpperCase();
+  const verdict = field(result, ['verdict'], 'NOT PASS').toUpperCase();
+  const completed = status === 'COMPLETED';
+  const passed = completed && verdict === 'PASS';
+  const checks = objectValue(result.checks);
+  const languageCheck = objectValue(checks?.cover_language);
+  const languageDetails = languageCheck
+    ? `Store cover: ${field(languageCheck, ['store_language'], 'und')} · Item cover: ${field(languageCheck, ['item_language'], 'und')}`
+    : undefined;
+  const displayVerdict = status === 'ERROR' ? 'NOT PASS (ERROR)' : verdict;
+  const model = field(result, ['model'], 'Unknown model');
+  const evaluatedAt = field(result, ['evaluated_at'], 'Unknown time');
+
+  return (
+    <Paper aria-labelledby="ai-approval-result-title" component="section" variant="outlined" sx={{ p: 2 }}>
+      <Stack spacing={1.5}>
+        <Stack alignItems={{ sm: 'center', xs: 'flex-start' }} direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1}>
+          <Box>
+            <Typography component="h3" id="ai-approval-result-title" sx={{ fontWeight: 700 }} variant="subtitle1">
+              AI Approval Result
+            </Typography>
+            <Typography color="text.secondary" variant="caption">
+              Observation only — this result does not change the listing status.
+            </Typography>
+          </Box>
+          <Chip color={passed ? 'success' : 'error'} label={displayVerdict} />
+        </Stack>
+
+        <Alert severity={passed ? 'success' : 'error'}>{field(result, ['reasoning'], 'No overall reasoning was returned.')}</Alert>
+
+        {completed && checks ? (
+          <Box
+            sx={{
+              display: 'grid',
+              gap: 1.5,
+              gridTemplateColumns: { lg: 'repeat(3, minmax(0, 1fr))', xs: '1fr' }
+            }}
+          >
+            <AutoListCheckCard check={objectValue(checks.same_game)} label="Same game" />
+            <AutoListCheckCard check={languageCheck} details={languageDetails} label="Cover language" />
+            <AutoListCheckCard check={objectValue(checks.name_match)} label="Name match" />
+          </Box>
+        ) : (
+          <Alert severity="warning">Individual check results are unavailable because the AI evaluation did not complete.</Alert>
+        )}
+
+        <Typography color="text.secondary" variant="caption">
+          Status: {status} · Model: {model} · Evaluated: {evaluatedAt}
+        </Typography>
+      </Stack>
+    </Paper>
+  );
 }
 
 function candidateId(record: AdminRecord) {
@@ -1646,6 +1803,8 @@ function ItemCandidateForm({
             </Stack>
           </Alert>
         ) : null}
+
+        {detailMode === 'review' ? <AutoListEvaluationPanel candidate={candidate} /> : null}
 
         {detailMode === 'review' ? (
           <>
