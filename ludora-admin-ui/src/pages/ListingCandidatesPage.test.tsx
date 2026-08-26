@@ -1549,7 +1549,7 @@ describe('ListingCandidatesPage', () => {
     expect(within(aiApprovalResult!).getByRole('heading', { name: 'Image similarity' })).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByText('Image similarity score 84.25 is below the required threshold 98.')).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByText('Score used: 84.25 / 100 · Required: ≥ 98.00')).toBeInTheDocument();
-    expect(within(aiApprovalResult!).getByText('Not auto-listed: AI PASS and image similarity ≥ 98.00 are both required.')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('Not auto-listed: a generated Spanish translation, AI PASS, and image similarity ≥ 98.00 are all required.')).toBeInTheDocument();
     expect(within(aiApprovalResult!).queryByText(/Observation only/)).not.toBeInTheDocument();
     const coverComparison = within(storeItemSection!).getByRole('group', {
       name: 'Store item and linked item cover comparison'
@@ -1666,6 +1666,63 @@ describe('ListingCandidatesPage', () => {
     await user.click(within(storeItemSection!).getByRole('button', { name: 'Approve listing' }));
     expect(await screen.findByText('Listing status: LISTED')).toBeInTheDocument();
   }, 10_000);
+
+  it('shows that auto-list evaluation was skipped when the linked item has no generated translation', async () => {
+    const candidate = {
+      auto_list_result: null,
+      description: 'Store description',
+      id: '920',
+      image_url: '',
+      item_id: 77,
+      listing_status: 'PENDING',
+      publisher: 'Publisher',
+      source_url: 'https://store.mx/products/game',
+      title: 'Game'
+    };
+    const item = {
+      canonical_name: 'Game',
+      canonical_name_es: 'Juego',
+      description: 'Catalog description',
+      description_es: '',
+      id: 77,
+      image_url: '',
+      image_url_es: '',
+      item_type: 'base_game',
+      normalized_name: 'game',
+      normalized_name_es: 'juego',
+      status: 'active'
+    };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings/920') {
+        return jsonResponse(candidate);
+      }
+      if (path === '/discovery/listings/920/additional-items') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77') {
+        return jsonResponse(item);
+      }
+      if (path === '/items/77/relationships' || path === '/items/77/store-items') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/taxonomy') {
+        return jsonResponse({ categories: [], families: [], mechanics: [] });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+
+    render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+
+    const approvalPanel = (await screen.findByRole('heading', { name: 'AI Approval Result' })).closest('section');
+    expect(approvalPanel).not.toBeNull();
+    expect(await within(approvalPanel!).findByText(
+      'Auto-list evaluation is skipped because the linked boardgame does not have a generated Spanish translation.'
+    )).toBeInTheDocument();
+    expect(within(approvalPanel!).getByText(
+      'Automatic listing requires a generated Spanish translation, AI PASS, and an image similarity score of at least 98.'
+    )).toBeInTheDocument();
+  });
 
   it.each([
     { itemId: 77, scenario: 'when a catalog item is already linked' },

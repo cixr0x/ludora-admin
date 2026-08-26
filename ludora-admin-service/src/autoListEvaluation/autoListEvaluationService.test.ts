@@ -15,6 +15,29 @@ import {
 import { systemPromptForAutoListEvaluation } from './autoListEvaluationPrompts.js';
 
 describe('auto-list evaluation service', () => {
+  it('skips AI and image similarity when the linked item has no generated translation', async () => {
+    const queries: RecordedQuery[] = [];
+    const client = evaluationClient(decision());
+    const imageSimilarity = imageSimilarityService(100);
+    const result = await createAutoListEvaluationService(
+      evaluationDatabase(linkedRow({ item_description_es: '   ' }), queries),
+      client,
+      { imageSimilarityService: imageSimilarity, model: 'gpt-5.6-terra' }
+    ).evaluateLinkedStoreItem(42, 77);
+
+    expect(result).toEqual({
+      auto_list_eligible: false,
+      item_id: 77,
+      reason: 'TRANSLATION_NOT_GENERATED',
+      reasoning: 'Auto-list evaluation skipped because the linked catalog item does not have a generated Spanish translation.',
+      status: 'SKIPPED',
+      store_item_id: 42
+    });
+    expect(client.evaluate).not.toHaveBeenCalled();
+    expect(imageSimilarity.estimate).not.toHaveBeenCalled();
+    expect(queries.some(({ sql }) => normalizeSql(sql).startsWith('update store_items'))).toBe(false);
+  });
+
   it('uses the Spanish item image and auto-lists when AI passes and similarity is at least 98', async () => {
     const queries: RecordedQuery[] = [];
     const database = evaluationDatabase(linkedRow(), queries);
@@ -229,6 +252,7 @@ function evaluationDatabase(row: Record<string, unknown>, queries: RecordedQuery
 
 function linkedRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
+    item_description_es: 'Dirige una cafeteria y completa los pedidos de tus clientes.',
     item_id: 77,
     item_image_url: 'https://catalog.mx/coffee-rush.jpg',
     item_image_url_es: 'https://catalog.mx/cafe-barista-es.jpg',

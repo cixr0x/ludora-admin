@@ -279,9 +279,10 @@ function AutoListCheckCard({
   );
 }
 
-function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
+function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; item: AdminRecord | null }) {
   const rawResult = candidate.auto_list_result;
   const result = jsonObjectValue(rawResult);
+  const translationGenerated = Boolean(item && field(item, ['description_es'], '').trim());
 
   if (rawResult === undefined || rawResult === null || rawResult === '') {
     return (
@@ -290,11 +291,17 @@ function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
           <Typography component="h3" id="ai-approval-result-title" sx={{ fontWeight: 700 }} variant="subtitle1">
             AI Approval Result
           </Typography>
-          <Alert severity="info">
-            Not evaluated yet. AI approval and image similarity run after a new automated match links this store item to a catalog item.
-          </Alert>
+          {item && !translationGenerated ? (
+            <Alert severity="warning">
+              Auto-list evaluation is skipped because the linked boardgame does not have a generated Spanish translation.
+            </Alert>
+          ) : (
+            <Alert severity="info">
+              Not evaluated yet. AI approval and image similarity run after an eligible automated match links this store item to a catalog item.
+            </Alert>
+          )}
           <Typography color="text.secondary" variant="caption">
-            Automatic listing requires AI PASS and an image similarity score of at least 98.
+            Automatic listing requires a generated Spanish translation, AI PASS, and an image similarity score of at least 98.
           </Typography>
         </Stack>
       </Paper>
@@ -347,7 +354,7 @@ function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
             </Typography>
             <Typography color="text.secondary" variant="caption">
               {imageSimilarity
-                ? `Automatic listing requires AI PASS and image similarity ≥ ${similarityThreshold.toFixed(2)}.`
+                ? `Automatic listing requires a generated Spanish translation, AI PASS, and image similarity ≥ ${similarityThreshold.toFixed(2)}.`
                 : 'Legacy AI-only result — no automatic listing decision was made.'}
             </Typography>
           </Box>
@@ -357,12 +364,14 @@ function AutoListEvaluationPanel({ candidate }: { candidate: AdminRecord }) {
         <Alert severity={passed ? 'success' : 'error'}>{field(result, ['reasoning'], 'No overall reasoning was returned.')}</Alert>
 
         {imageSimilarity ? (
-          <Alert severity={autoListEligible ? 'success' : 'warning'}>
-            {autoListEligible
+          <Alert severity={translationGenerated && autoListEligible ? 'success' : 'warning'}>
+            {item && !translationGenerated
+              ? 'The generated Spanish translation prerequisite is currently missing. This stored result is not sufficient for a new automatic approval.'
+              : autoListEligible
               ? listingStatus === 'LISTED'
                 ? 'Auto-list requirements passed and the store item is listed.'
                 : 'Auto-list requirements passed, but only pending items are changed to listed.'
-              : `Not auto-listed: AI PASS and image similarity ≥ ${similarityThreshold.toFixed(2)} are both required.`}
+              : `Not auto-listed: a generated Spanish translation, AI PASS, and image similarity ≥ ${similarityThreshold.toFixed(2)} are all required.`}
           </Alert>
         ) : null}
 
@@ -1829,7 +1838,7 @@ function ItemCandidateForm({
           </Alert>
         ) : null}
 
-        {detailMode === 'review' ? <AutoListEvaluationPanel candidate={candidate} /> : null}
+        {detailMode === 'review' ? <AutoListEvaluationPanel candidate={candidate} item={linkedItemPreview} /> : null}
 
         {detailMode === 'review' ? (
           <>

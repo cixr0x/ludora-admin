@@ -681,6 +681,14 @@ async function evaluateAutoListResult(
     store_item_id: storeItemId
   });
   const result = await service.evaluateLinkedStoreItem(storeItemId, itemId);
+  if (result.status === 'SKIPPED') {
+    traceLog(traceLogger, 'auto_list_evaluation.skipped', {
+      item_id: itemId,
+      reason: result.reason,
+      store_item_id: storeItemId
+    });
+    return;
+  }
   traceLog(traceLogger, 'auto_list_evaluation.completed', {
     auto_list_eligible: result.auto_list_eligible,
     image_similarity_pass: result.image_similarity.pass,

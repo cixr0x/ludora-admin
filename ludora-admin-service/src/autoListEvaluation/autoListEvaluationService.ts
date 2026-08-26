@@ -94,11 +94,23 @@ export type ErrorAutoListEvaluation = {
 
 export type AutoListEvaluationResult = CompletedAutoListEvaluation | ErrorAutoListEvaluation;
 
+export type SkippedAutoListEvaluation = {
+  auto_list_eligible: false;
+  item_id: number;
+  reason: 'TRANSLATION_NOT_GENERATED';
+  reasoning: string;
+  status: 'SKIPPED';
+  store_item_id: number;
+};
+
+export type AutoListEvaluationOutcome = AutoListEvaluationResult | SkippedAutoListEvaluation;
+
 export type AutoListEvaluationService = {
-  evaluateLinkedStoreItem(storeItemId: number, itemId: number): Promise<AutoListEvaluationResult>;
+  evaluateLinkedStoreItem(storeItemId: number, itemId: number): Promise<AutoListEvaluationOutcome>;
 };
 
 type LinkedStoreItemRow = {
+  item_description_es: string;
   item_id: number;
   item_image_url: string;
   item_image_url_es: string;
@@ -117,8 +129,19 @@ export function createAutoListEvaluationService(
   const now = options.now ?? (() => new Date());
 
   return {
-    async evaluateLinkedStoreItem(storeItemId, itemId): Promise<AutoListEvaluationResult> {
-      const input = await loadEvaluationInput(database, storeItemId, itemId);
+    async evaluateLinkedStoreItem(storeItemId, itemId): Promise<AutoListEvaluationOutcome> {
+      const source = await loadEvaluationSource(database, storeItemId, itemId);
+      if (!source.translationGenerated) {
+        return {
+          auto_list_eligible: false,
+          item_id: itemId,
+          reason: 'TRANSLATION_NOT_GENERATED',
+          reasoning: 'Auto-list evaluation skipped because the linked catalog item does not have a generated Spanish translation.',
+          status: 'SKIPPED',
+          store_item_id: storeItemId
+        };
+      }
+      const input = source.input;
       const evaluatedAt = now().toISOString();
       const [decisionOutcome, imageSimilarityOutcome] = await Promise.allSettled([
         client.evaluate(input, { model: options.model }),
@@ -175,11 +198,11 @@ export function createAutoListEvaluationService(
   };
 }
 
-async function loadEvaluationInput(
+async function loadEvaluationSource(
   database: Database,
   storeItemId: number,
   itemId: number
-): Promise<AutoListEvaluationRequest> {
+): Promise<{ input: AutoListEvaluationRequest; translationGenerated: boolean }> {
   const result = await database.query(
     `
     select
@@ -187,6 +210,7 @@ async function loadEvaluationInput(
       si.item_id,
       si.title as store_item_name,
       si.image_url as store_item_image_url,
+      i.description_es as item_description_es,
       i.canonical_name as item_name_en,
       i.canonical_name_es as item_name_es,
       i.image_url as item_image_url,
@@ -205,12 +229,15 @@ async function loadEvaluationInput(
 
   const spanishImageUrl = normalizedString(row.item_image_url_es);
   return {
-    itemImageSource: spanishImageUrl ? 'image_url_es' : 'image_url',
-    itemImageUrl: spanishImageUrl || normalizedString(row.item_image_url),
-    itemNameEn: normalizedString(row.item_name_en),
-    itemNameEs: normalizedString(row.item_name_es),
-    storeItemImageUrl: normalizedString(row.store_item_image_url),
-    storeItemName: normalizedString(row.store_item_name)
+    input: {
+      itemImageSource: spanishImageUrl ? 'image_url_es' : 'image_url',
+      itemImageUrl: spanishImageUrl || normalizedString(row.item_image_url),
+      itemNameEn: normalizedString(row.item_name_en),
+      itemNameEs: normalizedString(row.item_name_es),
+      storeItemImageUrl: normalizedString(row.store_item_image_url),
+      storeItemName: normalizedString(row.store_item_name)
+    },
+    translationGenerated: Boolean(normalizedString(row.item_description_es))
   };
 }
 

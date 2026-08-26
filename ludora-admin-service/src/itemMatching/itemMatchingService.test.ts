@@ -56,6 +56,28 @@ describe('item matching service', () => {
     expect(autoList.evaluateLinkedStoreItem).toHaveBeenCalledWith(42, 77);
   });
 
+  it('logs that auto-list evaluation was skipped when the matched item has no generated translation', async () => {
+    const events: TraceEvent[] = [];
+    const autoList = skippedAutoListService();
+    const service = createItemMatchingService(
+      matchingDatabase(storeItemCandidate(), [localItemRow()]),
+      dependencies({ autoList })
+    );
+
+    await service.confirmBoardgameAndMatch?.(42, {
+      confirmationSource: 'automated',
+      traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
+    });
+
+    expect(autoList.evaluateLinkedStoreItem).toHaveBeenCalledWith(42, 77);
+    expect(traceFields(events, 'auto_list_evaluation.skipped')).toEqual({
+      item_id: 77,
+      reason: 'TRANSLATION_NOT_GENERATED',
+      store_item_id: 42
+    });
+    expect(events.map(({ event }) => event)).not.toContain('auto_list_evaluation.completed');
+  });
+
   it('retrieves token candidates and accepts a local title surrounded by listing context', async () => {
     const queries: RecordedQuery[] = [];
     const updates: RecordedQuery[] = [];
@@ -1389,6 +1411,19 @@ function autoListService(): AutoListEvaluationService {
     version: 2
   };
   return { evaluateLinkedStoreItem: vi.fn().mockResolvedValue(result) };
+}
+
+function skippedAutoListService(): AutoListEvaluationService {
+  return {
+    evaluateLinkedStoreItem: vi.fn().mockResolvedValue({
+      auto_list_eligible: false,
+      item_id: 77,
+      reason: 'TRANSLATION_NOT_GENERATED',
+      reasoning: 'Auto-list evaluation skipped because the linked catalog item does not have a generated Spanish translation.',
+      status: 'SKIPPED',
+      store_item_id: 42
+    })
+  };
 }
 
 function aiServiceRejecting(error: Error): AiBggMatchingService {
