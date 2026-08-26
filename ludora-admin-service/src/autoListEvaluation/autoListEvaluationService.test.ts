@@ -116,7 +116,7 @@ describe('auto-list evaluation service', () => {
     expect(coverLanguagePass('und', 'und')).toBe(false);
   });
 
-  it('requires nearly identical cover artwork and all checks to pass', () => {
+  it('requires nearly identical cover artwork, same-language names, and all checks to pass', () => {
     const prompt = systemPromptForAutoListEvaluation();
     expect(prompt).toContain('strict same-cover-artwork check, not merely a same-title or same-underlying-game check');
     expect(prompt).toContain('same printed cover artwork and design');
@@ -127,6 +127,12 @@ describe('auto-list evaluation service', () => {
     expect(prompt).toContain('cite the decisive visual artwork and layout similarities or differences');
     expect(prompt).toContain('store cover is English ("en") and the catalog cover is Spanish ("es")');
     expect(prompt).toContain('Spanish store cover with an English catalog cover must fail');
+    expect(prompt).toContain('the two titles being compared are written in the same language');
+    expect(prompt).toContain('Judge the actual language of each title rather than trusting the En or Es field label');
+    expect(prompt).toContain('Do not translate either title for comparison');
+    expect(prompt).toContain('require all meaningful product qualifiers');
+    expect(prompt).toContain('"Destinies: Adversidad" must not match only "Destinies: Adversity Module"');
+    expect(prompt).toContain('never justify a pass only by translating between languages');
     expect(prompt).toContain('only when sameGame, the language rule, and nameMatches all pass');
   });
 });
