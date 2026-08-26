@@ -116,9 +116,15 @@ describe('auto-list evaluation service', () => {
     expect(coverLanguagePass('und', 'und')).toBe(false);
   });
 
-  it('tells CodexAPI to inspect the exact URLs and requires all checks to pass', () => {
+  it('requires nearly identical cover artwork and all checks to pass', () => {
     const prompt = systemPromptForAutoListEvaluation();
-    expect(prompt).toContain('Open or download exactly those two URLs');
+    expect(prompt).toContain('strict same-cover-artwork check, not merely a same-title or same-underlying-game check');
+    expect(prompt).toContain('same printed cover artwork and design');
+    expect(prompt).toContain('translated language text and small publisher or distributor logos or labels');
+    expect(prompt).toContain('A redesigned, alternate, legacy, anniversary, or retailer-exclusive cover must fail');
+    expect(prompt).toContain('an illustrated character scene versus an abstract dice-and-logo cover is a failure');
+    expect(prompt).toContain('Matching names, designers, or game identity cannot override different artwork');
+    expect(prompt).toContain('cite the decisive visual artwork and layout similarities or differences');
     expect(prompt).toContain('store cover is English ("en") and the catalog cover is Spanish ("es")');
     expect(prompt).toContain('Spanish store cover with an English catalog cover must fail');
     expect(prompt).toContain('only when sameGame, the language rule, and nameMatches all pass');
