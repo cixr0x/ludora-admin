@@ -1966,6 +1966,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('match_score');
     expect(sql).toContain('match_reasons');
     expect(sql).toContain('match_payload');
+    expect(sql).toContain('auto_list_result');
     expect(sql).toContain('matched_at');
     expect(sql).toContain('processed_at');
     expect(sql).toContain('processing_error');

@@ -7,6 +7,8 @@ import { createAmazonTitleExtractionService } from './amazonTitleExtraction/amaz
 import { createOpenAiAmazonTitleExtractionClient } from './amazonTitleExtraction/openAiAmazonTitleExtractionClient.js';
 import { createAiBggMatchingService } from './aiBggMatching/aiBggMatchingService.js';
 import { createCodexAiBggMatchingClient } from './aiBggMatching/codexAiBggMatchingClient.js';
+import { createAutoListEvaluationService } from './autoListEvaluation/autoListEvaluationService.js';
+import { createCodexAutoListEvaluationClient } from './autoListEvaluation/codexAutoListEvaluationClient.js';
 import { createBggClient } from './bgg/bggClient.js';
 import { createCachedBggClient } from './bgg/cachedBggClient.js';
 import { createBggItemImporter } from './bgg/bggItemImporter.js';
@@ -67,6 +69,10 @@ const bggClient = rawBggClient ? createCachedBggClient(database, rawBggClient, b
 const codexOptions = { baseURL: config.codexApiBaseUrl };
 const aiBggMatchingClient = createCodexAiBggMatchingClient({ baseURL: config.codexApiBaseUrl });
 const aiBggMatchingService = createAiBggMatchingService(aiBggMatchingClient, { model: config.codexAiModel });
+const autoListEvaluationClient = createCodexAutoListEvaluationClient(codexOptions);
+const autoListEvaluationService = createAutoListEvaluationService(database, autoListEvaluationClient, {
+  model: config.codexAiModel
+});
 const amazonTitleExtractionClient = createOpenAiAmazonTitleExtractionClient(codexOptions);
 const amazonTitleExtractionService = createAmazonTitleExtractionService(amazonTitleExtractionClient, { model: config.codexAiModel });
 const translationClient = createOpenAiTranslationClient(codexOptions);
@@ -84,6 +90,7 @@ const storeProfileDetectionService = createStoreProfileDetectionService({
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
 const itemMatchingService = createItemMatchingService(database, {
   aiBggMatchingService,
+  autoListEvaluationService,
   bggClient,
   bggItemImporter,
   bggMatchCache

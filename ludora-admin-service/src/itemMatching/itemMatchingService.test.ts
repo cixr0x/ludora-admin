@@ -10,6 +10,10 @@ import type { BggClient } from '../bgg/bggClient.js';
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import type { BggMatchCache } from '../bgg/bggMatchCache.js';
 import type { BggSearchItem, BggThingDetails } from '../bgg/bggParser.js';
+import type {
+  AutoListEvaluationResult,
+  AutoListEvaluationService
+} from '../autoListEvaluation/autoListEvaluationService.js';
 import type { Database } from '../db.js';
 import type { TraceLogger } from '../trace.js';
 import { createItemMatchingService } from './itemMatchingService.js';
@@ -40,7 +44,8 @@ describe('item matching service', () => {
     const ai = aiService();
     const cache = matchCache();
     const bggClient = clientWithThing(null);
-    const service = createItemMatchingService(database, dependencies({ ai, bggClient, cache }));
+    const autoList = autoListService();
+    const service = createItemMatchingService(database, dependencies({ ai, autoList, bggClient, cache }));
 
     await service.confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
@@ -48,6 +53,7 @@ describe('item matching service', () => {
     expect(cache.lookup).not.toHaveBeenCalled();
     expect(bggClient.searchFresh).not.toHaveBeenCalled();
     expect(linkUpdate(updates)?.params?.slice(0, 4)).toEqual([77, 'LOCAL', 377061, 'Coffee Rush']);
+    expect(autoList.evaluateLinkedStoreItem).toHaveBeenCalledWith(42, 77);
   });
 
   it('retrieves token candidates and accepts a local title surrounded by listing context', async () => {
@@ -630,13 +636,15 @@ describe('item matching service', () => {
     const cache = matchCache();
     const bggClient = clientWithThing(bggThingDetails());
     const importer = itemImporter(88);
+    const autoList = autoListService();
 
-    await createItemMatchingService(database, dependencies({ ai, bggClient, cache, importer }))
+    await createItemMatchingService(database, dependencies({ ai, autoList, bggClient, cache, importer }))
       .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
     expect(bggClient.fetchThing).not.toHaveBeenCalled();
     expect(cache.recordAiMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).not.toHaveBeenCalled();
+    expect(autoList.evaluateLinkedStoreItem).not.toHaveBeenCalled();
     expect(linkUpdate(updates)).toBeUndefined();
     const noMatch = updates.find((query) => normalizeSql(query.sql).includes("match_source = 'none'"));
     expect(noMatch?.params).toEqual([JSON.stringify(['no match above threshold']), 42]);
@@ -649,13 +657,14 @@ describe('item matching service', () => {
     const ai = aiService(null);
     const cache = matchCache();
     const importer = itemImporter(88);
+    const autoList = autoListService();
     const database = matchingDatabase(
       storeItemCandidate({ title: 'Unknown Game' }),
       [],
       { onStoreItemUpdate: (query) => updates.push(query) }
     );
 
-    await createItemMatchingService(database, dependencies({ ai, cache, importer }))
+    await createItemMatchingService(database, dependencies({ ai, autoList, cache, importer }))
       .confirmBoardgameAndMatch?.(42, {
         confirmationSource: 'admin',
         traceLogger: { log: (event, fields = {}) => events.push({ event, fields }) }
@@ -665,6 +674,7 @@ describe('item matching service', () => {
     expect(ai.findMatch).not.toHaveBeenCalled();
     expect(cache.recordAiMatch).not.toHaveBeenCalled();
     expect(importer.importBggId).not.toHaveBeenCalled();
+    expect(autoList.evaluateLinkedStoreItem).not.toHaveBeenCalled();
     expect(linkUpdate(updates)).toBeUndefined();
     expect(updates).toHaveLength(1);
     expect(normalizeSql(updates[0]?.sql ?? '')).toContain('is_boardgame = true');
@@ -1109,6 +1119,8 @@ describe('item matching service', () => {
       'item_matcher.bgg_import.start',
       'item_matcher.bgg_import.completed',
       'item_matcher.link.completed',
+      'auto_list_evaluation.start',
+      'auto_list_evaluation.completed',
       'item_matcher.confirm.completed'
     ]);
     expect(events[11]?.fields).toMatchObject({
@@ -1123,6 +1135,13 @@ describe('item matching service', () => {
     expect(events[12]?.fields).toMatchObject({ bgg_id: 115746, candidate_id: 42, validated: true });
     expect(events[13]?.fields).toMatchObject({ bgg_id: 115746, candidate_id: 42, query_count: 2 });
     expect(events[16]?.fields).toMatchObject({ bgg_id: 115746, item_id: 88 });
+    expect(events[18]?.fields).toEqual({ item_id: 88, store_item_id: 42 });
+    expect(events[19]?.fields).toEqual({
+      item_id: 88,
+      status: 'ERROR',
+      store_item_id: 42,
+      verdict: 'NOT PASS'
+    });
   });
 
   it('logs AI no-match and failure events', async () => {
@@ -1323,17 +1342,20 @@ type TraceEvent = { event: string; fields: Record<string, unknown> };
 
 function dependencies({
   ai = aiService(null),
+  autoList = autoListService(),
   bggClient = clientWithThing(null),
   cache = matchCache(),
   importer = itemImporter(null)
 }: {
   ai?: AiBggMatchingService;
+  autoList?: AutoListEvaluationService;
   bggClient?: BggClient;
   cache?: BggMatchCache;
   importer?: BggItemImporter;
 } = {}) {
   return {
     aiBggMatchingService: ai,
+    autoListEvaluationService: autoList,
     bggClient,
     bggItemImporter: importer,
     bggMatchCache: cache
@@ -1342,6 +1364,20 @@ function dependencies({
 
 function aiService(result: AiBggMatchFound | null = null): AiBggMatchingService {
   return { findMatch: vi.fn().mockResolvedValue(result) };
+}
+
+function autoListService(): AutoListEvaluationService {
+  const result: AutoListEvaluationResult = {
+    evaluated_at: '2026-08-25T18:00:00.000Z',
+    item_id: 77,
+    model: 'gpt-5.6-terra',
+    reasoning: 'Test result',
+    status: 'ERROR',
+    store_item_id: 42,
+    verdict: 'NOT PASS',
+    version: 1
+  };
+  return { evaluateLinkedStoreItem: vi.fn().mockResolvedValue(result) };
 }
 
 function aiServiceRejecting(error: Error): AiBggMatchingService {

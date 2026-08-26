@@ -32,6 +32,7 @@ LUDORA_INTERNAL_API_TOKEN=optional_shared_internal_token
 - `POST /admin/ai/amazon-title-extractions`
 - `POST /admin/store-profile-detections` (website metadata first, AI only for unresolved store fields)
 - AI BGG matching after local and cached BGG candidates cannot produce an accepted match
+- Auto-list evaluation after an automated store item match links a catalog item
 
 Each non-embedding client must call the shared CodexAPI transport helper instead of constructing a direct OpenAI client or fallback. Keep request and response contracts structured with Responses JSON schema output.
 
@@ -50,3 +51,11 @@ Item embeddings are intentionally different. CodexAPI does not support embedding
 When a confirmed store item has no accepted local-catalog match, matching checks the BGG cache first. Cached AI-verified associations are accepted; ordinary cached search results still receive the normal deterministic score. Only when neither provides an accepted match does the AI BGG matcher call CodexAPI. The matcher sends only JSON text data (`itemName` and `imageUrl`): Codex opens a public cover URL during that same invocation when one is available, researches BGG, and visually compares the covers. This feature does not use generic `input_image` transport. The structured prompt requires the model to search BGG, account for Spanish-to-English titles, compare a store cover with the BGG cover when available, and return no match for a cover conflict or uncertain result.
 
 A positive AI decision is not imported blindly. Admin-service fetches the returned BGG thing, verifies that the fetched BGG ID matches the decision, then stores an AI-verified cache association for both the store title and canonical BGG title. Future matching can reuse that association without another AI request. The normal BGG importer then uses the cached thing when available (or fetches it), upserts the canonical item and BGG metadata, and preserves the BGG taxonomy, people, publisher, alias, parent, and implementation relationships. A missing or invalid BGG validation result fails the match rather than creating an item.
+
+## Auto-list evaluation test flow
+
+After automated discovery links a store item to a catalog item, admin-service asks CodexAPI to compare the store cover with `items.image_url_es` (falling back to `items.image_url`) and to compare the store title with both catalog names. The prompt passes public image URLs as text because CodexAPI opens them with its own web/image tools; generic `input_image` transport is not used.
+
+The response is strict structured JSON. It records the same-game image check, both detected cover languages, the name check, a `PASS` or `NOT PASS` verdict, and reasoning in `store_items.auto_list_result`. Application code independently enforces the asymmetric language rule and requires every check to pass. Infrastructure or malformed-response failures are stored with `status: ERROR` and a fail-closed `NOT PASS` verdict.
+
+This stage is observation-only. It must not change `listing_status` or invoke the listing approval workflow.

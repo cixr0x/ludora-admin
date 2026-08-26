@@ -1,4 +1,5 @@
 import type { AiBggMatchFound, AiBggMatchingService } from '../aiBggMatching/aiBggMatchingService.js';
+import type { AutoListEvaluationService } from '../autoListEvaluation/autoListEvaluationService.js';
 import type { BggClient } from '../bgg/bggClient.js';
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import type { BggCachedMatch, BggMatchCache } from '../bgg/bggMatchCache.js';
@@ -97,6 +98,7 @@ const MAX_LIVE_BGG_THING_FETCHES = 10;
 
 export type ItemMatchingDependencies = {
   aiBggMatchingService?: AiBggMatchingService;
+  autoListEvaluationService: AutoListEvaluationService;
   bggClient?: BggClient;
   bggItemImporter?: BggItemImporter;
   bggMatchCache: BggMatchCache;
@@ -106,7 +108,7 @@ export function createItemMatchingService(
   database: Database,
   dependencies: ItemMatchingDependencies
 ): ItemMatchingService {
-  const { aiBggMatchingService, bggClient, bggItemImporter, bggMatchCache } = dependencies;
+  const { aiBggMatchingService, autoListEvaluationService, bggClient, bggItemImporter, bggMatchCache } = dependencies;
   return {
     async confirmBoardgameAndMatch(
       discoveryItemCandidateId: number,
@@ -175,6 +177,12 @@ export function createItemMatchingService(
             match_score: localMatch.matchScore,
             matched_bgg_id: localMatch.bggId
           });
+          await evaluateAutoListResult(
+            autoListEvaluationService,
+            discoveryItemCandidateId,
+            localMatch.itemId,
+            traceLogger
+          );
           traceLog(traceLogger, 'item_matcher.confirm.completed', {
             candidate_id: discoveryItemCandidateId,
             result: 'linked_local_match'
@@ -263,6 +271,12 @@ export function createItemMatchingService(
           match_score: bggMatch.matchScore,
           matched_bgg_id: bggMatch.bggId
         });
+        await evaluateAutoListResult(
+          autoListEvaluationService,
+          discoveryItemCandidateId,
+          itemId,
+          traceLogger
+        );
         traceLog(traceLogger, 'item_matcher.confirm.completed', {
           candidate_id: discoveryItemCandidateId,
           result: 'linked_bgg_match'
@@ -427,6 +441,7 @@ async function confirmStoreItemAsBoardgame(
     update store_items
     set is_boardgame = true,
         is_boardgame_confirmed = ${isBoardgameConfirmed ? 'true' : 'false'},
+        auto_list_result = ${isBoardgameConfirmed ? 'auto_list_result' : 'null'},
         processing_error = '',
         last_updated = now()
     where id = $1
@@ -454,6 +469,7 @@ async function linkStoreItemMatch(
         match_score = $5,
         match_reasons = $6::jsonb,
         match_payload = $7::jsonb,
+        auto_list_result = null,
         matched_at = now(),
         processed_at = now(),
         processing_error = '',
@@ -487,6 +503,7 @@ async function markStoreItemMatchNotFound(
         match_source = 'NONE',
         match_reasons = $1::jsonb,
         match_payload = '{}'::jsonb,
+        auto_list_result = null,
         processed_at = now(),
         processing_error = '',
         last_updated = now()
@@ -651,6 +668,25 @@ async function generateBggMatches(
   return aiMatch
     ? mergeMatchesByBggId([...deterministicMatches, aiMatch])
     : deterministicMatches;
+}
+
+async function evaluateAutoListResult(
+  service: AutoListEvaluationService,
+  storeItemId: number,
+  itemId: number,
+  traceLogger: TraceLogger
+): Promise<void> {
+  traceLog(traceLogger, 'auto_list_evaluation.start', {
+    item_id: itemId,
+    store_item_id: storeItemId
+  });
+  const result = await service.evaluateLinkedStoreItem(storeItemId, itemId);
+  traceLog(traceLogger, 'auto_list_evaluation.completed', {
+    item_id: itemId,
+    status: result.status,
+    store_item_id: storeItemId,
+    verdict: result.verdict
+  });
 }
 
 function prioritizeLiveBggSearchResults(

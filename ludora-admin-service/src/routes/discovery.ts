@@ -162,7 +162,7 @@ const itemCandidateSelect = `
   store_sku, raw_payload, is_boardgame, is_boardgame_confirmed, category_confidence,
   classification_reasons, match_source,
   matched_bgg_id, matched_name, match_score, match_reasons, match_payload,
-  matched_at, processed_at, processing_error, last_seen_at, last_updated, refreshed_date
+  auto_list_result, matched_at, processed_at, processing_error, last_seen_at, last_updated, refreshed_date
 `;
 
 const itemSelect = `
@@ -621,6 +621,10 @@ const storeCandidatesTableConfig: TableQueryConfig = {
 
 const itemCandidatesTableConfig: TableQueryConfig = {
   columns: {
+    auto_list_result: {
+      filterSql: textSql("coalesce(auto_list_result ->> 'verdict', auto_list_result ->> 'status', '')"),
+      sortSql: "coalesce(auto_list_result ->> 'verdict', auto_list_result ->> 'status', '')"
+    },
     availability: columnSql('availability'),
     availability_source: columnSql('availability_source'),
     category_confidence: columnSql('category_confidence'),
@@ -1393,6 +1397,7 @@ export function createDiscoveryRouter(
                 when store_item.item_id = $1 then null
                 else store_item.item_id
               end,
+              auto_list_result = null,
               listing_status = 'PENDING',
               last_updated = now()
           where store_item.id in (
@@ -1998,6 +2003,7 @@ export function createDiscoveryRouter(
               match_score = 1.0,
               match_reasons = $5::jsonb,
               match_payload = $6::jsonb,
+              auto_list_result = null,
               matched_at = now(),
               processed_at = now(),
               processing_error = '',
@@ -2083,6 +2089,7 @@ export function createDiscoveryRouter(
               match_score = 1.0,
               match_reasons = $4::jsonb,
               match_payload = $5::jsonb,
+              auto_list_result = null,
               matched_at = now(),
               processed_at = now(),
               processing_error = '',
@@ -2218,6 +2225,7 @@ export function createDiscoveryRouter(
               match_score = 1.0,
               match_reasons = $3::jsonb,
               match_payload = $4::jsonb,
+              auto_list_result = null,
               matched_at = now(),
               processed_at = now(),
               processing_error = '',
@@ -2329,6 +2337,13 @@ export function createDiscoveryRouter(
               original_title = $5,
               publisher = $6,
               description = $7,
+              auto_list_result = case
+                when item_id is distinct from $8
+                  or title is distinct from $4
+                  or image_url is distinct from $18
+                then null
+                else auto_list_result
+              end,
               item_id = $8,
               item_type = $9,
               min_players = $10,

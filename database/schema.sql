@@ -122,6 +122,7 @@ create table if not exists store_items (
     match_score numeric(5, 4),
     match_reasons jsonb not null default '[]'::jsonb,
     match_payload jsonb not null default '{}'::jsonb,
+    auto_list_result jsonb,
     matched_at timestamptz,
     processed_at timestamptz,
     processing_error text not null default '',
@@ -139,6 +140,7 @@ create table if not exists store_items (
 );
 
 alter table if exists store_items add column if not exists original_title text not null default '';
+alter table if exists store_items add column if not exists auto_list_result jsonb;
 update store_items set original_title = title where original_title = '';
 
 alter table if exists store_items add column if not exists refreshed_date timestamptz;
