@@ -486,7 +486,8 @@ export function StoreItemUpdateMonitorPage() {
         <DialogContent>
           {scheduleError ? <Alert severity="error" sx={{ mb: 2 }}>{scheduleError}</Alert> : null}
           <Typography>
-            This reschedules every eligible item over a new 20-hour window, including products already updated today and failures in backoff.
+            This reschedules every eligible item over a new{' '}
+            {summary ? `${summary.schedule_window_hours}-hour` : 'configured'} window, including products already updated today and failures in backoff.
           </Typography>
         </DialogContent>
         <DialogActions>

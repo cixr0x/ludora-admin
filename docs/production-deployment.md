@@ -130,9 +130,10 @@ LUDORA_WEB_BOT_AUTH_PRIVATE_JWK_PATH=/etc/ludora/web-bot-auth/private-key.jwk
 
 The discovery `.env` uses the same `CODEX_API_BASE_URL` and configures its intentional direct CodexAPI classifier with `CODEX_CLASSIFIER_MODEL=gpt-5.4-mini`. Configure official OpenAI only for embeddings: `OPENAI_API_KEY=<embeddings only>` and `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`. `OPENAI_BASE_URL` and `OPENAI_TRANSLATION_MODEL` are compatibility aliases for the loopback CodexAPI URL and shared Codex model; they never select official OpenAI for generative calls.
 
-The continuous updater is a supervised Python child of admin-service. It claims
-one due item at a time, uses a five-minute expiring lease, and schedules a
-successful item 21–23 hours into the future. The worker uses a PostgreSQL
+The continuous updater is a supervised Python child of admin-service. The
+admin service distributes eligible items daily from 3:00 AM across a 23-hour
+window. The worker claims one due item at a time, uses a five-minute expiring
+lease, and clears the due time after a successful update. It uses a PostgreSQL
 advisory lock, so a manual batch update cannot run concurrently and double the
 store request rate. HTTP 429 responses trigger independent platform-wide
 cooldowns for Shopify and WooCommerce, allowing the worker to continue with

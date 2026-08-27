@@ -30,7 +30,7 @@ export type StoreItemUpdateScheduleService = {
 };
 
 const DEFAULT_ADVISORY_LOCK_KEY = 20_260_805;
-const DEFAULT_WINDOW_HOURS = 20;
+export const STORE_ITEM_UPDATE_SCHEDULE_WINDOW_HOURS = 23;
 const SCHEDULE_START_HOUR = 3;
 const SCHEDULE_TIME_ZONE = 'America/Mexico_City';
 
@@ -116,7 +116,7 @@ export function createStoreItemUpdateScheduleService(
 ): StoreItemUpdateScheduleService {
   const advisoryLockKey = options.advisoryLockKey ?? DEFAULT_ADVISORY_LOCK_KEY;
   const now = options.now ?? (() => new Date());
-  const windowHours = options.windowHours ?? DEFAULT_WINDOW_HOURS;
+  const windowHours = options.windowHours ?? STORE_ITEM_UPDATE_SCHEDULE_WINDOW_HOURS;
 
   const run = async (
     trigger: StoreItemUpdateScheduleTrigger

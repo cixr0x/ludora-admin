@@ -114,8 +114,8 @@ const monitor: StoreItemUpdateMonitor = {
     scheduled_items: 96,
     scheduled_later_items: 84,
     schedule_utilization_percent: 100,
-    schedule_window_capacity: 14400,
-    schedule_window_hours: 20,
+    schedule_window_capacity: 16560,
+    schedule_window_hours: 23,
     stale_items: 8,
     success_rate_percent: 90.9,
     successes_24h: 100,
@@ -153,7 +153,7 @@ describe('StoreItemUpdateMonitorPage', () => {
     render(<StoreItemUpdateMonitorPage />);
 
     expect(await screen.findByRole('heading', { name: 'Store Item Update Monitor' })).toBeInTheDocument();
-    expect(screen.getByText('14,400')).toBeInTheDocument();
+    expect(screen.getByText('16,560')).toBeInTheDocument();
     expect(screen.getByText('3 HTTP 429 responses')).toBeInTheDocument();
     expect(screen.getByText('96')).toBeInTheDocument();
     expect(screen.getByText('Scheduled later')).toBeInTheDocument();
@@ -162,7 +162,7 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(screen.getByText(/Latest schedule attempt: MANUAL COMPLETED/)).toBeInTheDocument();
     expect(screen.getByText(/Latest automatic schedule: AUTOMATIC COMPLETED/)).toBeInTheDocument();
     expect(screen.getByText(/Applied schedule:.*8\/5\/2026, 4:00:00 AM America\/Mexico_City/)).toBeInTheDocument();
-    expect(screen.getByText(/20-hour scheduling window/)).toBeInTheDocument();
+    expect(screen.getByText(/23-hour scheduling window/)).toBeInTheDocument();
     expect(screen.getByText(/Schedule capacity is fully utilized or exceeded/)).toBeInTheDocument();
     expect(screen.getByText(/WooCommerce paused until/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pause automatic updates' })).toBeInTheDocument();
@@ -246,7 +246,7 @@ describe('StoreItemUpdateMonitorPage', () => {
 
     render(<StoreItemUpdateMonitorPage />);
 
-    expect(await screen.findByText(/Schedule utilization is at 90.0% of the 20-hour window/)).toBeInTheDocument();
+    expect(await screen.findByText(/Schedule utilization is at 90.0% of the 23-hour window/)).toBeInTheDocument();
   });
 
   it('confirms redistribution, refreshes the monitor, and reports scheduled volume', async () => {
@@ -258,6 +258,7 @@ describe('StoreItemUpdateMonitorPage', () => {
     render(<StoreItemUpdateMonitorPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Redistribute update schedule' }));
+    expect(screen.getByText(/new 23-hour window/i)).toBeInTheDocument();
     expect(screen.getByText(/including products already updated today and failures in backoff/i)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Confirm redistribution' }));
 

@@ -4718,9 +4718,9 @@ describe('ludora admin service', () => {
         rate_limited_24h: 3,
         scheduled_items: 96,
         scheduled_later_items: 84,
-        schedule_utilization_percent: 100 / 144,
-        schedule_window_capacity: 14400,
-        schedule_window_hours: 20,
+        schedule_utilization_percent: 100 / 165.6,
+        schedule_window_capacity: 16560,
+        schedule_window_hours: 23,
         unscheduled_items: 4,
         successes_24h: 100
       },

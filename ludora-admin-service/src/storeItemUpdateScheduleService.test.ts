@@ -47,7 +47,7 @@ class FakeSessionDatabase implements SessionDatabase {
 }
 
 describe('store item update schedule service', () => {
-  it('spreads deterministically ranked items evenly per store inside one 20-hour window', async () => {
+  it('spreads deterministically ranked items evenly per store inside one 23-hour window', async () => {
     const database = new FakeSessionDatabase([
       [{ acquired: true }],
       [runningRun({ id: '41' })],
@@ -62,7 +62,7 @@ describe('store item update schedule service', () => {
     const result = await service.runManual();
 
     expect(result.window_start).toBe('2026-08-05T15:00:00.000Z');
-    expect(result.window_end).toBe('2026-08-06T11:00:00.000Z');
+    expect(result.window_end).toBe('2026-08-06T14:00:00.000Z');
     expect(result.id).toBe(41);
     expect(result.scheduled_item_count).toBe(12);
     expect(result.scheduled_store_count).toBe(3);
@@ -76,7 +76,7 @@ describe('store item update schedule service', () => {
     const distributionSql = normalizeSql(distribution?.sql ?? '');
     expect(distribution?.params).toEqual([
       new Date('2026-08-05T15:00:00.000Z'),
-      new Date('2026-08-06T11:00:00.000Z')
+      new Date('2026-08-06T14:00:00.000Z')
     ]);
     expect(distributionSql).toContain(
       'row_number() over ( partition by store_items.store_id order by store_items.id )'
@@ -332,7 +332,7 @@ describe('store item update schedule service', () => {
         id: '81',
         started_at: delayedTime,
         window_start: delayedTime,
-        window_end: '2026-08-06T12:30:00.250Z'
+        window_end: '2026-08-06T15:30:00.250Z'
       })],
       [],
       [{ scheduled_item_count: '2', scheduled_store_count: '1' }],
@@ -340,7 +340,7 @@ describe('store item update schedule service', () => {
         id: '81',
         started_at: delayedTime,
         window_start: delayedTime,
-        window_end: '2026-08-06T12:30:00.250Z'
+        window_end: '2026-08-06T15:30:00.250Z'
       })],
       [],
       [{ pg_advisory_unlock: true }]
@@ -354,7 +354,7 @@ describe('store item update schedule service', () => {
       normalizeSql(query.sql).startsWith('insert into store_item_update_schedule_runs')
     )?.params).toEqual([
       delayedTime,
-      new Date('2026-08-06T12:30:00.250Z')
+      new Date('2026-08-06T15:30:00.250Z')
     ]);
   });
 
@@ -373,7 +373,7 @@ describe('store item update schedule service', () => {
         automatic_schedule_date: '2026-08-06',
         started_at: executionTime,
         window_start: executionTime,
-        window_end: '2026-08-07T05:01:00.125Z'
+        window_end: '2026-08-07T08:01:00.125Z'
       })],
       [],
       [{ scheduled_item_count: '2', scheduled_store_count: '1' }],
@@ -383,7 +383,7 @@ describe('store item update schedule service', () => {
         automatic_schedule_date: '2026-08-06',
         started_at: executionTime,
         window_start: executionTime,
-        window_end: '2026-08-07T05:01:00.125Z'
+        window_end: '2026-08-07T08:01:00.125Z'
       })],
       [],
       [{ pg_advisory_unlock: true }]
@@ -459,7 +459,7 @@ function runningRun(overrides: Record<string, unknown> = {}): Record<string, unk
     automatic_schedule_date: null,
     status: 'RUNNING',
     window_start: new Date('2026-08-05T15:00:00.000Z'),
-    window_end: '2026-08-06T11:00:00.000Z',
+    window_end: '2026-08-06T14:00:00.000Z',
     scheduled_item_count: 0,
     scheduled_store_count: 0,
     started_at: '2026-08-05T15:00:00.000Z',

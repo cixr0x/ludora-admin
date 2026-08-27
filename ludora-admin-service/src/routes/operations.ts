@@ -10,7 +10,10 @@ import type {
 import type { DiscoveryOperationsClient, ItemDiscoveryRunScope, ItemUpdateRunScope } from '../discoveryOperations.js';
 import type { ExternalCoverImageOptimizerOptions, ExternalCoverImageOptimizerResult } from '../externalCoverImageOptimizer.js';
 import type { StoreItemUpdateScheduleManager } from '../storeItemUpdateScheduleManager.js';
-import { StoreItemUpdateScheduleConflictError } from '../storeItemUpdateScheduleService.js';
+import {
+  STORE_ITEM_UPDATE_SCHEDULE_WINDOW_HOURS,
+  StoreItemUpdateScheduleConflictError
+} from '../storeItemUpdateScheduleService.js';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -605,7 +608,7 @@ async function loadStoreItemUpdateMonitor(
   const completed24h = successes24h + failures24h;
   const dailyCapacity = 86_400 / pollSeconds;
   const projectedDailyDemand = eligibleItems;
-  const scheduleWindowHours = 20;
+  const scheduleWindowHours = STORE_ITEM_UPDATE_SCHEDULE_WINDOW_HOURS;
   const scheduleWindowCapacity = Math.floor((scheduleWindowHours * 3_600) / pollSeconds);
   const scheduleUtilizationPercent = scheduleWindowCapacity > 0
     ? (eligibleItems / scheduleWindowCapacity) * 100
