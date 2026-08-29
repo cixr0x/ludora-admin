@@ -22,6 +22,41 @@ const canonicalWarImageKey = `war of the ring second edition::cover-context:${wa
 const spanishWarNameOnlyKey = 'la guerra del anillo::cover-context:name-only';
 
 describe('BGG match cache', () => {
+  it('reads a legacy Thing-cache name with the accessory request identity', async () => {
+    const queriedThingCacheParams: unknown[][] = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        const normalized = normalizeSql(sql);
+        if (normalized.includes('from bgg_thing_cache')) {
+          queriedThingCacheParams.push(params ?? []);
+          return { rows: [{ bgg_id: 337190, item_type: 'boardgameaccessory', name: 'Catan Accessory', year_published: 2022 }] };
+        }
+        return { rows: [] };
+      }
+    };
+
+    await expect(createBggMatchCache(database).lookup('Catan Accessory')).resolves.toEqual({
+      cacheHit: true,
+      matches: [{ item: { bggId: 337190, name: 'Catan Accessory', type: 'boardgameaccessory', yearPublished: 2022 }, verifiedByAi: false }]
+    });
+    expect(queriedThingCacheParams).toEqual([['boardgame,boardgameexpansion,boardgameaccessory', 'boardgame,boardgameexpansion', '%catan%accessory%', 'Catan Accessory']]);
+  });
+
+  it('prefers the new Thing-cache row over a legacy duplicate', async () => {
+    const database: Database = {
+      query: async (sql) => {
+        if (normalizeSql(sql).includes('from bgg_thing_cache')) {
+          return { rows: [{ bgg_id: 337190, item_type: 'boardgameaccessory', name: 'New Catan Accessory', year_published: 2022 }] };
+        }
+        return { rows: [] };
+      }
+    };
+
+    await expect(createBggMatchCache(database).lookup('Catan Accessory')).resolves.toEqual({
+      cacheHit: true,
+      matches: [{ item: { bggId: 337190, name: 'New Catan Accessory', type: 'boardgameaccessory', yearPublished: 2022 }, verifiedByAi: false }]
+    });
+  });
   it('uses an accessory-aware cache identity', () => {
     expect(BGG_SEARCH_TYPE).toBe('boardgame,boardgameexpansion,boardgameaccessory');
   });

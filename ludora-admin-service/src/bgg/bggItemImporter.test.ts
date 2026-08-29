@@ -279,12 +279,12 @@ describe('BGG item importer', () => {
     expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into item_publishers'))).toBe(true);
   });
 
-  it('imports BGG parent and implementation relationships for related items', async () => {
+  it('imports BGG accessory 337190 as an expansion with its inbound parent relationship', async () => {
     const fetchedBggIds: number[] = [];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const itemIdsByBggId = new Map<number, number>([
-      [34691, 77],
-      [13, 78],
+      [337190, 77],
+      [311988, 78],
       [999001, 79]
     ]);
     const database: Database = {
@@ -336,20 +336,20 @@ describe('BGG item importer', () => {
           minPlaytime: null,
           name: String(
             {
-              13: 'Catan',
-              34691: 'Catan: 5-6 Player Extension',
+              311988: 'Catan',
+              337190: 'Catan Accessory',
               999001: 'Catan Dice Game'
             }[bggId] ?? `BGG ${bggId}`
           ),
           parentLinks:
-            bggId === 34691 ? [{ bggId: 13, inbound: true, name: 'Catan' }] : [],
+            bggId === 337190 ? [{ bggId: 311988, inbound: true, name: 'Catan' }] : [],
           playingTime: null,
           publishers: [],
           rating: null,
           thumbnail: '',
-          type: bggId === 34691 ? 'boardgameexpansion' : 'boardgame',
+          type: bggId === 337190 ? 'boardgameaccessory' : 'boardgame',
           implementationLinks:
-            bggId === 34691 ? [{ bggId: 999001, inbound: false, name: 'Catan Dice Game' }] : [],
+            bggId === 337190 ? [{ bggId: 999001, inbound: false, name: 'Catan Dice Game' }] : [],
           weight: null,
           yearPublished: null
         };
@@ -358,19 +358,27 @@ describe('BGG item importer', () => {
       search: async () => []
     };
 
-    const itemId = await createBggItemImporter(database, bggClient).importBggId(34691);
+    const itemId = await createBggItemImporter(database, bggClient).importBggId(337190);
 
     expect(itemId).toBe(77);
-    expect(fetchedBggIds).toEqual([34691, 13, 999001]);
+    expect(fetchedBggIds).toEqual([337190, 311988, 999001]);
     const relationshipQueries = queries.filter((query) => normalizeSql(query.sql).includes('insert into item_relationships'));
     expect(relationshipQueries.map((query) => query.params)).toEqual([
-      [77, 'extension', 78, '13'],
+      [77, 'extension', 78, '311988'],
       [79, 'implementation', 77, '999001']
     ]);
     const extensionRelationshipQuery = relationshipQueries.find((query) => query.params?.[1] === 'extension');
     expect(normalizeSql(extensionRelationshipQuery?.sql ?? '')).toContain("relationship_input.link_type in ('extension', 'implementation')");
     const parentUpdate = queries.find((query) => normalizeSql(query.sql).startsWith('update items set parent_item_id'));
     expect(parentUpdate?.params).toEqual([78, 77]);
+    const accessoryInsert = queries.find((query) => normalizeSql(query.sql).startsWith('insert into items') && query.params?.[5] === 337190);
+    expect(accessoryInsert?.params?.slice(2, 7)).toEqual([
+      'expansion',
+      true,
+      null,
+      337190,
+      'https://boardgamegeek.com/boardgameaccessory/337190'
+    ]);
   });
 
   it('imports BGG implementation links without inbound as implemented-by relationships', async () => {

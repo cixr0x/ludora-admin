@@ -845,6 +845,7 @@ describe('ludora admin service', () => {
       bgg_thing_raw_xml: '',
       canonical_name: 'Coffee Rush',
       id: 77,
+      is_accessory: true,
       item_type: 'base_game'
     };
     const importedBggIds: number[] = [];
@@ -873,6 +874,7 @@ describe('ludora admin service', () => {
         bgg_id: 377061,
         canonical_name: 'Coffee Rush',
         id: 77,
+        is_accessory: true,
         item_type: 'base_game'
       }
     });
@@ -939,6 +941,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('normalized_name_es');
     expect(sql).toContain('description_es');
     expect(sql).toContain('image_url_es');
+    expect(sql).toContain('is_accessory');
     expect(sql).toContain('where id = $1');
     expect(sql).toContain('left join bgg_thing_cache thing_cache');
     expect(sql).toContain('thing_cache.raw_xml as bgg_thing_raw_xml');

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import type { Database, SessionDatabase } from '../db.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggSearchItem } from './bggParser.js';
-import { BGG_REQUEST_TYPE } from './bggTypes.js';
+import { BGG_LEGACY_REQUEST_TYPE, BGG_REQUEST_TYPE } from './bggTypes.js';
 
 export const BGG_SEARCH_TYPE = BGG_REQUEST_TYPE;
 export const BGG_AI_MATCH_SEARCH_TYPE = `ai_match:${BGG_SEARCH_TYPE}`;
@@ -214,22 +214,27 @@ async function searchCacheNames(database: Database, query: string): Promise<BggC
 async function searchThingCache(database: Database, query: string): Promise<BggCachedMatch[]> {
   const results = await database.query(
     `
-    select
+    with matching_rows as (
+      select distinct on (bgg_id)
       bgg_id,
       name,
       item_type,
       year_published
-    from bgg_thing_cache
-    where request_type = $1
-      and item_type in ('boardgame', 'boardgameexpansion', 'boardgameaccessory')
-      and name ilike $2 escape '\\'
+      from bgg_thing_cache
+      where request_type in ($1, $2)
+        and item_type in ('boardgame', 'boardgameexpansion', 'boardgameaccessory')
+        and name ilike $3 escape '\\'
+      order by bgg_id, case when request_type = $1 then 0 else 1 end
+    )
+    select bgg_id, name, item_type, year_published
+    from matching_rows
     order by
-      case when lower(name) = lower($3) then 0 else 1 end,
+      case when lower(name) = lower($4) then 0 else 1 end,
       year_published desc nulls last,
       bgg_id desc
     limit 20
     `,
-    [BGG_SEARCH_TYPE, searchPattern(query), query.trim()]
+    [BGG_SEARCH_TYPE, BGG_LEGACY_REQUEST_TYPE, searchPattern(query), query.trim()]
   );
   return bggSearchItems(results.rows).map((item) => ({ item, verifiedByAi: false }));
 }

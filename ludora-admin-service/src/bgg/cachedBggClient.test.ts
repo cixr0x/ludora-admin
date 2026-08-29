@@ -263,7 +263,8 @@ function fakeDatabase(selectResults: unknown[][]): { database: Database; queries
         normalized.startsWith('select raw_xml') ||
         normalized.startsWith('select id') ||
         normalized.startsWith('select c.bgg_id') ||
-        normalized.startsWith('select bgg_id')
+        normalized.startsWith('select bgg_id') ||
+        normalized.startsWith('with matching_rows')
       ) {
         return { rows: selectResults.shift() ?? [] };
       }

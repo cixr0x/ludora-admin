@@ -273,6 +273,19 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("alter table if exists items add column if not exists description_es text not null default ''", schema)
         self.assertIn("alter table if exists items add column if not exists image_url_es text not null default ''", schema)
 
+    def test_accessory_flag_belongs_to_items_and_has_an_incremental_patch(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+        items_table = schema.split("create table if not exists items", 1)[1].split(");", 1)[0]
+        store_items_table = schema.split("create table if not exists store_items", 1)[1].split(");", 1)[0]
+        patch = (patches_path() / "20260829_001_add_item_is_accessory.sql").read_text(encoding="utf-8").casefold()
+
+        self.assertIn("is_accessory boolean not null default false", items_table)
+        self.assertNotIn("is_accessory", store_items_table)
+        self.assertEqual(
+            patch.strip(),
+            "alter table if exists items\n    add column if not exists is_accessory boolean not null default false;",
+        )
+
     def test_store_items_replaces_listing_candidates(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()
         item_candidate_table = schema.split("create table if not exists store_items", 1)[1].split(");", 1)[0]
