@@ -1,6 +1,7 @@
 import { createBggClient } from '../bgg/bggClient.js';
 import { backfillBggThingCache } from '../bgg/bggThingBackfill.js';
 import { createCachedBggClient } from '../bgg/cachedBggClient.js';
+import { BGG_REQUEST_TYPE } from '../bgg/bggTypes.js';
 import { loadConfig } from '../config.js';
 import { createDatabase } from '../db.js';
 
@@ -24,7 +25,7 @@ const startedAt = Date.now();
 
 try {
   console.log('Starting BGG thing cache backfill.');
-  console.log('Using BGG thing request type boardgame,boardgameexpansion,boardgameaccessory with stats=1.');
+  console.log(`Using BGG thing request type ${BGG_REQUEST_TYPE} with stats=1.`);
   console.log('Requests are serialized by the BGG client at one request per second; 429 responses retry after a delay.');
 
   const result = await backfillBggThingCache(database, bggClient, {

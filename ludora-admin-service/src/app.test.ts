@@ -875,6 +875,7 @@ describe('ludora admin service', () => {
         canonical_name: 'Coffee Rush',
         id: 77,
         is_accessory: true,
+        is_accessory: true,
         item_type: 'base_game'
       }
     });
@@ -3153,6 +3154,7 @@ describe('ludora admin service', () => {
       expect(sql).toContain('source.item_id = i.id');
       expect(sql).toContain("nullif(trim(source.image_url), '') is not null");
       expect(sql).toContain('returning i.id, i.canonical_name');
+      expect(sql).toContain('i.is_accessory');
       expect(sql).toContain('select updated_item.*, thing_cache.raw_xml as bgg_thing_raw_xml');
       expect(queries[0].params).toEqual([42]);
     }

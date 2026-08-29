@@ -52,7 +52,10 @@ async function uncachedItemBggIds(database: Database): Promise<number[]> {
         select 1
         from bgg_thing_cache btc
         where btc.bgg_id = i.bgg_id
-          and btc.request_type in ($1, $2)
+          and (
+            btc.request_type = $1
+            or (btc.request_type = $2 and btc.raw_xml ~ '<item[[:space:]>]')
+          )
       )
     order by i.bgg_id asc
     `,

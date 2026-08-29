@@ -39,6 +39,28 @@ describe('BGG thing cache backfill', () => {
     ]);
   });
 
+  it('treats legacy negative Thing-cache rows as missing so they can be repaired', async () => {
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [{ bgg_id: '337190' }] };
+      }
+    };
+    const fetchedBggIds: number[] = [];
+    const client: BggClient = {
+      fetchThing: async (bggId) => {
+        fetchedBggIds.push(bggId);
+        return null;
+      },
+      search: async () => []
+    };
+
+    await expect(backfillBggThingCache(database, client)).resolves.toMatchObject({ fetched: 1, total: 1 });
+    expect(fetchedBggIds).toEqual([337190]);
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain("btc.request_type = $2 and btc.raw_xml ~ '<item[[:space:]>]'");
+  });
+
   it('fetches thing payloads sequentially', async () => {
     const database: Database = {
       query: async () => ({ rows: [{ bgg_id: 1 }, { bgg_id: 2 }] })

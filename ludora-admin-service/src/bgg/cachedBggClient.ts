@@ -9,6 +9,7 @@ const BGG_THING_REQUEST_TYPE = BGG_REQUEST_TYPE;
 
 type CachedThingRow = {
   raw_xml?: unknown;
+  request_type?: unknown;
 };
 
 export function createCachedBggClient(
@@ -63,7 +64,7 @@ async function cachedThingResult(
 ): Promise<{ found: false; usable: false } | { found: true; result: BggThingResult | null; usable: boolean }> {
   const cached = await database.query(
     `
-    select raw_xml
+    select raw_xml, request_type
     from bgg_thing_cache
     where bgg_id = $1
       and request_type in ($2, $3)
@@ -80,6 +81,9 @@ async function cachedThingResult(
 
   try {
     const details = parseBggThingResponse(rawXml);
+    if (!details && row?.request_type === BGG_LEGACY_REQUEST_TYPE) {
+      return { found: false, usable: false };
+    }
     return { found: true, result: details ? { details, rawXml } : null, usable: true };
   } catch {
     return { found: true, result: null, usable: false };

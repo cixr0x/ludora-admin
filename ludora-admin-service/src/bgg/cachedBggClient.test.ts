@@ -76,6 +76,30 @@ describe('cached BGG client', () => {
     expect(cacheWrite?.params?.[6]).toEqual({});
   });
 
+  it('refreshes a legacy negative Thing-cache row under the accessory-aware request identity', async () => {
+    const { database, queries } = fakeDatabase([[{ raw_xml: '<items></items>', request_type: 'boardgame,boardgameexpansion' }]]);
+    const fetchedBggIds: number[] = [];
+    const upstream = fakeUpstreamClient(async (bggId) => {
+      fetchedBggIds.push(bggId);
+      return coffeeRushXml;
+    });
+
+    const result = await createCachedBggClient(database, upstream).fetchThing(377061);
+
+    expect(result?.details.name).toBe('Coffee Rush');
+    expect(fetchedBggIds).toEqual([377061]);
+    expect(queries.find((query) => normalizeSql(query.sql).startsWith('insert into bgg_thing_cache'))?.params?.[1]).toBe(BGG_THING_REQUEST_TYPE);
+  });
+
+  it('keeps a negative Thing-cache row in the accessory-aware namespace', async () => {
+    const { database } = fakeDatabase([[{ raw_xml: '<items></items>', request_type: BGG_THING_REQUEST_TYPE }]]);
+    const upstream = fakeUpstreamClient(async () => {
+      throw new Error('current-namespace negative cache should not fetch upstream');
+    });
+
+    await expect(createCachedBggClient(database, upstream).fetchThing(377061)).resolves.toBeNull();
+  });
+
   it('refreshes malformed cached XML from the upstream BGG client', async () => {
     const { database, queries } = fakeDatabase([[{ raw_xml: '<items><item' }]]);
     const fetchedBggIds: number[] = [];
