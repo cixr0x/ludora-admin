@@ -96,9 +96,11 @@ describe('BGG item importer', () => {
 
   it('uses recently synced local related items before fetching linked BGG metadata', async () => {
     const fetchedBggIds: number[] = [];
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const recentSyncDate = new Date();
     const database: Database = {
       query: async (sql, params) => {
+        queries.push({ params, sql });
         const normalized = normalizeSql(sql);
         const bggId = Number(params?.[0]);
 
@@ -169,6 +171,14 @@ describe('BGG item importer', () => {
 
     expect(itemId).toBe(77);
     expect(fetchedBggIds).toEqual([34691]);
+    const ordinaryExpansionInsert = queries.find((query) => normalizeSql(query.sql).startsWith('insert into items'));
+    expect(ordinaryExpansionInsert?.params?.slice(2, 7)).toEqual([
+      'expansion',
+      false,
+      null,
+      34691,
+      'https://boardgamegeek.com/boardgameexpansion/34691'
+    ]);
   });
 
   it('imports BGG item metadata into catalog tables', async () => {

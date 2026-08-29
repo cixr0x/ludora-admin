@@ -43,10 +43,15 @@ describe('BGG match cache', () => {
   });
 
   it('prefers the new Thing-cache row over a legacy duplicate', async () => {
+    const thingCacheSql: string[] = [];
     const database: Database = {
       query: async (sql) => {
         if (normalizeSql(sql).includes('from bgg_thing_cache')) {
-          return { rows: [{ bgg_id: 337190, item_type: 'boardgameaccessory', name: 'New Catan Accessory', year_published: 2022 }] };
+          thingCacheSql.push(normalizeSql(sql));
+          return { rows: [
+            { bgg_id: 337190, item_type: 'boardgameaccessory', name: 'New Catan Accessory', year_published: 2022 },
+            { bgg_id: 337190, item_type: 'boardgameaccessory', name: 'Legacy Catan Accessory', year_published: 2021 }
+          ] };
         }
         return { rows: [] };
       }
@@ -56,6 +61,8 @@ describe('BGG match cache', () => {
       cacheHit: true,
       matches: [{ item: { bggId: 337190, name: 'New Catan Accessory', type: 'boardgameaccessory', yearPublished: 2022 }, verifiedByAi: false }]
     });
+    expect(thingCacheSql[0]).toContain('select distinct on (bgg_id)');
+    expect(thingCacheSql[0]).toContain('case when request_type = $1 then 0 else 1 end');
   });
   it('uses an accessory-aware cache identity', () => {
     expect(BGG_SEARCH_TYPE).toBe('boardgame,boardgameexpansion,boardgameaccessory');
