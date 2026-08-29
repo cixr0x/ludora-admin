@@ -875,7 +875,6 @@ describe('ludora admin service', () => {
         canonical_name: 'Coffee Rush',
         id: 77,
         is_accessory: true,
-        is_accessory: true,
         item_type: 'base_game'
       }
     });
