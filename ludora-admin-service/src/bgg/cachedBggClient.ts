@@ -3,8 +3,9 @@ import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import { parseBggThingResponse } from './bggParser.js';
 import type { BggClient, BggThingResult, BggThingXmlClient } from './bggClient.js';
 import { createBggMatchCache, type BggMatchCache } from './bggMatchCache.js';
+import { BGG_LEGACY_REQUEST_TYPE, BGG_REQUEST_TYPE } from './bggTypes.js';
 
-const BGG_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion';
+const BGG_THING_REQUEST_TYPE = BGG_REQUEST_TYPE;
 
 type CachedThingRow = {
   raw_xml?: unknown;
@@ -65,10 +66,11 @@ async function cachedThingResult(
     select raw_xml
     from bgg_thing_cache
     where bgg_id = $1
-      and request_type = $2
+      and request_type in ($2, $3)
+    order by case when request_type = $2 then 0 else 1 end
     limit 1
     `,
-    [bggId, BGG_THING_REQUEST_TYPE]
+    [bggId, BGG_THING_REQUEST_TYPE, BGG_LEGACY_REQUEST_TYPE]
   );
   const row = cached.rows[0] as CachedThingRow | undefined;
   const rawXml = typeof row?.raw_xml === 'string' ? row.raw_xml : '';

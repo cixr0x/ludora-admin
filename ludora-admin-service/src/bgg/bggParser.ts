@@ -80,7 +80,7 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
   if (!item) {
     return null;
   }
-  const expansionLinks = relatedLinksByType(item, 'boardgameexpansion');
+  const expansionLinks = relatedLinksByTypes(item, ['boardgameexpansion', 'boardgameaccessory']);
 
   return {
     alternateNames: namesByType(item, 'alternate'),
@@ -134,8 +134,12 @@ function linksByType(item: BggXmlItem, type: string): BggNamedLink[] {
 }
 
 function relatedLinksByType(item: BggXmlItem, type: string): BggRelatedLink[] {
+  return relatedLinksByTypes(item, [type]);
+}
+
+function relatedLinksByTypes(item: BggXmlItem, types: string[]): BggRelatedLink[] {
   return asArray(item.link)
-    .filter((link) => link.type === type)
+    .filter((link) => types.includes(stringValue(link.type)))
     .map((link) => ({
       bggId: numberValue(link.id) ?? 0,
       inbound: stringValue(link.inbound).toLowerCase() === 'true',

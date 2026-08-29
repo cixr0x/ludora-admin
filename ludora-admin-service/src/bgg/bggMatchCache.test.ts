@@ -22,6 +22,9 @@ const canonicalWarImageKey = `war of the ring second edition::cover-context:${wa
 const spanishWarNameOnlyKey = 'la guerra del anillo::cover-context:name-only';
 
 describe('BGG match cache', () => {
+  it('uses an accessory-aware cache identity', () => {
+    expect(BGG_SEARCH_TYPE).toBe('boardgame,boardgameexpansion,boardgameaccessory');
+  });
   it('marks AI query associations as verified', async () => {
     const cache = createBggMatchCache(databaseForAiQueryRow({
       bgg_id: 115746,

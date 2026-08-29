@@ -93,6 +93,7 @@ create table if not exists store_items (
     description text not null default '',
     item_id bigint,
     item_type text not null default 'unknown' check (item_type in ('unknown', 'base_game', 'expansion')),
+    is_accessory boolean not null default false,
     min_players integer,
     max_players integer,
     min_minutes integer,

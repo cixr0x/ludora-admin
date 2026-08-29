@@ -1,7 +1,8 @@
 import type { Database } from '../db.js';
 import type { BggClient } from './bggClient.js';
+import { BGG_LEGACY_REQUEST_TYPE, BGG_REQUEST_TYPE } from './bggTypes.js';
 
-export const BGG_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion';
+export const BGG_THING_REQUEST_TYPE = BGG_REQUEST_TYPE;
 
 export type BggThingBackfillResult = {
   failed: number;
@@ -51,11 +52,11 @@ async function uncachedItemBggIds(database: Database): Promise<number[]> {
         select 1
         from bgg_thing_cache btc
         where btc.bgg_id = i.bgg_id
-          and btc.request_type = $1
+          and btc.request_type in ($1, $2)
       )
     order by i.bgg_id asc
     `,
-    [BGG_THING_REQUEST_TYPE]
+    [BGG_THING_REQUEST_TYPE, BGG_LEGACY_REQUEST_TYPE]
   );
 
   return result.rows.map((row) => Number((row as Record<string, unknown>).bgg_id)).filter(Number.isFinite);

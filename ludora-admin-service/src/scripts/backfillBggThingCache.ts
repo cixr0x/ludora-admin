@@ -24,7 +24,7 @@ const startedAt = Date.now();
 
 try {
   console.log('Starting BGG thing cache backfill.');
-  console.log('Using BGG thing request type boardgame,boardgameexpansion with stats=1.');
+  console.log('Using BGG thing request type boardgame,boardgameexpansion,boardgameaccessory with stats=1.');
   console.log('Requests are serialized by the BGG client at one request per second; 429 responses retry after a delay.');
 
   const result = await backfillBggThingCache(database, bggClient, {

@@ -8,6 +8,23 @@ describe('ItemsPage', () => {
     vi.restoreAllMocks();
   });
 
+  it('shows the accessory flag as a read-only item detail', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = pathOf(String(input));
+      if (path === '/items/337190') {
+        return jsonResponse({ id: '337190', canonical_name: 'Catan Accessory', item_type: 'expansion', is_accessory: true });
+      }
+      if (path === '/items/337190/store-items' || path === '/items/337190/relationships') return jsonResponse([]);
+      if (path === '/items/337190/taxonomy') return jsonResponse({ categories: [], families: [], mechanics: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    render(<ItemsPage selectedItemId="337190" />);
+
+    expect(await screen.findByLabelText('Accessory')).toHaveValue('true');
+    expect(screen.getByLabelText('Accessory')).toHaveAttribute('readonly');
+  });
+
   it('renders catalog items in a server-side table', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       jsonResponse([

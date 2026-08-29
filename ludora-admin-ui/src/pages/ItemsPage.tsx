@@ -210,6 +210,7 @@ const itemDetailFields: ItemDetailField[] = [
   { gridColumn: { md: '1 / -1' }, key: 'description', label: 'Description', multiline: true },
   { gridColumn: { md: '1 / -1' }, key: 'description_es', label: 'Description ES', multiline: true },
   { key: 'item_type', label: 'Item Type' },
+  { key: 'is_accessory', label: 'Accessory', readOnly: true },
   { key: 'parent_item_id', label: 'Parent Item ID' },
   { key: 'bgg_id', label: 'BGG ID' },
   { gridColumn: { md: 'span 2' }, key: 'bgg_url', label: 'BGG URL' },

@@ -2,6 +2,7 @@ import type { Database } from '../db.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggClient } from './bggClient.js';
 import type { BggNamedLink, BggRelatedLink, BggThingDetails } from './bggParser.js';
+import { bggTypeToItemType, isBggAccessory } from './bggTypes.js';
 
 const BGG_IMPORT_REFRESH_AFTER_MS = 180 * 24 * 60 * 60 * 1000;
 
@@ -60,6 +61,7 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
     thing.name,
     normalizeTitle(thing.name),
     bggTypeToItemType(thing.type),
+    isBggAccessory(thing.type),
     null,
     thing.bggId,
     bggUrl(thing),
@@ -82,23 +84,24 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
       set canonical_name = $1,
           normalized_name = $2,
           item_type = $3,
-          parent_item_id = coalesce(parent_item_id, $4),
-          bgg_id = $5,
-          bgg_url = $6,
+          is_accessory = $4,
+          parent_item_id = coalesce(parent_item_id, $5),
+          bgg_id = $6,
+          bgg_url = $7,
           bgg_last_sync_at = now(),
-          year_published = $7,
-          rating = $8,
-          weight = $9,
-          description = $10,
-          min_players = $11,
-          max_players = $12,
-          min_minutes = $13,
-          max_minutes = $14,
-          min_age = $15,
-          image_url = $16,
+          year_published = $8,
+          rating = $9,
+          weight = $10,
+          description = $11,
+          min_players = $12,
+          max_players = $13,
+          min_minutes = $14,
+          max_minutes = $15,
+          min_age = $16,
+          image_url = $17,
           status = 'active',
           updated_at = now()
-      where id = $17
+      where id = $18
       returning id
       `,
       [...params, existingId]
@@ -112,6 +115,7 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
       canonical_name,
       normalized_name,
       item_type,
+      is_accessory,
       parent_item_id,
       bgg_id,
       bgg_url,
@@ -129,7 +133,7 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
       status,
       updated_at
     )
-    values ($1, $2, $3, $4, $5, $6, now(), $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'active', now())
+    values ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'active', now())
     returning id
     `,
     params
@@ -378,12 +382,8 @@ async function upsertPublisher(database: Database, link: BggNamedLink): Promise<
   return publisherId;
 }
 
-function bggTypeToItemType(value: string) {
-  return value === 'boardgameexpansion' ? 'expansion' : 'base_game';
-}
-
 function bggUrl(thing: BggThingDetails) {
-  const path = thing.type === 'boardgameexpansion' ? 'boardgameexpansion' : 'boardgame';
+  const path = thing.type === 'boardgameaccessory' ? 'boardgameaccessory' : thing.type === 'boardgameexpansion' ? 'boardgameexpansion' : 'boardgame';
   return `https://boardgamegeek.com/${path}/${thing.bggId}`;
 }
 

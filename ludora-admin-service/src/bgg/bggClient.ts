@@ -1,4 +1,5 @@
 import { parseBggSearchResponse, parseBggThingResponse, type BggSearchItem, type BggThingDetails } from './bggParser.js';
+import { BGG_REQUEST_TYPE } from './bggTypes.js';
 
 export type BggThingResult = {
   details: BggThingDetails;
@@ -94,7 +95,7 @@ export function createBggClient({
       new URLSearchParams({
         id: String(bggId),
         stats: '1',
-        type: 'boardgame,boardgameexpansion'
+        type: BGG_REQUEST_TYPE
       })
     );
   }
@@ -104,7 +105,7 @@ export function createBggClient({
       'search',
       new URLSearchParams({
         query,
-        type: 'boardgame,boardgameexpansion'
+        type: BGG_REQUEST_TYPE
       })
     );
     return parseBggSearchResponse(xml);

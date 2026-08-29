@@ -256,7 +256,16 @@ describe('BGG item importer', () => {
     expect(insertItemQuery).toBeDefined();
     expect(normalizeSql(insertItemQuery?.sql ?? '')).toContain('rating');
     expect(normalizeSql(insertItemQuery?.sql ?? '')).toContain('weight');
-    expect(insertItemQuery?.params?.slice(6, 10)).toEqual([2023, 7.48231, 1.9234, 'A coffee shop game.']);
+    expect(insertItemQuery?.params?.slice(3, 11)).toEqual([
+      false,
+      null,
+      377061,
+      'https://boardgamegeek.com/boardgame/377061',
+      2023,
+      7.48231,
+      1.9234,
+      'A coffee shop game.'
+    ]);
     expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into item_aliases'))).toBe(true);
     expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into boardgame_categories'))).toBe(true);
     expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into item_categories'))).toBe(true);
@@ -287,7 +296,7 @@ describe('BGG item importer', () => {
           return { rows: [] };
         }
         if (normalized.startsWith('insert into items')) {
-          return { rows: [{ id: itemIdsByBggId.get(Number(params?.[4])) }] };
+          return { rows: [{ id: itemIdsByBggId.get(Number(params?.[5])) }] };
         }
         if (normalized.startsWith('insert into item_aliases')) {
           return { rows: [] };
@@ -381,7 +390,7 @@ describe('BGG item importer', () => {
           return { rows: itemId ? [{ id: itemId }] : [] };
         }
         if (normalized.startsWith('insert into items')) {
-          const bggId = Number(params?.[4]);
+          const bggId = Number(params?.[5]);
           const itemId = itemIdsByBggId.get(bggId);
           if (itemId) {
             insertedItemIdsByBggId.set(bggId, itemId);
@@ -465,7 +474,7 @@ describe('BGG item importer', () => {
           return { rows: itemId ? [{ id: itemId }] : [] };
         }
         if (normalized.startsWith('insert into items')) {
-          const bggId = Number(params?.[4]);
+          const bggId = Number(params?.[5]);
           const itemId = itemIdsByBggId.get(bggId);
           if (itemId) {
             insertedItemIdsByBggId.set(bggId, itemId);

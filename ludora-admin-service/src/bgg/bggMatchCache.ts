@@ -3,8 +3,9 @@ import { createHash } from 'node:crypto';
 import type { Database, SessionDatabase } from '../db.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggSearchItem } from './bggParser.js';
+import { BGG_REQUEST_TYPE } from './bggTypes.js';
 
-export const BGG_SEARCH_TYPE = 'boardgame,boardgameexpansion';
+export const BGG_SEARCH_TYPE = BGG_REQUEST_TYPE;
 export const BGG_AI_MATCH_SEARCH_TYPE = `ai_match:${BGG_SEARCH_TYPE}`;
 
 export type BggCachedMatch = {
@@ -197,7 +198,7 @@ async function searchCacheNames(database: Database, query: string): Promise<BggC
       item_type,
       year_published
     from bgg_search_cache
-    where item_type in ('boardgame', 'boardgameexpansion')
+    where item_type in ('boardgame', 'boardgameexpansion', 'boardgameaccessory')
       and name ilike $1 escape '\\'
     order by
       case when lower(name) = lower($2) then 0 else 1 end,
@@ -220,7 +221,7 @@ async function searchThingCache(database: Database, query: string): Promise<BggC
       year_published
     from bgg_thing_cache
     where request_type = $1
-      and item_type in ('boardgame', 'boardgameexpansion')
+      and item_type in ('boardgame', 'boardgameexpansion', 'boardgameaccessory')
       and name ilike $2 escape '\\'
     order by
       case when lower(name) = lower($3) then 0 else 1 end,

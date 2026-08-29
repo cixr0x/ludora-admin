@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest';
 import { localMatchSearchTokens, normalizeTitleVariants, scoreBggThing, scoreLocalItem } from './itemMatcher.js';
 
 describe('item matcher', () => {
+  it('scores accessories as expansions without an item type conflict', () => {
+    const result = scoreBggThing(
+      { itemType: 'expansion', title: 'Catan Accessory' },
+      { alternateNames: [], bggId: 337190, name: 'Catan Accessory', publishers: [], type: 'boardgameaccessory' }
+    );
+
+    expect(result.matchScore).toBe(0.9);
+    expect(result.matchReasons).not.toContain('item type conflict');
+  });
   it('scores exact BGG alternate name matches as strong matches', () => {
     const result = scoreBggThing(
       {

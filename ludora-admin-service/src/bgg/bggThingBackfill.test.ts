@@ -33,7 +33,10 @@ describe('BGG thing cache backfill', () => {
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('from items i');
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('not exists');
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('from bgg_thing_cache btc');
-    expect(queries[0]?.params).toEqual(['boardgame,boardgameexpansion']);
+    expect(queries[0]?.params).toEqual([
+      'boardgame,boardgameexpansion,boardgameaccessory',
+      'boardgame,boardgameexpansion'
+    ]);
   });
 
   it('fetches thing payloads sequentially', async () => {

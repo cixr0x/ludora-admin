@@ -1,4 +1,5 @@
 import type { BggNamedLink } from '../bgg/bggParser.js';
+import { bggTypeToItemType } from '../bgg/bggTypes.js';
 
 export type DiscoveryCandidateForMatch = {
   itemType?: string | null;
@@ -475,16 +476,6 @@ function itemTypeConflicts(candidateType?: string | null, matchedType?: string |
     return false;
   }
   return candidateType !== matchedType;
-}
-
-function bggTypeToItemType(type: string): string {
-  if (type === 'boardgameexpansion') {
-    return 'expansion';
-  }
-  if (type === 'boardgame') {
-    return 'base_game';
-  }
-  return 'unknown';
 }
 
 function publisherOverlaps(candidatePublisher: string | null | undefined, publishers: BggNamedLink[]): boolean {

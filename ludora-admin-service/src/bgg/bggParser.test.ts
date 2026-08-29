@@ -118,4 +118,19 @@ describe('BGG XML parser', () => {
       yearPublished: 2023
     });
   });
+
+  it('parses inbound accessory links as parent relationships', () => {
+    const xml = `
+      <items><item type="boardgameaccessory" id="337190">
+        <name type="primary" value="Catan Accessory" />
+        <link type="boardgameaccessory" id="311988" value="Catan" inbound="true" />
+      </item></items>
+    `;
+
+    expect(parseBggThingResponse(xml)).toMatchObject({
+      bggId: 337190,
+      parentLinks: [{ bggId: 311988, inbound: true, name: 'Catan' }],
+      type: 'boardgameaccessory'
+    });
+  });
 });

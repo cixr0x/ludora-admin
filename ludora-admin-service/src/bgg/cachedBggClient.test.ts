@@ -6,7 +6,7 @@ import type { BggMatchCache } from './bggMatchCache.js';
 import type { BggSearchItem } from './bggParser.js';
 import { createCachedBggClient } from './cachedBggClient.js';
 
-const BGG_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion';
+const BGG_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion,boardgameaccessory';
 
 const coffeeRushXml = `
 <items>

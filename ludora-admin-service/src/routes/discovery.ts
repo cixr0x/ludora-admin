@@ -2,6 +2,7 @@ import { Router } from 'express';
 
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import { parseBggThingResponse } from '../bgg/bggParser.js';
+import { BGG_LEGACY_REQUEST_TYPE, BGG_REQUEST_TYPE } from '../bgg/bggTypes.js';
 import type { Database } from '../db.js';
 import type { ItemMatchingService, ManualAiItemMatchResult } from '../itemMatching/itemMatchingService.js';
 import {
@@ -12,7 +13,7 @@ import {
 } from '../productDetailsExtraction/productDetailsExtractionService.js';
 import { createTraceLoggerFromHeaders } from '../trace.js';
 
-const BGG_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion';
+const BGG_THING_REQUEST_TYPE = BGG_REQUEST_TYPE;
 
 type StoreCandidateInput = {
   canonical_domain: string;
@@ -167,7 +168,7 @@ const itemCandidateSelect = `
 
 const itemSelect = `
   id, canonical_name, normalized_name, canonical_name_es, normalized_name_es,
-  item_type, parent_item_id, bgg_id, bgg_url, bgg_last_sync_at,
+  item_type, is_accessory, parent_item_id, bgg_id, bgg_url, bgg_last_sync_at,
   year_published, rating, weight, description, description_es, min_players, max_players,
   min_minutes, max_minutes, complexity, min_age, image_url, image_url_es, status,
   created_at, updated_at
@@ -1094,7 +1095,13 @@ export function createDiscoveryRouter(
         ) item_record
         left join bgg_thing_cache thing_cache
           on thing_cache.bgg_id = item_record.bgg_id
-         and thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+         and (thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}' or (
+           thing_cache.request_type = '${BGG_LEGACY_REQUEST_TYPE}' and not exists (
+             select 1 from bgg_thing_cache current_cache
+             where current_cache.bgg_id = item_record.bgg_id
+               and current_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+           )
+         ))
         `,
         [itemId]
       );
@@ -1124,7 +1131,13 @@ export function createDiscoveryRouter(
         ) item_record
         left join bgg_thing_cache thing_cache
           on thing_cache.bgg_id = item_record.bgg_id
-         and thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+         and (thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}' or (
+           thing_cache.request_type = '${BGG_LEGACY_REQUEST_TYPE}' and not exists (
+             select 1 from bgg_thing_cache current_cache
+             where current_cache.bgg_id = item_record.bgg_id
+               and current_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+           )
+         ))
         `,
         [request.params.id]
       );
@@ -1480,7 +1493,13 @@ export function createDiscoveryRouter(
         from updated_item
         left join bgg_thing_cache thing_cache
           on thing_cache.bgg_id = updated_item.bgg_id
-         and thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+         and (thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}' or (
+           thing_cache.request_type = '${BGG_LEGACY_REQUEST_TYPE}' and not exists (
+             select 1 from bgg_thing_cache current_cache
+             where current_cache.bgg_id = updated_item.bgg_id
+               and current_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+           )
+         ))
         `,
         [...itemParams(input), request.params.id]
       );
@@ -2284,7 +2303,13 @@ export function createDiscoveryRouter(
         from updated_item
         left join bgg_thing_cache thing_cache
           on thing_cache.bgg_id = updated_item.bgg_id
-         and thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+         and (thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}' or (
+           thing_cache.request_type = '${BGG_LEGACY_REQUEST_TYPE}' and not exists (
+             select 1 from bgg_thing_cache current_cache
+             where current_cache.bgg_id = updated_item.bgg_id
+               and current_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
+           )
+         ))
         `,
         [candidateId]
       );
