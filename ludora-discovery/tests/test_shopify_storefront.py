@@ -373,6 +373,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
     def test_shopify_discovery_exhausts_http_429_without_headers_using_bounded_fallbacks(self):
         product_url = PRODUCT_URL.split("?")[0]
         repository = DiscoveryRepository()
+        trace = FakeTraceLogger()
         throttled = FetchResult(url=GRAPHQL_ENDPOINT, text="busy", status_code=429)
 
         with patch(
@@ -382,22 +383,32 @@ class ShopifyStorefrontTests(unittest.TestCase):
             "ludora.product_crawler.fetch_shopify_storefront_product",
             side_effect=[throttled, throttled, throttled],
         ) as fetch_product, patch("ludora.product_crawler.wait_for_discovery_delay") as wait:
-            with self.assertRaises(TransientProductFetchError) as raised:
-                crawl_store_product_details(
-                    "https://tienda.example.mx/",
-                    31,
-                    repository,
-                    platform="shopify",
-                    request_headers_provider=_signing_provider,
-                )
+            records = crawl_store_product_details(
+                "https://tienda.example.mx/",
+                31,
+                repository,
+                platform="shopify",
+                request_headers_provider=_signing_provider,
+                trace_logger=trace,
+            )
 
         self.assertEqual(fetch_product.call_count, 3)
         self.assertEqual(wait.call_args_list, [call(60.0, None), call(300.0, None)])
-        self.assertEqual(raised.exception.status_code, 429)
+        self.assertEqual(records, [])
+        skipped = next(
+            fields
+            for event, fields in trace.events
+            if event == "inventory.candidate.detail_fetch.skipped_transient"
+        )
+        self.assertEqual(skipped["error_type"], "TransientProductFetchError")
+        self.assertEqual(skipped["source_url"], product_url)
+        self.assertEqual(skipped["status_code"], 429)
+        self.assertEqual(skipped["store_id"], 31)
 
     def test_shopify_discovery_exhausts_graphql_throttling_using_bounded_fallbacks(self):
         product_url = PRODUCT_URL.split("?")[0]
         repository = DiscoveryRepository()
+        trace = FakeTraceLogger()
         errors = [{"message": "Query throttled", "extensions": {"code": "THROTTLED"}}]
         throttled = FetchResult(url=GRAPHQL_ENDPOINT, text=_payload(errors=errors))
 
@@ -408,18 +419,27 @@ class ShopifyStorefrontTests(unittest.TestCase):
             "ludora.product_crawler.fetch_shopify_storefront_product",
             side_effect=[throttled, throttled, throttled],
         ) as fetch_product, patch("ludora.product_crawler.wait_for_discovery_delay") as wait:
-            with self.assertRaises(TransientProductFetchError) as raised:
-                crawl_store_product_details(
-                    "https://tienda.example.mx/",
-                    31,
-                    repository,
-                    platform="shopify",
-                    request_headers_provider=_signing_provider,
-                )
+            records = crawl_store_product_details(
+                "https://tienda.example.mx/",
+                31,
+                repository,
+                platform="shopify",
+                request_headers_provider=_signing_provider,
+                trace_logger=trace,
+            )
 
         self.assertEqual(fetch_product.call_count, 3)
         self.assertEqual(wait.call_args_list, [call(60.0, None), call(300.0, None)])
-        self.assertEqual(raised.exception.status_code, 429)
+        self.assertEqual(records, [])
+        skipped = next(
+            fields
+            for event, fields in trace.events
+            if event == "inventory.candidate.detail_fetch.skipped_transient"
+        )
+        self.assertEqual(skipped["error_type"], "TransientProductFetchError")
+        self.assertEqual(skipped["source_url"], product_url)
+        self.assertEqual(skipped["status_code"], 429)
+        self.assertEqual(skipped["store_id"], 31)
 
     def test_shopify_discovery_honors_retry_after_for_http_200_graphql_throttling(self):
         product_url = PRODUCT_URL.split("?")[0]
@@ -610,15 +630,14 @@ class ShopifyStorefrontTests(unittest.TestCase):
             "ludora.product_crawler.fetch_shopify_storefront_product",
             return_value=transport_failure,
         ):
-            with self.assertRaises(TransientProductFetchError) as raised:
-                crawl_store_product_details(
-                    "https://tienda.example.mx/",
-                    31,
-                    repository,
-                    platform="shopify",
-                    request_headers_provider=_signing_provider,
-                    trace_logger=trace,
-                )
+            records = crawl_store_product_details(
+                "https://tienda.example.mx/",
+                31,
+                repository,
+                platform="shopify",
+                request_headers_provider=_signing_provider,
+                trace_logger=trace,
+            )
 
         attempt_failures = [
             fields
@@ -637,7 +656,16 @@ class ShopifyStorefrontTests(unittest.TestCase):
             for event, fields in trace.events
             if event == "item_discovery.candidate.shopify_graphql.failed"
         )
-        self.assertLessEqual(len(str(raised.exception)), 2_000)
+        skipped = next(
+            fields
+            for event, fields in trace.events
+            if event == "inventory.candidate.detail_fetch.skipped_transient"
+        )
+        self.assertEqual(records, [])
+        self.assertLessEqual(len(skipped["error"]), 2_000)
+        self.assertEqual(skipped["error_type"], "TransientProductFetchError")
+        self.assertEqual(skipped["source_url"], product_url)
+        self.assertEqual(skipped["store_id"], 31)
         self.assertLessEqual(len(final_failure["error"]), 500)
         self.assertLessEqual(len(final_failure["error_type"]), 100)
         self.assertLessEqual(len(final_failure["message"]), 2_000)

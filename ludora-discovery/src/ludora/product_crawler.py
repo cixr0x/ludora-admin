@@ -170,10 +170,12 @@ class TransientProductFetchError(RuntimeError):
         self,
         message: str,
         *,
+        error_type: str | None = None,
         retry_after_seconds: float | None = None,
         status_code: int | None = None,
     ):
         super().__init__(message)
+        self.error_type = error_type or type(self).__name__
         self.retry_after_seconds = retry_after_seconds
         self.status_code = status_code
 
@@ -383,6 +385,19 @@ def crawl_listing_candidates(
                     cancellation_token=cancellation_token,
                     before_request=before_product_request,
                 )
+        except TransientProductFetchError as exc:
+            fields: dict[str, object] = {
+                "error": str(exc),
+                "error_type": exc.error_type,
+                "source_url": listing_candidate.source_url,
+                "store_id": listing_candidate.store_id,
+            }
+            if exc.retry_after_seconds is not None:
+                fields["retry_after_seconds"] = exc.retry_after_seconds
+            if exc.status_code is not None:
+                fields["status_code"] = exc.status_code
+            trace.log("inventory.candidate.detail_fetch.skipped_transient", **fields)
+            continue
         except ProductDetailRejectedError:
             continue
         if item_candidate_enricher is not None:
@@ -1423,6 +1438,7 @@ def _fetch_detail_candidate(
     store_item_update_request = detect_removed
     amazon_detail_validation_failed = False
     amazon_browser_failure: dict[str, object] | None = None
+    browser_failure: dict[str, object] | None = None
     fetched_detail = _fetch_static_product_detail(
         listing_candidate.source_url,
         detect_removed=detect_removed,
@@ -1537,6 +1553,11 @@ def _fetch_detail_candidate(
                     before_navigation=before_request,
                     cancellation_token=cancellation_token,
                 )
+                if fetched_detail is None:
+                    fetcher_owner = getattr(browser_fetcher, "__self__", None)
+                    last_failure = getattr(fetcher_owner, "last_failure", None)
+                    if isinstance(last_failure, Mapping):
+                        browser_failure = dict(last_failure)
         _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
         if fetched_detail is not None and fetched_detail.status_code >= 400:
             last_failure_status_code = fetched_detail.status_code
@@ -1580,23 +1601,35 @@ def _fetch_detail_candidate(
 
     if static_fetch_failed and fetched_detail is None:
         status_suffix = f" (HTTP {last_failure_status_code})" if last_failure_status_code is not None else ""
-        browser_failure_suffix = (
+        amazon_browser_failure_suffix = (
             f"; {_format_amazon_browser_failure(amazon_browser_failure)}"
             if amazon_browser_failure
             else ""
         )
-        if last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES or amazon_detail_validation_failed:
+        browser_error = str((browser_failure or {}).get("error") or "").strip()
+        browser_error_type = str((browser_failure or {}).get("error_type") or "").strip()
+        browser_failure_suffix = (
+            f"; browser fallback {browser_error_type}: {browser_error}"
+            if browser_error_type and browser_error
+            else ""
+        )
+        if (
+            last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES
+            or amazon_detail_validation_failed
+            or browser_error_type == "TimeoutError"
+        ):
             raise TransientProductFetchError(
                 (
                     f"Failed to fetch product detail page: {listing_candidate.source_url}"
-                    f"{status_suffix}{browser_failure_suffix}"
+                    f"{status_suffix}{amazon_browser_failure_suffix}{browser_failure_suffix}"
                 ),
+                error_type=browser_error_type or None,
                 retry_after_seconds=last_failure_retry_after_seconds,
                 status_code=last_failure_status_code,
             )
         raise RuntimeError(
             f"Failed to fetch product detail page: {listing_candidate.source_url}"
-            f"{status_suffix}{browser_failure_suffix}"
+            f"{status_suffix}{amazon_browser_failure_suffix}{browser_failure_suffix}"
         )
 
     if detail_candidate is None:

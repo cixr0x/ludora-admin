@@ -1030,6 +1030,99 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(repository.item_records, [])
 
+    def test_crawl_store_product_details_skips_browser_timeout_and_processes_later_candidate(self):
+        timed_out_url = "https://example.mx/products/not-alone"
+        valid_url = "https://example.mx/products/catan"
+        valid_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Catan",
+          "offers": {"price": "899.00", "priceCurrency": "MXN"}
+        }
+        </script>
+        """
+        repository = FakeRepository(
+            ItemCandidateUpsertResult(
+                candidate_id=701,
+                listing_status="PENDING",
+                item_id=None,
+                should_process=True,
+            )
+        )
+        processor = FakeItemProcessor()
+        trace = FakeTraceLogger()
+
+        class TimeoutBrowserFetcher:
+            def __init__(self):
+                self.last_failure = None
+                self.fetched_urls = []
+
+            def fetch(self, url):
+                self.fetched_urls.append(url)
+                self.last_failure = {
+                    "error": "Page.goto: Timeout 30000ms exceeded.",
+                    "error_type": "TimeoutError",
+                    "final_url": "about:blank",
+                    "timeout_ms": 30_000,
+                    "url": url,
+                }
+                return None
+
+        browser_fetcher = TimeoutBrowserFetcher()
+
+        def fetch_detail(url, **_kwargs):
+            if url == timed_out_url:
+                return None
+            return FetchResult(url=url, text=valid_html)
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[timed_out_url, valid_url],
+        ), patch(
+            "ludora.product_crawler.fetch_html",
+            side_effect=fetch_detail,
+        ):
+            try:
+                records = crawl_store_product_details(
+                    "https://example.mx/",
+                    12,
+                    repository,
+                    browser_fetch_enabled=True,
+                    browser_fetcher=browser_fetcher.fetch,
+                    item_processor=processor,
+                    trace_logger=trace,
+                )
+            except RuntimeError as exc:
+                self.fail(f"Transient browser timeout aborted discovery: {exc}")
+
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
+        self.assertEqual(
+            [(candidate_id, record.source_url) for candidate_id, record in processor.processed],
+            [(701, valid_url)],
+        )
+        self.assertEqual(browser_fetcher.fetched_urls, [timed_out_url])
+        self.assertEqual(
+            [
+                fields
+                for event, fields in trace.events
+                if event == "inventory.candidate.detail_fetch.skipped_transient"
+            ],
+            [
+                {
+                    "error": (
+                        "Failed to fetch product detail page: "
+                        f"{timed_out_url}; browser fallback TimeoutError: "
+                        "Page.goto: Timeout 30000ms exceeded."
+                    ),
+                    "error_type": "TimeoutError",
+                    "source_url": timed_out_url,
+                    "store_id": 12,
+                }
+            ],
+        )
+
     def test_crawl_store_product_details_retries_transient_http_status_and_honors_retry_after(self):
         detail_html = """
         <script type="application/ld+json">
@@ -1086,36 +1179,81 @@ class InventoryTests(unittest.TestCase):
             ],
         )
 
-    def test_crawl_store_product_details_reports_transient_http_status_after_retries_exhausted(self):
-        product_url = "https://example.mx/products/catan"
-        repository = FakeRepository()
+    def test_crawl_store_product_details_skips_transient_http_status_and_processes_later_candidate(self):
+        unavailable_url = "https://example.mx/products/unavailable"
+        valid_url = "https://example.mx/products/catan"
+        valid_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Catan",
+          "offers": {"price": "899.00", "priceCurrency": "MXN"}
+        }
+        </script>
+        """
+        repository = FakeRepository(
+            ItemCandidateUpsertResult(
+                candidate_id=702,
+                listing_status="PENDING",
+                item_id=None,
+                should_process=True,
+            )
+        )
+        processor = FakeItemProcessor()
         trace = FakeTraceLogger()
-        unavailable = FetchResult(url=product_url, text="", status_code=503, retry_after_seconds=0.0)
+        unavailable = FetchResult(url=unavailable_url, text="", status_code=503, retry_after_seconds=0.0)
+
+        def fetch_detail(url, **_kwargs):
+            if url == unavailable_url:
+                return unavailable
+            return FetchResult(url=url, text=valid_html)
 
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
-            return_value=[product_url],
+            return_value=[unavailable_url, valid_url],
         ), patch(
             "ludora.product_crawler.fetch_html",
-            side_effect=[unavailable, unavailable, unavailable],
+            side_effect=fetch_detail,
         ) as fetch_html, patch("ludora.webfetch._wait_for_fetch_retry") as wait_for_retry:
-            with self.assertRaisesRegex(
-                RuntimeError,
-                r"Failed to fetch product detail page: https://example.mx/products/catan \(HTTP 503\)",
-            ):
-                crawl_store_product_details(
+            try:
+                records = crawl_store_product_details(
                     "https://example.mx/",
                     12,
                     repository,
+                    item_processor=processor,
                     trace_logger=trace,
                 )
+            except RuntimeError as exc:
+                self.fail(f"Transient HTTP failure aborted discovery: {exc}")
 
-        self.assertEqual(fetch_html.call_count, 3)
+        self.assertEqual(fetch_html.call_count, 4)
         self.assertEqual(wait_for_retry.call_count, 2)
         http_error_events = [fields for event, fields in trace.events if event == "inventory.candidate.detail_fetch.http_error"]
         self.assertEqual([event["status_code"] for event in http_error_events], [503, 503, 503])
         self.assertEqual([event["will_retry"] for event in http_error_events], [True, True, False])
-        self.assertEqual(repository.item_records, [])
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
+        self.assertEqual(
+            [(candidate_id, record.source_url) for candidate_id, record in processor.processed],
+            [(702, valid_url)],
+        )
+        self.assertEqual(
+            [
+                fields
+                for event, fields in trace.events
+                if event == "inventory.candidate.detail_fetch.skipped_transient"
+            ],
+            [
+                {
+                    "error": f"Failed to fetch product detail page: {unavailable_url} (HTTP 503)",
+                    "error_type": "TransientProductFetchError",
+                    "retry_after_seconds": 0.0,
+                    "source_url": unavailable_url,
+                    "status_code": 503,
+                    "store_id": 12,
+                }
+            ],
+        )
 
     def test_crawl_store_product_details_skips_removed_candidate_and_continues(self):
         removed_url = "https://example.mx/products/removed"
