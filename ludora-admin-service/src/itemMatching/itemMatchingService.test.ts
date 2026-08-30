@@ -1400,7 +1400,7 @@ function autoListService(): AutoListEvaluationService {
       reasoning: 'Test image similarity result',
       score: null,
       status: 'ERROR',
-      threshold: 98
+      threshold: 95
     },
     item_id: 77,
     model: 'gpt-5.6-terra',

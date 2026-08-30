@@ -4,7 +4,7 @@ import type {
   ImageSimilarityService
 } from '../imageSimilarity/imageSimilarityService.js';
 
-export const AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD = 98;
+export const AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD = 95;
 
 export type AutoListVerdict = 'PASS' | 'NOT PASS';
 

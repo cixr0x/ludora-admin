@@ -301,7 +301,7 @@ function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; 
             </Alert>
           )}
           <Typography color="text.secondary" variant="caption">
-            Automatic listing requires a generated Spanish translation, AI PASS, and an image similarity score of at least 98.
+            Automatic listing requires a generated Spanish translation, AI PASS, and an image similarity score of at least 95.
           </Typography>
         </Stack>
       </Paper>
@@ -337,7 +337,7 @@ function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; 
   const model = field(result, ['model'], 'Unknown model');
   const evaluatedAt = field(result, ['evaluated_at'], 'Unknown time');
   const similarityScore = imageSimilarity ? numericField(imageSimilarity, ['score']) : null;
-  const similarityThreshold = imageSimilarity ? numericField(imageSimilarity, ['threshold']) ?? 98 : 98;
+  const similarityThreshold = imageSimilarity ? numericField(imageSimilarity, ['threshold']) ?? 95 : 95;
   const similarityDetails = imageSimilarity
     ? similarityScore === null
       ? `Required score: ≥ ${similarityThreshold.toFixed(2)} / 100`

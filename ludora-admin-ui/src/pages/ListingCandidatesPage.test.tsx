@@ -1720,7 +1720,7 @@ describe('ListingCandidatesPage', () => {
       'Auto-list evaluation is skipped because the linked boardgame does not have a generated Spanish translation.'
     )).toBeInTheDocument();
     expect(within(approvalPanel!).getByText(
-      'Automatic listing requires a generated Spanish translation, AI PASS, and an image similarity score of at least 98.'
+      'Automatic listing requires a generated Spanish translation, AI PASS, and an image similarity score of at least 95.'
     )).toBeInTheDocument();
   });
 

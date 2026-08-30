@@ -6,7 +6,6 @@ import type {
   ImageSimilarityService
 } from '../imageSimilarity/imageSimilarityService.js';
 import {
-  AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD,
   coverLanguagePass,
   createAutoListEvaluationService,
   type AutoListAiDecision,
@@ -38,11 +37,11 @@ describe('auto-list evaluation service', () => {
     expect(queries.some(({ sql }) => normalizeSql(sql).startsWith('update store_items'))).toBe(false);
   });
 
-  it('uses the Spanish item image and auto-lists when AI passes and similarity is at least 98', async () => {
+  it('uses the Spanish item image and auto-lists when AI passes and similarity is exactly 95', async () => {
     const queries: RecordedQuery[] = [];
     const database = evaluationDatabase(linkedRow(), queries);
     const client = evaluationClient(decision());
-    const imageSimilarity = imageSimilarityService(98);
+    const imageSimilarity = imageSimilarityService(95);
     const service = createAutoListEvaluationService(database, client, {
       imageSimilarityService: imageSimilarity,
       model: 'gpt-5.6-terra',
@@ -72,9 +71,9 @@ describe('auto-list evaluation service', () => {
       },
       image_similarity: {
         pass: true,
-        score: 98,
+        score: 95,
         status: 'COMPLETED',
-        threshold: 98
+        threshold: 95
       },
       status: 'COMPLETED',
       verdict: 'PASS',
@@ -89,17 +88,17 @@ describe('auto-list evaluation service', () => {
     expect(update?.params?.slice(1)).toEqual([42, 77, true]);
   });
 
-  it('does not auto-list a score below 98 even when all AI checks pass', async () => {
+  it('does not auto-list a score of 94.99 even when all AI checks pass', async () => {
     const queries: RecordedQuery[] = [];
     const result = await createAutoListEvaluationService(
       evaluationDatabase(linkedRow(), queries),
       evaluationClient(decision()),
-      { imageSimilarityService: imageSimilarityService(97.99), model: 'gpt-5.6-terra' }
+      { imageSimilarityService: imageSimilarityService(94.99), model: 'gpt-5.6-terra' }
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
       auto_list_eligible: false,
-      image_similarity: { pass: false, score: 97.99, threshold: 98 },
+      image_similarity: { pass: false, score: 94.99, threshold: 95 },
       verdict: 'PASS'
     });
     const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
@@ -155,7 +154,7 @@ describe('auto-list evaluation service', () => {
         reasoning: 'comparison unavailable',
         score: null,
         status: 'ERROR',
-        threshold: 98
+        threshold: 95
       },
       status: 'COMPLETED',
       verdict: 'PASS'
@@ -180,7 +179,7 @@ describe('auto-list evaluation service', () => {
     expect(result).toMatchObject({
       auto_list_eligible: false,
       evaluated_at: '2026-08-25T18:00:00.000Z',
-      image_similarity: { pass: true, score: 100, status: 'COMPLETED', threshold: 98 },
+      image_similarity: { pass: true, score: 100, status: 'COMPLETED', threshold: 95 },
       item_id: 77,
       model: 'gpt-5.6-terra',
       reasoning: 'CodexAPI timed out',
@@ -209,7 +208,6 @@ describe('auto-list evaluation service', () => {
   });
 
   it('encodes the exact language asymmetry and conservative unknown handling', () => {
-    expect(AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD).toBe(98);
     expect(coverLanguagePass('es', 'es')).toBe(true);
     expect(coverLanguagePass('en', 'en')).toBe(true);
     expect(coverLanguagePass('en', 'es')).toBe(true);
