@@ -121,6 +121,7 @@ LUDORA_DAILY_ITEM_DISCOVERY_ENABLED=true
 LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED=true
 LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS=5
 LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS=300
+LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS=120
 LUDORA_COVER_FLATTENING_WORK_DIR=/tmp/ludora-cover-flattening
 LUDORA_WEB_BOT_AUTH_ENABLED=true
 LUDORA_WEB_BOT_AUTH_IDENTITY_ORIGIN=https://admin.ludora.bobbycrimson.com
@@ -152,6 +153,19 @@ connection, coordinator lock, and current job. Review
 `browser_fetch.recycle.started`, `browser_fetch.recycle.completed`, and
 `browser_fetch.recycle.failed` entries in the item-update trace when validating
 the lifecycle in production.
+
+The admin-service supervisor also applies a hard per-item watchdog outside
+Python and Playwright. `LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS`
+defaults to 120, must be positive, and must remain shorter than
+`LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS`. It starts when the worker emits
+`worker.item.started` and clears on the corresponding success, failure, or
+deactivation lifecycle event. On expiry, admin-service logs the attempt ID,
+store-item ID, platform, configured deadline, and elapsed time, then kills the
+entire worker process tree (the dedicated POSIX process group includes Python,
+Playwright, and Chromium) before its normal restart loop launches one
+replacement worker. On restart, any interrupted item attempts are recorded as
+`lease_lost`; their leases are cleared and their next update is delayed by at
+least 15 minutes so the same broken item cannot immediately restart the cycle.
 
 ### Daily item-discovery schedule
 

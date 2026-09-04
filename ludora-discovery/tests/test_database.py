@@ -224,14 +224,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         self.assertNotIn("next_update_at", insert_sql)
 
-    def test_interrupted_updates_are_explicitly_requeued_when_unscheduled(self):
+    def test_interrupted_updates_keep_a_fifteen_minute_recovery_backoff(self):
         connection = FakeConnection()
         repository = DiscoveryRepository(connection)
 
         repository.recover_interrupted_continuous_updates()
 
         recovery_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
-        self.assertIn("next_update_at = coalesce(next_update_at, now() + interval '1 minute')", recovery_sql)
+        self.assertIn("next_update_at = greatest(coalesce(next_update_at, now()), now() + interval '15 minutes')", recovery_sql)
         self.assertIn("last_update_attempt_at = clock_timestamp()", recovery_sql)
 
     def test_woocommerce_429_upserts_platform_cooldown_with_failed_item(self):

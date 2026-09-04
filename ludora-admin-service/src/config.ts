@@ -35,6 +35,7 @@ export type Config = {
   corsOrigin: string[];
   continuousItemUpdateWorker: {
     enabled: boolean;
+    itemTimeoutSeconds: number;
     leaseSeconds: number;
     pollSeconds: number;
   };
@@ -91,12 +92,23 @@ export function loadConfig(): Config {
 }
 
 function readContinuousItemUpdateWorkerConfig(): Config['continuousItemUpdateWorker'] {
+  const leaseSeconds = readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', 300);
+  const itemTimeoutSeconds = readPositiveNumberEnv(
+    'LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS',
+    120
+  );
+  if (itemTimeoutSeconds >= leaseSeconds) {
+    throw new Error(
+      'LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS must be shorter than LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS'
+    );
+  }
   return {
     enabled: readBooleanEnv(
       'LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED',
       process.env.NODE_ENV === 'production'
     ),
-    leaseSeconds: readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', 300),
+    itemTimeoutSeconds,
+    leaseSeconds,
     pollSeconds: readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', 5)
   };
 }

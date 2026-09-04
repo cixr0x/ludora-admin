@@ -107,6 +107,7 @@ const continuousItemUpdateWorkerManager =
         adminApiUrl: `http://127.0.0.1:${config.port}`,
         envFile: config.discoveryRunner.envFile,
         internalApiToken,
+        itemTimeoutSeconds: config.continuousItemUpdateWorker.itemTimeoutSeconds,
         leaseSeconds: config.continuousItemUpdateWorker.leaseSeconds,
         packageDir: config.discoveryRunner.packageDir,
         pollSeconds: config.continuousItemUpdateWorker.pollSeconds,

@@ -220,8 +220,10 @@ describe('loadConfig', () => {
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED', 'true');
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', '5');
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', '300');
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS', '120');
     expect(loadConfig().continuousItemUpdateWorker).toEqual({
       enabled: true,
+      itemTimeoutSeconds: 120,
       leaseSeconds: 300,
       pollSeconds: 5
     });
@@ -232,6 +234,12 @@ describe('loadConfig', () => {
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED', undefined);
 
     expect(loadConfig().continuousItemUpdateWorker.enabled).toBe(true);
+  });
+
+  it('defaults the continuous updater item watchdog to 120 seconds', () => {
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS', undefined);
+
+    expect(loadConfig().continuousItemUpdateWorker.itemTimeoutSeconds).toBe(120);
   });
 
   it('keeps daily item discovery scheduling off outside production and accepts an explicit override', () => {
@@ -268,6 +276,23 @@ describe('loadConfig', () => {
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', value);
 
     expect(() => loadConfig()).toThrow('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS must be a positive number');
+  });
+
+  it.each(['0', '-1', 'not-a-number'])('rejects invalid continuous updater item timeout %s', (value) => {
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS', value);
+
+    expect(() => loadConfig()).toThrow(
+      'LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS must be a positive number'
+    );
+  });
+
+  it('rejects an item timeout that is not shorter than the item lease', () => {
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', '120');
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS', '120');
+
+    expect(() => loadConfig()).toThrow(
+      'LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS must be shorter than LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS'
+    );
   });
 
   it('loads local cover workflow defaults and overrides', () => {

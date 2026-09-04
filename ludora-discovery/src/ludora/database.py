@@ -490,7 +490,7 @@ class DiscoveryRepository:
                     returning store_item_id, lease_token
                 )
                 update store_items
-                set next_update_at = coalesce(next_update_at, now() + interval '1 minute'),
+                set next_update_at = greatest(coalesce(next_update_at, now()), now() + interval '15 minutes'),
                     last_update_attempt_at = clock_timestamp(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
