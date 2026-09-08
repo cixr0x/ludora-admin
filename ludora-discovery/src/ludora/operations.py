@@ -13,6 +13,7 @@ from ludora.admin_matching import AdminItemMatcher
 from ludora.admin_title_extraction import AdminAmazonTitleExtractor
 from ludora.admin_web_bot_auth import AdminWebBotAuthHeadersProvider
 from ludora.ai_item_classification import CodexApiItemClassifier
+from ludora.discovery_browser_lifecycle import discovery_browser_scope
 from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
 from ludora.collector import collect_stores
 from ludora.config import (
@@ -348,21 +349,22 @@ def _run_item_discovery_for_store(
             if cancellation_token is not None:
                 collect_kwargs["cancellation_token"] = cancellation_token
             raise_if_cancelled(cancellation_token)
-            records = collect_store_inventory(
-                website_url,
-                store_id,
-                tracking_repository,
-                platform=platform,
-                store_name=store_name,
-                browser_sitemap_fetch_enabled=browser_sitemap_fetch_enabled,
-                item_classifier=item_classifier,
-                item_processor=item_processor,
-                item_title_extractor=item_title_extractor,
-                request_headers_provider=web_bot_auth_headers_provider,
-                trace_logger=trace_logger,
-                before_product_request=before_product_request,
-                **collect_kwargs,
-            )
+            with discovery_browser_scope(resolved_run_id, store_id, website_url):
+                records = collect_store_inventory(
+                    website_url,
+                    store_id,
+                    tracking_repository,
+                    platform=platform,
+                    store_name=store_name,
+                    browser_sitemap_fetch_enabled=browser_sitemap_fetch_enabled,
+                    item_classifier=item_classifier,
+                    item_processor=item_processor,
+                    item_title_extractor=item_title_extractor,
+                    request_headers_provider=web_bot_auth_headers_provider,
+                    trace_logger=trace_logger,
+                    before_product_request=before_product_request,
+                    **collect_kwargs,
+                )
             raise_if_cancelled(cancellation_token)
         except OperationCancelled as exc:
             statistics = _item_discovery_statistics(tracking_repository)

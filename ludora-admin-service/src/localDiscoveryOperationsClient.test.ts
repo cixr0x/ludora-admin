@@ -94,6 +94,145 @@ describe('local discovery operations client', () => {
     });
   });
 
+  it('hard fails a hanging discovery browser fetch after acceptance, preserving its database identity', async () => {
+    vi.useFakeTimers();
+    const terminate = vi.fn(async () => undefined);
+    const persistBrowserFailure = vi.fn(async () => undefined);
+    const { client, spawned } = createClient({
+      browserFetchTimeoutSeconds: 0.1,
+      processTreeFactory: () => ({ capture: () => undefined, terminate }),
+      persistBrowserFailure
+    });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    const frame = browserFrame('started');
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME + frame.slice(0, 34), frame.slice(34));
+    const run = await started;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(persistBrowserFailure).toHaveBeenCalledWith(expect.objectContaining({
+      runId: 'batch:17', storeId: 17, url: 'https://chocitajuegos.com/juego/changan/', timeoutSeconds: 0.1,
+      reason: 'timeout'
+    }));
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({
+      status: 'failed', error: expect.stringMatching(/0.1.*batch:17.*17.*changan/)
+    });
+    expectChildListenersRemoved(spawned[0].child);
+    await expect(client.startStoreDiscoveryRun()).resolves.toMatchObject({ status: 'running' });
+  });
+
+  it('clears only the matching fetch deadline and permits long batches between fetches', async () => {
+    vi.useFakeTimers();
+    const terminate = vi.fn(async () => undefined);
+    const { client, spawned } = createClient({
+      browserFetchTimeoutSeconds: 0.1,
+      processTreeFactory: () => ({ capture: () => undefined, terminate })
+    });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME + browserFrame('started') + browserFrame('completed'));
+    const run = await started;
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(terminate).not.toHaveBeenCalled();
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({ status: 'running' });
+    spawned[0].child.acceptItemDiscovery(browserFrame('started', 'next') + browserFrame('completed', 'stale'));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(terminate).toHaveBeenCalledOnce();
+  });
+
+  it.each(['close', 'error', 'cancel', 'shutdown'])('clears the browser timer on %s without targeting a later run', async (action) => {
+    vi.useFakeTimers();
+    const terminate = vi.fn(async () => undefined);
+    const { client, spawned } = createClient({
+      browserFetchTimeoutSeconds: 0.1,
+      processTreeFactory: () => ({ capture: () => undefined, terminate })
+    });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME + browserFrame('started'));
+    const run = await started;
+    let shutdown: Promise<void> | undefined;
+    if (action === 'cancel') await client.cancelStoreDiscoveryRun(run.id);
+    if (action === 'shutdown') shutdown = client.shutdown();
+    if (action === 'error') spawned[0].child.failToSpawn(new Error('pipe failure'));
+    else spawned[0].child.succeed({ result: { item_candidates: 0, store_id: null, stores_scanned: 1, website_url: '' } });
+    await flushPromises();
+    await shutdown;
+    const killsBefore = terminate.mock.calls.length;
+    if (action !== 'shutdown') await client.startStoreDiscoveryRun();
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(terminate).toHaveBeenCalledTimes(killsBefore);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('reports termination and persistence failures without leaving the operation running', async () => {
+    vi.useFakeTimers();
+    const { client, spawned } = createClient({
+      browserFetchTimeoutSeconds: 0.1,
+      processTreeFactory: () => ({ capture: () => undefined, terminate: async () => { throw new Error('kill denied'); } }),
+      persistBrowserFailure: async () => { throw new Error('database unavailable'); }
+    });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME + browserFrame('started'));
+    const run = await started;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({
+      status: 'failed', error: expect.stringMatching(/kill denied.*database unavailable/)
+    });
+  });
+
+  it('does not enable the browser watchdog for item update', async () => {
+    vi.useFakeTimers();
+    const { client, spawned } = createClient({ browserFetchTimeoutSeconds: 0.1 });
+    const run = await client.startItemUpdateRun();
+    spawned[0].child.acceptItemDiscovery(browserFrame('started'));
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({ status: 'running' });
+    expect((spawned[0].options as { env: Record<string, string> }).env.LUDORA_DISCOVERY_BROWSER_WATCHDOG).toBe('0');
+  });
+
+  it('bounds a hung persistence callback and frees the operation after hard termination', async () => {
+    vi.useFakeTimers();
+    const { client, spawned } = createClient({ browserFetchTimeoutSeconds: 0.1, cleanupTimeoutMs: 25,
+      persistBrowserFailure: () => new Promise(() => undefined) });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME + browserFrame('started'));
+    const run = await started;
+    await vi.advanceTimersByTimeAsync(125);
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({ status: 'failed', error: expect.stringContaining('persistence failed: Discovery terminal-state persistence exceeded 25ms') });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds an exited child whose descendant holds stderr open without firing a stale browser deadline', async () => {
+    vi.useFakeTimers();
+    const terminate = vi.fn(async () => undefined);
+    const { client, spawned } = createClient({ browserFetchTimeoutSeconds: 0.1, cancelForceFailMs: 25,
+      processTreeFactory: () => ({ capture: () => undefined, terminate }) });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME + browserFrame('started'));
+    const run = await started;
+    spawned[0].child.emit('exit', 1, null);
+    await vi.advanceTimersByTimeAsync(25);
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({ status: 'failed', error: expect.stringContaining('output pipes did not close') });
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('uses tree termination and persists cancellation when shutdown escalates an active fetch', async () => {
+    vi.useFakeTimers();
+    const terminate = vi.fn(async () => undefined);
+    const persistBrowserFailure = vi.fn(async () => undefined);
+    const { client, spawned } = createClient({ browserFetchTimeoutSeconds: 0.1, cancelEscalationMs: 25,
+      processTreeFactory: () => ({ capture: () => undefined, terminate }), persistBrowserFailure });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME + browserFrame('started'));
+    const run = await started;
+    const shutdown = client.shutdown();
+    await vi.advanceTimersByTimeAsync(25);
+    await shutdown;
+    expect(terminate).toHaveBeenCalledOnce();
+    expect(persistBrowserFailure).toHaveBeenCalledWith(expect.objectContaining({ runId: 'batch:17', storeId: 17, reason: 'cancelled' }));
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({ status: 'failed', error: expect.stringContaining('cancellation') });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it('passes the internal API token to the spawned discovery process', async () => {
     const { client, spawned } = createClient({ internalApiToken: 'internal-test-token' });
 
@@ -657,4 +796,11 @@ async function flushPromises(): Promise<void> {
   for (let index = 0; index < 10; index += 1) {
     await Promise.resolve();
   }
+}
+
+function browserFrame(event: 'started' | 'completed', fetchId = 'fetch-1'): string {
+  return '@@LUDORA_OPERATION_EVENT@@' + JSON.stringify({
+    event: `item_discovery.browser.${event}`, fetch_id: fetchId, run_id: 'batch:17',
+    store_id: 17, url: 'https://chocitajuegos.com/juego/changan/', phase: 'fetch'
+  }) + '\n';
 }

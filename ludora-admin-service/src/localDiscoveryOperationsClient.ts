@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import path from 'node:path';
+import { createDiscoveryProcessTree, type DiscoveryProcessTree } from './discoveryProcessTree.js';
 
 import {
   DiscoveryOperationError,
@@ -22,6 +23,10 @@ export type SpawnDiscoveryProcess = (
 ) => ChildProcessWithoutNullStreams;
 
 type LocalDiscoveryOptions = {
+  browserFetchTimeoutSeconds?: number;
+  cleanupTimeoutMs?: number;
+  processTreeFactory?: (child: ChildProcessWithoutNullStreams) => DiscoveryProcessTree;
+  persistBrowserFailure?: (failure: DiscoveryBrowserFailure) => Promise<void>;
   cancelEscalationMs?: number;
   cancelForceFailMs?: number;
   envFile: string;
@@ -32,7 +37,24 @@ type LocalDiscoveryOptions = {
   spawnProcess?: SpawnDiscoveryProcess;
 };
 
+export type DiscoveryBrowserFailure = {
+  runId: string;
+  storeId: number;
+  url: string;
+  phase: string;
+  timeoutSeconds: number;
+  reason: 'timeout' | 'cancelled';
+  error: string;
+};
+type BrowserFetch = Pick<DiscoveryBrowserFailure, 'runId' | 'storeId' | 'url' | 'phase'> & { fetchId: string };
+
 type ManagedRun = StoreDiscoveryRun & {
+  exitDrainTimer?: ReturnType<typeof setTimeout>;
+  browserWatchdogTimer?: ReturnType<typeof setTimeout>;
+  watchedBrowser?: BrowserFetch;
+  lastBrowser?: BrowserFetch;
+  processTree?: DiscoveryProcessTree;
+  hardStopStarted?: boolean;
   acceptanceRequired?: boolean;
   accepted?: boolean;
   cancelEscalationTimer?: ReturnType<typeof setTimeout>;
@@ -46,6 +68,10 @@ type ManagedRun = StoreDiscoveryRun & {
 };
 
 export function createLocalDiscoveryOperationsClient({
+  browserFetchTimeoutSeconds = 120,
+  cleanupTimeoutMs = 10_000,
+  processTreeFactory = createDiscoveryProcessTree,
+  persistBrowserFailure,
   cancelEscalationMs = 10_000,
   cancelForceFailMs = 5_000,
   envFile,
@@ -55,6 +81,9 @@ export function createLocalDiscoveryOperationsClient({
   pythonExecutable,
   spawnProcess = spawn
 }: LocalDiscoveryOptions): LocalDiscoveryOperationsClient {
+  if (!Number.isFinite(browserFetchTimeoutSeconds) || browserFetchTimeoutSeconds <= 0 || browserFetchTimeoutSeconds * 1000 > 2_147_483_647) {
+    throw new Error('Discovery browser fetch timeout must be positive and no greater than 2147483.647 seconds');
+  }
   const runs = new Map<string, ManagedRun>();
   let latestRunId: string | null = null;
   let activeRunId: string | null = null;
@@ -110,6 +139,7 @@ export function createLocalDiscoveryOperationsClient({
     const packagePath = /^[A-Za-z]:[\\/]/.test(packageDir) ? path.win32 : path;
     const childEnv = {
       ...process.env,
+      LUDORA_DISCOVERY_BROWSER_WATCHDOG: type === 'item_discovery' ? '1' : '0',
       PYTHONPATH: packagePath.join(packageDir, 'src'),
       ...(internalApiToken?.trim() ? { LUDORA_INTERNAL_API_TOKEN: internalApiToken.trim() } : {})
     };
@@ -119,6 +149,12 @@ export function createLocalDiscoveryOperationsClient({
     });
 
     run.child = child;
+    // Capture the root creation identity while it is still our newly spawned child.
+    try { run.processTree = processTreeFactory(child); }
+    catch (error) {
+      child.kill('SIGKILL');
+      throw new DiscoveryOperationError(`Failed to track discovery process tree: ${failureMessage(error)}`, 500);
+    }
     runs.set(run.id, run);
     latestRunId = run.id;
     activeRunId = run.id;
@@ -140,6 +176,7 @@ export function createLocalDiscoveryOperationsClient({
         return;
       }
       settled = true;
+      clearBrowserWatchdog(run);
       clearCancellationTimers(run);
       removeChildListeners();
       if (run.acceptanceRequired && !run.accepted) {
@@ -176,7 +213,7 @@ export function createLocalDiscoveryOperationsClient({
     const onStderrData = (chunk: unknown): void => {
       const text = String(chunk);
       stderr += text;
-      if (!run.acceptanceRequired || run.accepted || run.terminalFailure) {
+      if (run.type !== 'item_discovery' || run.terminalFailure || run.status !== 'running') {
         return;
       }
 
@@ -191,24 +228,78 @@ export function createLocalDiscoveryOperationsClient({
           try {
             event = JSON.parse(line.slice(eventPrefixIndex + OPERATION_EVENT_PREFIX.length));
           } catch {
+            if (!run.accepted) failAcceptanceProtocol('Malformed item discovery acceptance event');
+            else failBrowserProtocol('Malformed item discovery browser event');
+            return;
+          }
+          if (!isRecord(event)) {
             failAcceptanceProtocol('Malformed item discovery acceptance event');
             return;
           }
-          if (!isRecord(event) || event.event !== ITEM_DISCOVERY_ACCEPTANCE_EVENT) {
+          if (event.event === ITEM_DISCOVERY_ACCEPTANCE_EVENT) {
+            run.resolveAcceptance?.();
+          } else if (event.event === 'item_discovery.browser.started' || event.event === 'item_discovery.browser.completed') {
+            const browser = parseBrowserEvent(event);
+            if (!run.accepted || !browser) {
+              failBrowserProtocol('Malformed item discovery browser event');
+              return;
+            }
+            if (event.event === 'item_discovery.browser.started') {
+              // Duplicate starts cannot extend an already armed deadline.
+              if (run.watchedBrowser) {
+                if (run.watchedBrowser.fetchId !== browser.fetchId) failBrowserProtocol('Overlapping item discovery browser fetches');
+              } else {
+                run.watchedBrowser = browser;
+                run.lastBrowser = browser;
+                run.browserWatchdogTimer = setTimeout(() => {
+                  if (settled || activeRunId !== run.id || run.watchedBrowser !== browser || run.status !== 'running') return;
+                  const error = `Discovery browser timeout after ${browserFetchTimeoutSeconds} seconds: run_id=${browser.runId} store_id=${browser.storeId} phase=${browser.phase} url=${browser.url}`;
+                  run.terminalFailure = error;
+                  void hardStop(run, error, 'timeout');
+                }, browserFetchTimeoutSeconds * 1000);
+                run.browserWatchdogTimer.unref?.();
+                try { run.processTree?.capture(); }
+                catch (error) { failBrowserProtocol(`Failed to track browser descendants: ${failureMessage(error)}`); }
+              }
+            } else if (run.watchedBrowser?.fetchId === browser.fetchId && run.watchedBrowser.runId === browser.runId && run.watchedBrowser.storeId === browser.storeId) {
+              clearBrowserWatchdog(run);
+            }
+          } else if (!run.accepted) {
             failAcceptanceProtocol('Malformed item discovery acceptance event');
             return;
           }
-          run.resolveAcceptance?.();
-          return;
         }
         newlineIndex = protocolBuffer.indexOf('\n');
       }
     };
+    const failBrowserProtocol = (message: string): void => {
+      run.terminalFailure = message;
+      void hardStop(run, message);
+    };
     const onChildError = (error: Error): void => {
+      if (run.hardStopStarted) return;
       rejectPendingAcceptance(new DiscoveryOperationError(error.message, 500));
+      if (run.child?.pid) {
+        run.terminalFailure = error.message;
+        void hardStop(run, error.message);
+        return;
+      }
       settleRun('failed', null, error.message);
     };
+    const onChildExit = (): void => {
+      clearBrowserWatchdog(run);
+      if (run.hardStopStarted || settled) return;
+      run.exitDrainTimer = setTimeout(() => {
+        void hardStop(run, 'Discovery operation exited but output pipes did not close', run.status === 'cancelling' ? 'cancelled' : undefined, true);
+      }, cancelForceFailMs);
+      run.exitDrainTimer.unref?.();
+    };
     const onChildClose = (code: number | null, signal: NodeJS.Signals | null): void => {
+      if (run.hardStopStarted) return;
+      if (run.status === 'cancelling' && (run.child?.pid || run.lastBrowser)) {
+        void hardStop(run, run.terminalFailure ?? 'Discovery operation cancelled', 'cancelled');
+        return;
+      }
       if (run.terminalFailure) {
         settleRun('failed', null, run.terminalFailure);
         return;
@@ -268,11 +359,13 @@ export function createLocalDiscoveryOperationsClient({
       child.stderr.off('data', onStderrData);
       child.off('error', onChildError);
       child.off('close', onChildClose);
+      child.off('exit', onChildExit);
     };
     child.stdout.on('data', onStdoutData);
     child.stderr.on('data', onStderrData);
     child.on('error', onChildError);
     child.on('close', onChildClose);
+    child.on('exit', onChildExit);
 
     return acceptancePromise ?? publicRun(run);
   }
@@ -332,18 +425,26 @@ export function createLocalDiscoveryOperationsClient({
           503
         )
       );
-      await waitForRunToSettle(run, cancelEscalationMs + cancelForceFailMs + 100);
+      await waitForRunToSettle(run, cancelEscalationMs + cancelForceFailMs + 2 * cleanupTimeoutMs + 100);
     }
   };
 
   function requestCancellation(run: ManagedRun, pendingAcceptanceError?: DiscoveryOperationError): void {
+    if (run.hardStopStarted) return;
     if (run.status === 'running') {
+      clearBrowserWatchdog(run);
       if (pendingAcceptanceError && run.acceptanceRequired && !run.accepted) {
         run.rejectAcceptance?.(pendingAcceptanceError);
       }
       run.status = 'cancelling';
-      run.child?.kill('SIGTERM');
       scheduleCancellationEscalation(run);
+      try {
+        run.processTree?.capture();
+        run.child?.kill('SIGTERM');
+      } catch (error) {
+        run.terminalFailure = `Discovery cancellation failed: ${failureMessage(error)}`;
+        void hardStop(run, run.terminalFailure, 'cancelled');
+      }
     }
   }
 
@@ -354,7 +455,13 @@ export function createLocalDiscoveryOperationsClient({
       if (activeRunId !== run.id || run.status !== 'cancelling') {
         return;
       }
-      run.child?.kill('SIGKILL');
+      if (run.child?.pid || run.lastBrowser) {
+        void hardStop(run, run.terminalFailure ?? 'Discovery operation did not exit after cancellation', 'cancelled', true);
+        return;
+      }
+      void run.processTree?.terminate().catch((error: unknown) => {
+        run.terminalFailure = `Discovery process cleanup failed: ${failureMessage(error)}`;
+      });
       run.cancelForceFailTimer = setTimeout(() => {
         run.cancelForceFailTimer = undefined;
         if (activeRunId === run.id && run.status === 'cancelling') {
@@ -368,6 +475,28 @@ export function createLocalDiscoveryOperationsClient({
       run.cancelForceFailTimer.unref?.();
     }, cancelEscalationMs);
     run.cancelEscalationTimer.unref?.();
+  }
+
+  async function hardStop(run: ManagedRun, error: string, reason?: DiscoveryBrowserFailure['reason'], forceFailed = false): Promise<void> {
+    if (run.hardStopStarted || activeRunId !== run.id) return;
+    run.hardStopStarted = true;
+    clearBrowserWatchdog(run);
+    clearCancellationTimers(run);
+    const failures: string[] = [];
+    try {
+      await boundedCleanup(() => run.processTree?.terminate() ?? Promise.resolve(), cleanupTimeoutMs, 'Process tree termination');
+    } catch (failure) { failures.push(`process cleanup failed: ${failureMessage(failure)}`); }
+    if (reason && run.lastBrowser && persistBrowserFailure) {
+      try {
+        await boundedCleanup(() => persistBrowserFailure({
+          ...run.lastBrowser!, timeoutSeconds: browserFetchTimeoutSeconds, reason, error
+        }), cleanupTimeoutMs, 'Discovery terminal-state persistence');
+      } catch (failure) { failures.push(`persistence failed: ${failureMessage(failure)}`); }
+    }
+    const finalError = [error, ...failures].join('; ');
+    if (reason === 'timeout' || failures.length) console.error(`[item-discovery] ${finalError}`);
+    const cancelled = reason === 'cancelled' && !forceFailed && !run.terminalFailure && !failures.length;
+    run.settleRun?.(cancelled ? 'cancelled' : 'failed', null, cancelled ? null : finalError);
   }
 
   function waitForRunToSettle(run: ManagedRun, timeoutMs: number): Promise<void> {
@@ -427,23 +556,45 @@ function publicRun(run: ManagedRun | null): StoreDiscoveryRun | null {
   if (!run) {
     return null;
   }
-  const {
-    acceptanceRequired: _acceptanceRequired,
-    accepted: _accepted,
-    cancelEscalationTimer: _cancelEscalationTimer,
-    cancelForceFailTimer: _cancelForceFailTimer,
-    child: _child,
-    rejectAcceptance: _rejectAcceptance,
-    resolveAcceptance: _resolveAcceptance,
-    settleRun: _settleRun,
-    terminalFailure: _terminalFailure,
-    waiters: _waiters,
-    ...payload
-  } = run;
-  return { ...payload };
+  return { id: run.id, type: run.type, status: run.status, started_at: run.started_at,
+    completed_at: run.completed_at, error: run.error, result: run.result };
 }
 
+function clearBrowserWatchdog(run: ManagedRun): void {
+  if (run.browserWatchdogTimer) clearTimeout(run.browserWatchdogTimer);
+  run.browserWatchdogTimer = undefined;
+  run.watchedBrowser = undefined;
+}
+
+function parseBrowserEvent(event: Record<string, unknown>): BrowserFetch | null {
+  if (typeof event.fetch_id !== 'string' || !event.fetch_id || event.fetch_id.length > 128
+    || typeof event.run_id !== 'string' || !event.run_id || event.run_id.length > 128
+    || typeof event.store_id !== 'number' || !Number.isSafeInteger(event.store_id) || event.store_id <= 0
+    || typeof event.url !== 'string' || event.url.length > 2048
+    || !['fetch', 'startup', 'cleanup'].includes(String(event.phase))) return null;
+  try {
+    const url = new URL(event.url);
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return null;
+  } catch { return null; }
+  return { fetchId: event.fetch_id, runId: event.run_id, storeId: event.store_id, url: event.url, phase: String(event.phase) };
+}
+
+async function boundedCleanup(operation: () => Promise<void>, timeoutMs: number, label: string): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      operation(),
+      new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error(`${label} exceeded ${timeoutMs}ms`)), timeoutMs); })
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
+}
+function failureMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+
 function clearCancellationTimers(run: ManagedRun): void {
+  if (run.exitDrainTimer) {
+    clearTimeout(run.exitDrainTimer);
+    run.exitDrainTimer = undefined;
+  }
   if (run.cancelEscalationTimer) {
     clearTimeout(run.cancelEscalationTimer);
     run.cancelEscalationTimer = undefined;

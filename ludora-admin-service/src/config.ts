@@ -48,6 +48,7 @@ export type Config = {
     privateJwkPath?: string;
   };
   discoveryRunner: {
+    browserFetchTimeoutSeconds: number;
     apiUrl: string;
     envFile: string;
     mode: DiscoveryRunnerMode;
@@ -230,7 +231,12 @@ function readWebBotAuthConfig(): Config['webBotAuth'] {
 }
 
 function readDiscoveryRunnerConfig(): Config['discoveryRunner'] {
+  const browserFetchTimeoutSeconds = readPositiveNumberEnv('LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS', 120);
+  if (browserFetchTimeoutSeconds * 1000 > 2_147_483_647) {
+    throw new Error('LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS must not exceed 2147483.647');
+  }
   return {
+    browserFetchTimeoutSeconds,
     apiUrl: readEnvWithDefault('LUDORA_DISCOVERY_API_URL', 'http://localhost:8001'),
     envFile: readEnvWithDefault('LUDORA_DISCOVERY_ENV_FILE', path.resolve(process.cwd(), '.env')),
     mode: readDiscoveryRunnerMode(),

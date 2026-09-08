@@ -11,6 +11,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
+from ludora.discovery_browser_lifecycle import browser_watchdog_scope
 from ludora.product_discovery_throttle import wait_for_discovery_delay
 from ludora.trace import TraceLogger
 from ludora.webfetch import FetchResult
@@ -71,7 +72,8 @@ class BrowserTextFetcher:
         self.last_failure: dict[str, object] | None = None
 
     def __enter__(self) -> BrowserTextFetcher:
-        self._start_browser()
+        with browser_watchdog_scope(phase="startup"):
+            self._start_browser()
         return self
 
     def _start_browser(self) -> None:
@@ -138,6 +140,10 @@ class BrowserTextFetcher:
 
     def reset_context(self) -> None:
         """Start a clean browser session while keeping the Chromium process alive."""
+        with browser_watchdog_scope(phase="startup"):
+            self._reset_context()
+
+    def _reset_context(self) -> None:
         if self._browser is None:
             raise BrowserFetchUnavailable("Browser fetcher has not been started.")
 
@@ -174,7 +180,8 @@ class BrowserTextFetcher:
                 pass
 
     def __exit__(self, exc_type, exc, traceback) -> None:
-        self._stop_browser()
+        with browser_watchdog_scope(phase="cleanup"):
+            self._stop_browser()
 
     def _recycle_details(self) -> tuple[str, float] | None:
         if self._driver_started_at is None:
@@ -214,6 +221,17 @@ class BrowserTextFetcher:
             self.trace_logger.log("browser_fetch.recycle.completed", **fields)
 
     def fetch(
+        self,
+        url: str,
+        *,
+        before_navigation: Callable[[str], None] | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> FetchResult | None:
+        # Keep the external deadline armed across new_page, recycling, content and page.close.
+        with browser_watchdog_scope(url):
+            return self._fetch(url, before_navigation=before_navigation, cancellation_token=cancellation_token)
+
+    def _fetch(
         self,
         url: str,
         *,

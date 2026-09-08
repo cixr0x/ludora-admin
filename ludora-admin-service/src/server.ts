@@ -28,6 +28,7 @@ import {
   createNodeImageSimilarityDependencies
 } from './imageSimilarity/imageSimilarityService.js';
 import { createLocalDiscoveryOperationsClient } from './localDiscoveryOperationsClient.js';
+import { createDiscoveryBrowserFailureRecorder } from './discoveryBrowserFailure.js';
 import { createLocalCoverWorkflowManager, createNodeLocalCoverWorkflowDependencies } from './localCoverWorkflow.js';
 import { createOpenAiProductDetailsExtractionClient } from './productDetailsExtraction/openAiProductDetailsExtractionClient.js';
 import {
@@ -88,6 +89,8 @@ const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) :
 const localOperationsClient =
   config.discoveryRunner.mode === 'local'
     ? createLocalDiscoveryOperationsClient({
+        browserFetchTimeoutSeconds: config.discoveryRunner.browserFetchTimeoutSeconds,
+        persistBrowserFailure: createDiscoveryBrowserFailureRecorder(database),
         envFile: config.discoveryRunner.envFile,
         internalApiToken,
         packageDir: config.discoveryRunner.packageDir,

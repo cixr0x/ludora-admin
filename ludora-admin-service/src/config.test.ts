@@ -5,6 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
 
 describe('loadConfig', () => {
+  it('defaults browser fetch watchdog to 120 seconds and accepts a positive override', () => {
+    vi.stubEnv('LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS', undefined);
+    expect(loadConfig().discoveryRunner.browserFetchTimeoutSeconds).toBe(120);
+    vi.stubEnv('LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS', '180');
+    expect(loadConfig().discoveryRunner.browserFetchTimeoutSeconds).toBe(180);
+  });
+  it.each(['0', '-1', 'NaN', 'Infinity', '2147484'])('rejects unsafe browser watchdog duration %s', (value) => {
+    vi.stubEnv('LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS', value);
+    expect(() => loadConfig()).toThrow(/LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS/);
+  });
   beforeEach(() => {
     vi.stubEnv('ADMIN_USERNAME', 'admin');
     vi.stubEnv('ADMIN_PASSWORD', 'secret-password');
@@ -45,6 +55,7 @@ describe('loadConfig', () => {
     const config = loadConfig();
 
     expect(config.discoveryRunner).toEqual({
+      browserFetchTimeoutSeconds: 120,
       apiUrl: 'http://localhost:8001',
       envFile: path.resolve(process.cwd(), '.env'),
       mode: 'local',
@@ -63,6 +74,7 @@ describe('loadConfig', () => {
     const config = loadConfig();
 
     expect(config.discoveryRunner).toEqual({
+      browserFetchTimeoutSeconds: 120,
       apiUrl: 'http://127.0.0.1:9009',
       envFile: 'C:\\tmp\\admin.env',
       mode: 'http',
@@ -81,6 +93,7 @@ describe('loadConfig', () => {
     const config = loadConfig();
 
     expect(config.discoveryRunner).toEqual({
+      browserFetchTimeoutSeconds: 120,
       apiUrl: 'http://127.0.0.1:9009',
       envFile: 'C:\\tmp\\admin.env',
       mode: 'http',
@@ -99,6 +112,7 @@ describe('loadConfig', () => {
     const config = loadConfig();
 
     expect(config.discoveryRunner).toEqual({
+      browserFetchTimeoutSeconds: 120,
       apiUrl: 'http://localhost:8001',
       envFile: path.resolve(process.cwd(), '.env'),
       mode: 'local',

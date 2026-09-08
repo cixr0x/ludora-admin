@@ -117,6 +117,7 @@ LUDORA_DISCOVERY_RUNNER=local
 LUDORA_DISCOVERY_PACKAGE_DIR=/opt/ludora/ludora-admin/ludora-discovery
 LUDORA_DISCOVERY_PYTHON=/opt/ludora/ludora-admin/ludora-discovery/.venv/bin/python
 LUDORA_DISCOVERY_ENV_FILE=/opt/ludora/ludora-admin/ludora-discovery/.env
+LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS=120
 LUDORA_DAILY_ITEM_DISCOVERY_ENABLED=true
 LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED=true
 LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS=5
@@ -168,6 +169,50 @@ replacement worker. On restart, any interrupted item attempts are recorded as
 least 15 minutes so the same broken item cannot immediately restart the cycle.
 
 ### Daily item-discovery schedule
+
+Local manual and scheduled item discovery has a hard browser deadline enforced
+by admin-service outside Python/Playwright.
+`LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS` defaults to **120 seconds** and
+must be positive and finite (at most 2147483.647 seconds, the Node timer limit).
+Each fetch gets its own deadline covering page creation, navigation, rendering,
+content extraction, browser recycling and `page.close()`. Browser startup and
+final browser/driver cleanup also have individual deadlines. There is no total
+deadline on a store or multi-store batch. Large Amazon listings can spend longer
+loading all products; increase this setting if a verified legitimate single
+browser operation needs more time. The HTTP discovery runner and continuous
+item updater keep their existing timeout behavior.
+
+Python emits small framed stderr lifecycle events scoped to the exact store
+database `run_id`, URL and fetch ID; signals do not depend on trace commits.
+URLs omit credentials, query strings and fragments. On expiry, admin-service
+records a failed operation with the configured deadline, store/run identity,
+phase and URL, and hard-kills the owned Python/Playwright/Chromium subtree.
+Linux cleanup follows parentage and process start identities, freezes parents
+before enumerating descendants, then kills children before parents, including
+Chromium sessions with separate process groups. Windows uses `taskkill /T /F`.
+Cancellation snapshots descendants before SIGTERM and escalates after 10 seconds;
+shutdown waits for this bounded cleanup.
+
+The timeout callback changes only the matching still-running
+`job_store_item_discovery_log` row to `failed`, sets its completion/error fields,
+and writes `item_discovery.browser.timeout` to its discovery trace atomically.
+Recorded progress counts and completed store rows remain intact. Forced
+cancellation uses `cancelled` and `item_discovery.browser.cancelled` for the last
+known browser store if it is still running. Each process cleanup and persistence
+step has a 10-second supervisor bound; the SQL also has a 5-second statement
+timeout and 2-second lock timeout. Failures are included in the operation error
+and service journal, rather than leaving the operation active indefinitely.
+If persistence fails, the journal explicitly identifies the affected run for
+manual inspection; any manual repair still needs exact SQL approval.
+
+This change requires no schema migration or deployment-time SQL. The runtime
+statement lives in `ludora-admin-service/src/discoveryBrowserFailure.ts`.
+After a watchdog failure inspect the operation, exact store job and
+trace plus the service process tree before a manual retry. The interrupted batch
+does not continue automatically and there is no startup repair sweep. For a
+local Linux process-tree smoke check after `npm run build`, run
+`node --test tests/discoveryProcessTree.smoke.mjs` from `ludora-admin-service/`;
+it creates disposable Python processes without contacting a site or database.
 
 With `LUDORA_DAILY_ITEM_DISCOVERY_ENABLED=true`, admin-service automatically
 launches an all-store item-discovery run at 05:00
