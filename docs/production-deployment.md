@@ -187,9 +187,25 @@ database `run_id`, URL and fetch ID; signals do not depend on trace commits.
 URLs omit credentials, query strings and fragments. On expiry, admin-service
 records a failed operation with the configured deadline, store/run identity,
 phase and URL, and hard-kills the owned Python/Playwright/Chromium subtree.
-Linux cleanup follows parentage and process start identities, freezes parents
-before enumerating descendants, then kills children before parents, including
-Chromium sessions with separate process groups. Windows uses `taskkill /T /F`.
+On Linux, local item discovery launches through `ludora.operation_supervisor`,
+which enables `PR_SET_CHILD_SUBREAPER` before creating the real operation worker.
+Driver/browser descendants that become orphaned are adopted by this live
+supervisor, including children born after a browser-start event. The supervisor
+inherits and forwards the worker's stdio unchanged, forwards TERM/INT to the
+worker, and cleans/reaps descendants before propagating the worker result.
+Node's hard deadline requests supervisor cleanup with USR1; the wrapper freezes
+owned descendants, validates process start identities, kills them and reaps
+adopted children within a 3-second cleanup attempt. Worker exit also invokes this
+cleanup, including when a browser still holds stderr open.
+
+Node allows 5 seconds for the wrapper to finish, then invokes external subtree
+cleanup if the wrapper does not respond. The still-live subreaper preserves the
+ownership boundary during that fallback. Cleanup errors are reported explicitly;
+the wrapper cannot report success while descendants survive. If external killing
+fails, the supervisor stays alive to retain ownership and the operation reports
+the cleanup failure for manual inspection. Ownership is established by the
+kernel's subreaper relationship, not an environment marker or periodic process
+polling. Windows retains native `taskkill /T /F` handling.
 Cancellation snapshots descendants before SIGTERM and escalates after 10 seconds;
 shutdown waits for this bounded cleanup.
 

@@ -59,6 +59,7 @@ function createClient(overrides: Partial<Parameters<typeof createLocalDiscoveryO
     return child as never;
   };
   const client = createLocalDiscoveryOperationsClient({
+    platform: 'win32',
     envFile: 'C:/PROJECTS/ludora/ludora-admin/ludora-admin-service/.env',
     now: () => new Date('2026-06-29T20:00:00.000Z'),
     packageDir: 'C:/PROJECTS/ludora/ludora-admin/ludora-discovery',
@@ -70,6 +71,31 @@ function createClient(overrides: Partial<Parameters<typeof createLocalDiscoveryO
 }
 
 describe('local discovery operations client', () => {
+  it('launches Linux item discovery through the dedicated operation supervisor', async () => {
+    const { client, spawned } = createClient({ platform: 'linux' });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery();
+    await started;
+    expect(spawned[0].args.slice(0, 2)).toEqual(['-m', 'ludora.operation_supervisor']);
+    expect(spawned[0].args.at(-1)).toBe('item-discovery-batch');
+  });
+
+  it('preserves the ordinary Linux item-update launch', async () => {
+    const { client, spawned } = createClient({ platform: 'linux' });
+    await client.startItemUpdateRun();
+    expect(spawned[0].args.slice(0, 2)).toEqual(['-m', 'ludora.operation_cli']);
+  });
+
+  it('reports supervisor cleanup failure instead of accepting a successful worker result', async () => {
+    const { client, spawned } = createClient();
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME);
+    const run = await started;
+    spawned[0].child.stderr.emit('data', '@@LUDORA_OPERATION_EVENT@@{"event":"item_discovery.supervisor.cleanup_failed","error":"surviving child 123"}\n');
+    spawned[0].child.succeed({ result: { item_candidates: 0, store_id: null, website_url: '' } });
+    await flushPromises();
+    expect(await client.getStoreDiscoveryRun(run.id)).toMatchObject({ status: 'failed', error: expect.stringContaining('surviving child 123') });
+  });
   afterEach(() => {
     vi.useRealTimers();
   });

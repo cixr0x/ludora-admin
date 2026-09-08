@@ -1,10 +1,11 @@
 import { execFile, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { readdirSync, readFileSync } from 'node:fs';
 
-export type ProcessIdentity = { pid: number; ppid: number; identity: string };
+export type ProcessIdentity = { pid: number; ppid: number; identity: string; state?: string };
 export type DiscoveryProcessTree = { capture(): void; terminate(): Promise<void> };
-type Child = Pick<ChildProcessWithoutNullStreams, 'pid' | 'kill'>;
+type Child = Pick<ChildProcessWithoutNullStreams, 'pid' | 'kill'> & Partial<Pick<ChildProcessWithoutNullStreams, 'once' | 'off' | 'exitCode'>>;
 type Options = {
+  supervised?: boolean;
   platform?: NodeJS.Platform;
   listProcesses?: () => ProcessIdentity[];
   readIdentity?: (pid: number) => ProcessIdentity | undefined;
@@ -49,9 +50,18 @@ export function createDiscoveryProcessTree(child: Child, options: Options = {}):
     async terminate(): Promise<void> {
       if (!child.pid) { child.kill('SIGKILL'); return; }
       if (child.pid === process.pid) throw new Error('Refusing to terminate the admin service');
+      if (platform === 'linux' && options.supervised) {
+        const root = owned.get(child.pid);
+        if (root && current(root) && await requestSupervisorCleanup(child, () => {
+          if (current(root)) kill(root.pid, 'SIGUSR1');
+        })) return;
+        // Unresponsive supervisor: it is still the subreaper, so ancestry now
+        // includes late-born orphans. Keep it alive until descendants are killed.
+      }
       const failures: string[] = [];
       const stopped = new Set<number>();
       const signal = (row: ProcessIdentity, value: NodeJS.Signals): void => {
+        if (options.supervised && row.pid === child.pid && value === 'SIGKILL' && failures.length) return;
         try { if (current(row)) kill(row.pid, value); }
         catch (error) { if (!gone(error)) failures.push(`pid ${row.pid} ${value}: ${message(error)}`); }
       };
@@ -64,7 +74,20 @@ export function createDiscoveryProcessTree(child: Child, options: Options = {}):
               if (!stopped.has(row.pid)) { signal(row, 'SIGSTOP'); stopped.add(row.pid); }
             }
             capture();
-            if ([...owned.keys()].every((pid) => stopped.has(pid))) break;
+            if ([...owned.keys()].every((pid) => stopped.has(pid))) {
+              const stillRunning = [...owned.values()].some((row) => {
+                const live = read(row.pid);
+                return live?.identity === row.identity && live.state && !['T', 't', 'Z', 'X'].includes(live.state);
+              });
+              if (stillRunning) {
+                await new Promise((resolve) => setTimeout(resolve, 5));
+              } else {
+                // A child may have forked between our earlier snapshot and
+                // delivery of SIGSTOP. Once stops are confirmed, resnapshot.
+                capture();
+                if ([...owned.keys()].every((pid) => stopped.has(pid))) break;
+              }
+            }
             if (pass === 19) failures.push('Process tree did not stabilize before termination');
           }
           for (const row of [...owned.values()].reverse()) signal(row, 'SIGKILL');
@@ -91,11 +114,30 @@ export function createDiscoveryProcessTree(child: Child, options: Options = {}):
   };
 }
 
+function requestSupervisorCleanup(child: Child, request: () => void): Promise<boolean> {
+  if (!child.once || !child.off) return Promise.resolve(false);
+  if (child.exitCode !== null && child.exitCode !== undefined) return Promise.resolve(true);
+  return new Promise((resolve, reject) => {
+    const onExit = (): void => { clearTimeout(timer); resolve(true); };
+    const timer = setTimeout(() => {
+      child.off?.('exit', onExit);
+      resolve(false);
+    }, 5_000);
+    child.once?.('exit', onExit);
+    try { request(); }
+    catch (error) {
+      clearTimeout(timer);
+      child.off?.('exit', onExit);
+      reject(error);
+    }
+  });
+}
+
 function readLinuxIdentity(pid: number): ProcessIdentity | undefined {
   try {
     const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
     const fields = stat.slice(stat.lastIndexOf(')') + 2).split(' ');
-    return { pid, ppid: Number(fields[1]), identity: fields[19] };
+    return { pid, ppid: Number(fields[1]), identity: fields[19], state: fields[0] };
   } catch (error) {
     if (gone(error)) return undefined;
     throw error;

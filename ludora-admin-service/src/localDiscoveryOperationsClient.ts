@@ -23,6 +23,7 @@ export type SpawnDiscoveryProcess = (
 ) => ChildProcessWithoutNullStreams;
 
 type LocalDiscoveryOptions = {
+  platform?: NodeJS.Platform;
   browserFetchTimeoutSeconds?: number;
   cleanupTimeoutMs?: number;
   processTreeFactory?: (child: ChildProcessWithoutNullStreams) => DiscoveryProcessTree;
@@ -49,6 +50,7 @@ export type DiscoveryBrowserFailure = {
 type BrowserFetch = Pick<DiscoveryBrowserFailure, 'runId' | 'storeId' | 'url' | 'phase'> & { fetchId: string };
 
 type ManagedRun = StoreDiscoveryRun & {
+  supervisorFailure?: string;
   exitDrainTimer?: ReturnType<typeof setTimeout>;
   browserWatchdogTimer?: ReturnType<typeof setTimeout>;
   watchedBrowser?: BrowserFetch;
@@ -68,9 +70,10 @@ type ManagedRun = StoreDiscoveryRun & {
 };
 
 export function createLocalDiscoveryOperationsClient({
+  platform = process.platform,
   browserFetchTimeoutSeconds = 120,
   cleanupTimeoutMs = 10_000,
-  processTreeFactory = createDiscoveryProcessTree,
+  processTreeFactory,
   persistBrowserFailure,
   cancelEscalationMs = 10_000,
   cancelForceFailMs = 5_000,
@@ -135,7 +138,8 @@ export function createLocalDiscoveryOperationsClient({
       });
     }
 
-    const args = ['-m', 'ludora.operation_cli', '--env-file', envFile, ...commandArgs];
+    const supervised = platform === 'linux' && type === 'item_discovery';
+    const args = ['-m', supervised ? 'ludora.operation_supervisor' : 'ludora.operation_cli', '--env-file', envFile, ...commandArgs];
     const packagePath = /^[A-Za-z]:[\\/]/.test(packageDir) ? path.win32 : path;
     const childEnv = {
       ...process.env,
@@ -150,7 +154,7 @@ export function createLocalDiscoveryOperationsClient({
 
     run.child = child;
     // Capture the root creation identity while it is still our newly spawned child.
-    try { run.processTree = processTreeFactory(child); }
+    try { run.processTree = processTreeFactory ? processTreeFactory(child) : createDiscoveryProcessTree(child, { platform, supervised }); }
     catch (error) {
       child.kill('SIGKILL');
       throw new DiscoveryOperationError(`Failed to track discovery process tree: ${failureMessage(error)}`, 500);
@@ -213,7 +217,7 @@ export function createLocalDiscoveryOperationsClient({
     const onStderrData = (chunk: unknown): void => {
       const text = String(chunk);
       stderr += text;
-      if (run.type !== 'item_discovery' || run.terminalFailure || run.status !== 'running') {
+      if (run.type !== 'item_discovery') {
         return;
       }
 
@@ -236,7 +240,13 @@ export function createLocalDiscoveryOperationsClient({
             failAcceptanceProtocol('Malformed item discovery acceptance event');
             return;
           }
-          if (event.event === ITEM_DISCOVERY_ACCEPTANCE_EVENT) {
+          if (event.event === 'item_discovery.supervisor.cleanup_failed') {
+            run.supervisorFailure = `Discovery supervisor cleanup failed: ${String(event.error).slice(0, 1000)}`;
+            run.terminalFailure ??= run.supervisorFailure;
+            void hardStop(run, run.terminalFailure);
+          } else if (run.terminalFailure || run.status !== 'running') {
+            // Keep reading supervisor diagnostics even during timeout cleanup.
+          } else if (event.event === ITEM_DISCOVERY_ACCEPTANCE_EVENT) {
             run.resolveAcceptance?.();
           } else if (event.event === 'item_discovery.browser.started' || event.event === 'item_discovery.browser.completed') {
             const browser = parseBrowserEvent(event);
@@ -493,6 +503,7 @@ export function createLocalDiscoveryOperationsClient({
         }), cleanupTimeoutMs, 'Discovery terminal-state persistence');
       } catch (failure) { failures.push(`persistence failed: ${failureMessage(failure)}`); }
     }
+    if (run.supervisorFailure && run.supervisorFailure !== error) failures.push(run.supervisorFailure);
     const finalError = [error, ...failures].join('; ');
     if (reason === 'timeout' || failures.length) console.error(`[item-discovery] ${finalError}`);
     const cancelled = reason === 'cancelled' && !forceFailed && !run.terminalFailure && !failures.length;
