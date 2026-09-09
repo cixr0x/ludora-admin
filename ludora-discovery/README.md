@@ -108,7 +108,7 @@ Item discovery uses the AI classifier by default. It calls the private loopback 
 ```text
 AI_ENABLED_CLASSIFIER=true
 CODEX_API_BASE_URL=http://127.0.0.1:3001/v1
-CODEX_CLASSIFIER_MODEL=gpt-5.4-mini
+CODEX_CLASSIFIER_MODEL=gpt-5.6-terra
 ```
 
 `OPENAI_BASE_URL` and `OPENAI_CLASSIFIER_MODEL` are legacy loopback compatibility aliases only. Set `AI_ENABLED_CLASSIFIER=false` to use the older heuristic classifier.

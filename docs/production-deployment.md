@@ -130,7 +130,7 @@ LUDORA_WEB_BOT_AUTH_CONTACT_EMAIL=robertorojasmo@gmail.com
 LUDORA_WEB_BOT_AUTH_PRIVATE_JWK_PATH=/etc/ludora/web-bot-auth/private-key.jwk
 ```
 
-The discovery `.env` uses the same `CODEX_API_BASE_URL` and configures its intentional direct CodexAPI classifier with `CODEX_CLASSIFIER_MODEL=gpt-5.4-mini`. Configure official OpenAI only for embeddings: `OPENAI_API_KEY=<embeddings only>` and `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`. `OPENAI_BASE_URL` and `OPENAI_TRANSLATION_MODEL` are compatibility aliases for the loopback CodexAPI URL and shared Codex model; they never select official OpenAI for generative calls.
+The discovery `.env` uses the same `CODEX_API_BASE_URL` and configures its intentional direct CodexAPI classifier with `CODEX_CLASSIFIER_MODEL=gpt-5.6-terra`. Configure official OpenAI only for embeddings: `OPENAI_API_KEY=<embeddings only>` and `OPENAI_EMBEDDING_MODEL=text-embedding-3-small`. `OPENAI_BASE_URL` and `OPENAI_TRANSLATION_MODEL` are compatibility aliases for the loopback CodexAPI URL and shared Codex model; they never select official OpenAI for generative calls.
 
 The continuous updater is a supervised Python child of admin-service. The
 admin service distributes eligible items daily from 3:00 AM across a 23-hour

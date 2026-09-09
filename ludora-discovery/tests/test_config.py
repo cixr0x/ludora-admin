@@ -196,7 +196,7 @@ class ConfigTests(unittest.TestCase):
                 "codex-model-env",
             )
             self.assertEqual(resolve_classifier_model(env={}, dotenv_path=dotenv_path), "model-dotenv")
-            self.assertEqual(resolve_classifier_model(env={}, dotenv_path=Path(temp_dir) / "missing.env"), "gpt-5.4-mini")
+            self.assertEqual(resolve_classifier_model(env={}, dotenv_path=Path(temp_dir) / "missing.env"), "gpt-5.6-terra")
             self.assertEqual(
                 resolve_codex_api_base_url(env={"CODEX_API_BASE_URL": "http://127.0.0.1:3001/v1/"}, dotenv_path=dotenv_path),
                 "http://127.0.0.1:3001/v1",

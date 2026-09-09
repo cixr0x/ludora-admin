@@ -123,7 +123,7 @@ def resolve_classifier_model(
         dotenv.get("CODEX_CLASSIFIER_MODEL", "").strip()
         or dotenv.get("OPENAI_CLASSIFIER_MODEL", "").strip()
     )
-    return dotenv_value or "gpt-5.4-mini"
+    return dotenv_value or "gpt-5.6-terra"
 
 
 def resolve_codex_api_base_url(

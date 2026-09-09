@@ -781,7 +781,7 @@ def resolve_codex_api_base_url(env=None, dotenv_path='.env') -> str:
     return value.rstrip('/')
 ```
 
-Read `CODEX_CLASSIFIER_MODEL` before legacy `OPENAI_CLASSIFIER_MODEL`; retain `gpt-5.4-mini` as the default.
+Read `CODEX_CLASSIFIER_MODEL` before legacy `OPENAI_CLASSIFIER_MODEL`; retain `gpt-5.6-terra` as the default.
 
 - [ ] **Step 5: Rename and simplify the classifier transport**
 
@@ -860,7 +860,7 @@ Document this configuration:
 ```text
 CODEX_API_BASE_URL=http://127.0.0.1:3001/v1
 CODEX_AI_MODEL=gpt-5.6-terra
-CODEX_CLASSIFIER_MODEL=gpt-5.4-mini
+CODEX_CLASSIFIER_MODEL=gpt-5.6-terra
 OPENAI_API_KEY=<embeddings only>
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```

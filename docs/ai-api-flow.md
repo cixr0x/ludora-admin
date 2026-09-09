@@ -11,7 +11,7 @@ Configure the admin-service generative clients and the intentional direct discov
 ```text
 CODEX_API_BASE_URL=http://127.0.0.1:3001/v1
 CODEX_AI_MODEL=gpt-5.6-terra
-CODEX_CLASSIFIER_MODEL=gpt-5.4-mini
+CODEX_CLASSIFIER_MODEL=gpt-5.6-terra
 OPENAI_API_KEY=<embeddings only>
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 LUDORA_INTERNAL_API_TOKEN=optional_shared_internal_token
