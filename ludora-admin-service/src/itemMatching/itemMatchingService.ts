@@ -92,7 +92,8 @@ const matchCandidateSelect = `
   match_score, match_reasons, status, raw_payload, created_at, updated_at
 `;
 
-const AUTO_MATCH_SCORE_THRESHOLD = 0.9;
+const LOCAL_AUTO_MATCH_SCORE_THRESHOLD = 0.85;
+const BGG_AUTO_MATCH_SCORE_THRESHOLD = 0.9;
 const MAX_LOCAL_MATCH_CANDIDATES = 100;
 const MAX_LIVE_BGG_THING_FETCHES = 10;
 
@@ -623,7 +624,7 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
     const item = localItemFromRow(row as Record<string, unknown>);
     const score = scoreLocalItem(discoveryCandidateForMatch(candidate), item);
     return {
-      accepted: score.matchScore >= AUTO_MATCH_SCORE_THRESHOLD,
+      accepted: score.matchScore >= LOCAL_AUTO_MATCH_SCORE_THRESHOLD,
       bggId: item.bggId ?? null,
       itemId: item.id,
       matchReasons: score.matchReasons,
@@ -786,7 +787,7 @@ async function generateLiveBggMatches(
 
     const score = scoreBggThing(discoveryCandidateForMatch(candidate), thing.details);
     const match: GeneratedMatchCandidate = {
-      accepted: score.matchScore >= AUTO_MATCH_SCORE_THRESHOLD,
+      accepted: score.matchScore >= BGG_AUTO_MATCH_SCORE_THRESHOLD,
       bggId: thing.details.bggId,
       itemId: null,
       matchReasons: score.matchReasons,
@@ -822,14 +823,14 @@ function generatedCacheMatch(
 ): GeneratedMatchCandidate {
   const score = scoreBggThing(discoveryCandidateForMatch(candidate), bggThingFromSearchItem(cached.item));
   return {
-    accepted: cached.verifiedByAi || score.matchScore >= AUTO_MATCH_SCORE_THRESHOLD,
+    accepted: cached.verifiedByAi || score.matchScore >= BGG_AUTO_MATCH_SCORE_THRESHOLD,
     bggId: cached.item.bggId,
     itemId: null,
     matchReasons: cached.verifiedByAi
       ? ['AI-verified BGG cache association', ...score.matchReasons]
       : score.matchReasons,
     matchScore: cached.verifiedByAi
-      ? Math.max(score.matchScore, AUTO_MATCH_SCORE_THRESHOLD)
+      ? Math.max(score.matchScore, BGG_AUTO_MATCH_SCORE_THRESHOLD)
       : score.matchScore,
     matchedName: cached.item.name,
     rawPayload: {

@@ -56,6 +56,62 @@ describe('item matching service', () => {
     expect(autoList.evaluateLinkedStoreItem).toHaveBeenCalledWith(42, 77);
   });
 
+  it('accepts a local normalized-title F1 score of 0.8571 before BGG or AI matching', async () => {
+    const updates: RecordedQuery[] = [];
+    const database = matchingDatabase(
+      storeItemCandidate({
+        title: 'Aurelia Borealis Celestia Draconis Elysium Faron Galaxis'
+      }),
+      [localItemRow({
+        canonical_name: 'Aurelia Borealis Celestia Draconis Elysium Faron Heliox',
+        normalized_name: 'aurelia borealis celestia draconis elysium faron heliox'
+      })],
+      { onStoreItemUpdate: (query) => updates.push(query) }
+    );
+    const ai = aiService();
+    const cache = matchCache();
+    const bggClient = clientWithThing(null);
+    const importer = itemImporter(88);
+
+    await createItemMatchingService(database, dependencies({ ai, bggClient, cache, importer }))
+      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([
+      77,
+      'LOCAL',
+      377061,
+      'Aurelia Borealis Celestia Draconis Elysium Faron Heliox',
+      0.8571
+    ]);
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(bggClient.searchFresh).not.toHaveBeenCalled();
+    expect(bggClient.fetchThing).not.toHaveBeenCalled();
+    expect(ai.findMatch).not.toHaveBeenCalled();
+    expect(importer.importBggId).not.toHaveBeenCalled();
+  });
+
+  it('continues to BGG matching for a local normalized-title F1 score of 0.8333', async () => {
+    const updates: RecordedQuery[] = [];
+    const title = 'Aurelia Borealis Celestia Draconis Elysium';
+    const database = matchingDatabase(
+      storeItemCandidate({ title }),
+      [localItemRow({
+        canonical_name: 'Aurelia Borealis Celestia Draconis Elysium Faron Galaxis',
+        normalized_name: 'aurelia borealis celestia draconis elysium faron galaxis'
+      })],
+      { onStoreItemUpdate: (query) => updates.push(query) }
+    );
+    const cache = matchCache();
+
+    await createItemMatchingService(database, dependencies({ cache }))
+      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(linkUpdate(updates)).toBeUndefined();
+    expect(cache.lookup).toHaveBeenCalledWith(title, {
+      imageUrl: 'https://store.mx/coffee-rush.jpg'
+    });
+  });
+
   it('logs that auto-list evaluation was skipped when the matched item has no generated translation', async () => {
     const events: TraceEvent[] = [];
     const autoList = skippedAutoListService();
