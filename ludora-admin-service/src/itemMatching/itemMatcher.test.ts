@@ -12,6 +12,24 @@ describe('item matcher', () => {
     expect(result.matchScore).toBe(0.9);
     expect(result.matchReasons).not.toContain('item type conflict');
   });
+
+  it('ignores conflicting known item types when scoring an exact BGG name match', () => {
+    const result = scoreBggThing(
+      { itemType: 'base_game', title: 'Coffee Rush' },
+      {
+        alternateNames: [],
+        bggId: 377061,
+        name: 'Coffee Rush',
+        publishers: [],
+        type: 'boardgameexpansion'
+      }
+    );
+
+    expect(result.matchScore).toBe(0.9);
+    expect(result.matchReasons).toContain('exact BGG primary name match');
+    expect(result.matchReasons).not.toContain('item type conflict');
+  });
+
   it('scores exact BGG alternate name matches as strong matches', () => {
     const result = scoreBggThing(
       {
@@ -100,10 +118,23 @@ describe('item matcher', () => {
       normalizedName: 'arkham horror third edition under dark waves'
     });
 
-    expect(incorrectResult.matchScore).toBe(0.4);
+    expect(incorrectResult.matchScore).toBe(0.3077);
     expect(incorrectResult.matchScore).toBeLessThan(0.9);
-    expect(correctResult.matchScore).toBe(0.8333);
+    expect(incorrectResult.matchReasons).toContain('matched local title tokens: arkham, horror');
+    expect(incorrectResult.matchReasons).toContain(
+      'missing local title tokens: card, game, children, blood, small, campaign'
+    );
+    expect(incorrectResult.matchReasons).toContain('extra candidate title tokens: under, dark, waves');
+    expect(incorrectResult.matchReasons).toContain(
+      'excluded context tokens: asmodee, expansion, ingles, the, of'
+    );
+    expect(correctResult.matchScore).toBe(0.9091);
+    expect(correctResult.matchScore).toBeGreaterThanOrEqual(0.9);
     expect(correctResult.matchScore).toBeGreaterThan(incorrectResult.matchScore);
+    expect(correctResult.matchReasons).toContain('matched local title tokens: arkham, horror, under, dark, waves');
+    expect(correctResult.matchReasons).toContain('missing local title tokens: third');
+    expect(correctResult.matchReasons).toContain('extra candidate title tokens: none');
+    expect(correctResult.matchReasons).toContain('excluded context tokens: asmodee, expansion, ingles, edition');
   });
 
   it('scores reordered local title words above the automatic threshold', () => {
@@ -141,11 +172,12 @@ describe('item matcher', () => {
       }
     );
 
-    expect(localMatchSearchTokens(candidate)).toEqual(['expedicion', 'perdida', 'arnak', 'expansion']);
-    expect(result.matchScore).toBe(0.8);
-    expect(result.matchReasons).toContain('matched local title tokens: arnak, expansion, expedicion, perdida');
+    expect(localMatchSearchTokens(candidate)).toEqual(['expedicion', 'perdida', 'arnak']);
+    expect(result.matchScore).toBe(0.75);
+    expect(result.matchReasons).toContain('matched local title tokens: arnak, expedicion, perdida');
     expect(result.matchReasons).toContain('missing local title tokens: ruinas, perdidas');
     expect(result.matchReasons).toContain('extra candidate title tokens: none');
+    expect(result.matchReasons).toContain('excluded context tokens: la, de, expansion, devir, las');
   });
 
   it('accepts a long shared phrase plus another shared token despite ordinary listing noise', () => {
@@ -214,9 +246,10 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBe(0.5455);
+    expect(result.matchScore).toBe(0.6);
     expect(result.matchReasons).toContain('matched local title tokens: lairs, deeper, dungeons');
-    expect(result.matchReasons).toContain('extra candidate title tokens: expansion, kids, table, board, gaming');
+    expect(result.matchReasons).toContain('extra candidate title tokens: kids, table, board, gaming');
+    expect(result.matchReasons).toContain('excluded context tokens: expansion');
   });
 
   it('ignores store, publisher, language, and generic listing context around a complete title', () => {
@@ -246,7 +279,7 @@ describe('item matcher', () => {
     );
   });
 
-  it('rejects an otherwise strong fuzzy match when the item types conflict', () => {
+  it('ignores conflicting known item types when scoring an exact local token-set match', () => {
     const result = scoreLocalItem(
       { title: 'Middle-earth Duel: The Lord of the Rings', itemType: 'expansion' },
       {
@@ -258,8 +291,9 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBe(0.75);
-    expect(result.matchReasons).toContain('item type conflict');
+    expect(result.matchScore).toBe(0.99);
+    expect(result.matchReasons).toContain('normalized local title token F1: 1.0000');
+    expect(result.matchReasons).not.toContain('item type conflict');
   });
 
   it('scores local matches with language-only edition suffixes as strong matches', () => {

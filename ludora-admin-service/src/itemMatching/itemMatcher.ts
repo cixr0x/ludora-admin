@@ -1,5 +1,4 @@
 import type { BggNamedLink } from '../bgg/bggParser.js';
-import { bggTypeToItemType } from '../bgg/bggTypes.js';
 
 export type DiscoveryCandidateForMatch = {
   itemType?: string | null;
@@ -122,12 +121,6 @@ export function scoreBggThing(candidate: DiscoveryCandidateForMatch, thing: BggT
     }
   }
 
-  const typeConflict = itemTypeConflicts(candidate.itemType, bggTypeToItemType(thing.type));
-  if (typeConflict) {
-    score -= 0.25;
-    reasons.push('item type conflict');
-  }
-
   if (publisherOverlaps(candidate.publisher, thing.publishers)) {
     score += 0.03;
     reasons.push('publisher overlap');
@@ -163,11 +156,6 @@ export function scoreLocalItem(candidate: DiscoveryCandidateForMatch, item: Loca
     reasons.push(...tokenMatch.reasons);
   } else {
     reasons.push('no local item names to score');
-  }
-
-  if (itemTypeConflicts(candidate.itemType, item.itemType)) {
-    score -= 0.25;
-    reasons.push('item type conflict');
   }
 
   return { matchReasons: reasons, matchScore: clampScore(score) };
@@ -306,7 +294,8 @@ function ignoredListingTokens(
     ...TITLE_STOP_TOKENS,
     ...LANGUAGE_TOKENS,
     ...LANGUAGE_EDITION_FILLER_TOKENS,
-    ...LISTING_MARKETING_TOKENS
+    ...LISTING_MARKETING_TOKENS,
+    'expansion'
   ]);
   for (const context of [candidate.publisher, candidate.storeName, ...itemPublishers]) {
     for (const token of normalizeTitle(context ?? '').split(' ').filter(Boolean)) {
@@ -399,13 +388,6 @@ function meaningfulExtraTokenReasons(candidateTitle: string, matchedTitle: strin
     .split(' ')
     .filter((token) => token && !matchedTokens.has(token) && MEANINGFUL_EXTRA_TOKENS.has(token))
     .map((token) => `meaningful extra title token: ${token}`);
-}
-
-function itemTypeConflicts(candidateType?: string | null, matchedType?: string | null): boolean {
-  if (!candidateType || candidateType === 'unknown' || !matchedType || matchedType === 'unknown') {
-    return false;
-  }
-  return candidateType !== matchedType;
 }
 
 function publisherOverlaps(candidatePublisher: string | null | undefined, publishers: BggNamedLink[]): boolean {

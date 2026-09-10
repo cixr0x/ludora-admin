@@ -271,22 +271,37 @@ describe('item matching service', () => {
     expect(ai.findMatch).not.toHaveBeenCalled();
   });
 
-  it('rejects an exact live title when the BGG Thing type conflicts', async () => {
+  it('accepts, imports, and links an exact live title when the BGG Thing type conflicts', async () => {
+    const updates: RecordedQuery[] = [];
     const ai = aiService(null);
     const bggClient = clientWithFreshSearch(
       [bggSearchItem(377061, 'Coffee Rush', 2023)],
       new Map([[
         377061,
-        bggThingDetails({ bggId: 377061, name: 'Coffee Rush', type: 'boardgameexpansion' })
+        bggThingDetails({
+          bggId: 377061,
+          maxPlayers: null,
+          minPlayers: null,
+          name: 'Coffee Rush',
+          type: 'boardgameexpansion'
+        })
       ]])
+    );
+    const importer = itemImporter(88);
+    const database = matchingDatabase(
+      storeItemCandidate({ item_type: 'base_game', title: 'Coffee Rush' }),
+      [],
+      { onStoreItemUpdate: (query) => updates.push(query) }
     );
 
     await createItemMatchingService(
-      matchingDatabase(storeItemCandidate({ item_type: 'base_game', title: 'Coffee Rush' })),
-      dependencies({ ai, bggClient, cache: matchCache() })
+      database,
+      dependencies({ ai, bggClient, cache: matchCache(), importer })
     ).confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
-    expect(ai.findMatch).toHaveBeenCalledOnce();
+    expect(importer.importBggId).toHaveBeenCalledWith(377061);
+    expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([88, 'BGG', 377061, 'Coffee Rush', 0.9]);
+    expect(ai.findMatch).not.toHaveBeenCalled();
   });
 
   it('continues to AI when fresh BGG results stay below the deterministic threshold', async () => {
