@@ -108,7 +108,7 @@ describe('item matching service', () => {
     const localQuery = queries.find((query) => normalizeSql(query.sql).startsWith('with local_names as'));
     expect(normalizeSql(localQuery?.sql ?? '')).toContain("string_to_array(normalized_match_name, ' ') && $2::text[]");
     expect(localQuery?.params?.[1]).toEqual(['catan']);
-    expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([13, 'LOCAL', 13, 'Catan', 0.92]);
+    expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([13, 'LOCAL', 13, 'Catan', 0.99]);
     expect(cache.lookup).not.toHaveBeenCalled();
     expect(ai.findMatch).not.toHaveBeenCalled();
   });

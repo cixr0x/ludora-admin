@@ -73,8 +73,37 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBeGreaterThanOrEqual(0.9);
-    expect(result.matchReasons).toContain('exact local alias match');
+    expect(result.matchScore).toBe(0.99);
+    expect(result.matchReasons).toContain('selected local name source: alias');
+    expect(result.matchReasons).toContain('normalized local title token F1: 1.0000');
+  });
+
+  it('keeps the Arkham Horror Children of Blood false match below the correct title', () => {
+    const candidate = {
+      title: 'ASMODEE - Arkham Horror: Under Dark Waves Expansion (Inglés)',
+      itemType: 'expansion',
+      publisher: 'ASMODEE',
+      storeName: 'Gamesmart'
+    };
+    const incorrectResult = scoreLocalItem(candidate, {
+      aliases: [],
+      id: 49057,
+      itemType: 'expansion',
+      name: 'Arkham Horror: The Card Game – Children of Blood Small Campaign Expansion',
+      normalizedName: 'arkham horror the card game children of blood small campaign expansion'
+    });
+    const correctResult = scoreLocalItem(candidate, {
+      aliases: [],
+      id: 49058,
+      itemType: 'expansion',
+      name: 'Arkham Horror (Third Edition): Under Dark Waves',
+      normalizedName: 'arkham horror third edition under dark waves'
+    });
+
+    expect(incorrectResult.matchScore).toBe(0.4);
+    expect(incorrectResult.matchScore).toBeLessThan(0.9);
+    expect(correctResult.matchScore).toBe(0.8333);
+    expect(correctResult.matchScore).toBeGreaterThan(incorrectResult.matchScore);
   });
 
   it('scores reordered local title words above the automatic threshold', () => {
@@ -89,11 +118,12 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBe(0.92);
-    expect(result.matchReasons).toContain('order-independent local item name match');
+    expect(result.matchScore).toBe(0.99);
+    expect(result.matchReasons).toContain('selected local name source: item name');
+    expect(result.matchReasons).toContain('normalized local title token F1: 1.0000');
   });
 
-  it('accepts an embedded exact title phrase reinforced by other shared title tokens', () => {
+  it('scores an embedded title from all normalized tokens instead of a phrase shortcut', () => {
     const candidate = {
       title: 'La Expedición Perdida de Arnak Exp | Devir',
       itemType: 'expansion',
@@ -112,9 +142,10 @@ describe('item matcher', () => {
     );
 
     expect(localMatchSearchTokens(candidate)).toEqual(['expedicion', 'perdida', 'arnak', 'expansion']);
-    expect(result.matchScore).toBeGreaterThanOrEqual(0.9);
-    expect(result.matchReasons).toContain('embedded local item name phrase match: expedicion perdida');
-    expect(result.matchReasons).toContain('additional shared local title tokens: arnak, expansion');
+    expect(result.matchScore).toBe(0.8);
+    expect(result.matchReasons).toContain('matched local title tokens: arnak, expansion, expedicion, perdida');
+    expect(result.matchReasons).toContain('missing local title tokens: ruinas, perdidas');
+    expect(result.matchReasons).toContain('extra candidate title tokens: none');
   });
 
   it('accepts a long shared phrase plus another shared token despite ordinary listing noise', () => {
@@ -128,25 +159,31 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBe(0.91);
-    expect(result.matchReasons).toContain('embedded local item name phrase match: batman regreso caballero oscuro');
-    expect(result.matchReasons).toContain('additional shared local title tokens: deluxe');
-    expect(result.matchReasons).toContain('unexplained extra title token: ed');
+    expect(result.matchScore).toBe(0.9091);
+    expect(result.matchReasons).toContain('normalized local title token F1: 0.9091');
+    expect(result.matchReasons).toContain('extra candidate title tokens: ed');
   });
 
-  it('does not accept the same phrase evidence with an unmatched meaningful product modifier', () => {
+  it.each([
+    ['Catan Junior', 0.6667, 'junior'],
+    ['Catan Plus', 0.6667, 'plus'],
+    ['Catan Big Box', 0.5, 'big, box'],
+    ['Catan Legacy', 0.6667, 'legacy']
+  ])('keeps the identity-bearing product variant %s below the automatic threshold', (title, expectedScore, extraTokens) => {
     const result = scoreLocalItem(
-      { title: 'Batman: El Regreso del Caballero Oscuro Junior DELUXE' },
+      { title, itemType: 'base_game' },
       {
         aliases: [],
         id: 19,
-        name: 'Batman: El Regreso del Caballero Oscuro DELUXE',
-        normalizedName: 'batman el regreso del caballero oscuro deluxe'
+        itemType: 'base_game',
+        name: 'Catan',
+        normalizedName: 'catan'
       }
     );
 
+    expect(result.matchScore).toBe(expectedScore);
     expect(result.matchScore).toBeLessThan(0.9);
-    expect(result.matchReasons).toContain('meaningful extra title token: junior');
+    expect(result.matchReasons).toContain(`extra candidate title tokens: ${extraTokens}`);
   });
 
   it('does not accept a two-word phrase without reinforcing shared title tokens', () => {
@@ -161,11 +198,12 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBeLessThan(0.9);
-    expect(result.matchReasons).not.toContain('embedded local item name phrase match: star wars');
+    expect(result.matchScore).toBe(0.5714);
+    expect(result.matchReasons).toContain('missing local title tokens: rebellion');
+    expect(result.matchReasons).toContain('extra candidate title tokens: card, game');
   });
 
-  it('accepts a complete three-word catalog title embedded in otherwise unrecognized listing text', () => {
+  it('scores a complete catalog title embedded in listing text from all normalized tokens', () => {
     const result = scoreLocalItem(
       { title: 'Lairs: Deeper Dungeons: Expansion | Kids Table Board Gaming' },
       {
@@ -176,8 +214,9 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBe(0.91);
-    expect(result.matchReasons).toContain('complete embedded local item name match: lairs deeper dungeons');
+    expect(result.matchScore).toBe(0.5455);
+    expect(result.matchReasons).toContain('matched local title tokens: lairs, deeper, dungeons');
+    expect(result.matchReasons).toContain('extra candidate title tokens: expansion, kids, table, board, gaming');
   });
 
   it('ignores store, publisher, language, and generic listing context around a complete title', () => {
@@ -200,25 +239,11 @@ describe('item matcher', () => {
     );
 
     expect(localMatchSearchTokens(candidate)).toEqual(['catan']);
-    expect(result.matchScore).toBe(0.92);
-    expect(result.matchReasons).toContain('order-independent local item name match');
-    expect(result.matchReasons.some((reason) => reason.startsWith('ignored listing context tokens:'))).toBe(true);
-  });
-
-  it('keeps meaningful product suffixes below the automatic threshold', () => {
-    const result = scoreLocalItem(
-      { title: 'Catan Plus', itemType: 'base_game' },
-      {
-        aliases: [],
-        id: 13,
-        itemType: 'base_game',
-        name: 'Catan',
-        normalizedName: 'catan'
-      }
+    expect(result.matchScore).toBe(0.99);
+    expect(result.matchReasons).toContain('normalized local title token F1: 1.0000');
+    expect(result.matchReasons).toContain(
+      'excluded context tokens: amazon, mexico, devir, juego, de, mesa, edicion, en, espanol, original'
     );
-
-    expect(result.matchScore).toBeLessThan(0.9);
-    expect(result.matchReasons).toContain('meaningful extra title token: plus');
   });
 
   it('rejects an otherwise strong fuzzy match when the item types conflict', () => {
@@ -233,7 +258,7 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBe(0.67);
+    expect(result.matchScore).toBe(0.75);
     expect(result.matchReasons).toContain('item type conflict');
   });
 
@@ -250,8 +275,9 @@ describe('item matcher', () => {
       }
     );
 
-    expect(result.matchScore).toBeGreaterThanOrEqual(0.9);
-    expect(result.matchReasons).toContain('exact local item name match after ignoring language edition');
+    expect(result.matchScore).toBe(0.99);
+    expect(result.matchReasons).toContain('selected local name source: item name');
+    expect(result.matchReasons).toContain('excluded context tokens: espanol');
   });
 
   it('scores bare trailing language suffixes as strong local and BGG matches', () => {
@@ -271,8 +297,9 @@ describe('item matcher', () => {
       }
     );
 
-    expect(localResult.matchScore).toBeGreaterThanOrEqual(0.9);
-    expect(localResult.matchReasons).toContain('exact local item name match after ignoring language edition');
+    expect(localResult.matchScore).toBe(0.99);
+    expect(localResult.matchReasons).toContain('selected local name source: item name');
+    expect(localResult.matchReasons).toContain('excluded context tokens: en, espanol');
 
     const bggResult = scoreBggThing(
       { title, itemType: 'base_game' },

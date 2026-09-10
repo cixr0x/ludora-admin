@@ -148,40 +148,21 @@ export function scoreBggThing(candidate: DiscoveryCandidateForMatch, thing: BggT
 
 export function scoreLocalItem(candidate: DiscoveryCandidateForMatch, item: LocalItemForMatch): MatchScore {
   const reasons: string[] = [];
-  const candidateTitle = normalizeTitle(candidate.title);
-  const candidateTitleVariants = normalizeTitleVariants(candidate.title);
   const canonicalName = normalizeTitle(item.name || item.normalizedName);
   const spanishNames = [item.nameEs, item.normalizedNameEs].map((value) => normalizeTitle(value ?? '')).filter(Boolean);
   const aliases = item.aliases.map(normalizeTitle);
-  let score = 0.2;
+  let score = 0;
 
-  if (candidateTitleVariants.includes(canonicalName) || candidateTitleVariants.includes(normalizeTitle(item.normalizedName))) {
-    score = 0.94;
-    const reasonSuffix =
-      candidateTitle === canonicalName || candidateTitle === normalizeTitle(item.normalizedName)
-        ? ''
-        : ' after ignoring language edition';
-    reasons.push(`exact local item name match${reasonSuffix}`);
-  } else if (spanishNames.some((name) => candidateTitleVariants.includes(name))) {
-    score = 0.94;
-    const reasonSuffix = spanishNames.includes(candidateTitle) ? '' : ' after ignoring language edition';
-    reasons.push(`exact local Spanish item name match${reasonSuffix}`);
-  } else if (aliases.some((alias) => candidateTitleVariants.includes(alias))) {
-    score = 0.94;
-    const reasonSuffix = aliases.includes(candidateTitle) ? '' : ' after ignoring language edition';
-    reasons.push(`exact local alias match${reasonSuffix}`);
+  const tokenMatch = bestLocalTokenMatch(candidate, item, [
+    { label: 'item name', value: canonicalName },
+    ...spanishNames.map((value) => ({ label: 'Spanish item name', value })),
+    ...aliases.map((value) => ({ label: 'alias', value }))
+  ]);
+  if (tokenMatch) {
+    score = tokenMatch.score;
+    reasons.push(...tokenMatch.reasons);
   } else {
-    const fuzzyMatch = bestLocalTokenMatch(candidate, item, [
-      { label: 'item name', value: canonicalName },
-      ...spanishNames.map((value) => ({ label: 'Spanish item name', value })),
-      ...aliases.map((value) => ({ label: 'alias', value }))
-    ]);
-    if (fuzzyMatch) {
-      score = fuzzyMatch.score;
-      reasons.push(...fuzzyMatch.reasons);
-    } else {
-      reasons.push('no local name token overlap');
-    }
+    reasons.push('no local item names to score');
   }
 
   if (itemTypeConflicts(candidate.itemType, item.itemType)) {
@@ -272,114 +253,57 @@ function scoreLocalNameTokens(
   item: LocalItemForMatch,
   label: string,
   matchedName: string
-): LocalNameTokenMatch | null {
-  const candidateTokens = significantTitleTokens(normalizeTitle(candidate.title));
-  const matchedTokens = significantTitleTokens(matchedName);
-  if (candidateTokens.length === 0 || matchedTokens.length === 0) {
-    return null;
-  }
-
+): LocalNameTokenMatch {
+  const allCandidateTokens = normalizedTitleTokens(normalizeTitle(candidate.title));
+  const allCatalogTokens = normalizedTitleTokens(matchedName);
+  const excludedTokens = ignoredListingTokens(candidate, item.publishers ?? [], [matchedName]);
+  const candidateTokens = allCandidateTokens.filter((token) => !excludedTokens.has(token));
+  const catalogTokens = allCatalogTokens.filter((token) => !excludedTokens.has(token));
   const candidateTokenSet = new Set(candidateTokens);
-  const matchedTokenSet = new Set(matchedTokens);
-  const overlap = matchedTokens.filter((token) => candidateTokenSet.has(token));
-  if (overlap.length === 0) {
-    return null;
-  }
-
-  const ignoredTokens = ignoredListingTokens(candidate, item.publishers ?? []);
-  const extraTokens = candidateTokens.filter((token) => !matchedTokenSet.has(token));
-  const ignoredExtraTokens = extraTokens.filter((token) => ignoredTokens.has(token));
-  const unexpectedExtraTokens = extraTokens.filter((token) => !ignoredTokens.has(token));
-  const meaningfulUnexpectedExtraTokens = unexpectedExtraTokens.filter((token) =>
-    MEANINGFUL_EXTRA_TOKENS.has(token)
+  const catalogTokenSet = new Set(catalogTokens);
+  const matchedTokens = catalogTokens.filter((token) => candidateTokenSet.has(token));
+  const missingCatalogTokens = catalogTokens.filter((token) => !candidateTokenSet.has(token));
+  const extraCandidateTokens = candidateTokens.filter((token) => !catalogTokenSet.has(token));
+  const excludedContextTokens = uniqueTokens(
+    [...allCandidateTokens, ...allCatalogTokens].filter((token) => excludedTokens.has(token))
   );
-  const missingTokens = matchedTokens.filter((token) => !candidateTokenSet.has(token));
-  const fullCatalogTitleCoverage = missingTokens.length === 0;
-  const strongContainedMatch = fullCatalogTitleCoverage && unexpectedExtraTokens.length === 0;
-  const comparableCandidateTokens = candidateTokens.filter((token) => !ignoredTokens.has(token));
-  const sharedPhrase = longestSharedContiguousTokenPhrase(comparableCandidateTokens, matchedTokens);
-  const sharedPhraseTokens = new Set(sharedPhrase);
-  const additionalSharedTokens = overlap.filter((token) => !sharedPhraseTokens.has(token));
-  const strongCompleteEmbeddedTitleMatch =
-    matchedTokens.length >= 3 &&
-    sharedPhrase.length === matchedTokens.length;
-  const strongEmbeddedPhraseMatch =
-    sharedPhrase.length >= 2 &&
-    additionalSharedTokens.length >= 1 &&
-    meaningfulUnexpectedExtraTokens.length === 0;
-
-  const reasons: string[] = [];
-  let score: number;
-  if (strongContainedMatch) {
-    score = 0.92;
-    reasons.push(`order-independent local ${label} match`);
-  } else if (strongCompleteEmbeddedTitleMatch) {
-    score = 0.91;
-    reasons.push(`complete embedded local ${label} match: ${sharedPhrase.join(' ')}`);
-  } else if (strongEmbeddedPhraseMatch) {
-    score = 0.91;
-    reasons.push(`embedded local ${label} phrase match: ${sharedPhrase.join(' ')}`);
-    reasons.push(`additional shared local title tokens: ${additionalSharedTokens.join(', ')}`);
-  } else {
-    const precision = overlap.length / (overlap.length + unexpectedExtraTokens.length);
-    const recall = overlap.length / matchedTokens.length;
-    const tokenF1 = precision + recall === 0 ? 0 : (2 * precision * recall) / (precision + recall);
-    score = Math.min(0.89, 0.2 + (0.69 * tokenF1));
-    reasons.push(`local ${label} token overlap: ${overlap.length}/${matchedTokens.length}`);
-  }
-
-  if (ignoredExtraTokens.length > 0) {
-    reasons.push(`ignored listing context tokens: ${ignoredExtraTokens.join(', ')}`);
-  }
-  if (missingTokens.length > 0) {
-    reasons.push(`missing local title tokens: ${missingTokens.join(', ')}`);
-  }
-  for (const token of unexpectedExtraTokens) {
-    reasons.push(
-      MEANINGFUL_EXTRA_TOKENS.has(token)
-        ? `meaningful extra title token: ${token}`
-        : `unexplained extra title token: ${token}`
-    );
-  }
+  const score = candidateTokens.length === 0 || catalogTokens.length === 0
+    ? 0
+    : (2 * matchedTokens.length) / (candidateTokens.length + catalogTokens.length);
+  const reasons = [
+    `selected local name source: ${label}`,
+    `normalized local title token F1: ${score.toFixed(4)}`,
+    `matched local title tokens: ${formatTokenList(matchedTokens)}`,
+    `missing local title tokens: ${formatTokenList(missingCatalogTokens)}`,
+    `extra candidate title tokens: ${formatTokenList(extraCandidateTokens)}`,
+    `excluded context tokens: ${formatTokenList(excludedContextTokens)}`
+  ];
 
   return { reasons, score };
 }
 
 function significantTitleTokens(normalizedTitle: string): string[] {
-  const tokens = uniqueTokens(
+  const tokens = normalizedTitleTokens(normalizedTitle);
+  const significantTokens = tokens.filter((token) => !TITLE_STOP_TOKENS.has(token));
+  return significantTokens.length > 0 ? significantTokens : tokens;
+}
+
+function normalizedTitleTokens(normalizedTitle: string): string[] {
+  return uniqueTokens(
     normalizedTitle
       .split(' ')
       .filter(Boolean)
       .map((token) => TITLE_TOKEN_ALIASES.get(token) ?? token)
   );
-  const significantTokens = tokens.filter((token) => !TITLE_STOP_TOKENS.has(token));
-  return significantTokens.length > 0 ? significantTokens : tokens;
 }
 
-function longestSharedContiguousTokenPhrase(leftTokens: string[], rightTokens: string[]): string[] {
-  let bestStart = 0;
-  let bestLength = 0;
-  for (let leftIndex = 0; leftIndex < leftTokens.length; leftIndex += 1) {
-    for (let rightIndex = 0; rightIndex < rightTokens.length; rightIndex += 1) {
-      let length = 0;
-      while (
-        leftIndex + length < leftTokens.length &&
-        rightIndex + length < rightTokens.length &&
-        leftTokens[leftIndex + length] === rightTokens[rightIndex + length]
-      ) {
-        length += 1;
-      }
-      if (length > bestLength) {
-        bestStart = leftIndex;
-        bestLength = length;
-      }
-    }
-  }
-  return leftTokens.slice(bestStart, bestStart + bestLength);
-}
-
-function ignoredListingTokens(candidate: DiscoveryCandidateForMatch, itemPublishers: string[]): Set<string> {
+function ignoredListingTokens(
+  candidate: DiscoveryCandidateForMatch,
+  itemPublishers: string[],
+  additionalTitles: string[] = []
+): Set<string> {
   const ignoredTokens = new Set<string>([
+    ...TITLE_STOP_TOKENS,
     ...LANGUAGE_TOKENS,
     ...LANGUAGE_EDITION_FILLER_TOKENS,
     ...LISTING_MARKETING_TOKENS
@@ -390,11 +314,17 @@ function ignoredListingTokens(candidate: DiscoveryCandidateForMatch, itemPublish
     }
   }
 
-  const normalizedCandidateTitle = normalizeTitle(candidate.title);
-  addPhraseTokensWhenPresent(ignoredTokens, normalizedCandidateTitle, ['juego de mesa', 'juegos de mesa']);
-  addPhraseTokensWhenPresent(ignoredTokens, normalizedCandidateTitle, ['board game', 'board games']);
-  addPhraseTokensWhenPresent(ignoredTokens, normalizedCandidateTitle, ['tabletop game', 'tabletop games']);
+  for (const title of [candidate.title, ...additionalTitles]) {
+    const normalizedTitle = normalizeTitle(title);
+    addPhraseTokensWhenPresent(ignoredTokens, normalizedTitle, ['juego de mesa', 'juegos de mesa']);
+    addPhraseTokensWhenPresent(ignoredTokens, normalizedTitle, ['board game', 'board games']);
+    addPhraseTokensWhenPresent(ignoredTokens, normalizedTitle, ['tabletop game', 'tabletop games']);
+  }
   return ignoredTokens;
+}
+
+function formatTokenList(tokens: string[]): string {
+  return tokens.length > 0 ? tokens.join(', ') : 'none';
 }
 
 function addPhraseTokensWhenPresent(target: Set<string>, normalizedTitle: string, phrases: string[]): void {
