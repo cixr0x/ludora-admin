@@ -110,6 +110,51 @@ class ProductDetailExtractionTests(unittest.TestCase):
         self.assertEqual(record.min_age, 10)
         self.assertEqual(record.raw_payload["json_ld"]["name"], "Catan")
 
+    def test_prefers_json_ld_image_object_content_url_over_blurred_dom_image(self):
+        html = """
+        <html>
+          <head>
+            <script type="application/ld+json">
+            {
+              "@context": "https://schema.org",
+              "@type": "Product",
+              "name": "Catan",
+              "image": [{
+                "@type": "ImageObject",
+                "contentUrl": "https://static.wixstatic.com/media/catan.jpg/v1/fill/w_500,h_500,al_c,q_90/catan.jpg",
+                "thumbnail": {
+                  "@type": "ImageObject",
+                  "contentUrl": "https://static.wixstatic.com/media/catan.jpg/v1/fill/w_50,h_50,al_c,q_80/catan.jpg"
+                }
+              }]
+            }
+            </script>
+          </head>
+          <body>
+            <h1>Catan</h1>
+            <img
+              itemprop="image"
+              alt="Catan"
+              src="https://static.wixstatic.com/media/catan.jpg/v1/fill/w_50,h_50,al_c,q_5,blur_2/catan.jpg"
+            >
+          </body>
+        </html>
+        """
+
+        record = extract_product_detail_candidate(
+            html,
+            "https://geekystuff.mx/product-page/catan",
+            17,
+            "https://geekystuff.mx/shop",
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(
+            record.image_url,
+            "https://static.wixstatic.com/media/catan.jpg/v1/fill/w_500,h_500,al_c,q_90/catan.jpg",
+        )
+
     def test_extracts_html_meta_fallback_fields(self):
         html = """
         <html lang="es-MX">

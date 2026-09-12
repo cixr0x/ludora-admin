@@ -795,11 +795,11 @@ def _json_image(product: dict[str, Any]) -> str:
             if isinstance(item, str):
                 return item
             if isinstance(item, dict):
-                url = _json_text(item, "url")
+                url = _first_text(_json_text(item, "contentUrl"), _json_text(item, "url"))
                 if url:
                     return url
     if isinstance(image, dict):
-        return _json_text(image, "url")
+        return _first_text(_json_text(image, "contentUrl"), _json_text(image, "url"))
     return ""
 
 
