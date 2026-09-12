@@ -17,6 +17,7 @@ HIDRALISTICO_CATEGORY_SLUG = "juegos-de-mesa"
 HIDRALISTICO_STORE_API_PRODUCTS_PATH = "/wp-json/wc/store/v1/products"
 HIDRALISTICO_STORE_API_CATEGORIES_PATH = "/wp-json/wc/store/v1/products/categories"
 HIDRALISTICO_STORE_API_PAGE_SIZE = 100
+HIDRALISTICO_STORE_API_MAX_CATEGORY_PAGES = 100
 StoreApiFetcher = Callable[[str], FetchResult | None]
 
 
@@ -40,34 +41,72 @@ def discover_hidralistico_listing_candidates(
     cancellation_token: CancellationToken | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     trace = trace_logger or NullTraceLogger()
-    category_api_url = _store_api_url(
-        store_url,
-        HIDRALISTICO_STORE_API_CATEGORIES_PATH,
-        slug=HIDRALISTICO_CATEGORY_SLUG,
-        per_page=HIDRALISTICO_STORE_API_PAGE_SIZE,
-    )
-    trace.log(
-        "inventory.hidralistico_store_api.category_fetch.start",
-        category_slug=HIDRALISTICO_CATEGORY_SLUG,
-        source_url=category_api_url,
-        store_id=store_id,
-    )
-    categories = _fetch_json_list(
-        category_api_url,
-        fetcher=fetcher,
-        failure_reason="category_fetch_failed",
-        incompatible_reason="category_response_incompatible",
-        trace_event="inventory.hidralistico_store_api.category_fetch.http_error",
-        trace_logger=trace,
-        cancellation_token=cancellation_token,
-        store_id=store_id,
-    )
-    exact_categories = [
-        category
-        for category in categories
-        if isinstance(category, dict)
-        and str(category.get("slug", "")).strip().casefold() == HIDRALISTICO_CATEGORY_SLUG
-    ]
+    exact_categories: dict[str, dict[str, Any]] = {}
+    seen_category_payloads: set[str] = set()
+    for category_page_number in range(1, HIDRALISTICO_STORE_API_MAX_CATEGORY_PAGES + 1):
+        category_api_url = _store_api_url(
+            store_url,
+            HIDRALISTICO_STORE_API_CATEGORIES_PATH,
+            slug=HIDRALISTICO_CATEGORY_SLUG,
+            page=category_page_number,
+            per_page=HIDRALISTICO_STORE_API_PAGE_SIZE,
+        )
+        trace.log(
+            "inventory.hidralistico_store_api.category_fetch.start",
+            category_slug=HIDRALISTICO_CATEGORY_SLUG,
+            page_number=category_page_number,
+            page_size=HIDRALISTICO_STORE_API_PAGE_SIZE,
+            source_url=category_api_url,
+            store_id=store_id,
+        )
+        categories = _fetch_json_list(
+            category_api_url,
+            fetcher=fetcher,
+            failure_reason="category_fetch_failed",
+            incompatible_reason="category_response_incompatible",
+            trace_event="inventory.hidralistico_store_api.category_fetch.http_error",
+            trace_logger=trace,
+            cancellation_token=cancellation_token,
+            store_id=store_id,
+        )
+        new_category_count = 0
+        for category in categories:
+            category_payload = json.dumps(category, sort_keys=True, separators=(",", ":"))
+            if category_payload in seen_category_payloads:
+                continue
+            seen_category_payloads.add(category_payload)
+            new_category_count += 1
+            if not isinstance(category, dict):
+                continue
+            normalized_slug = str(category.get("slug", "")).strip().casefold()
+            if normalized_slug == HIDRALISTICO_CATEGORY_SLUG:
+                category_identity = json.dumps(
+                    [category.get("id"), normalized_slug],
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+                exact_categories[category_identity] = category
+        trace.log(
+            "inventory.hidralistico_store_api.category_fetch.completed",
+            exact_category_count=len(exact_categories),
+            new_category_count=new_category_count,
+            page_number=category_page_number,
+            returned_category_count=len(categories),
+            store_id=store_id,
+        )
+        if len(categories) < HIDRALISTICO_STORE_API_PAGE_SIZE:
+            break
+        if new_category_count == 0:
+            raise HidralisticoStoreApiFallback(
+                "category_pagination_stalled",
+                f"Store API category page {category_page_number} returned no new categories",
+            )
+    else:
+        raise HidralisticoStoreApiFallback(
+            "category_pagination_exhausted",
+            "Store API category pagination exceeded the safety limit",
+        )
+
     if not exact_categories:
         raise HidralisticoStoreApiFallback(
             "category_not_found",
@@ -78,7 +117,7 @@ def discover_hidralistico_listing_candidates(
             "category_ambiguous",
             f"Store API returned multiple categories for exact slug {HIDRALISTICO_CATEGORY_SLUG}",
         )
-    category_id = exact_categories[0].get("id")
+    category_id = next(iter(exact_categories.values())).get("id")
     if isinstance(category_id, bool) or not isinstance(category_id, int) or category_id <= 0:
         raise HidralisticoStoreApiFallback(
             "category_response_incompatible",

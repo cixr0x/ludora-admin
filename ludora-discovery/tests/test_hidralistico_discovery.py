@@ -1,6 +1,7 @@
 import json
 import sys
 import unittest
+from email.message import Message
 from pathlib import Path
 from unittest.mock import ANY, Mock, call, patch
 from urllib.parse import parse_qs, urlparse
@@ -8,6 +9,11 @@ from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from ludora import product_crawler
+from ludora.hidralistico_discovery import (
+    HidralisticoStoreApiFallback,
+    discover_hidralistico_listing_candidates,
+)
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import crawl_store_product_details
 from ludora.webfetch import FetchResult
@@ -25,7 +31,206 @@ def json_result(url, payload):
     return FetchResult(url=url, text=json.dumps(payload))
 
 
+def patch_store_api_fetcher(**kwargs):
+    return patch.object(product_crawler, "fetch_json", create=True, **kwargs)
+
+
+class FakeJsonResponse:
+    def __init__(self, url, payload):
+        self.url = url
+        self.body = json.dumps(payload).encode("utf-8")
+        self.headers = Message()
+        self.headers["Content-Type"] = "application/json; charset=UTF-8"
+        self.status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def geturl(self):
+        return self.url
+
+    def read(self):
+        return self.body
+
+
 class HidralisticoDiscoveryTests(unittest.TestCase):
+    def test_crawl_accepts_application_json_store_api_responses(self):
+        opened_urls = []
+        accept_headers = []
+
+        def fake_urlopen(request, timeout):
+            self.assertEqual(timeout, 20)
+            url = request.full_url
+            opened_urls.append(url)
+            accept_headers.append(request.get_header("Accept"))
+            if urlparse(url).path.endswith("/products/categories"):
+                return FakeJsonResponse(
+                    url,
+                    [{"id": 27, "name": "Juegos de mesa", "slug": "juegos-de-mesa"}],
+                )
+            return FakeJsonResponse(
+                url,
+                [
+                    {
+                        "id": 101,
+                        "name": "Bitoku",
+                        "permalink": "https://hidralistico.com.mx/producto/bitoku/",
+                    }
+                ],
+            )
+
+        with patch(
+            "ludora.webfetch.urlopen",
+            side_effect=fake_urlopen,
+        ), patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=["https://hidralistico.com.mx/producto/sitemap-only/"],
+        ) as sitemap_discovery, patch(
+            "ludora.product_crawler.crawl_listing_candidates",
+            return_value=[],
+        ) as crawl_candidates:
+            crawl_store_product_details(
+                "https://hidralistico.com.mx/",
+                55,
+                Mock(),
+                platform="woocommerce",
+            )
+
+        sitemap_discovery.assert_not_called()
+        self.assertEqual(len(opened_urls), 2)
+        self.assertEqual(accept_headers, ["application/json", "application/json"])
+        self.assertEqual(
+            [candidate.source_url for candidate in crawl_candidates.call_args.args[0]],
+            ["https://hidralistico.com.mx/producto/bitoku/"],
+        )
+
+    def test_exact_category_on_later_page_supplies_id_for_product_pagination(self):
+        first_category_page = [
+            {"id": category_id, "name": f"Category {category_id}", "slug": f"category-{category_id}"}
+            for category_id in range(1, 101)
+        ]
+        fetched_category_pages = []
+        fetched_product_categories = []
+
+        def api_fetcher(url):
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query)
+            self.assertEqual(query["per_page"], ["100"])
+            page_number = int(query.get("page", ["1"])[0])
+            if parsed.path.endswith("/products/categories"):
+                fetched_category_pages.append(page_number)
+                self.assertEqual(query["slug"], ["juegos-de-mesa"])
+                if page_number == 1:
+                    return json_result(url, first_category_page)
+                return json_result(
+                    url,
+                    [{"id": 314, "name": "Juegos de mesa", "slug": "juegos-de-mesa"}],
+                )
+            fetched_product_categories.append(query["category"][0])
+            return json_result(
+                url,
+                [
+                    {
+                        "id": 101,
+                        "name": "Bitoku",
+                        "permalink": "https://hidralistico.com.mx/producto/bitoku/",
+                    }
+                ],
+            )
+
+        try:
+            candidates = discover_hidralistico_listing_candidates(
+                "https://hidralistico.com.mx/",
+                55,
+                fetcher=api_fetcher,
+            )
+        except HidralisticoStoreApiFallback as exc:
+            self.fail(f"later category page unexpectedly fell back: {exc.reason}")
+
+        self.assertEqual(fetched_category_pages, [1, 2])
+        self.assertEqual(fetched_product_categories, ["314"])
+        self.assertEqual([candidate.source_url for candidate in candidates], ["https://hidralistico.com.mx/producto/bitoku/"])
+
+    def test_exact_category_ids_across_pages_remain_ambiguous(self):
+        first_category_page = [
+            {"id": 27, "name": "Juegos de mesa", "slug": "juegos-de-mesa"},
+            *[
+                {"id": category_id, "name": f"Category {category_id}", "slug": f"category-{category_id}"}
+                for category_id in range(2, 101)
+            ],
+        ]
+
+        def api_fetcher(url):
+            parsed = urlparse(url)
+            page_number = int(parse_qs(parsed.query).get("page", ["1"])[0])
+            if parsed.path.endswith("/products/categories"):
+                return json_result(
+                    url,
+                    first_category_page
+                    if page_number == 1
+                    else [{"id": 88, "name": "Juegos de mesa", "slug": "juegos-de-mesa"}],
+                )
+            return json_result(url, [])
+
+        with self.assertRaises(HidralisticoStoreApiFallback) as raised:
+            discover_hidralistico_listing_candidates(
+                "https://hidralistico.com.mx/",
+                55,
+                fetcher=api_fetcher,
+            )
+
+        self.assertEqual(raised.exception.reason, "category_ambiguous")
+
+    def test_invalid_exact_category_id_on_later_page_remains_incompatible(self):
+        first_category_page = [
+            {"id": category_id, "name": f"Category {category_id}", "slug": f"category-{category_id}"}
+            for category_id in range(1, 101)
+        ]
+
+        def api_fetcher(url):
+            parsed = urlparse(url)
+            page_number = int(parse_qs(parsed.query).get("page", ["1"])[0])
+            return json_result(
+                url,
+                first_category_page
+                if page_number == 1
+                else [{"id": "27", "name": "Juegos de mesa", "slug": "juegos-de-mesa"}],
+            )
+
+        with self.assertRaises(HidralisticoStoreApiFallback) as raised:
+            discover_hidralistico_listing_candidates(
+                "https://hidralistico.com.mx/",
+                55,
+                fetcher=api_fetcher,
+            )
+
+        self.assertEqual(raised.exception.reason, "category_response_incompatible")
+
+    def test_repeated_full_category_page_falls_back_as_stalled(self):
+        category_page = [
+            {"id": category_id, "name": f"Category {category_id}", "slug": f"category-{category_id}"}
+            for category_id in range(1, 101)
+        ]
+        fetch_count = 0
+
+        def api_fetcher(url):
+            nonlocal fetch_count
+            fetch_count += 1
+            return json_result(url, category_page)
+
+        with self.assertRaises(HidralisticoStoreApiFallback) as raised:
+            discover_hidralistico_listing_candidates(
+                "https://hidralistico.com.mx/",
+                55,
+                fetcher=api_fetcher,
+            )
+
+        self.assertEqual(raised.exception.reason, "category_pagination_stalled")
+        self.assertEqual(fetch_count, 2)
+
     def test_exact_host_selects_category_id_and_paginates_products_without_sitemap_candidates(self):
         first_page = [
             {
@@ -79,8 +284,7 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=["https://hidralistico.com.mx/producto/sitemap-only/"],
-        ) as sitemap_discovery, patch(
-            "ludora.product_crawler.fetch_html",
+        ) as sitemap_discovery, patch_store_api_fetcher(
             side_effect=api_fetcher,
         ), patch(
             "ludora.product_crawler.crawl_listing_candidates",
@@ -135,8 +339,7 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=["https://hidralistico.com.mx/producto/sitemap-only/"],
-        ) as sitemap_discovery, patch(
-            "ludora.product_crawler.fetch_html",
+        ) as sitemap_discovery, patch_store_api_fetcher(
             side_effect=api_fetcher,
         ), patch(
             "ludora.product_crawler.crawl_listing_candidates",
@@ -167,8 +370,7 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=[fallback_url],
-        ) as sitemap_discovery, patch(
-            "ludora.product_crawler.fetch_html",
+        ) as sitemap_discovery, patch_store_api_fetcher(
             return_value=json_result(
                 "https://hidralistico.com.mx/wp-json/wc/store/v1/products/categories",
                 {"unexpected": "shape"},
@@ -204,8 +406,7 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=["https://hidralistico.com.mx/producto/sitemap-fallback/"],
-        ) as sitemap_discovery, patch(
-            "ludora.product_crawler.fetch_html",
+        ) as sitemap_discovery, patch_store_api_fetcher(
             return_value=json_result(
                 "https://hidralistico.com.mx/wp-json/wc/store/v1/products/categories",
                 [{"id": 91, "name": "Juegos de mesa y rol", "slug": "juegos-de-mesa-y-rol"}],
@@ -237,8 +438,7 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=["https://hidralistico.com.mx/producto/sitemap-fallback/"],
-        ) as sitemap_discovery, patch(
-            "ludora.product_crawler.fetch_html",
+        ) as sitemap_discovery, patch_store_api_fetcher(
             side_effect=api_fetcher,
         ), patch("ludora.product_crawler.crawl_listing_candidates", return_value=[]):
             crawl_store_product_details(
@@ -265,9 +465,8 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=[sitemap_url],
-        ) as sitemap_discovery, patch(
-            "ludora.product_crawler.fetch_html",
-        ) as fetch_html, patch(
+        ) as sitemap_discovery, patch_store_api_fetcher(
+        ) as fetch_json, patch(
             "ludora.product_crawler.crawl_listing_candidates",
             return_value=[],
         ):
@@ -278,7 +477,7 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
             [entry.args[0] for entry in sitemap_discovery.call_args_list],
             store_urls,
         )
-        fetch_html.assert_not_called()
+        fetch_json.assert_not_called()
 
 
 if __name__ == "__main__":

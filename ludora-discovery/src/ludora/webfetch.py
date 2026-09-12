@@ -169,6 +169,60 @@ def fetch_html(
         return None
 
 
+def fetch_json(
+    url: str,
+    timeout: int = 20,
+    *,
+    headers: Mapping[str, str] | None = None,
+    include_http_error_status: bool = False,
+) -> FetchResult | None:
+    request_headers = {
+        "Accept": "application/json",
+        "Accept-Language": "es-MX,es;q=0.9,en;q=0.8",
+        "User-Agent": (
+            "LudoraStoreCollector/1.0 "
+            "(+https://admin.ludora.bobbycrimson.com/crawler)"
+        ),
+    }
+    request_headers.update(headers or {})
+    request = Request(
+        url,
+        headers=request_headers,
+        method="GET",
+    )
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().casefold()
+            if content_type != "application/json" and not content_type.endswith("+json"):
+                return None
+            charset = response.headers.get_content_charset() or "utf-8"
+            body = response.read().decode(charset, errors="replace")
+            return FetchResult(
+                url=response.geturl(),
+                text=body,
+                status_code=int(getattr(response, "status", 200)),
+            )
+    except HTTPError as exc:
+        if include_http_error_status:
+            return FetchResult(
+                url=exc.geturl() or url,
+                text="",
+                status_code=int(exc.code),
+                retry_after_seconds=retry_after_seconds_from_headers(exc.headers),
+            )
+        return None
+    except (ConnectionResetError, HTTPException, URLError, TimeoutError, ValueError) as exc:
+        if include_http_error_status:
+            return FetchResult(
+                url=url,
+                text="",
+                status_code=0,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+        return None
+
+
 def fetch_with_transient_retries(
     url: str,
     fetcher: Callable[[str], FetchResult | None],

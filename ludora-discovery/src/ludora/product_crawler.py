@@ -41,6 +41,7 @@ from ludora.webfetch import (
     HostThrottleWait,
     PerHostRequestThrottle,
     fetch_html,
+    fetch_json,
     fetch_with_transient_retries,
 )
 
@@ -238,7 +239,7 @@ def crawl_store_product_details(
                 listing_candidates = discover_hidralistico_listing_candidates(
                     store_url,
                     store_id,
-                    fetcher=lambda url: fetch_html(
+                    fetcher=lambda url: fetch_json(
                         url,
                         headers=request_headers_provider(url) if request_headers_provider is not None else None,
                         include_http_error_status=True,
