@@ -14,11 +14,13 @@ from ludora.webfetch import FetchResult, fetch_with_transient_retries
 
 HIDRALISTICO_STORE_DOMAINS = {"hidralistico.com.mx"}
 HIDRALISTICO_CATEGORY_SLUG = "juegos-de-mesa"
+HIDRALISTICO_CATEGORY_SEARCH = "Juegos de mesa"
 HIDRALISTICO_STORE_API_PRODUCTS_PATH = "/wp-json/wc/store/v1/products"
 HIDRALISTICO_STORE_API_CATEGORIES_PATH = "/wp-json/wc/store/v1/products/categories"
 HIDRALISTICO_STORE_API_PAGE_SIZE = 100
 HIDRALISTICO_STORE_API_MAX_CATEGORY_PAGES = 100
 StoreApiFetcher = Callable[[str], FetchResult | None]
+BeforeStoreApiRequest = Callable[[str], None]
 
 
 class HidralisticoStoreApiFallback(RuntimeError):
@@ -39,6 +41,7 @@ def discover_hidralistico_listing_candidates(
     limit: int | None = None,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
+    before_request: BeforeStoreApiRequest | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     trace = trace_logger or NullTraceLogger()
     exact_categories: dict[str, dict[str, Any]] = {}
@@ -47,7 +50,7 @@ def discover_hidralistico_listing_candidates(
         category_api_url = _store_api_url(
             store_url,
             HIDRALISTICO_STORE_API_CATEGORIES_PATH,
-            slug=HIDRALISTICO_CATEGORY_SLUG,
+            search=HIDRALISTICO_CATEGORY_SEARCH,
             page=category_page_number,
             per_page=HIDRALISTICO_STORE_API_PAGE_SIZE,
         )
@@ -68,6 +71,7 @@ def discover_hidralistico_listing_candidates(
             trace_logger=trace,
             cancellation_token=cancellation_token,
             store_id=store_id,
+            before_request=before_request,
         )
         new_category_count = 0
         for category in categories:
@@ -159,6 +163,7 @@ def discover_hidralistico_listing_candidates(
             trace_logger=trace,
             cancellation_token=cancellation_token,
             store_id=store_id,
+            before_request=before_request,
         )
         added_on_page = 0
         for product in products:
@@ -216,10 +221,16 @@ def _fetch_json_list(
     trace_logger: TraceLogger,
     cancellation_token: CancellationToken | None,
     store_id: int | None,
+    before_request: BeforeStoreApiRequest | None,
 ) -> list[Any]:
+    def fetch_attempt(target_url: str) -> FetchResult | None:
+        if before_request is not None:
+            before_request(target_url)
+        return fetcher(target_url)
+
     fetched = fetch_with_transient_retries(
         url,
-        fetcher,
+        fetch_attempt,
         trace_event=trace_event,
         trace_logger=trace_logger,
         trace_fields={"store_id": store_id},

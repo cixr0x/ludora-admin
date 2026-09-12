@@ -247,6 +247,7 @@ def crawl_store_product_details(
                     limit=limit,
                     trace_logger=trace,
                     cancellation_token=cancellation_token,
+                    before_request=before_product_request,
                 )
             except HidralisticoStoreApiFallback as exc:
                 trace.log(

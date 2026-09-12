@@ -107,6 +107,62 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
             ["https://hidralistico.com.mx/producto/bitoku/"],
         )
 
+    def test_store_api_callback_immediately_precedes_every_fetch_attempt(self):
+        events = []
+        category_attempt = 0
+
+        def before_request(url):
+            events.append(("callback", url))
+
+        def api_fetcher(url, **_kwargs):
+            nonlocal category_attempt
+            events.append(("fetch", url))
+            if urlparse(url).path.endswith("/products/categories"):
+                category_attempt += 1
+                if category_attempt == 1:
+                    return FetchResult(url=url, text="", status_code=503, retry_after_seconds=0)
+                return json_result(
+                    url,
+                    [{"id": 27, "name": "Juegos de mesa", "slug": "juegos-de-mesa"}],
+                )
+            return json_result(
+                url,
+                [
+                    {
+                        "id": 101,
+                        "name": "Bitoku",
+                        "permalink": "https://hidralistico.com.mx/producto/bitoku/",
+                    }
+                ],
+            )
+
+        with patch_store_api_fetcher(
+            side_effect=api_fetcher,
+        ), patch(
+            "ludora.webfetch._wait_for_fetch_retry",
+        ) as wait_for_retry, patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+        ) as sitemap_discovery, patch(
+            "ludora.product_crawler.crawl_listing_candidates",
+            return_value=[],
+        ):
+            crawl_store_product_details(
+                "https://hidralistico.com.mx/",
+                55,
+                Mock(),
+                platform="woocommerce",
+                before_product_request=before_request,
+            )
+
+        self.assertEqual(category_attempt, 2)
+        wait_for_retry.assert_called_once_with(0, None)
+        sitemap_discovery.assert_not_called()
+        self.assertEqual(len(events), 6)
+        for index in range(0, len(events), 2):
+            self.assertEqual(events[index][0], "callback")
+            self.assertEqual(events[index + 1][0], "fetch")
+            self.assertEqual(events[index][1], events[index + 1][1])
+
     def test_exact_category_on_later_page_supplies_id_for_product_pagination(self):
         first_category_page = [
             {"id": category_id, "name": f"Category {category_id}", "slug": f"category-{category_id}"}
@@ -122,7 +178,8 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
             page_number = int(query.get("page", ["1"])[0])
             if parsed.path.endswith("/products/categories"):
                 fetched_category_pages.append(page_number)
-                self.assertEqual(query["slug"], ["juegos-de-mesa"])
+                self.assertEqual(query.get("search"), ["Juegos de mesa"])
+                self.assertNotIn("slug", query)
                 if page_number == 1:
                     return json_result(url, first_category_page)
                 return json_result(
