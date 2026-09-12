@@ -350,6 +350,28 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(repository.item_records, [])
 
+    def test_collect_store_inventory_rejects_wix_without_product_candidates(self):
+        store_url = "https://geekystuff.example/"
+        repository = FakeRepository()
+
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[]), patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=store_url, text='<a href="/contacto">Contacto</a>'),
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                collect_store_inventory(
+                    store_url,
+                    12,
+                    repository,
+                    platform="wix",
+                )
+
+        self.assertEqual(
+            str(raised.exception),
+            "Wix discovery returned no product candidates: https://geekystuff.example/",
+        )
+        self.assertEqual(repository.item_records, [])
+
     def test_collect_store_inventory_rejects_shopify_without_signer_before_enumeration(self):
         repository = FakeRepository()
 

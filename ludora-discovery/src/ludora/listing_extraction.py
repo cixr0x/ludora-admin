@@ -10,6 +10,7 @@ from ludora.models import DiscoveryItemCandidateRecord
 
 PRODUCT_PATH_MARKERS = (
     "/product/",
+    "/product-page/",
     "/products/",
     "/producto/",
     "/productos/",
