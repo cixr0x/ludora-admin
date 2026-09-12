@@ -4,8 +4,9 @@
 
 - Scoped the Store API behavior to the exact canonical domain `hidralistico.com.mx`; `www` is normalized by the existing domain helper, while lookalike and subdomain-suffix hosts retain generic discovery.
 - Fetch Store API responses through a JSON-capable HTTP boundary that accepts `application/json` and structured `+json` media types while retaining HTTP status, `Retry-After`, transport-error details, transient retry behavior, and cancellation checks.
-- Resolve the public Store API category dynamically by paginating the categories endpoint with `per_page=100` and `page=N`, then selecting the exact slug `juegos-de-mesa` across all returned pages. The returned positive numeric category ID is used for product enumeration; category ID `27` is not hardcoded.
+- Resolve the public Store API category dynamically with its supported `search=Juegos de mesa` query, paginate the categories endpoint with `per_page=100` and `page=N`, then select only the exact slug `juegos-de-mesa` across all returned pages. The returned positive numeric category ID is used for product enumeration; category ID `27` is not hardcoded.
 - Preserve cross-page ambiguity and invalid-ID rejection, detect a repeated full category page as stalled, and cap category pagination at 100 pages as a final safety bound.
+- Invoke the existing `before_product_request` callback immediately before every Store API category/product fetch attempt, including transient retries, before continuing to use it for each candidate detail fetch.
 - Enumerate category products from `/wp-json/wc/store/v1/products` using `per_page=100`, advancing pages until a short page is returned and stopping immediately when the discovery `limit` is reached.
 - Normalize product permalinks by removing query strings and fragments, require the store's canonical domain, deduplicate normalized URLs across pages, and map API products into `DiscoveryItemCandidateRecord` listing candidates.
 - Feed successful API candidates directly into the existing `crawl_listing_candidates` path. Sitemap discovery is not invoked or merged on a successful Store API enumeration.
@@ -126,6 +127,61 @@ OK
 ### Correction commit
 
 `b3fcc4fcb7d84a1a4704c1425c1d69c02bfd90d7`
+
+## Final request-behavior correction evidence
+
+The final TDD pass aligned category lookup with the live endpoint's supported `search` parameter and extended the existing outbound-request callback contract to every Store API attempt.
+
+### Final correction RED
+
+Command, run after adding the final regression tests and before editing production code:
+
+```powershell
+python -m unittest tests.test_hidralistico_discovery -v
+```
+
+Observed result:
+
+```text
+Ran 12 tests in 0.020s
+FAILED (failures=2)
+```
+
+The later-page category test observed no `search=Juegos de mesa` parameter, and the retry-order test observed three network fetches without the required immediately preceding callback invocations.
+
+### Final correction focused GREEN
+
+Command:
+
+```powershell
+python -m unittest tests.test_hidralistico_discovery -v
+```
+
+Observed result:
+
+```text
+Ran 12 tests in 0.023s
+OK
+```
+
+### Final correction full discovery suite
+
+Command, run from `ludora-discovery`:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Observed result:
+
+```text
+Ran 495 tests in 3.348s
+OK
+```
+
+### Final correction commit
+
+`175176b75e4083f1b3ef173a9536b06cc6fb7f2b`
 
 ## Risks and follow-up notes
 
