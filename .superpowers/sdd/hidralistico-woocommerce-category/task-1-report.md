@@ -3,7 +3,9 @@
 ## Summary and design
 
 - Scoped the Store API behavior to the exact canonical domain `hidralistico.com.mx`; `www` is normalized by the existing domain helper, while lookalike and subdomain-suffix hosts retain generic discovery.
-- Resolve the public Store API category dynamically by the exact slug `juegos-de-mesa`. The returned positive numeric category ID is used for product enumeration; category ID `27` is not hardcoded.
+- Fetch Store API responses through a JSON-capable HTTP boundary that accepts `application/json` and structured `+json` media types while retaining HTTP status, `Retry-After`, transport-error details, transient retry behavior, and cancellation checks.
+- Resolve the public Store API category dynamically by paginating the categories endpoint with `per_page=100` and `page=N`, then selecting the exact slug `juegos-de-mesa` across all returned pages. The returned positive numeric category ID is used for product enumeration; category ID `27` is not hardcoded.
+- Preserve cross-page ambiguity and invalid-ID rejection, detect a repeated full category page as stalled, and cap category pagination at 100 pages as a final safety bound.
 - Enumerate category products from `/wp-json/wc/store/v1/products` using `per_page=100`, advancing pages until a short page is returned and stopping immediately when the discovery `limit` is reached.
 - Normalize product permalinks by removing query strings and fragments, require the store's canonical domain, deduplicate normalized URLs across pages, and map API products into `DiscoveryItemCandidateRecord` listing candidates.
 - Feed successful API candidates directly into the existing `crawl_listing_candidates` path. Sitemap discovery is not invoked or merged on a successful Store API enumeration.
@@ -14,6 +16,7 @@
 
 - `ludora-discovery/src/ludora/hidralistico_discovery.py`
 - `ludora-discovery/src/ludora/product_crawler.py`
+- `ludora-discovery/src/ludora/webfetch.py`
 - `ludora-discovery/tests/test_hidralistico_discovery.py`
 
 ## TDD evidence
@@ -69,8 +72,63 @@ OK
 
 `bbaee4aee2f2762566d1c1330cd8f462f2d65b9a`
 
+## Review correction evidence
+
+The independent review identified that the HTML-only fetch boundary rejected Hidralistico's real JSON responses and that the exact category occurs after the first category page. Both corrections followed a separate RED/GREEN cycle.
+
+### Correction RED
+
+Command, run after adding the correction tests and before editing production code:
+
+```powershell
+python -m unittest tests.test_hidralistico_discovery -v
+```
+
+Observed result:
+
+```text
+Ran 11 tests in 8.515s
+FAILED (failures=10)
+```
+
+The JSON integration test observed sitemap fallback for an `application/json; charset=UTF-8` response. The later-page category test failed with `category_not_found`; cross-page ambiguity, invalid-ID, and repeated-page stall expectations also failed against the single-page implementation. The unrelated-host control remained green.
+
+### Correction focused GREEN
+
+Command:
+
+```powershell
+python -m unittest tests.test_hidralistico_discovery -v
+```
+
+Observed result:
+
+```text
+Ran 11 tests in 0.011s
+OK
+```
+
+### Correction full discovery suite
+
+Command, run from `ludora-discovery`:
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+Observed result:
+
+```text
+Ran 494 tests in 2.036s
+OK
+```
+
+### Correction commit
+
+`b3fcc4fcb7d84a1a4704c1425c1d69c02bfd90d7`
+
 ## Risks and follow-up notes
 
 - The Store API remains an external storefront dependency. If it is unavailable or changes shape, discovery deliberately falls back to the existing sitemap/homepage behavior and records the reason; that compatibility path may still miss later split Hidralistico sitemap files.
-- Pagination termination uses the standard full-page/short-page convention because the existing `FetchResult` does not retain WordPress total-page response headers.
+- Category and product pagination use the standard full-page/short-page convention because the existing `FetchResult` does not retain WordPress total-page response headers. Category pagination additionally detects repeated pages and has a hard safety cap.
 - No database schema/data, admin UI, or admin-service changes were made. No DDL or DML was executed. Nothing was pushed.
