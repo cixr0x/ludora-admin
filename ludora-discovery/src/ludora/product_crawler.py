@@ -10,6 +10,11 @@ from urllib.parse import urljoin, urlparse
 
 from ludora.browser_fetch import fetch_product_detail_with_browser
 from ludora.cancellation import CancellationToken, raise_if_cancelled
+from ludora.hidralistico_discovery import (
+    HidralisticoStoreApiFallback,
+    discover_hidralistico_listing_candidates,
+    is_hidralistico_store_url,
+)
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import extract_listing_candidates
 from ludora.models import DiscoveryItemCandidateRecord
@@ -227,6 +232,52 @@ def crawl_store_product_details(
         browser_fetcher = browser_session.__enter__().fetch
 
     try:
+        if is_hidralistico_store_url(store_url):
+            trace.log("inventory.hidralistico_store_api.start", store_id=store_id, store_url=store_url)
+            try:
+                listing_candidates = discover_hidralistico_listing_candidates(
+                    store_url,
+                    store_id,
+                    fetcher=lambda url: fetch_html(
+                        url,
+                        headers=request_headers_provider(url) if request_headers_provider is not None else None,
+                        include_http_error_status=True,
+                    ),
+                    limit=limit,
+                    trace_logger=trace,
+                    cancellation_token=cancellation_token,
+                )
+            except HidralisticoStoreApiFallback as exc:
+                trace.log(
+                    "inventory.hidralistico_store_api.fallback",
+                    error=str(exc),
+                    reason=exc.reason,
+                    store_id=store_id,
+                    store_url=store_url,
+                )
+            else:
+                source_listing_url = listing_candidates[0].source_listing_url
+                records = crawl_listing_candidates(
+                    listing_candidates,
+                    repository,
+                    source_listing_url=source_listing_url,
+                    browser_fetcher=browser_fetcher if use_browser_fetch else None,
+                    item_classifier=item_classifier,
+                    item_processor=item_processor,
+                    request_headers_provider=request_headers_provider,
+                    platform=platform,
+                    trace_logger=trace,
+                    cancellation_token=cancellation_token,
+                    before_product_request=before_product_request,
+                )
+                trace.log(
+                    "inventory.crawl.completed",
+                    record_count=len(records),
+                    store_id=store_id,
+                    store_url=store_url,
+                )
+                return records
+
         trace.log("inventory.sitemap_discovery.start", store_id=store_id, store_url=store_url)
         product_urls = discover_product_urls_from_sitemaps(
             store_url,
