@@ -4735,10 +4735,14 @@ describe('ludora admin service', () => {
     expect(histogramQuery?.params).toEqual([72, 12]);
     expect(normalizeSql(histogramQuery?.sql ?? '')).toContain('store_items.store_id = $2::bigint');
     const storeStatisticsQuery = queries.find((query) => normalizeSql(query.sql).includes('from active_stores stores'));
-    expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).toContain('where stores.active = true');
-    expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).toContain('left join store_item_update_attempt_log attempts');
-    expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).not.toContain('having count(*)');
-    expect(normalizeSql(storeStatisticsQuery?.sql ?? '')).not.toContain('limit 12');
+    const storeStatisticsSql = normalizeSql(storeStatisticsQuery?.sql ?? '');
+    expect(storeStatisticsSql).toContain("coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform");
+    expect(storeStatisticsSql).not.toContain('raw_payload');
+    expect(storeStatisticsSql).not.toContain('ilike');
+    expect(storeStatisticsSql).toContain('where stores.active = true');
+    expect(storeStatisticsSql).toContain('left join store_item_update_attempt_log attempts');
+    expect(storeStatisticsSql).not.toContain('having count(*)');
+    expect(storeStatisticsSql).not.toContain('limit 12');
   });
 
   it('pauses and resumes the continuous automatic update worker', async () => {

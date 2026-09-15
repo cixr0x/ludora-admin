@@ -668,16 +668,7 @@ async function loadStoreItemUpdateMonitor(
        select
          stores.id,
          stores.name,
-         coalesce(
-           nullif(lower(trim(stores.platform)), ''),
-           case when exists (
-             select 1
-             from store_items platform_items
-             where platform_items.store_id = stores.id
-               and platform_items.raw_payload::text ilike '%shopify%'
-           ) then 'shopify' end,
-           'unknown'
-         ) as platform
+         coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform
        from stores
        where stores.active = true
      ), eligible_items as (
