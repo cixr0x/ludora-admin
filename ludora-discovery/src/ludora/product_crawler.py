@@ -1514,7 +1514,12 @@ def _fetch_detail_candidate(
         request_headers_provider=request_headers_provider,
         max_attempts=static_fetch_max_attempts,
     )
-    _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
+    _handle_removed_product_detail(
+        fetched_detail,
+        listing_candidate,
+        detect_removed=detect_removed,
+        trace=trace,
+    )
     last_failure_status_code = (
         fetched_detail.status_code if fetched_detail is not None and fetched_detail.status_code >= 400 else None
     )
@@ -1523,22 +1528,6 @@ def _fetch_detail_candidate(
     )
     explicitly_throttled = store_item_update_request and last_failure_status_code == 429
     static_fetch_failed = fetched_detail is None or last_failure_status_code is not None
-    if not detect_removed and last_failure_status_code in {404, 410}:
-        trace.log(
-            "inventory.candidate.detail_fetch.skipped_removed",
-            listing_title=listing_candidate.title,
-            message=(
-                "Skipping catalog candidate because its product detail returned "
-                f"HTTP {last_failure_status_code}"
-            ),
-            reason=f"http_{last_failure_status_code}",
-            source_url=listing_candidate.source_url,
-            status_code=last_failure_status_code,
-            store_id=listing_candidate.store_id,
-        )
-        raise ProductDetailRejectedError(
-            f"Product detail skipped (HTTP {last_failure_status_code}): {listing_candidate.source_url}"
-        )
     if last_failure_status_code is not None:
         fetched_detail = None
     if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
@@ -1613,7 +1602,12 @@ def _fetch_detail_candidate(
                     last_failure = getattr(fetcher_owner, "last_failure", None)
                     if isinstance(last_failure, Mapping):
                         browser_failure = dict(last_failure)
-        _raise_if_product_page_removed(fetched_detail, listing_candidate.source_url, detect_removed=detect_removed)
+        _handle_removed_product_detail(
+            fetched_detail,
+            listing_candidate,
+            detect_removed=detect_removed,
+            trace=trace,
+        )
         if fetched_detail is not None and fetched_detail.status_code >= 400:
             last_failure_status_code = fetched_detail.status_code
             last_failure_retry_after_seconds = fetched_detail.retry_after_seconds
@@ -1979,21 +1973,51 @@ def _store_item_trace_fields(
     }
 
 
-def _raise_if_product_page_removed(
+def _removed_product_page_reason(fetched_detail: FetchResult | None) -> str | None:
+    if fetched_detail is None:
+        return None
+    if fetched_detail.status_code == 404:
+        return "http_404"
+    if fetched_detail.status_code == 410:
+        return "http_410"
+    if _looks_like_removed_product_page(fetched_detail.text):
+        return "soft_404"
+    return None
+
+
+def _handle_removed_product_detail(
     fetched_detail: FetchResult | None,
-    source_url: str,
+    listing_candidate: DiscoveryItemCandidateRecord,
     *,
     detect_removed: bool,
+    trace: TraceLogger,
 ) -> None:
-    if not detect_removed or fetched_detail is None:
+    removal_reason = _removed_product_page_reason(fetched_detail)
+    if removal_reason is None or fetched_detail is None:
         return
-    if fetched_detail.status_code in {404, 410}:
-        reason = f"HTTP {fetched_detail.status_code}"
-    elif _looks_like_removed_product_page(fetched_detail.text):
-        reason = "an explicit not-found page"
-    else:
-        return
-    raise ProductPageRemovedError(f"Product detail page returned {reason}: {source_url}")
+    removal_description = (
+        f"HTTP {fetched_detail.status_code}"
+        if removal_reason.startswith("http_")
+        else "an explicit not-found page"
+    )
+    if detect_removed:
+        raise ProductPageRemovedError(
+            f"Product detail page returned {removal_description}: {listing_candidate.source_url}"
+        )
+
+    trace.log(
+        "inventory.candidate.detail_fetch.skipped_removed",
+        final_url=fetched_detail.url,
+        listing_title=listing_candidate.title,
+        message=f"Skipping catalog candidate because its product detail returned {removal_description}",
+        reason=removal_reason,
+        source_url=listing_candidate.source_url,
+        status_code=fetched_detail.status_code,
+        store_id=listing_candidate.store_id,
+    )
+    raise ProductDetailRejectedError(
+        f"Product detail skipped ({removal_description}): {listing_candidate.source_url}"
+    )
 
 
 def _looks_like_removed_product_page(html: str) -> bool:
@@ -2015,7 +2039,8 @@ def _looks_like_removed_product_page(html: str) -> bool:
         "producto ya no esta disponible",
     )
     return any(
-        heading in {"404", "410"} or any(phrase in heading for phrase in not_found_phrases)
+        heading in {"404", "410", "error - 404", "error - 410"}
+        or any(phrase in heading for phrase in not_found_phrases)
         for heading in normalized_headings
     )
 
