@@ -587,12 +587,7 @@ class DiscoveryRepository:
                         select 1
                         from store_item_update_platform_cooldown cooldown
                         where cooldown.worker_name = %s
-                          and cooldown.platform = case
-                            when trim(coalesce(stores.platform, '')) = ''
-                              and store_items.raw_payload::text ilike '%%shopify%%'
-                            then 'shopify'
-                            else lower(trim(coalesce(stores.platform, '')))
-                          end
+                          and cooldown.platform = coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown')
                           and cooldown.blocked_until > now()
                       )
                     order by store_items.next_update_at, store_items.id
@@ -638,24 +633,14 @@ class DiscoveryRepository:
                 """
                 select
                     coalesce(stores.name, ''),
-                    case
-                      when trim(coalesce(stores.platform, '')) = ''
-                        and store_items.raw_payload::text ilike '%%shopify%%'
-                      then 'shopify'
-                      else lower(trim(coalesce(stores.platform, '')))
-                    end,
+                    coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown'),
                     store_items.consecutive_update_failures,
                     coalesce(cooldown.consecutive_429s, 0)
                 from store_items
                 join stores on stores.id = store_items.store_id
                 left join store_item_update_platform_cooldown cooldown
                   on cooldown.worker_name = %s
-                 and cooldown.platform = case
-                   when trim(coalesce(stores.platform, '')) = ''
-                     and store_items.raw_payload::text ilike '%%shopify%%'
-                   then 'shopify'
-                   else lower(trim(coalesce(stores.platform, '')))
-                 end
+                 and cooldown.platform = coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown')
                 where store_items.id = %s
                 """,
                 (worker_name, store_item_id),

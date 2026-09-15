@@ -256,6 +256,12 @@ describe('loadConfig', () => {
     expect(loadConfig().continuousItemUpdateWorker.itemTimeoutSeconds).toBe(120);
   });
 
+  it('defaults the continuous updater poll interval to one second', () => {
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', undefined);
+
+    expect(loadConfig().continuousItemUpdateWorker.pollSeconds).toBe(1);
+  });
+
   it('keeps daily item discovery scheduling off outside production and accepts an explicit override', () => {
     vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('LUDORA_DAILY_ITEM_DISCOVERY_ENABLED', undefined);

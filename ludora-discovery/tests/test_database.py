@@ -140,12 +140,22 @@ class DatabaseRepositoryTests(unittest.TestCase):
             lease_seconds=300,
         )
 
-        claim_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
-        platform_sql = " ".join(connection.cursor_instance.executions[2][0].casefold().split())
+        emitted_sql = [
+            " ".join(sql.casefold().split())
+            for sql, _params in connection.cursor_instance.executions
+        ]
+        claim_sql = emitted_sql[0]
+        platform_sql = emitted_sql[2]
+        combined_claim_sql = f"{claim_sql} {platform_sql}"
+        normalized_platform = "coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown')"
         self.assertIn("store_item_update_platform_cooldown", claim_sql)
         self.assertIn("blocked_until > now()", claim_sql)
         self.assertIn("store_item_update_platform_cooldown", platform_sql)
         self.assertIn("consecutive_429s", platform_sql)
+        self.assertNotIn("raw_payload", combined_claim_sql)
+        self.assertNotIn("ilike", combined_claim_sql)
+        self.assertIn(normalized_platform, claim_sql)
+        self.assertIn(normalized_platform, platform_sql)
         self.assertEqual(claim.platform, "woocommerce")
         self.assertEqual(claim.platform_consecutive_429s, 2)
 

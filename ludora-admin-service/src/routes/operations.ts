@@ -544,7 +544,7 @@ async function loadStoreItemUpdateMonitor(
      where worker.worker_name = 'continuous'`
   );
   const workerRow = workerResult.rows[0] as Record<string, unknown> | undefined;
-  const pollSeconds = workerRow ? numberField(workerRow, 'poll_seconds') || 5 : 5;
+  const pollSeconds = workerRow ? numberField(workerRow, 'poll_seconds') || 1 : 1;
 
   const platformCooldownsResult = await database.query(
     `select

@@ -4441,7 +4441,11 @@ describe('ludora admin service', () => {
     expect(response.body.data).toMatchObject({
       latest_automatic_schedule_run: null,
       latest_schedule_attempt: null,
-      latest_schedule_run: null
+      latest_schedule_run: null,
+      summary: {
+        daily_capacity: 86400,
+        schedule_window_capacity: 82800
+      }
     });
   });
 

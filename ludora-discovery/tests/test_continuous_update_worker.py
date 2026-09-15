@@ -14,6 +14,8 @@ from ludora.continuous_update_worker import (
     _ContextTraceLogger,
     _create_continuous_browser_session,
     _process_claim,
+    main,
+    run_continuous_update_worker,
 )
 from ludora.database import ClaimedStoreItemUpdate, ItemCandidateUpsertResult
 from ludora.models import DiscoveryItemCandidateRecord
@@ -45,6 +47,25 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             store_name="Example",
         )
         self.now = datetime(2026, 8, 4, 18, 0, tzinfo=timezone.utc)
+
+    def test_run_worker_defaults_to_one_second_polling(self):
+        with (
+            patch("ludora.continuous_update_worker.resolve_database_url", return_value="postgresql://test"),
+            patch("ludora.continuous_update_worker._run_worker_session") as run_session,
+        ):
+            run_continuous_update_worker(env={})
+
+        self.assertEqual(run_session.call_args.kwargs["poll_seconds"], 1.0)
+
+    def test_cli_defaults_to_one_second_polling(self):
+        with (
+            patch.object(sys, "argv", ["continuous_update_worker.py"]),
+            patch("ludora.continuous_update_worker.signal.signal"),
+            patch("ludora.continuous_update_worker.run_continuous_update_worker") as run_worker,
+        ):
+            main()
+
+        self.assertEqual(run_worker.call_args.kwargs["poll_seconds"], 1.0)
 
     def test_continuous_browser_session_uses_bounded_playwright_lifetime(self):
         trace_logger = Mock()

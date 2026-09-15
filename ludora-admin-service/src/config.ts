@@ -110,7 +110,7 @@ function readContinuousItemUpdateWorkerConfig(): Config['continuousItemUpdateWor
     ),
     itemTimeoutSeconds,
     leaseSeconds,
-    pollSeconds: readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', 5)
+    pollSeconds: readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', 1)
   };
 }
 

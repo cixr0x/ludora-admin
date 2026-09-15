@@ -60,7 +60,7 @@ def run_continuous_update_worker(
     *,
     env: Mapping[str, str] | None = None,
     env_file: str = ".env",
-    poll_seconds: float = 5.0,
+    poll_seconds: float = 1.0,
     lease_seconds: int = 300,
     stop_event: threading.Event | None = None,
 ) -> None:
@@ -354,7 +354,7 @@ def _positive_int(value: str) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run the continuous Ludora store item update worker")
     parser.add_argument("--env-file", default=".env")
-    parser.add_argument("--poll-seconds", type=_positive_float, default=5.0)
+    parser.add_argument("--poll-seconds", type=_positive_float, default=1.0)
     parser.add_argument("--lease-seconds", type=_positive_int, default=300)
     args = parser.parse_args()
     stop_event = threading.Event()
