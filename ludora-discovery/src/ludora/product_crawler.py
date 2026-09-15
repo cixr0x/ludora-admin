@@ -2007,6 +2007,7 @@ def _handle_removed_product_detail(
 
     trace.log(
         "inventory.candidate.detail_fetch.skipped_removed",
+        final_url=fetched_detail.url,
         listing_title=listing_candidate.title,
         message=f"Skipping catalog candidate because its product detail returned {removal_description}",
         reason=removal_reason,

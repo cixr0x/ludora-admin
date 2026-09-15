@@ -1388,6 +1388,7 @@ class InventoryTests(unittest.TestCase):
 
     def test_fetch_detail_candidate_rejects_browser_soft_404_before_json_ld_extraction(self):
         product_url = "https://imperio.example/producto/kinfire-chronicles-nights-fall/"
+        final_url = "https://imperio.example/error-404/"
         listing_candidate = DiscoveryItemCandidateRecord(
             store_id=12,
             source_url=product_url,
@@ -1423,7 +1424,7 @@ class InventoryTests(unittest.TestCase):
                 _fetch_detail_candidate(
                     listing_candidate=listing_candidate,
                     source_listing_url="https://imperio.example/sitemap.xml",
-                    browser_fetcher=lambda url: FetchResult(url=url, text=soft_404_html, status_code=200),
+                    browser_fetcher=lambda _url: FetchResult(url=final_url, text=soft_404_html, status_code=200),
                     item_detail_extractor=reject_extraction,
                     trace_logger=trace,
                 )
@@ -1435,6 +1436,7 @@ class InventoryTests(unittest.TestCase):
         ]
         self.assertEqual(len(skipped_events), 1)
         self.assertEqual(skipped_events[0]["source_url"], product_url)
+        self.assertEqual(skipped_events[0].get("final_url"), "https://imperio.example/error-404/")
         self.assertEqual(skipped_events[0]["status_code"], 200)
         self.assertEqual(skipped_events[0]["reason"], "soft_404")
 
