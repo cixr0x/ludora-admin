@@ -17,8 +17,12 @@ PLAYER_RANGE_RE = re.compile(
     re.IGNORECASE,
 )
 PLAYER_LABEL_RE = re.compile(r"jugadores?\s*:?\s*(\d+)\s*(?:-|–|a)\s*(\d+)", re.IGNORECASE)
-MINUTES_RANGE_RE = re.compile(r"(\d+)\s*(?:-|–|a)\s*(\d+)\s*min", re.IGNORECASE)
-MINUTES_SINGLE_RE = re.compile(r"(\d+)\s*min", re.IGNORECASE)
+MINUTES_UNIT_PATTERN = r"(?:min|minutes?|minutos?)\b"
+MINUTES_RANGE_RE = re.compile(
+    rf"(\d+)\s*(?:-|–|a)\s*(\d+)\s*{MINUTES_UNIT_PATTERN}",
+    re.IGNORECASE,
+)
+MINUTES_SINGLE_RE = re.compile(rf"(\d+)\s*{MINUTES_UNIT_PATTERN}", re.IGNORECASE)
 AGE_LABEL_RE = re.compile(
     r"\bedad(?:\s+m[ií]nima)?(?:\s+recomendada)?\s*:?\s*(\d{1,2})(?!\d)\s*\+?",
     re.IGNORECASE,
@@ -27,6 +31,8 @@ AGE_YEARS_RE = re.compile(
     r"\b(\d{1,2})(?!\d)(?:\s*(?:-|–|a)\s*\d{1,2}(?!\d))?\s*\+?\s*(?:años|anos)\b",
     re.IGNORECASE,
 )
+MIN_PLAUSIBLE_MINUTES = 1
+MAX_PLAUSIBLE_MINUTES = 1440
 MIN_PLAUSIBLE_AGE = 1
 MAX_PLAUSIBLE_AGE = 99
 PUBLISHER_RE = re.compile(r"(?:editorial|publisher)\s*:?\s*(.+)", re.IGNORECASE)
@@ -943,36 +949,49 @@ def _extract_players(text: str, product_details: dict[str, str] | None = None) -
 def _extract_minutes(text: str, product_details: dict[str, str] | None = None) -> tuple[int | None, int | None]:
     range_match = MINUTES_RANGE_RE.search(text)
     if range_match:
-        return int(range_match.group(1)), int(range_match.group(2))
+        return (
+            _validated_minutes(int(range_match.group(1))),
+            _validated_minutes(int(range_match.group(2))),
+        )
     single_match = MINUTES_SINGLE_RE.search(text)
     if single_match:
-        minutes = int(single_match.group(1))
+        minutes = _validated_minutes(int(single_match.group(1)))
         return minutes, minutes
 
     details = product_details or {}
-    min_minutes = _first_int(
-        _product_detail_value(
-            details,
-            "Tiempo min partida (min)",
-            "Tiempo minimo partida (min)",
-            "Tiempo mínimo partida (min)",
-            "Duracion min",
-            "Duración min",
-            "Minutos min",
+    min_minutes = _validated_minutes(
+        _first_int(
+            _product_detail_value(
+                details,
+                "Tiempo min partida (min)",
+                "Tiempo minimo partida (min)",
+                "Tiempo mínimo partida (min)",
+                "Duracion min",
+                "Duración min",
+                "Minutos min",
+            )
         )
     )
-    max_minutes = _first_int(
-        _product_detail_value(
-            details,
-            "Tiempo max partida (min)",
-            "Tiempo maximo partida (min)",
-            "Tiempo máximo partida (min)",
-            "Duracion max",
-            "Duración max",
-            "Minutos max",
+    max_minutes = _validated_minutes(
+        _first_int(
+            _product_detail_value(
+                details,
+                "Tiempo max partida (min)",
+                "Tiempo maximo partida (min)",
+                "Tiempo máximo partida (min)",
+                "Duracion max",
+                "Duración max",
+                "Minutos max",
+            )
         )
     )
     return min_minutes, max_minutes
+
+
+def _validated_minutes(value: int | None) -> int | None:
+    if value is None or not MIN_PLAUSIBLE_MINUTES <= value <= MAX_PLAUSIBLE_MINUTES:
+        return None
+    return value
 
 
 def _extract_min_age(text: str) -> int | None:

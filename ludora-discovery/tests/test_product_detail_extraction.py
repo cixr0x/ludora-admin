@@ -5,10 +5,77 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.product_detail_extraction import _extract_min_age, extract_product_detail_candidate
+from ludora.product_detail_extraction import (
+    _extract_min_age,
+    _extract_minutes,
+    extract_product_detail_candidate,
+)
 
 
 class ProductDetailExtractionTests(unittest.TestCase):
+    def test_ignores_sku_before_mini_when_extracting_duration(self):
+        html = """
+        <html lang="es">
+          <head><title>Mini Rogue en Español</title></head>
+          <body>
+            <h1>Mini Rogue en Español</h1>
+            <p>SKU: 8425402449172 Mini Rogue</p>
+            <p>Tiempo de juego: 30 minutos aprox.</p>
+          </body>
+        </html>
+        """
+
+        record = extract_product_detail_candidate(
+            html,
+            "https://infiniteskill.com.mx/products/mini-rogue-en-espanol",
+            1,
+            "https://infiniteskill.com.mx/sitemap.xml",
+        )
+
+        self.assertIsNotNone(record)
+        assert record is not None
+        self.assertEqual(record.min_minutes, 30)
+        self.assertEqual(record.max_minutes, 30)
+
+    def test_extracts_only_complete_supported_duration_units_with_plausible_values(self):
+        cases = (
+            ("1 min", (1, 1)),
+            ("30 minute", (30, 30)),
+            ("30 minutes", (30, 30)),
+            ("30 minuto", (30, 30)),
+            ("1440 minutos", (1440, 1440)),
+            ("30-45 minutes", (30, 45)),
+            ("10-20 Mini Rogue", (None, None)),
+            ("0 min", (None, None)),
+            ("1441 min", (None, None)),
+        )
+
+        for text, expected_minutes in cases:
+            with self.subTest(text=text):
+                self.assertEqual(_extract_minutes(text), expected_minutes)
+
+    def test_extracts_only_plausible_structured_duration_values(self):
+        cases = (
+            (
+                {
+                    "Tiempo min partida (min)": "1",
+                    "Tiempo max partida (min)": "1440",
+                },
+                (1, 1440),
+            ),
+            (
+                {
+                    "Tiempo min partida (min)": "0",
+                    "Tiempo max partida (min)": "1441",
+                },
+                (None, None),
+            ),
+        )
+
+        for product_details, expected_minutes in cases:
+            with self.subTest(product_details=product_details):
+                self.assertEqual(_extract_minutes("", product_details), expected_minutes)
+
     def test_extracts_only_strict_plausible_min_age_formats(self):
         cases = {
             "Edad: 10+": 10,
