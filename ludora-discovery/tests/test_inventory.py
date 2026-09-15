@@ -15,6 +15,8 @@ from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import (
     ProductDetailRejectedError,
     TransientProductFetchError,
+    _fetch_detail_candidate,
+    _looks_like_removed_product_page,
     _should_retry_detail_with_browser,
     _significant_text_tokens,
     crawl_store_product_details,
@@ -191,6 +193,11 @@ class InventoryTests(unittest.TestCase):
             _significant_text_tokens("Æterna Œuvre Straße"),
             {"aeterna", "oeuvre", "strasse"},
         )
+
+    def test_removed_page_detector_recognizes_exact_error_status_headings(self):
+        for heading in ("Error - 404", "Error - 410"):
+            with self.subTest(heading=heading):
+                self.assertTrue(_looks_like_removed_product_page(f"<h1>  {heading.upper()}  </h1>"))
 
     def test_title_validation_rejects_a_lone_generic_pack_overlap(self):
         listing = DiscoveryItemCandidateRecord(
@@ -1322,6 +1329,114 @@ class InventoryTests(unittest.TestCase):
                 self.assertEqual(skipped_events[0]["source_url"], removed_url)
                 self.assertEqual(skipped_events[0]["status_code"], status_code)
                 self.assertEqual(skipped_events[0]["reason"], f"http_{status_code}")
+
+    def test_crawl_store_product_details_skips_soft_404_before_json_ld_extraction(self):
+        removed_url = "https://imperio.example/producto/kinfire-chronicles-nights-fall/"
+        valid_url = "https://imperio.example/producto/catan/"
+        soft_404_html = """
+        <html>
+          <body>
+            <h1>Error - 404</h1>
+            <script type="application/ld+json">
+            {
+              "@type": "Product",
+              "name": "Kinfire Chronicles: Night's Fall",
+              "offers": {"price": "1499.00", "priceCurrency": "MXN"}
+            }
+            </script>
+            <script type="application/ld+json">
+            {"@type": "Product", "name": "Heat: Pedal to the Metal"}
+            </script>
+          </body>
+        </html>
+        """
+        valid_html = """
+        <script type="application/ld+json">
+        {"@type": "Product", "name": "Catan"}
+        </script>
+        """
+        repository = FakeRepository()
+        trace = FakeTraceLogger()
+
+        def fetch_detail(url, **_kwargs):
+            if url == removed_url:
+                return FetchResult(url=url, text=soft_404_html, status_code=200)
+            return FetchResult(url=url, text=valid_html, status_code=200)
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[removed_url, valid_url],
+        ), patch("ludora.product_crawler.fetch_html", side_effect=fetch_detail):
+            records = crawl_store_product_details(
+                "https://imperio.example/",
+                12,
+                repository,
+                trace_logger=trace,
+            )
+
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
+        skipped_events = [
+            fields
+            for event, fields in trace.events
+            if event == "inventory.candidate.detail_fetch.skipped_removed"
+        ]
+        self.assertEqual(len(skipped_events), 1)
+        self.assertEqual(skipped_events[0]["source_url"], removed_url)
+        self.assertEqual(skipped_events[0]["status_code"], 200)
+        self.assertEqual(skipped_events[0]["reason"], "soft_404")
+
+    def test_fetch_detail_candidate_rejects_browser_soft_404_before_json_ld_extraction(self):
+        product_url = "https://imperio.example/producto/kinfire-chronicles-nights-fall/"
+        listing_candidate = DiscoveryItemCandidateRecord(
+            store_id=12,
+            source_url=product_url,
+            title="Kinfire Chronicles Night's Fall",
+        )
+        challenge_html = (
+            "<html><head><title>One moment</title></head>"
+            "<body><script>window.location.reload()</script></body></html>"
+        )
+        soft_404_html = """
+        <html>
+          <body>
+            <h1>Error - 404</h1>
+            <script type="application/ld+json">
+            {"@type": "Product", "name": "Kinfire Chronicles: Night's Fall"}
+            </script>
+            <script type="application/ld+json">
+            {"@type": "Product", "name": "Heat: Pedal to the Metal"}
+            </script>
+          </body>
+        </html>
+        """
+        trace = FakeTraceLogger()
+
+        def reject_extraction(*_args):
+            self.fail("Soft-404 browser HTML reached product detail extraction")
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=product_url, text=challenge_html, status_code=200),
+        ):
+            with self.assertRaises(ProductDetailRejectedError):
+                _fetch_detail_candidate(
+                    listing_candidate=listing_candidate,
+                    source_listing_url="https://imperio.example/sitemap.xml",
+                    browser_fetcher=lambda url: FetchResult(url=url, text=soft_404_html, status_code=200),
+                    item_detail_extractor=reject_extraction,
+                    trace_logger=trace,
+                )
+
+        skipped_events = [
+            fields
+            for event, fields in trace.events
+            if event == "inventory.candidate.detail_fetch.skipped_removed"
+        ]
+        self.assertEqual(len(skipped_events), 1)
+        self.assertEqual(skipped_events[0]["source_url"], product_url)
+        self.assertEqual(skipped_events[0]["status_code"], 200)
+        self.assertEqual(skipped_events[0]["reason"], "soft_404")
 
     def test_crawl_store_product_details_skips_sitemap_candidate_when_parsed_detail_is_rejected(self):
         cookie_html = """
