@@ -124,6 +124,13 @@ class SchemaTests(unittest.TestCase):
                 "insert into store_item_update_platform_cooldown",
                 "select worker_name, 'shopify'",
             ],
+            "20260915_001_store_item_update_store_cooldown.sql": [
+                "create table if not exists store_item_update_store_cooldown",
+                "primary key (worker_name, store_id)",
+                "references store_item_update_worker_state(worker_name) on delete cascade",
+                "references stores(id) on delete cascade",
+                "check (consecutive_429s >= 0)",
+            ],
             "20260822_001_materialize_active_item_refresh_queue.sql": [
                 "drop view active_item",
                 "create materialized view active_item as",
@@ -188,6 +195,7 @@ class SchemaTests(unittest.TestCase):
             "store_item_update_trace_log",
             "store_item_update_change_log",
             "store_item_update_platform_cooldown",
+            "store_item_update_store_cooldown",
             "publishers",
         ]:
             self.assertIn(f"create table if not exists {table_name}", schema.casefold())
@@ -201,6 +209,17 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("primary key (worker_name, platform)", table)
         self.assertIn("references store_item_update_worker_state(worker_name) on delete cascade", table)
         self.assertIn("check (platform in ('shopify', 'woocommerce'))", table)
+        self.assertIn("check (consecutive_429s >= 0)", table)
+
+    def test_schema_contains_store_update_cooldowns(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+        table = schema.split("create table if not exists store_item_update_store_cooldown", 1)[1].split(
+            ");", 1
+        )[0]
+
+        self.assertIn("primary key (worker_name, store_id)", table)
+        self.assertIn("references store_item_update_worker_state(worker_name) on delete cascade", table)
+        self.assertIn("references stores(id) on delete cascade", table)
         self.assertIn("check (consecutive_429s >= 0)", table)
 
     def test_curated_stores_are_active_by_default(self):

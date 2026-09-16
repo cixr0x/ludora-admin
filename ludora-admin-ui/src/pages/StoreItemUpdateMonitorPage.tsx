@@ -165,7 +165,7 @@ export function StoreItemUpdateMonitorPage() {
   const worker = monitor?.worker;
   const workerHealth = worker ? recordText(worker, 'health') : 'not started';
   const controlStatus = monitor?.control_status ?? 'unavailable';
-  const activePlatformCooldowns = (monitor?.platform_cooldowns ?? []).filter(
+  const activeStoreCooldowns = (monitor?.store_cooldowns ?? []).filter(
     (cooldown) => cooldown.active && cooldown.blocked_until
   );
   const histogramStores = [...(monitor?.store_statistics ?? [])].sort((left, right) =>
@@ -260,18 +260,18 @@ export function StoreItemUpdateMonitorPage() {
             Worker: {workerHealth}. {worker ? `Last heartbeat ${formatDate(worker.heartbeat_at)}.` : 'No heartbeat has been recorded.'}
           </Typography>
           {!monitor ? (
-            <Chip color="default" label="Platform cooldown state unavailable" size="small" variant="outlined" />
-          ) : activePlatformCooldowns.length ? (
-            activePlatformCooldowns.map((cooldown) => (
+            <Chip color="default" label="Store cooldown state unavailable" size="small" variant="outlined" />
+          ) : activeStoreCooldowns.length ? (
+            activeStoreCooldowns.map((cooldown) => (
               <Chip
                 color="warning"
-                key={cooldown.platform}
-                label={`${formatPlatform(cooldown.platform)} paused until ${formatDate(cooldown.blocked_until)}`}
+                key={`${cooldown.store_id}:${cooldown.store_name}`}
+                label={`${cooldown.store_name} paused until ${formatDate(cooldown.blocked_until)} (${formatPlatform(cooldown.platform)})`}
                 size="small"
               />
             ))
           ) : (
-            <Chip color="success" label="Platform claims enabled" size="small" variant="outlined" />
+            <Chip color="success" label="No active store cooldowns" size="small" variant="outlined" />
           )}
         </Stack>
       </Alert>

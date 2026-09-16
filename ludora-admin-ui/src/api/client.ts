@@ -105,11 +105,13 @@ export type StoreItemUpdateScheduleRun = {
 
 export type ContinuousItemUpdateControlStatus = 'paused' | 'running' | 'stopping' | 'unavailable';
 
-export type StoreItemUpdatePlatformCooldown = {
+export type StoreItemUpdateStoreCooldown = {
   active: boolean;
   blocked_until: string | null;
   consecutive_429s: number;
-  platform: 'shopify' | 'woocommerce';
+  platform: string;
+  store_id: number;
+  store_name: string;
 };
 
 export type StoreItemUpdateMonitor = {
@@ -126,7 +128,7 @@ export type StoreItemUpdateMonitor = {
   latest_automatic_schedule_run: StoreItemUpdateScheduleRun | null;
   latest_schedule_attempt: StoreItemUpdateScheduleRun | null;
   latest_schedule_run: StoreItemUpdateScheduleRun | null;
-  platform_cooldowns: StoreItemUpdatePlatformCooldown[];
+  store_cooldowns: StoreItemUpdateStoreCooldown[];
   range_hours: number;
   recent_attempts: AdminRecord[];
   summary: StoreItemUpdateMonitorSummary;

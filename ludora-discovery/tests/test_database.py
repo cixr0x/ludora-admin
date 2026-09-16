@@ -122,7 +122,7 @@ def confirmed_store_item_row() -> tuple[object, ...]:
 
 
 class DatabaseRepositoryTests(unittest.TestCase):
-    def test_claim_due_store_item_update_skips_blocked_platforms_and_reads_platform_count(self):
+    def test_claim_due_store_item_update_skips_only_the_blocked_store_and_reads_its_count(self):
         connection = FakeConnection(
             fetchone_rows=[
                 (501,),
@@ -145,21 +145,24 @@ class DatabaseRepositoryTests(unittest.TestCase):
             for sql, _params in connection.cursor_instance.executions
         ]
         claim_sql = emitted_sql[0]
-        platform_sql = emitted_sql[2]
-        combined_claim_sql = f"{claim_sql} {platform_sql}"
+        store_sql = emitted_sql[2]
+        combined_claim_sql = f"{claim_sql} {store_sql}"
         normalized_platform = "coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown')"
-        self.assertIn("store_item_update_platform_cooldown", claim_sql)
+        self.assertIn("store_item_update_store_cooldown", claim_sql)
         self.assertIn("blocked_until > now()", claim_sql)
-        self.assertIn("store_item_update_platform_cooldown", platform_sql)
-        self.assertIn("consecutive_429s", platform_sql)
+        self.assertIn("cooldown.store_id = store_items.store_id", claim_sql)
+        self.assertNotIn("cooldown.platform", claim_sql)
+        self.assertIn("store_item_update_store_cooldown", store_sql)
+        self.assertIn("consecutive_429s", store_sql)
+        self.assertIn("cooldown.store_id = store_items.store_id", store_sql)
+        self.assertNotIn("cooldown.platform", store_sql)
         self.assertNotIn("raw_payload", combined_claim_sql)
         self.assertNotIn("ilike", combined_claim_sql)
-        self.assertIn(normalized_platform, claim_sql)
-        self.assertIn(normalized_platform, platform_sql)
+        self.assertIn(normalized_platform, store_sql)
         self.assertEqual(claim.platform, "woocommerce")
-        self.assertEqual(claim.platform_consecutive_429s, 2)
+        self.assertEqual(claim.store_consecutive_429s, 2)
 
-    def test_successful_platform_update_clears_platform_cooldown(self):
+    def test_successful_update_clears_only_its_store_cooldown(self):
         connection = FakeConnection(fetchone_rows=[(501,)])
         repository = DiscoveryRepository(connection)
         record = confirmed_store_item_record()
@@ -173,7 +176,6 @@ class DatabaseRepositoryTests(unittest.TestCase):
             run_id="continuous:test",
             worker_id="worker-1",
             worker_name="continuous",
-            platform="woocommerce",
         )
 
         completion_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
@@ -182,13 +184,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
         cooldown_updates = [
             (sql, params)
             for sql, params in connection.cursor_instance.executions
-            if "store_item_update_platform_cooldown" in sql.casefold()
+            if "store_item_update_store_cooldown" in sql.casefold()
         ]
         self.assertEqual(len(cooldown_updates), 1)
         sql, params = cooldown_updates[0]
         self.assertIn("blocked_until = null", " ".join(sql.casefold().split()))
         self.assertIn("consecutive_429s = 0", " ".join(sql.casefold().split()))
-        self.assertEqual(params, ("continuous", "woocommerce"))
+        self.assertIn("store_id = %s", " ".join(sql.casefold().split()))
+        self.assertEqual(params, ("continuous", 12))
 
     def test_successful_claimed_update_persists_and_logs_changed_image(self):
         connection = FakeConnection(fetchone_rows=[(501,)])
@@ -211,7 +214,6 @@ class DatabaseRepositoryTests(unittest.TestCase):
             run_id="continuous:test",
             worker_id="worker-1",
             worker_name="continuous",
-            platform="shopify",
         )
 
         update_sql, update_params = connection.cursor_instance.executions[0]
@@ -244,7 +246,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("next_update_at = greatest(coalesce(next_update_at, now()), now() + interval '15 minutes')", recovery_sql)
         self.assertIn("last_update_attempt_at = clock_timestamp()", recovery_sql)
 
-    def test_woocommerce_429_upserts_platform_cooldown_with_failed_item(self):
+    def test_woocommerce_429_upserts_store_cooldown_with_failed_item(self):
         connection = FakeConnection(fetchone_rows=[(501,)])
         repository = DiscoveryRepository(connection)
         blocked_until = datetime(2026, 8, 4, 18, 15, tzinfo=timezone.utc)
@@ -256,7 +258,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             http_status=429,
             lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
             next_update_at=blocked_until,
-            platform_blocked_until=blocked_until,
+            store_blocked_until=blocked_until,
             worker_id="worker-1",
             worker_name="continuous",
             job_id=17,
@@ -268,16 +270,17 @@ class DatabaseRepositoryTests(unittest.TestCase):
         cooldown_writes = [
             (sql, params)
             for sql, params in connection.cursor_instance.executions
-            if "store_item_update_platform_cooldown" in sql.casefold()
+            if "store_item_update_store_cooldown" in sql.casefold()
         ]
         self.assertEqual(len(cooldown_writes), 1)
         sql, params = cooldown_writes[0]
         normalized_sql = " ".join(sql.casefold().split())
-        self.assertIn("insert into store_item_update_platform_cooldown", normalized_sql)
-        self.assertIn("consecutive_429s = store_item_update_platform_cooldown.consecutive_429s + 1", normalized_sql)
-        self.assertEqual(params, ("continuous", "woocommerce", blocked_until))
+        self.assertIn("insert into store_item_update_store_cooldown", normalized_sql)
+        self.assertIn("on conflict (worker_name, store_id)", normalized_sql)
+        self.assertIn("consecutive_429s = store_item_update_store_cooldown.consecutive_429s + 1", normalized_sql)
+        self.assertEqual(params, ("continuous", 12, blocked_until))
 
-    def test_non_rate_limited_platform_failure_does_not_write_platform_cooldown(self):
+    def test_non_rate_limited_platform_failure_does_not_write_store_cooldown(self):
         connection = FakeConnection(fetchone_rows=[(501,)])
         repository = DiscoveryRepository(connection)
 
@@ -288,7 +291,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             http_status=429,
             lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
             next_update_at=datetime(2026, 8, 4, 18, 15, tzinfo=timezone.utc),
-            platform_blocked_until=None,
+            store_blocked_until=None,
             worker_id="worker-1",
             worker_name="continuous",
             job_id=17,
@@ -297,7 +300,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         self.assertFalse(
             any(
-                "store_item_update_platform_cooldown" in sql.casefold()
+                "store_item_update_store_cooldown" in sql.casefold()
                 for sql, _params in connection.cursor_instance.executions
             )
         )

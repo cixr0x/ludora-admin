@@ -35,7 +35,7 @@ WORKER_NAME = "continuous"
 BROWSER_RECYCLE_MAX_FETCHES = 250
 BROWSER_RECYCLE_MAX_AGE_SECONDS = 6 * 60 * 60
 ITEM_FAILURE_BACKOFF_MINUTES = (15, 60, 360, 1_440)
-PLATFORM_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
+STORE_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
 
 
@@ -261,7 +261,6 @@ def _process_claim(
             run_id=run_id,
             worker_id=worker_id,
             worker_name=WORKER_NAME,
-            platform=claim.platform,
         )
         _log(
             "worker.item.succeeded",
@@ -284,13 +283,13 @@ def _process_claim(
         status_code = exc.status_code if isinstance(exc, TransientProductFetchError) else None
         retry_after_seconds = exc.retry_after_seconds if isinstance(exc, TransientProductFetchError) else None
         next_update_at = _item_failure_retry_at(claim.consecutive_failures + 1)
-        platform_blocked_until = None
+        store_blocked_until = None
         if claim.platform in RATE_LIMITED_PLATFORMS and status_code == 429:
-            platform_blocked_until = _platform_retry_at(
-                claim.platform_consecutive_429s + 1,
+            store_blocked_until = _store_retry_at(
+                claim.store_consecutive_429s + 1,
                 retry_after_seconds=retry_after_seconds,
             )
-            next_update_at = max(next_update_at, platform_blocked_until)
+            next_update_at = max(next_update_at, store_blocked_until)
         repository.fail_claimed_store_item_update(
             claim.record,
             attempt_id=claim.attempt_id,
@@ -298,7 +297,7 @@ def _process_claim(
             http_status=status_code,
             lease_token=claim.lease_token,
             next_update_at=next_update_at,
-            platform_blocked_until=platform_blocked_until,
+            store_blocked_until=store_blocked_until,
             worker_id=worker_id,
             worker_name=WORKER_NAME,
             job_id=job_id,
@@ -310,7 +309,7 @@ def _process_claim(
             error=str(exc),
             http_status=status_code,
             next_update_at=next_update_at.isoformat(),
-            platform_blocked_until=(platform_blocked_until.isoformat() if platform_blocked_until else None),
+            store_blocked_until=(store_blocked_until.isoformat() if store_blocked_until else None),
             store_item_id=store_item_id,
         )
 
@@ -321,9 +320,9 @@ def _item_failure_retry_at(consecutive_failures: int) -> datetime:
     return _utc_now() + timedelta(minutes=minutes)
 
 
-def _platform_retry_at(consecutive_429s: int, *, retry_after_seconds: float | None) -> datetime:
-    index = min(max(consecutive_429s, 1), len(PLATFORM_429_BACKOFF_MINUTES)) - 1
-    configured_seconds = PLATFORM_429_BACKOFF_MINUTES[index] * 60
+def _store_retry_at(consecutive_429s: int, *, retry_after_seconds: float | None) -> datetime:
+    index = min(max(consecutive_429s, 1), len(STORE_429_BACKOFF_MINUTES)) - 1
+    configured_seconds = STORE_429_BACKOFF_MINUTES[index] * 60
     requested_seconds = max(0.0, retry_after_seconds or 0.0)
     delay_seconds = min(24 * 60 * 60, max(configured_seconds, requested_seconds))
     return _utc_now() + timedelta(seconds=delay_seconds)

@@ -4530,7 +4530,6 @@ describe('ludora admin service', () => {
             rows: [{
               heartbeat_at: new Date().toISOString(),
               poll_seconds: 5,
-              shopify_blocked_until: null,
               status: 'idle',
               worker_id: 'worker-1',
               worker_name: 'continuous'
@@ -4602,14 +4601,16 @@ describe('ludora admin service', () => {
             }]
           };
         }
-        if (normalizedSql.includes('from store_item_update_platform_cooldown')) {
+        if (normalizedSql.includes('from store_item_update_store_cooldown')) {
           return {
             rows: [
               {
                 active: true,
                 blocked_until: '2026-08-04T19:00:00.000Z',
                 consecutive_429s: 2,
-                platform: 'woocommerce'
+                platform: 'woocommerce',
+                store_id: 13,
+                store_name: 'Beta'
               }
             ]
           };
@@ -4683,12 +4684,14 @@ describe('ludora admin service', () => {
         status: 'COMPLETED',
         trigger: 'MANUAL'
       },
-      platform_cooldowns: [
+      store_cooldowns: [
         {
           active: true,
           blocked_until: '2026-08-04T19:00:00.000Z',
           consecutive_429s: 2,
-          platform: 'woocommerce'
+          platform: 'woocommerce',
+          store_id: 13,
+          store_name: 'Beta'
         }
       ],
       range_hours: 72,
@@ -4734,6 +4737,11 @@ describe('ludora admin service', () => {
       },
       worker: { health: 'healthy', status: 'idle', worker_id: 'worker-1' }
     });
+    const storeCooldownQuery = normalizeSql(queries.find((query) =>
+      normalizeSql(query.sql).includes('from store_item_update_store_cooldown')
+    )?.sql ?? '');
+    expect(storeCooldownQuery).toContain('join stores on stores.id = cooldown.store_id');
+    expect(storeCooldownQuery).toContain("coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform");
     expect(queries).toHaveLength(7);
     const histogramQuery = queries.find((query) => normalizeSql(query.sql).includes('generate_series'));
     expect(histogramQuery?.params).toEqual([72, 12]);

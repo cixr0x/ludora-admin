@@ -537,8 +537,7 @@ async function loadStoreItemUpdateMonitor(
        worker.heartbeat_at, worker.started_at, worker.current_store_item_id,
        current_item.update_lease_expires_at as current_lease_expires_at,
        worker.last_attempt_at, worker.last_success_at, worker.last_failure_at,
-       worker.last_error, worker.shopify_blocked_until,
-       worker.shopify_consecutive_429s, worker.updated_at
+       worker.last_error, worker.updated_at
      from store_item_update_worker_state worker
      left join store_items current_item on current_item.id = worker.current_store_item_id
      where worker.worker_name = 'continuous'`
@@ -546,13 +545,18 @@ async function loadStoreItemUpdateMonitor(
   const workerRow = workerResult.rows[0] as Record<string, unknown> | undefined;
   const pollSeconds = workerRow ? numberField(workerRow, 'poll_seconds') || 1 : 1;
 
-  const platformCooldownsResult = await database.query(
+  const storeCooldownsResult = await database.query(
     `select
-       platform, blocked_until, consecutive_429s,
-       (blocked_until > now()) as active
-     from store_item_update_platform_cooldown
-     where worker_name = 'continuous'
-     order by platform`
+       cooldown.store_id,
+       stores.name as store_name,
+       coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform,
+       cooldown.blocked_until,
+       cooldown.consecutive_429s,
+       (cooldown.blocked_until > now()) as active
+     from store_item_update_store_cooldown cooldown
+     join stores on stores.id = cooldown.store_id
+     where cooldown.worker_name = 'continuous'
+     order by stores.name, cooldown.store_id`
   );
 
   const summaryResult = await database.query(
@@ -753,7 +757,7 @@ async function loadStoreItemUpdateMonitor(
     latest_automatic_schedule_run: scheduleRunsRow.latest_automatic_schedule_run ?? null,
     latest_schedule_attempt: scheduleRunsRow.latest_schedule_attempt ?? null,
     latest_schedule_run: scheduleRunsRow.latest_schedule_run ?? null,
-    platform_cooldowns: platformCooldownsResult.rows,
+    store_cooldowns: storeCooldownsResult.rows,
     range_hours: rangeHours,
     recent_attempts: recentAttemptsResult.rows,
     summary: {
@@ -784,8 +788,7 @@ async function loadStoreItemUpdateMonitor(
     worker: workerRow
       ? {
           ...workerRow,
-          health: workerHealth(workerRow, pollSeconds),
-          shopify_is_blocked: isFutureDate(workerRow.shopify_blocked_until)
+          health: workerHealth(workerRow, pollSeconds)
         }
       : null
   };

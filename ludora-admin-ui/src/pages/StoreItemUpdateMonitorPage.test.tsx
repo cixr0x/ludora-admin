@@ -46,18 +46,22 @@ const monitor: StoreItemUpdateMonitor = {
   },
   latest_schedule_attempt: completedManualScheduleRun,
   latest_schedule_run: completedManualScheduleRun,
-  platform_cooldowns: [
+  store_cooldowns: [
     {
       active: false,
       blocked_until: null,
       consecutive_429s: 0,
-      platform: 'shopify'
+      platform: 'shopify',
+      store_id: 12,
+      store_name: 'Alpha'
     },
     {
       active: true,
       blocked_until: '2026-08-04T19:00:00Z',
       consecutive_429s: 2,
-      platform: 'woocommerce'
+      platform: 'woocommerce',
+      store_id: 13,
+      store_name: 'Beta'
     }
   ],
   range_hours: 48,
@@ -124,8 +128,6 @@ const monitor: StoreItemUpdateMonitor = {
   worker: {
     health: 'healthy',
     heartbeat_at: '2026-08-04T18:00:00Z',
-    shopify_blocked_until: '2026-08-04T19:00:00Z',
-    shopify_is_blocked: true,
     status: 'idle'
   }
 };
@@ -164,7 +166,8 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(screen.getByText(/Applied schedule:.*8\/5\/2026, 4:00:00 AM America\/Mexico_City/)).toBeInTheDocument();
     expect(screen.getByText(/23-hour scheduling window/)).toBeInTheDocument();
     expect(screen.getByText(/Schedule capacity is fully utilized or exceeded/)).toBeInTheDocument();
-    expect(screen.getByText(/WooCommerce paused until/)).toBeInTheDocument();
+    expect(screen.getByText(/Beta paused until/)).toBeInTheDocument();
+    expect(screen.queryByText(/WooCommerce paused until/)).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pause automatic updates' })).toBeInTheDocument();
     expect(screen.getByRole('img', { name: 'Store item staleness histogram' })).toBeInTheDocument();
     expect(screen.getByLabelText('24h: 2 items')).toBeInTheDocument();

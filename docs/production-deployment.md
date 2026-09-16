@@ -137,11 +137,11 @@ admin service distributes eligible items daily from 3:00 AM across a 23-hour
 window. The worker claims one due item at a time, uses a five-minute expiring
 lease, and clears the due time after a successful update. It uses a PostgreSQL
 advisory lock, so a manual batch update cannot run concurrently and double the
-store request rate. HTTP 429 responses trigger independent platform-wide
-cooldowns for Shopify and WooCommerce, allowing the worker to continue with
-other platforms while the blocked platform recovers. Its heartbeat, leases,
-attempts, platform cooldowns, pause/resume controls, and hourly staleness
-distribution are available under **Operations > Update Monitor**. Pausing lets
+store request rate. HTTP 429 responses trigger independent store cooldowns for
+Shopify and WooCommerce, allowing the worker to continue with other stores,
+including stores on the same platform, while the affected store recovers. Its
+heartbeat, leases, attempts, store cooldowns, pause/resume controls, and hourly
+staleness distribution are available under **Operations > Update Monitor**. Pausing lets
 the in-flight item finish, stops the automatic worker, and releases the
 coordinator lock for manual updates. The pause is process-local, so restarting
 admin-service starts the automatic worker again when it is enabled by

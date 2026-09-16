@@ -103,7 +103,7 @@ class ClaimedStoreItemUpdate:
     lease_token: str
     platform: str
     record: DiscoveryItemCandidateRecord
-    platform_consecutive_429s: int
+    store_consecutive_429s: int
     store_name: str
 
 
@@ -441,7 +441,7 @@ class DiscoveryRepository:
         worker_name: str,
         worker_id: str,
         poll_seconds: float,
-    ) -> datetime | None:
+    ) -> None:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -466,13 +466,10 @@ class DiscoveryRepository:
                     current_store_item_id = null,
                     last_error = '',
                     updated_at = excluded.updated_at
-                returning shopify_blocked_until
                 """,
                 (worker_name, worker_id, poll_seconds),
             )
-            row = cursor.fetchone()
         self.connection.commit()
-        return row[0] if row else None
 
     def recover_interrupted_continuous_updates(self) -> None:
         recovery_error = "Continuous update worker restarted before the attempt completed"
@@ -585,9 +582,9 @@ class DiscoveryRepository:
                       )
                       and not exists (
                         select 1
-                        from store_item_update_platform_cooldown cooldown
+                        from store_item_update_store_cooldown cooldown
                         where cooldown.worker_name = %s
-                          and cooldown.platform = coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown')
+                          and cooldown.store_id = store_items.store_id
                           and cooldown.blocked_until > now()
                       )
                     order by store_items.next_update_at, store_items.id
@@ -638,9 +635,9 @@ class DiscoveryRepository:
                     coalesce(cooldown.consecutive_429s, 0)
                 from store_items
                 join stores on stores.id = store_items.store_id
-                left join store_item_update_platform_cooldown cooldown
+                left join store_item_update_store_cooldown cooldown
                   on cooldown.worker_name = %s
-                 and cooldown.platform = coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown')
+                 and cooldown.store_id = store_items.store_id
                 where store_items.id = %s
                 """,
                 (worker_name, store_item_id),
@@ -685,7 +682,7 @@ class DiscoveryRepository:
             lease_token=lease_token,
             platform=platform,
             record=record,
-            platform_consecutive_429s=int(store_row[3]) if store_row else 0,
+            store_consecutive_429s=int(store_row[3]) if store_row else 0,
             store_name=store_name or f"Store {record.store_id}",
         )
 
@@ -700,7 +697,6 @@ class DiscoveryRepository:
         run_id: str,
         worker_id: str,
         worker_name: str,
-        platform: str,
     ) -> ItemCandidateUpsertResult:
         store_item_id = existing_record.store_item_id or refreshed_record.store_item_id
         if store_item_id is None:
@@ -781,26 +777,23 @@ class DiscoveryRepository:
                     current_store_item_id = null,
                     last_success_at = now(),
                     last_error = '',
-                    shopify_blocked_until = case when %s = 'shopify' then null else shopify_blocked_until end,
-                    shopify_consecutive_429s = case when %s = 'shopify' then 0 else shopify_consecutive_429s end,
                     updated_at = now()
                 where worker_name = %s
                   and worker_id = %s
                 """,
-                (platform, platform, worker_name, worker_id),
+                (worker_name, worker_id),
             )
-            if platform in STORE_ITEM_UPDATE_RATE_LIMITED_PLATFORMS:
-                cursor.execute(
-                    """
-                    update store_item_update_platform_cooldown
-                    set blocked_until = null,
-                        consecutive_429s = 0,
-                        updated_at = now()
-                    where worker_name = %s
-                      and platform = %s
-                    """,
-                    (worker_name, platform),
-                )
+            cursor.execute(
+                """
+                update store_item_update_store_cooldown
+                set blocked_until = null,
+                    consecutive_429s = 0,
+                    updated_at = now()
+                where worker_name = %s
+                  and store_id = %s
+                """,
+                (worker_name, existing_record.store_id),
+            )
             cursor.execute(
                 """
                 update job_store_item_update_log
@@ -910,7 +903,7 @@ class DiscoveryRepository:
         http_status: int | None,
         lease_token: str,
         next_update_at: datetime,
-        platform_blocked_until: datetime | None,
+        store_blocked_until: datetime | None,
         worker_id: str,
         worker_name: str,
         job_id: int,
@@ -955,27 +948,27 @@ class DiscoveryRepository:
             if (
                 platform in STORE_ITEM_UPDATE_RATE_LIMITED_PLATFORMS
                 and http_status == 429
-                and platform_blocked_until is not None
+                and store_blocked_until is not None
             ):
                 cursor.execute(
                     """
-                    insert into store_item_update_platform_cooldown (
+                    insert into store_item_update_store_cooldown (
                         worker_name,
-                        platform,
+                        store_id,
                         blocked_until,
                         consecutive_429s,
                         updated_at
                     )
                     values (%s, %s, %s, 1, now())
-                    on conflict (worker_name, platform) do update set
+                    on conflict (worker_name, store_id) do update set
                         blocked_until = greatest(
-                          store_item_update_platform_cooldown.blocked_until,
+                          store_item_update_store_cooldown.blocked_until,
                           excluded.blocked_until
                         ),
-                        consecutive_429s = store_item_update_platform_cooldown.consecutive_429s + 1,
+                        consecutive_429s = store_item_update_store_cooldown.consecutive_429s + 1,
                         updated_at = now()
                     """,
-                    (worker_name, platform, platform_blocked_until),
+                    (worker_name, existing_record.store_id, store_blocked_until),
                 )
             cursor.execute(
                 """
@@ -985,25 +978,12 @@ class DiscoveryRepository:
                     current_store_item_id = null,
                     last_failure_at = now(),
                     last_error = %s,
-                    shopify_blocked_until = case
-                      when %s = 'shopify' and %s = 429 then %s
-                      else shopify_blocked_until
-                    end,
-                    shopify_consecutive_429s = case
-                      when %s = 'shopify' and %s = 429 then shopify_consecutive_429s + 1
-                      else shopify_consecutive_429s
-                    end,
                     updated_at = now()
                 where worker_name = %s
                   and worker_id = %s
                 """,
                 (
                     error,
-                    platform,
-                    http_status,
-                    platform_blocked_until,
-                    platform,
-                    http_status,
                     worker_name,
                     worker_id,
                 ),
