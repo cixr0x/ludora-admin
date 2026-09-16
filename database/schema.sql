@@ -389,18 +389,6 @@ create table if not exists store_item_update_platform_cooldown (
     primary key (worker_name, platform)
 );
 
-create table if not exists store_item_update_store_cooldown (
-    worker_name text not null
-        references store_item_update_worker_state(worker_name) on delete cascade,
-    store_id bigint not null
-        references stores(id) on delete cascade,
-    blocked_until timestamptz,
-    consecutive_429s integer not null default 0
-        check (consecutive_429s >= 0),
-    updated_at timestamptz not null default now(),
-    primary key (worker_name, store_id)
-);
-
 alter table if exists store_items add column if not exists source_listing_url text not null default '';
 alter table if exists store_items add column if not exists image_url text not null default '';
 alter table if exists store_items add column if not exists item_type text not null default 'unknown';
@@ -617,6 +605,18 @@ create table if not exists stores (
     active boolean not null default true,
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
+);
+
+create table if not exists store_item_update_store_cooldown (
+    worker_name text not null
+        references store_item_update_worker_state(worker_name) on delete cascade,
+    store_id bigint not null
+        references stores(id) on delete cascade,
+    blocked_until timestamptz,
+    consecutive_429s integer not null default 0
+        check (consecutive_429s >= 0),
+    updated_at timestamptz not null default now(),
+    primary key (worker_name, store_id)
 );
 
 do $$

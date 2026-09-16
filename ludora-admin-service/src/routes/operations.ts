@@ -757,7 +757,14 @@ async function loadStoreItemUpdateMonitor(
     latest_automatic_schedule_run: scheduleRunsRow.latest_automatic_schedule_run ?? null,
     latest_schedule_attempt: scheduleRunsRow.latest_schedule_attempt ?? null,
     latest_schedule_run: scheduleRunsRow.latest_schedule_run ?? null,
-    store_cooldowns: storeCooldownsResult.rows,
+    store_cooldowns: storeCooldownsResult.rows.map((row) => {
+      const record = row as Record<string, unknown>;
+      return {
+        ...record,
+        active: record.active === true,
+        store_id: numberField(record, 'store_id')
+      };
+    }),
     range_hours: rangeHours,
     recent_attempts: recentAttemptsResult.rows,
     summary: {

@@ -222,6 +222,16 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("references stores(id) on delete cascade", table)
         self.assertIn("check (consecutive_429s >= 0)", table)
 
+    def test_store_cooldown_table_is_declared_after_its_foreign_key_targets(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+
+        worker_state_position = schema.index("create table if not exists store_item_update_worker_state")
+        stores_position = schema.index("create table if not exists stores (")
+        store_cooldown_position = schema.index("create table if not exists store_item_update_store_cooldown")
+
+        self.assertLess(worker_state_position, store_cooldown_position)
+        self.assertLess(stores_position, store_cooldown_position)
+
     def test_curated_stores_are_active_by_default(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()
         stores_table = schema.split("create table if not exists stores", 1)[1].split(");", 1)[0]

@@ -4605,11 +4605,11 @@ describe('ludora admin service', () => {
           return {
             rows: [
               {
-                active: true,
+                active: null,
                 blocked_until: '2026-08-04T19:00:00.000Z',
                 consecutive_429s: 2,
                 platform: 'woocommerce',
-                store_id: 13,
+                store_id: '13',
                 store_name: 'Beta'
               }
             ]
@@ -4686,7 +4686,7 @@ describe('ludora admin service', () => {
       },
       store_cooldowns: [
         {
-          active: true,
+          active: false,
           blocked_until: '2026-08-04T19:00:00.000Z',
           consecutive_429s: 2,
           platform: 'woocommerce',
