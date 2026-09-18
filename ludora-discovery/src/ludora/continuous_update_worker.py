@@ -258,7 +258,7 @@ def _process_claim(
     def check_successful_page_fetch(final_url: str) -> None:
         if normalize_store_item_url(final_url) == normalize_store_item_url(claim.record.source_url):
             return
-        target_store_item_id = repository.deactivate_claimed_store_item_update(
+        target_store_item_id = repository.deactivate_claimed_redirected_store_item_update(
             claim.record,
             attempt_id=claim.attempt_id,
             final_url=final_url,

@@ -134,7 +134,7 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
 
     def test_redirected_fetch_deactivates_source_when_eligible_target_exists(self):
         repository = Mock()
-        repository.deactivate_claimed_store_item_update.return_value = 777
+        repository.deactivate_claimed_redirected_store_item_update.return_value = 777
         trace_logger = Mock()
         final_url = "https://example.test/product/catan"
         detail_html = """
@@ -174,7 +174,7 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             headers=None,
             include_http_error_status=True,
         )
-        repository.deactivate_claimed_store_item_update.assert_called_once_with(
+        repository.deactivate_claimed_redirected_store_item_update.assert_called_once_with(
             replace(self.record, store_sku="CATAN-ES"),
             attempt_id=91,
             final_url=final_url,
@@ -235,12 +235,12 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
                         worker_id="worker-1",
                     )
 
-                repository.deactivate_claimed_store_item_update.assert_not_called()
+                repository.deactivate_claimed_redirected_store_item_update.assert_not_called()
                 repository.complete_claimed_store_item_update.assert_called_once()
 
     def test_redirect_without_eligible_target_preserves_sku_mismatch_backoff(self):
         repository = Mock()
-        repository.deactivate_claimed_store_item_update.return_value = None
+        repository.deactivate_claimed_redirected_store_item_update.return_value = None
         final_url = "https://example.test/product/catan"
         source_record = replace(self.record, store_sku="CATAN-ES")
         expected_error = f"Parsed product detail rejected (store_sku_mismatch): {source_record.source_url}"
@@ -276,7 +276,7 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
                 worker_id="worker-1",
             )
 
-        repository.deactivate_claimed_store_item_update.assert_called_once_with(
+        repository.deactivate_claimed_redirected_store_item_update.assert_called_once_with(
             source_record,
             attempt_id=91,
             final_url=final_url,

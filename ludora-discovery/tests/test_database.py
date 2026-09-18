@@ -322,20 +322,24 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads(change_params[5]), "https://cdn.example.mx/catan-current.webp")
         self.assertTrue(result.changed)
 
-    def test_redirect_deactivation_locks_and_rechecks_target_before_source_lifecycle(self):
+    def test_redirect_deactivation_locks_only_selected_pair_in_ascending_id_order_then_rechecks(self):
         connection = FakeConnection(
-            fetchone_rows=[(501,)],
+            fetchone_rows=[
+                (100, "HTTPS://EXAMPLE.MX:443/product/catan/#details"),
+                (900,),
+            ],
             fetchall_rows=[
                 [
-                    (777, "HTTPS://EXAMPLE.MX:443/product/catan/#details"),
-                    (778, "https://example.mx/product/catan-deluxe"),
-                ]
-            ]
+                    (100, "HTTPS://EXAMPLE.MX:443/product/catan/#details"),
+                    (200, "https://example.mx/product/catan-deluxe"),
+                ],
+                [(100,), (900,)],
+            ],
         )
         repository = DiscoveryRepository(connection)
-        source = confirmed_store_item_record()
+        source = replace(confirmed_store_item_record(), store_item_id=900)
 
-        target_id = repository.deactivate_claimed_store_item_update(
+        target_id = repository.deactivate_claimed_redirected_store_item_update(
             source,
             attempt_id=91,
             final_url="https://example.mx/product/catan",
@@ -346,36 +350,56 @@ class DatabaseRepositoryTests(unittest.TestCase):
             worker_name="continuous",
         )
 
-        self.assertEqual(target_id, 777)
-        target_query, target_params = connection.cursor_instance.executions[0]
-        normalized_target_query = " ".join(target_query.casefold().split())
-        self.assertIn("from store_items source_item", normalized_target_query)
-        self.assertIn("join store_items target_item", normalized_target_query)
-        self.assertIn("target_item.store_id = source_item.store_id", normalized_target_query)
-        self.assertIn("target_item.item_id = source_item.item_id", normalized_target_query)
-        self.assertIn("source_item.item_id is not null", normalized_target_query)
-        self.assertIn("target_item.id <> source_item.id", normalized_target_query)
-        self.assertIn("target_item.store_active = true", normalized_target_query)
-        self.assertIn("target_item.listing_status = 'listed'", normalized_target_query)
-        self.assertIn("target_item.is_boardgame = true", normalized_target_query)
-        self.assertIn("target_item.is_boardgame_confirmed = true", normalized_target_query)
-        self.assertIn("for update of source_item, target_item", normalized_target_query)
-        self.assertEqual(target_params, (501, 12, 77))
-        source_update = " ".join(connection.cursor_instance.executions[1][0].casefold().split())
+        self.assertEqual(target_id, 100)
+        candidate_query, candidate_params = connection.cursor_instance.executions[0]
+        normalized_candidate_query = " ".join(candidate_query.casefold().split())
+        self.assertNotIn("for update", normalized_candidate_query)
+        self.assertNotIn("join store_items", normalized_candidate_query)
+        self.assertEqual(candidate_params, (12, 900, 77))
+
+        lock_query, lock_params = connection.cursor_instance.executions[1]
+        normalized_lock_query = " ".join(lock_query.casefold().split())
+        self.assertIn("where id in (%s, %s)", normalized_lock_query)
+        self.assertIn("order by id", normalized_lock_query)
+        self.assertIn("for update", normalized_lock_query)
+        self.assertEqual(lock_params, (100, 900))
+        self.assertNotIn(200, lock_params)
+
+        recheck_query, recheck_params = connection.cursor_instance.executions[2]
+        normalized_recheck_query = " ".join(recheck_query.casefold().split())
+        self.assertIn("source_item.update_lease_token = %s::uuid", normalized_recheck_query)
+        self.assertIn("source_item.item_id is not null", normalized_recheck_query)
+        self.assertIn("target_item.id <> source_item.id", normalized_recheck_query)
+        self.assertIn("target_item.store_id = source_item.store_id", normalized_recheck_query)
+        self.assertIn("target_item.item_id = source_item.item_id", normalized_recheck_query)
+        self.assertIn("target_item.store_active = true", normalized_recheck_query)
+        self.assertIn("target_item.listing_status = 'listed'", normalized_recheck_query)
+        self.assertIn("target_item.is_boardgame = true", normalized_recheck_query)
+        self.assertIn("target_item.is_boardgame_confirmed = true", normalized_recheck_query)
+        self.assertEqual(
+            recheck_params,
+            (100, 900, 12, 77, "ee2bf2df-2330-430b-8f65-ad41dad4dc62"),
+        )
+
+        source_update = " ".join(connection.cursor_instance.executions[3][0].casefold().split())
         self.assertIn("update store_items", source_update)
         self.assertEqual(connection.commits, 1)
 
-    def test_redirect_deactivation_skips_source_lifecycle_when_locked_target_url_no_longer_matches(self):
+    def test_redirect_deactivation_skips_lifecycle_when_target_changes_after_pair_lock(self):
         connection = FakeConnection(
+            fetchone_rows=[
+                (777, "https://example.mx/product/catan-deluxe"),
+            ],
             fetchall_rows=[
                 [
-                    (777, "https://example.mx/product/catan-deluxe"),
-                ]
-            ]
+                    (777, "https://example.mx/product/catan"),
+                ],
+                [(501,), (777,)],
+            ],
         )
         repository = DiscoveryRepository(connection)
 
-        target_id = repository.deactivate_claimed_store_item_update(
+        target_id = repository.deactivate_claimed_redirected_store_item_update(
             confirmed_store_item_record(),
             attempt_id=91,
             final_url="https://example.mx/product/catan",
@@ -387,10 +411,12 @@ class DatabaseRepositoryTests(unittest.TestCase):
         )
 
         self.assertIsNone(target_id)
-        self.assertEqual(len(connection.cursor_instance.executions), 1)
-        self.assertNotIn(
-            "update store_items",
-            " ".join(connection.cursor_instance.executions[0][0].casefold().split()),
+        self.assertEqual(len(connection.cursor_instance.executions), 3)
+        self.assertFalse(
+            any(
+                "update store_items" in " ".join(sql.casefold().split())
+                for sql, _params in connection.cursor_instance.executions
+            )
         )
         self.assertEqual(connection.commits, 1)
 
