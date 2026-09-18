@@ -354,6 +354,8 @@ def crawl_store_product_details(
                 raise RuntimeError(f"WooCommerce discovery returned no product candidates: {store_url}")
             if normalized_platform == "wix" and not listing_candidates:
                 raise RuntimeError(f"Wix discovery returned no product candidates: {store_url}")
+            if normalized_platform == "odoo" and not listing_candidates:
+                raise RuntimeError(f"Odoo discovery returned no product candidates: {store_url}")
 
         records = crawl_listing_candidates(
             listing_candidates,

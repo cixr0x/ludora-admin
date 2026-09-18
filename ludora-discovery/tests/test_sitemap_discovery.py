@@ -19,6 +19,38 @@ class FakeTraceLogger:
 
 
 class SitemapDiscoveryTests(unittest.TestCase):
+    def test_extracts_every_nested_odoo_shop_url_and_ignores_unrelated_urls(self):
+        root_url = "https://ingenioz.com.mx/sitemap.xml"
+
+        def fake_fetcher(url):
+            if url != root_url:
+                return None
+            return FetchResult(
+                url=url,
+                text="""
+                <urlset>
+                  <url><loc>https://ingenioz.com.mx/shop/catan-el-juego-463</loc></url>
+                  <url><loc>https://ingenioz.com.mx/shop/category/juegos-de-mesa-6</loc></url>
+                  <url><loc>https://ingenioz.com.mx/shop/all-brands</loc></url>
+                  <url><loc>https://ingenioz.com.mx/shop</loc></url>
+                  <url><loc>https://ingenioz.com.mx/shop/</loc></url>
+                  <url><loc>https://ingenioz.com.mx/contactus</loc></url>
+                  <url><loc>https://other.example/shop/wrong-domain-1</loc></url>
+                </urlset>
+                """,
+            )
+
+        urls = discover_product_urls_from_sitemaps("https://ingenioz.com.mx/", fetcher=fake_fetcher)
+
+        self.assertEqual(
+            urls,
+            [
+                "https://ingenioz.com.mx/shop/catan-el-juego-463",
+                "https://ingenioz.com.mx/shop/category/juegos-de-mesa-6",
+                "https://ingenioz.com.mx/shop/all-brands",
+            ],
+        )
+
     def test_follows_wix_product_sitemap_with_product_page_paths(self):
         store_url = "https://geekystuff.example/"
         product_sitemap_url = "https://geekystuff.example/store-products-sitemap.xml"

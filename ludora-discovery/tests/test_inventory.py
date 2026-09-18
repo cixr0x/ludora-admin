@@ -379,6 +379,27 @@ class InventoryTests(unittest.TestCase):
         )
         self.assertEqual(repository.item_records, [])
 
+    def test_collect_store_inventory_rejects_odoo_without_product_candidates(self):
+        store_url = "https://ingenioz.com.mx/"
+        repository = FakeRepository()
+
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[]), patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=store_url, text='<a href="/contactus">Contacto</a>'),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Odoo discovery returned no product candidates: https://ingenioz.com.mx/",
+            ):
+                collect_store_inventory(
+                    store_url,
+                    12,
+                    repository,
+                    platform="odoo",
+                )
+
+        self.assertEqual(repository.item_records, [])
+
     def test_collect_store_inventory_rejects_shopify_without_signer_before_enumeration(self):
         repository = FakeRepository()
 

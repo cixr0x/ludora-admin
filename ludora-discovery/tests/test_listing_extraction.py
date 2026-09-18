@@ -36,6 +36,27 @@ class ListingExtractionTests(unittest.TestCase):
 
         self.assertEqual(records, [])
 
+    def test_admits_broad_odoo_shop_paths_but_not_shop_collection_root(self):
+        html = """
+        <a href="/shop/catan-el-juego-463">Catan</a>
+        <a href="/shop/category/juegos-de-mesa-6">Juegos de mesa</a>
+        <a href="/shop/all-brands">Todas las marcas</a>
+        <a href="/shop">Tienda sin diagonal</a>
+        <a href="/shop/">Tienda con diagonal</a>
+        <a href="/contacto">Contacto</a>
+        """
+
+        records = extract_listing_candidates(html, "https://ingenioz.com.mx/", 12)
+
+        self.assertEqual(
+            [record.source_url for record in records],
+            [
+                "https://ingenioz.com.mx/shop/catan-el-juego-463",
+                "https://ingenioz.com.mx/shop/category/juegos-de-mesa-6",
+                "https://ingenioz.com.mx/shop/all-brands",
+            ],
+        )
+
     def test_does_not_limit_product_links_by_default(self):
         html = "".join(
             f'<a href="/products/item-{index}">Item {index}</a>'
