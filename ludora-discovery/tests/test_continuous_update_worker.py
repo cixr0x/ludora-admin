@@ -132,9 +132,8 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
         )
         repository.fail_claimed_store_item_update.assert_not_called()
 
-    def test_redirected_fetch_deactivates_source_when_eligible_target_exists(self):
+    def test_redirected_fetch_deactivates_claimed_source_without_a_target_row(self):
         repository = Mock()
-        repository.deactivate_claimed_redirected_store_item_update.return_value = 777
         trace_logger = Mock()
         final_url = "https://example.test/product/catan"
         detail_html = """
@@ -174,10 +173,9 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             headers=None,
             include_http_error_status=True,
         )
-        repository.deactivate_claimed_redirected_store_item_update.assert_called_once_with(
+        repository.deactivate_claimed_store_item_update.assert_called_once_with(
             replace(self.record, store_sku="CATAN-ES"),
             attempt_id=91,
-            final_url=final_url,
             job_id=17,
             lease_token=self.claim.lease_token,
             run_id="continuous:test",
@@ -187,22 +185,19 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
         repository.complete_claimed_store_item_update.assert_not_called()
         repository.fail_claimed_store_item_update.assert_not_called()
         trace_logger.log.assert_called_once_with(
-            "item_update.item.redirect_target.deactivated",
+            "item_update.item.redirect.deactivated",
             final_url=final_url,
             source_store_item_id=501,
             source_url=self.record.source_url,
-            target_store_item_id=777,
         )
 
-    def test_equivalent_final_url_variants_complete_normally(self):
-        equivalent_final_urls = (
-            "HTTPS://EXAMPLE.TEST/products/catan",
-            "https://example.test:443/products/catan",
-            "https://example.test/products/catan/",
-            "https://example.test/products/catan#overview",
+    def test_exact_and_fragment_only_final_urls_complete_normally(self):
+        non_redirect_final_urls = (
+            self.record.source_url,
+            f"{self.record.source_url}#overview",
         )
 
-        for final_url in equivalent_final_urls:
+        for final_url in non_redirect_final_urls:
             with self.subTest(final_url=final_url):
                 repository = Mock()
                 repository.complete_claimed_store_item_update.return_value = ItemCandidateUpsertResult(
@@ -235,61 +230,56 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
                         worker_id="worker-1",
                     )
 
-                repository.deactivate_claimed_redirected_store_item_update.assert_not_called()
+                repository.deactivate_claimed_store_item_update.assert_not_called()
                 repository.complete_claimed_store_item_update.assert_called_once()
 
-    def test_redirect_without_eligible_target_preserves_sku_mismatch_backoff(self):
-        repository = Mock()
-        repository.deactivate_claimed_redirected_store_item_update.return_value = None
-        final_url = "https://example.test/product/catan"
-        source_record = replace(self.record, store_sku="CATAN-ES")
-        expected_error = f"Parsed product detail rejected (store_sku_mismatch): {source_record.source_url}"
-        detail_html = """
-        <script type="application/ld+json">
-        {
-          "@type": "Product",
-          "name": "Catan",
-          "sku": "WRONG-SKU",
-          "offers": {"price": "799.00", "priceCurrency": "MXN"}
-        }
-        </script>
-        """
-
-        with (
-            patch(
-                "ludora.product_crawler.fetch_html",
-                return_value=FetchResult(url=final_url, text=detail_html),
-            ),
-            patch("ludora.continuous_update_worker._utc_now", return_value=self.now),
-            patch("ludora.continuous_update_worker.random.uniform", return_value=1.0),
-        ):
-            _process_claim(
-                browser_fetcher=None,
-                claim=replace(self.claim, platform="custom", record=source_record),
-                item_title_extractor=Mock(),
-                job_id=17,
-                repository=repository,
-                request_headers_provider=Mock(),
-                run_id="continuous:test",
-                throttle=Mock(),
-                trace_logger=Mock(),
-                worker_id="worker-1",
-            )
-
-        repository.deactivate_claimed_redirected_store_item_update.assert_called_once_with(
-            source_record,
-            attempt_id=91,
-            final_url=final_url,
-            job_id=17,
-            lease_token=self.claim.lease_token,
-            run_id="continuous:test",
-            worker_id="worker-1",
-            worker_name="continuous",
+    def test_server_observable_url_changes_deactivate_claimed_source(self):
+        redirect_final_urls = (
+            "http://example.test/products/catan",
+            "https://shop.example.test/products/catan",
+            "https://example.test:8443/products/catan",
+            "https://example.test/products/Catan",
+            "https://example.test/products/catan/",
+            "https://example.test/products/catan;edition=base",
+            "https://example.test/products/catan?edition=base",
         )
-        repository.complete_claimed_store_item_update.assert_not_called()
-        failure = repository.fail_claimed_store_item_update.call_args.kwargs
-        self.assertEqual(failure["error"], expected_error)
-        self.assertEqual(failure["next_update_at"], self.now + timedelta(minutes=15))
+
+        for final_url in redirect_final_urls:
+            with self.subTest(final_url=final_url):
+                repository = Mock()
+
+                def refresh(_record, **kwargs):
+                    kwargs["on_successful_page_fetch"](final_url)
+                    self.fail("redirect should stop refresh processing")
+
+                with patch(
+                    "ludora.continuous_update_worker.refresh_confirmed_store_item_candidate",
+                    side_effect=refresh,
+                ):
+                    _process_claim(
+                        browser_fetcher=None,
+                        claim=replace(self.claim, platform="custom"),
+                        item_title_extractor=Mock(),
+                        job_id=17,
+                        repository=repository,
+                        request_headers_provider=Mock(),
+                        run_id="continuous:test",
+                        throttle=Mock(),
+                        trace_logger=Mock(),
+                        worker_id="worker-1",
+                    )
+
+                repository.deactivate_claimed_store_item_update.assert_called_once_with(
+                    self.record,
+                    attempt_id=91,
+                    job_id=17,
+                    lease_token=self.claim.lease_token,
+                    run_id="continuous:test",
+                    worker_id="worker-1",
+                    worker_name="continuous",
+                )
+                repository.complete_claimed_store_item_update.assert_not_called()
+                repository.fail_claimed_store_item_update.assert_not_called()
 
     def test_first_shopify_429_pauses_store_and_reschedules_item_for_15_minutes(self):
         repository = Mock()

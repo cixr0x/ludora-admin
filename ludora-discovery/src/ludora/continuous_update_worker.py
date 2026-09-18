@@ -10,6 +10,7 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Mapping
+from urllib.parse import urldefrag
 
 from ludora.admin_title_extraction import AdminAmazonTitleExtractor
 from ludora.admin_web_bot_auth import AdminWebBotAuthHeadersProvider
@@ -21,12 +22,7 @@ from ludora.config import (
     resolve_internal_api_token,
     resolve_web_bot_auth_enabled,
 )
-from ludora.database import (
-    ClaimedStoreItemUpdate,
-    DiscoveryRepository,
-    connect_database,
-    normalize_store_item_url,
-)
+from ludora.database import ClaimedStoreItemUpdate, DiscoveryRepository, connect_database
 from ludora.product_crawler import (
     ProductPageRemovedError,
     TransientProductFetchError,
@@ -45,10 +41,9 @@ RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
 
 
 class _ClaimedRedirectDeactivated(RuntimeError):
-    def __init__(self, *, final_url: str, target_store_item_id: int) -> None:
-        super().__init__(f"Eligible redirect target {target_store_item_id}: {final_url}")
+    def __init__(self, *, final_url: str) -> None:
+        super().__init__(f"Redirected store item deactivated: {final_url}")
         self.final_url = final_url
-        self.target_store_item_id = target_store_item_id
 
 
 class _ContextTraceLogger:
@@ -256,23 +251,18 @@ def _process_claim(
     )
 
     def check_successful_page_fetch(final_url: str) -> None:
-        if normalize_store_item_url(final_url) == normalize_store_item_url(claim.record.source_url):
+        if urldefrag(final_url).url == urldefrag(claim.record.source_url).url:
             return
-        target_store_item_id = repository.deactivate_claimed_redirected_store_item_update(
+        repository.deactivate_claimed_store_item_update(
             claim.record,
             attempt_id=claim.attempt_id,
-            final_url=final_url,
             job_id=job_id,
             lease_token=claim.lease_token,
             run_id=run_id,
             worker_id=worker_id,
             worker_name=WORKER_NAME,
         )
-        if target_store_item_id is not None:
-            raise _ClaimedRedirectDeactivated(
-                final_url=final_url,
-                target_store_item_id=target_store_item_id,
-            )
+        raise _ClaimedRedirectDeactivated(final_url=final_url)
 
     try:
         refreshed_record = refresh_confirmed_store_item_candidate(
@@ -304,18 +294,16 @@ def _process_claim(
     except _ClaimedRedirectDeactivated as exc:
         if trace_logger is not None:
             trace_logger.log(
-                "item_update.item.redirect_target.deactivated",
+                "item_update.item.redirect.deactivated",
                 final_url=exc.final_url,
                 source_store_item_id=store_item_id,
                 source_url=claim.record.source_url,
-                target_store_item_id=exc.target_store_item_id,
             )
         _log(
             "worker.item.deactivated",
             final_url=exc.final_url,
             source_store_item_id=store_item_id,
             source_url=claim.record.source_url,
-            target_store_item_id=exc.target_store_item_id,
         )
     except ProductPageRemovedError as exc:
         repository.deactivate_claimed_store_item_update(

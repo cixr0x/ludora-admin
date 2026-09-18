@@ -17,7 +17,6 @@ from ludora.database import (
     TutorialLinkUpsertResult,
     _insert_item_candidate_sql,
     connect_database,
-    normalize_store_item_url,
 )
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
 
@@ -322,87 +321,13 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads(change_params[5]), "https://cdn.example.mx/catan-current.webp")
         self.assertTrue(result.changed)
 
-    def test_redirect_deactivation_locks_only_selected_pair_in_ascending_id_order_then_rechecks(self):
-        connection = FakeConnection(
-            fetchone_rows=[
-                (100, "HTTPS://EXAMPLE.MX:443/product/catan/#details"),
-                (900,),
-            ],
-            fetchall_rows=[
-                [
-                    (100, "HTTPS://EXAMPLE.MX:443/product/catan/#details"),
-                    (200, "https://example.mx/product/catan-deluxe"),
-                ],
-                [(100,), (900,)],
-            ],
-        )
-        repository = DiscoveryRepository(connection)
-        source = replace(confirmed_store_item_record(), store_item_id=900)
-
-        target_id = repository.deactivate_claimed_redirected_store_item_update(
-            source,
-            attempt_id=91,
-            final_url="https://example.mx/product/catan",
-            job_id=17,
-            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
-            run_id="continuous:test",
-            worker_id="worker-1",
-            worker_name="continuous",
-        )
-
-        self.assertEqual(target_id, 100)
-        candidate_query, candidate_params = connection.cursor_instance.executions[0]
-        normalized_candidate_query = " ".join(candidate_query.casefold().split())
-        self.assertNotIn("for update", normalized_candidate_query)
-        self.assertNotIn("join store_items", normalized_candidate_query)
-        self.assertEqual(candidate_params, (12, 900, 77))
-
-        lock_query, lock_params = connection.cursor_instance.executions[1]
-        normalized_lock_query = " ".join(lock_query.casefold().split())
-        self.assertIn("where id in (%s, %s)", normalized_lock_query)
-        self.assertIn("order by id", normalized_lock_query)
-        self.assertIn("for update", normalized_lock_query)
-        self.assertEqual(lock_params, (100, 900))
-        self.assertNotIn(200, lock_params)
-
-        recheck_query, recheck_params = connection.cursor_instance.executions[2]
-        normalized_recheck_query = " ".join(recheck_query.casefold().split())
-        self.assertIn("source_item.update_lease_token = %s::uuid", normalized_recheck_query)
-        self.assertIn("source_item.item_id is not null", normalized_recheck_query)
-        self.assertIn("target_item.id <> source_item.id", normalized_recheck_query)
-        self.assertIn("target_item.store_id = source_item.store_id", normalized_recheck_query)
-        self.assertIn("target_item.item_id = source_item.item_id", normalized_recheck_query)
-        self.assertIn("target_item.store_active = true", normalized_recheck_query)
-        self.assertIn("target_item.listing_status = 'listed'", normalized_recheck_query)
-        self.assertIn("target_item.is_boardgame = true", normalized_recheck_query)
-        self.assertIn("target_item.is_boardgame_confirmed = true", normalized_recheck_query)
-        self.assertEqual(
-            recheck_params,
-            (100, 900, 12, 77, "ee2bf2df-2330-430b-8f65-ad41dad4dc62"),
-        )
-
-        source_update = " ".join(connection.cursor_instance.executions[3][0].casefold().split())
-        self.assertIn("update store_items", source_update)
-        self.assertEqual(connection.commits, 1)
-
-    def test_redirect_deactivation_skips_lifecycle_when_target_changes_after_pair_lock(self):
-        connection = FakeConnection(
-            fetchone_rows=[
-                (777, "https://example.mx/product/catan-deluxe"),
-            ],
-            fetchall_rows=[
-                [
-                    (777, "https://example.mx/product/catan"),
-                ],
-                [(501,), (777,)],
-            ],
-        )
+    def test_deactivate_claimed_store_item_update_completes_claim_lifecycle(self):
+        connection = FakeConnection(fetchone_rows=[(501,)])
         repository = DiscoveryRepository(connection)
 
-        target_id = repository.deactivate_claimed_redirected_store_item_update(
+        repository.deactivate_claimed_store_item_update(
             confirmed_store_item_record(),
             attempt_id=91,
-            final_url="https://example.mx/product/catan",
             job_id=17,
             lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
             run_id="continuous:test",
@@ -410,37 +335,43 @@ class DatabaseRepositoryTests(unittest.TestCase):
             worker_name="continuous",
         )
 
-        self.assertIsNone(target_id)
-        self.assertEqual(len(connection.cursor_instance.executions), 3)
-        self.assertFalse(
-            any(
-                "update store_items" in " ".join(sql.casefold().split())
-                for sql, _params in connection.cursor_instance.executions
-            )
+        self.assertEqual(len(connection.cursor_instance.executions), 5)
+        source_update, source_params = connection.cursor_instance.executions[0]
+        normalized_source_update = " ".join(source_update.casefold().split())
+        self.assertIn("store_active = false", normalized_source_update)
+        self.assertIn("update_lease_token = null", normalized_source_update)
+        self.assertIn("update_lease_expires_at = null", normalized_source_update)
+        self.assertIn("consecutive_update_failures = 0", normalized_source_update)
+        self.assertIn("last_update_error = ''", normalized_source_update)
+        self.assertEqual(
+            source_params,
+            (501, "ee2bf2df-2330-430b-8f65-ad41dad4dc62"),
         )
+
+        change_log, change_params = connection.cursor_instance.executions[1]
+        self.assertIn("insert into store_item_update_change_log", change_log.casefold())
+        self.assertEqual(change_params, (17, "continuous:test", 501))
+
+        attempt_update, attempt_params = connection.cursor_instance.executions[2]
+        normalized_attempt_update = " ".join(attempt_update.casefold().split())
+        self.assertIn("status = 'deactivated'", normalized_attempt_update)
+        self.assertIn("changed = true", normalized_attempt_update)
+        self.assertEqual(attempt_params, (91,))
+
+        worker_update, worker_params = connection.cursor_instance.executions[3]
+        normalized_worker_update = " ".join(worker_update.casefold().split())
+        self.assertIn("update store_item_update_worker_state", normalized_worker_update)
+        self.assertIn("status = 'idle'", normalized_worker_update)
+        self.assertIn("current_store_item_id = null", normalized_worker_update)
+        self.assertIn("last_success_at = now()", normalized_worker_update)
+        self.assertEqual(worker_params, ("continuous", "worker-1"))
+
+        job_update, job_params = connection.cursor_instance.executions[4]
+        normalized_job_update = " ".join(job_update.casefold().split())
+        self.assertIn("scanned_items = scanned_items + 1", normalized_job_update)
+        self.assertIn("updated_items = updated_items + 1", normalized_job_update)
+        self.assertEqual(job_params, (17,))
         self.assertEqual(connection.commits, 1)
-
-    def test_store_item_url_normalization_only_applies_approved_equivalences(self):
-        equivalent_pairs = (
-            ("HTTPS://EXAMPLE.MX/Product/Catan", "https://example.mx/Product/Catan"),
-            ("https://example.mx:443/Product/Catan", "https://example.mx/Product/Catan"),
-            ("http://example.mx:80/Product/Catan", "http://example.mx/Product/Catan"),
-            ("https://example.mx/Product/Catan/", "https://example.mx/Product/Catan"),
-            ("https://example.mx/Product/Catan#details", "https://example.mx/Product/Catan"),
-        )
-        different_pairs = (
-            ("https://example.mx/Product/Catan", "https://example.mx/product/catan"),
-            ("https://example.mx/Product;Edition=ABC", "https://example.mx/Product;edition=abc"),
-            ("https://example.mx/Product?id=ABC", "https://example.mx/Product?id=abc"),
-            ("https://User:Pass@example.mx/Product", "https://user:pass@example.mx/Product"),
-        )
-
-        for left, right in equivalent_pairs:
-            with self.subTest(left=left, right=right, equivalent=True):
-                self.assertEqual(normalize_store_item_url(left), normalize_store_item_url(right))
-        for left, right in different_pairs:
-            with self.subTest(left=left, right=right, equivalent=False):
-                self.assertNotEqual(normalize_store_item_url(left), normalize_store_item_url(right))
 
     def test_new_item_candidates_do_not_assign_an_update_schedule(self):
         insert_sql = " ".join(_insert_item_candidate_sql().casefold().split())
