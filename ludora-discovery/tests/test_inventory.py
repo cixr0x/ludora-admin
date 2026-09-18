@@ -14,6 +14,7 @@ from ludora.inventory import collect_store_inventory, update_confirmed_store_ite
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import (
     ProductDetailRejectedError,
+    ProductPageRemovedError,
     TransientProductFetchError,
     _fetch_detail_candidate,
     _looks_like_removed_product_page,
@@ -1751,6 +1752,48 @@ class InventoryTests(unittest.TestCase):
 
         fetch_html.assert_called_once()
         self.assertEqual(final_urls, [final_url])
+
+    def test_continuous_refresh_does_not_report_unsuccessful_static_or_browser_fetches(self):
+        existing_record = DiscoveryItemCandidateRecord(
+            store_id=12,
+            store_item_id=501,
+            source_url="https://example.mx/products/catan",
+            source_listing_url="https://example.mx/sitemap.xml",
+            title="Catan",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        final_url = "https://example.mx/product/catan"
+        cases = (
+            (
+                "static",
+                FetchResult(url=final_url, text="", status_code=404),
+                None,
+                "HTTP 404",
+            ),
+            (
+                "browser",
+                None,
+                Mock(return_value=FetchResult(url=final_url, text="", status_code=410)),
+                "HTTP 410",
+            ),
+        )
+
+        for fetch_method, static_result, browser_fetcher, expected_error in cases:
+            with self.subTest(fetch_method=fetch_method):
+                final_urls = []
+                with patch("ludora.product_crawler.fetch_html", return_value=static_result):
+                    with self.assertRaisesRegex(ProductPageRemovedError, expected_error):
+                        refresh_confirmed_store_item_candidate(
+                            existing_record,
+                            platform="custom",
+                            browser_fetcher=browser_fetcher,
+                            on_successful_page_fetch=final_urls.append,
+                        )
+
+                self.assertEqual(final_urls, [])
 
     def test_update_confirmed_amazon_item_uses_amazon_detail_parser(self):
         product_html = """

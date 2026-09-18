@@ -1523,6 +1523,12 @@ def _fetch_detail_candidate(
         request_headers_provider=request_headers_provider,
         max_attempts=static_fetch_max_attempts,
     )
+    if (
+        fetched_detail is not None
+        and fetched_detail.status_code < 400
+        and on_successful_page_fetch is not None
+    ):
+        on_successful_page_fetch(fetched_detail.url)
     _handle_removed_product_detail(
         fetched_detail,
         listing_candidate,
@@ -1611,6 +1617,12 @@ def _fetch_detail_candidate(
                     last_failure = getattr(fetcher_owner, "last_failure", None)
                     if isinstance(last_failure, Mapping):
                         browser_failure = dict(last_failure)
+        if (
+            fetched_detail is not None
+            and fetched_detail.status_code < 400
+            and on_successful_page_fetch is not None
+        ):
+            on_successful_page_fetch(fetched_detail.url)
         _handle_removed_product_detail(
             fetched_detail,
             listing_candidate,
@@ -1689,9 +1701,6 @@ def _fetch_detail_candidate(
             f"Failed to fetch product detail page: {listing_candidate.source_url}"
             f"{status_suffix}{amazon_browser_failure_suffix}{browser_failure_suffix}"
         )
-
-    if fetched_detail is not None and on_successful_page_fetch is not None:
-        on_successful_page_fetch(fetched_detail.url)
 
     if detail_candidate is None:
         listing_candidate.source_listing_url = source_listing_url

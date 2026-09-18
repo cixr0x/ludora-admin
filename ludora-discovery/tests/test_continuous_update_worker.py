@@ -191,6 +191,169 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             source_url=self.record.source_url,
         )
 
+    def test_static_redirect_deactivates_before_browser_fallback_can_replace_it(self):
+        repository = Mock()
+        trace_logger = Mock()
+        browser_fetcher = Mock(return_value=None)
+        final_url = "https://example.test/product/catan"
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(
+                url=final_url,
+                text="<html><body>Product data unavailable</body></html>",
+                status_code=200,
+            ),
+        ) as fetch_html:
+            _process_claim(
+                browser_fetcher=browser_fetcher,
+                claim=replace(self.claim, platform="custom"),
+                item_title_extractor=Mock(),
+                job_id=17,
+                repository=repository,
+                request_headers_provider=Mock(),
+                run_id="continuous:test",
+                throttle=Mock(),
+                trace_logger=trace_logger,
+                worker_id="worker-1",
+            )
+
+        fetch_html.assert_called_once()
+        browser_fetcher.assert_not_called()
+        repository.deactivate_claimed_store_item_update.assert_called_once_with(
+            self.record,
+            attempt_id=91,
+            job_id=17,
+            lease_token=self.claim.lease_token,
+            run_id="continuous:test",
+            worker_id="worker-1",
+            worker_name="continuous",
+        )
+        repository.complete_claimed_store_item_update.assert_not_called()
+        repository.fail_claimed_store_item_update.assert_not_called()
+        redirect_events = [
+            entry.kwargs
+            for entry in trace_logger.log.call_args_list
+            if entry.args == ("item_update.item.redirect.deactivated",)
+        ]
+        self.assertEqual(
+            redirect_events,
+            [
+                {
+                    "final_url": final_url,
+                    "source_store_item_id": 501,
+                    "source_url": self.record.source_url,
+                }
+            ],
+        )
+
+    def test_redirected_soft_404_uses_redirect_deactivation_trace(self):
+        repository = Mock()
+        trace_logger = Mock()
+        final_url = "https://example.test/product/catan"
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(
+                url=final_url,
+                text="<html><head><title>Error - 404</title></head><body></body></html>",
+                status_code=200,
+            ),
+        ) as fetch_html:
+            _process_claim(
+                browser_fetcher=None,
+                claim=replace(self.claim, platform="custom"),
+                item_title_extractor=Mock(),
+                job_id=17,
+                repository=repository,
+                request_headers_provider=Mock(),
+                run_id="continuous:test",
+                throttle=Mock(),
+                trace_logger=trace_logger,
+                worker_id="worker-1",
+            )
+
+        fetch_html.assert_called_once()
+        repository.deactivate_claimed_store_item_update.assert_called_once_with(
+            self.record,
+            attempt_id=91,
+            job_id=17,
+            lease_token=self.claim.lease_token,
+            run_id="continuous:test",
+            worker_id="worker-1",
+            worker_name="continuous",
+        )
+        repository.complete_claimed_store_item_update.assert_not_called()
+        repository.fail_claimed_store_item_update.assert_not_called()
+        trace_logger.log.assert_called_once_with(
+            "item_update.item.redirect.deactivated",
+            final_url=final_url,
+            source_store_item_id=501,
+            source_url=self.record.source_url,
+        )
+
+    def test_browser_redirect_deactivates_after_exact_static_fetch_requests_fallback(self):
+        repository = Mock()
+        trace_logger = Mock()
+        final_url = "https://example.test/product/catan"
+        browser_fetcher = Mock(
+            return_value=FetchResult(
+                url=final_url,
+                text="<html><body>Product data unavailable</body></html>",
+                status_code=200,
+            )
+        )
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(
+                url=self.record.source_url,
+                text="<html><body>Product data unavailable</body></html>",
+                status_code=200,
+            ),
+        ) as fetch_html:
+            _process_claim(
+                browser_fetcher=browser_fetcher,
+                claim=replace(self.claim, platform="custom"),
+                item_title_extractor=Mock(),
+                job_id=17,
+                repository=repository,
+                request_headers_provider=Mock(),
+                run_id="continuous:test",
+                throttle=Mock(),
+                trace_logger=trace_logger,
+                worker_id="worker-1",
+            )
+
+        fetch_html.assert_called_once()
+        browser_fetcher.assert_called_once_with(self.record.source_url)
+        repository.deactivate_claimed_store_item_update.assert_called_once_with(
+            self.record,
+            attempt_id=91,
+            job_id=17,
+            lease_token=self.claim.lease_token,
+            run_id="continuous:test",
+            worker_id="worker-1",
+            worker_name="continuous",
+        )
+        repository.complete_claimed_store_item_update.assert_not_called()
+        repository.fail_claimed_store_item_update.assert_not_called()
+        redirect_events = [
+            entry.kwargs
+            for entry in trace_logger.log.call_args_list
+            if entry.args == ("item_update.item.redirect.deactivated",)
+        ]
+        self.assertEqual(
+            redirect_events,
+            [
+                {
+                    "final_url": final_url,
+                    "source_store_item_id": 501,
+                    "source_url": self.record.source_url,
+                }
+            ],
+        )
+
     def test_exact_and_fragment_only_final_urls_complete_normally(self):
         non_redirect_final_urls = (
             self.record.source_url,
