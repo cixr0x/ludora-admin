@@ -321,6 +321,52 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads(change_params[5]), "https://cdn.example.mx/catan-current.webp")
         self.assertTrue(result.changed)
 
+    def test_find_eligible_redirect_target_matches_normalized_url_and_required_identity(self):
+        connection = FakeConnection(
+            fetchall_rows=[
+                [
+                    (777, "HTTPS://EXAMPLE.MX:443/product/catan/#details"),
+                    (778, "https://example.mx/product/catan-deluxe"),
+                ]
+            ]
+        )
+        repository = DiscoveryRepository(connection)
+        source = confirmed_store_item_record()
+
+        target_id = repository.find_eligible_redirect_target_store_item_id(
+            source,
+            "https://example.mx/product/catan",
+        )
+
+        self.assertEqual(target_id, 777)
+        query, params = connection.cursor_instance.executions[0]
+        normalized_query = " ".join(query.casefold().split())
+        self.assertIn("store_id = %s", normalized_query)
+        self.assertIn("id <> %s", normalized_query)
+        self.assertIn("item_id = %s", normalized_query)
+        self.assertIn("store_active = true", normalized_query)
+        self.assertIn("listing_status = 'listed'", normalized_query)
+        self.assertIn("is_boardgame = true", normalized_query)
+        self.assertIn("is_boardgame_confirmed = true", normalized_query)
+        self.assertEqual(params, (12, 501, 77))
+
+    def test_find_eligible_redirect_target_requires_matching_normalized_url(self):
+        connection = FakeConnection(
+            fetchall_rows=[
+                [
+                    (777, "https://example.mx/product/catan-deluxe"),
+                ]
+            ]
+        )
+        repository = DiscoveryRepository(connection)
+
+        target_id = repository.find_eligible_redirect_target_store_item_id(
+            confirmed_store_item_record(),
+            "https://example.mx/product/catan",
+        )
+
+        self.assertIsNone(target_id)
+
     def test_new_item_candidates_do_not_assign_an_update_schedule(self):
         insert_sql = " ".join(_insert_item_candidate_sql().casefold().split())
 

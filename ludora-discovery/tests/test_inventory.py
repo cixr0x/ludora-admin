@@ -1712,6 +1712,46 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.update_change_log_calls, [])
         self.assertEqual(repository.item_records, [])
 
+    def test_continuous_refresh_reports_final_url_before_sku_rejection_without_refetching(self):
+        final_url = "https://example.mx/product/catan"
+        detail_html = """
+        <script type="application/ld+json">
+        {
+          "@type": "Product",
+          "name": "Catan",
+          "sku": "WRONG-SKU",
+          "offers": {"price": "799.00", "priceCurrency": "MXN"}
+        }
+        </script>
+        """
+        existing_record = DiscoveryItemCandidateRecord(
+            store_id=12,
+            store_item_id=501,
+            source_url="https://example.mx/products/catan",
+            source_listing_url="https://example.mx/sitemap.xml",
+            title="Catan",
+            store_sku="CATAN-ES",
+            item_id=77,
+            listing_status="LISTED",
+            is_boardgame=True,
+            is_boardgame_confirmed=True,
+        )
+        final_urls = []
+
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=final_url, text=detail_html),
+        ) as fetch_html:
+            with self.assertRaisesRegex(ProductDetailRejectedError, "store_sku_mismatch"):
+                refresh_confirmed_store_item_candidate(
+                    existing_record,
+                    platform="custom",
+                    on_successful_fetch=final_urls.append,
+                )
+
+        fetch_html.assert_called_once()
+        self.assertEqual(final_urls, [final_url])
+
     def test_update_confirmed_amazon_item_uses_amazon_detail_parser(self):
         product_html = """
         <html><body>

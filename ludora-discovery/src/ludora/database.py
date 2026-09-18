@@ -51,6 +51,31 @@ def _url_has_sslmode(database_url: str) -> bool:
     return any(key.casefold() == "sslmode" for key, _value in parse_qsl(parsed.query, keep_blank_values=True))
 
 
+def normalize_store_item_url(value: str) -> str:
+    parsed = urlparse(value.strip())
+    scheme = parsed.scheme.casefold()
+    hostname = (parsed.hostname or "").casefold()
+    if not scheme or not hostname:
+        return value.strip().split("#", 1)[0].rstrip("/").casefold()
+
+    port = parsed.port
+    if (scheme, port) in {("http", 80), ("https", 443)}:
+        port = None
+    normalized_host = f"[{hostname}]" if ":" in hostname else hostname
+    netloc = f"{normalized_host}:{port}" if port is not None else normalized_host
+    path = parsed.path.rstrip("/").casefold()
+    return urlunparse(
+        (
+            scheme,
+            netloc,
+            path,
+            parsed.params.casefold(),
+            parsed.query.casefold(),
+            "",
+        )
+    )
+
+
 @dataclass(frozen=True)
 class ItemCandidateUpsertResult:
     candidate_id: int
@@ -854,6 +879,41 @@ class DiscoveryRepository:
             should_process=False,
             changed=bool(changes),
         )
+
+    def find_eligible_redirect_target_store_item_id(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        final_url: str,
+    ) -> int | None:
+        store_item_id = existing_record.store_item_id
+        store_id = existing_record.store_id
+        item_id = existing_record.item_id
+        if store_item_id is None or store_id is None or item_id is None:
+            return None
+
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select id, source_url
+                from store_items
+                where store_id = %s
+                  and id <> %s
+                  and item_id = %s
+                  and store_active = true
+                  and listing_status = 'LISTED'
+                  and is_boardgame = true
+                  and is_boardgame_confirmed = true
+                order by id
+                """,
+                (store_id, store_item_id, item_id),
+            )
+            rows = cursor.fetchall()
+
+        normalized_final_url = normalize_store_item_url(final_url)
+        for target_id, source_url in rows:
+            if normalize_store_item_url(_text(source_url)) == normalized_final_url:
+                return int(target_id)
+        return None
 
     def deactivate_claimed_store_item_update(
         self,
