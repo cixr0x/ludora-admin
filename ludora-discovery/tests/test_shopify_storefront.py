@@ -744,6 +744,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
         waited_urls = []
         browser_fetcher = Mock()
         headers_provider = Mock(return_value={"Signature": "sig-value"})
+        page_fetch_callback = Mock()
 
         with patch(
             "ludora.product_crawler.fetch_shopify_storefront_product",
@@ -756,10 +757,12 @@ class ShopifyStorefrontTests(unittest.TestCase):
                 before_request=waited_urls.append,
                 request_headers_provider=headers_provider,
                 trace_logger=trace,
+                on_successful_page_fetch=page_fetch_callback,
             )
 
         fetch_product.assert_called_once_with(PRODUCT_URL, request_headers_provider=headers_provider)
         browser_fetcher.assert_not_called()
+        page_fetch_callback.assert_not_called()
         self.assertEqual(waited_urls, [GRAPHQL_ENDPOINT])
         self.assertEqual(refreshed.title, "Mago: El Despertar 2ª edición")
         self.assertEqual(refreshed.price, "899.00")

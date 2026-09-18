@@ -52,25 +52,32 @@ def _url_has_sslmode(database_url: str) -> bool:
 
 
 def normalize_store_item_url(value: str) -> str:
-    parsed = urlparse(value.strip())
+    stripped_value = value.strip()
+    parsed = urlparse(stripped_value)
     scheme = parsed.scheme.casefold()
     hostname = (parsed.hostname or "").casefold()
     if not scheme or not hostname:
-        return value.strip().split("#", 1)[0].rstrip("/").casefold()
+        return stripped_value.split("#", 1)[0].rstrip("/")
 
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        return stripped_value.split("#", 1)[0].rstrip("/")
     if (scheme, port) in {("http", 80), ("https", 443)}:
         port = None
+    userinfo, separator, _host = parsed.netloc.rpartition("@")
+    userinfo_prefix = f"{userinfo}@" if separator else ""
     normalized_host = f"[{hostname}]" if ":" in hostname else hostname
-    netloc = f"{normalized_host}:{port}" if port is not None else normalized_host
-    path = parsed.path.rstrip("/").casefold()
+    host_and_port = f"{normalized_host}:{port}" if port is not None else normalized_host
+    netloc = f"{userinfo_prefix}{host_and_port}"
+    path = parsed.path.rstrip("/")
     return urlunparse(
         (
             scheme,
             netloc,
             path,
-            parsed.params.casefold(),
-            parsed.query.casefold(),
+            parsed.params,
+            parsed.query,
             "",
         )
     )
@@ -880,56 +887,63 @@ class DiscoveryRepository:
             changed=bool(changes),
         )
 
-    def find_eligible_redirect_target_store_item_id(
-        self,
-        existing_record: DiscoveryItemCandidateRecord,
-        final_url: str,
-    ) -> int | None:
-        store_item_id = existing_record.store_item_id
-        store_id = existing_record.store_id
-        item_id = existing_record.item_id
-        if store_item_id is None or store_id is None or item_id is None:
-            return None
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                select id, source_url
-                from store_items
-                where store_id = %s
-                  and id <> %s
-                  and item_id = %s
-                  and store_active = true
-                  and listing_status = 'LISTED'
-                  and is_boardgame = true
-                  and is_boardgame_confirmed = true
-                order by id
-                """,
-                (store_id, store_item_id, item_id),
-            )
-            rows = cursor.fetchall()
-
-        normalized_final_url = normalize_store_item_url(final_url)
-        for target_id, source_url in rows:
-            if normalize_store_item_url(_text(source_url)) == normalized_final_url:
-                return int(target_id)
-        return None
-
     def deactivate_claimed_store_item_update(
         self,
         existing_record: DiscoveryItemCandidateRecord,
         *,
         attempt_id: int,
+        final_url: str | None = None,
         job_id: int,
         lease_token: str,
         run_id: str,
         worker_id: str,
         worker_name: str,
-    ) -> None:
+    ) -> int | None:
         store_item_id = existing_record.store_item_id
         if store_item_id is None:
             raise ValueError("store item id is required to deactivate a claimed update")
         with self.connection.cursor() as cursor:
+            target_store_item_id = None
+            if final_url is not None:
+                store_id = existing_record.store_id
+                item_id = existing_record.item_id
+                if store_id is None or item_id is None:
+                    self.connection.commit()
+                    return None
+                cursor.execute(
+                    """
+                    select target_item.id, target_item.source_url
+                    from store_items source_item
+                    join store_items target_item
+                      on target_item.store_id = source_item.store_id
+                     and target_item.item_id = source_item.item_id
+                    where source_item.id = %s
+                      and source_item.store_id = %s
+                      and source_item.item_id = %s
+                      and source_item.item_id is not null
+                      and target_item.id <> source_item.id
+                      and target_item.store_active = true
+                      and target_item.listing_status = 'LISTED'
+                      and target_item.is_boardgame = true
+                      and target_item.is_boardgame_confirmed = true
+                    order by target_item.id
+                    for update of source_item, target_item
+                    """,
+                    (store_item_id, store_id, item_id),
+                )
+                normalized_final_url = normalize_store_item_url(final_url)
+                target_store_item_id = next(
+                    (
+                        int(target_id)
+                        for target_id, source_url in cursor.fetchall()
+                        if normalize_store_item_url(_text(source_url)) == normalized_final_url
+                    ),
+                    None,
+                )
+                if target_store_item_id is None:
+                    self.connection.commit()
+                    return None
+
             cursor.execute(
                 """
                 update store_items
@@ -995,6 +1009,7 @@ class DiscoveryRepository:
                 (job_id,),
             )
         self.connection.commit()
+        return target_store_item_id
 
     def fail_claimed_store_item_update(
         self,

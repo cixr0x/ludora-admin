@@ -44,7 +44,7 @@ STORE_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
 
 
-class _EligibleRedirectTarget(RuntimeError):
+class _ClaimedRedirectDeactivated(RuntimeError):
     def __init__(self, *, final_url: str, target_store_item_id: int) -> None:
         super().__init__(f"Eligible redirect target {target_store_item_id}: {final_url}")
         self.final_url = final_url
@@ -255,15 +255,21 @@ def _process_claim(
         store_name=claim.store_name,
     )
 
-    def check_successful_fetch(final_url: str) -> None:
+    def check_successful_page_fetch(final_url: str) -> None:
         if normalize_store_item_url(final_url) == normalize_store_item_url(claim.record.source_url):
             return
-        target_store_item_id = repository.find_eligible_redirect_target_store_item_id(
+        target_store_item_id = repository.deactivate_claimed_store_item_update(
             claim.record,
-            final_url,
+            attempt_id=claim.attempt_id,
+            final_url=final_url,
+            job_id=job_id,
+            lease_token=claim.lease_token,
+            run_id=run_id,
+            worker_id=worker_id,
+            worker_name=WORKER_NAME,
         )
         if target_store_item_id is not None:
-            raise _EligibleRedirectTarget(
+            raise _ClaimedRedirectDeactivated(
                 final_url=final_url,
                 target_store_item_id=target_store_item_id,
             )
@@ -277,7 +283,7 @@ def _process_claim(
             before_request=lambda url: throttle.wait_before_request(url),
             request_headers_provider=request_headers_provider if claim.platform == "shopify" else None,
             trace_logger=trace_logger,
-            on_successful_fetch=check_successful_fetch,
+            on_successful_page_fetch=check_successful_page_fetch,
         )
         result = repository.complete_claimed_store_item_update(
             claim.record,
@@ -295,16 +301,7 @@ def _process_claim(
             changed=result.changed,
             store_item_id=store_item_id,
         )
-    except _EligibleRedirectTarget as exc:
-        repository.deactivate_claimed_store_item_update(
-            claim.record,
-            attempt_id=claim.attempt_id,
-            job_id=job_id,
-            lease_token=claim.lease_token,
-            run_id=run_id,
-            worker_id=worker_id,
-            worker_name=WORKER_NAME,
-        )
+    except _ClaimedRedirectDeactivated as exc:
         if trace_logger is not None:
             trace_logger.log(
                 "item_update.item.redirect_target.deactivated",

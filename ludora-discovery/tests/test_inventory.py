@@ -1712,7 +1712,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.update_change_log_calls, [])
         self.assertEqual(repository.item_records, [])
 
-    def test_continuous_refresh_reports_final_url_before_sku_rejection_without_refetching(self):
+    def test_continuous_refresh_reports_final_page_url_before_sku_rejection_without_refetching(self):
         final_url = "https://example.mx/product/catan"
         detail_html = """
         <script type="application/ld+json">
@@ -1746,7 +1746,7 @@ class InventoryTests(unittest.TestCase):
                 refresh_confirmed_store_item_candidate(
                     existing_record,
                     platform="custom",
-                    on_successful_fetch=final_urls.append,
+                    on_successful_page_fetch=final_urls.append,
                 )
 
         fetch_html.assert_called_once()

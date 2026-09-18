@@ -17,6 +17,7 @@ from ludora.database import (
     TutorialLinkUpsertResult,
     _insert_item_candidate_sql,
     connect_database,
+    normalize_store_item_url,
 )
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
 
@@ -321,8 +322,9 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads(change_params[5]), "https://cdn.example.mx/catan-current.webp")
         self.assertTrue(result.changed)
 
-    def test_find_eligible_redirect_target_matches_normalized_url_and_required_identity(self):
+    def test_redirect_deactivation_locks_and_rechecks_target_before_source_lifecycle(self):
         connection = FakeConnection(
+            fetchone_rows=[(501,)],
             fetchall_rows=[
                 [
                     (777, "HTTPS://EXAMPLE.MX:443/product/catan/#details"),
@@ -333,24 +335,37 @@ class DatabaseRepositoryTests(unittest.TestCase):
         repository = DiscoveryRepository(connection)
         source = confirmed_store_item_record()
 
-        target_id = repository.find_eligible_redirect_target_store_item_id(
+        target_id = repository.deactivate_claimed_store_item_update(
             source,
-            "https://example.mx/product/catan",
+            attempt_id=91,
+            final_url="https://example.mx/product/catan",
+            job_id=17,
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            run_id="continuous:test",
+            worker_id="worker-1",
+            worker_name="continuous",
         )
 
         self.assertEqual(target_id, 777)
-        query, params = connection.cursor_instance.executions[0]
-        normalized_query = " ".join(query.casefold().split())
-        self.assertIn("store_id = %s", normalized_query)
-        self.assertIn("id <> %s", normalized_query)
-        self.assertIn("item_id = %s", normalized_query)
-        self.assertIn("store_active = true", normalized_query)
-        self.assertIn("listing_status = 'listed'", normalized_query)
-        self.assertIn("is_boardgame = true", normalized_query)
-        self.assertIn("is_boardgame_confirmed = true", normalized_query)
-        self.assertEqual(params, (12, 501, 77))
+        target_query, target_params = connection.cursor_instance.executions[0]
+        normalized_target_query = " ".join(target_query.casefold().split())
+        self.assertIn("from store_items source_item", normalized_target_query)
+        self.assertIn("join store_items target_item", normalized_target_query)
+        self.assertIn("target_item.store_id = source_item.store_id", normalized_target_query)
+        self.assertIn("target_item.item_id = source_item.item_id", normalized_target_query)
+        self.assertIn("source_item.item_id is not null", normalized_target_query)
+        self.assertIn("target_item.id <> source_item.id", normalized_target_query)
+        self.assertIn("target_item.store_active = true", normalized_target_query)
+        self.assertIn("target_item.listing_status = 'listed'", normalized_target_query)
+        self.assertIn("target_item.is_boardgame = true", normalized_target_query)
+        self.assertIn("target_item.is_boardgame_confirmed = true", normalized_target_query)
+        self.assertIn("for update of source_item, target_item", normalized_target_query)
+        self.assertEqual(target_params, (501, 12, 77))
+        source_update = " ".join(connection.cursor_instance.executions[1][0].casefold().split())
+        self.assertIn("update store_items", source_update)
+        self.assertEqual(connection.commits, 1)
 
-    def test_find_eligible_redirect_target_requires_matching_normalized_url(self):
+    def test_redirect_deactivation_skips_source_lifecycle_when_locked_target_url_no_longer_matches(self):
         connection = FakeConnection(
             fetchall_rows=[
                 [
@@ -360,12 +375,46 @@ class DatabaseRepositoryTests(unittest.TestCase):
         )
         repository = DiscoveryRepository(connection)
 
-        target_id = repository.find_eligible_redirect_target_store_item_id(
+        target_id = repository.deactivate_claimed_store_item_update(
             confirmed_store_item_record(),
-            "https://example.mx/product/catan",
+            attempt_id=91,
+            final_url="https://example.mx/product/catan",
+            job_id=17,
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            run_id="continuous:test",
+            worker_id="worker-1",
+            worker_name="continuous",
         )
 
         self.assertIsNone(target_id)
+        self.assertEqual(len(connection.cursor_instance.executions), 1)
+        self.assertNotIn(
+            "update store_items",
+            " ".join(connection.cursor_instance.executions[0][0].casefold().split()),
+        )
+        self.assertEqual(connection.commits, 1)
+
+    def test_store_item_url_normalization_only_applies_approved_equivalences(self):
+        equivalent_pairs = (
+            ("HTTPS://EXAMPLE.MX/Product/Catan", "https://example.mx/Product/Catan"),
+            ("https://example.mx:443/Product/Catan", "https://example.mx/Product/Catan"),
+            ("http://example.mx:80/Product/Catan", "http://example.mx/Product/Catan"),
+            ("https://example.mx/Product/Catan/", "https://example.mx/Product/Catan"),
+            ("https://example.mx/Product/Catan#details", "https://example.mx/Product/Catan"),
+        )
+        different_pairs = (
+            ("https://example.mx/Product/Catan", "https://example.mx/product/catan"),
+            ("https://example.mx/Product;Edition=ABC", "https://example.mx/Product;edition=abc"),
+            ("https://example.mx/Product?id=ABC", "https://example.mx/Product?id=abc"),
+            ("https://User:Pass@example.mx/Product", "https://user:pass@example.mx/Product"),
+        )
+
+        for left, right in equivalent_pairs:
+            with self.subTest(left=left, right=right, equivalent=True):
+                self.assertEqual(normalize_store_item_url(left), normalize_store_item_url(right))
+        for left, right in different_pairs:
+            with self.subTest(left=left, right=right, equivalent=False):
+                self.assertNotEqual(normalize_store_item_url(left), normalize_store_item_url(right))
 
     def test_new_item_candidates_do_not_assign_an_update_schedule(self):
         insert_sql = " ".join(_insert_item_candidate_sql().casefold().split())

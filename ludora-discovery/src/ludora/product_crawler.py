@@ -827,9 +827,13 @@ def refresh_confirmed_store_item_candidate(
     trace_logger: TraceLogger | None = None,
     before_request: Callable[[str], None] | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
-    on_successful_fetch: Callable[[str], None] | None = None,
+    on_successful_page_fetch: Callable[[str], None] | None = None,
 ) -> DiscoveryItemCandidateRecord:
-    """Fetch and normalize one confirmed store item without persisting it."""
+    """Fetch and normalize one confirmed store item without persisting it.
+
+    ``on_successful_page_fetch`` observes redirect-resolved HTML page fetches only.
+    Shopify Storefront GraphQL refreshes do not invoke it.
+    """
 
     normalized_platform = platform.strip().casefold()
     if normalized_platform == "shopify":
@@ -852,7 +856,7 @@ def refresh_confirmed_store_item_candidate(
             cancellation_token=cancellation_token,
             before_request=before_request,
             request_headers_provider=request_headers_provider,
-            on_successful_fetch=on_successful_fetch,
+            on_successful_page_fetch=on_successful_page_fetch,
             static_fetch_max_attempts=(
                 AMAZON_UPDATE_STATIC_FETCH_ATTEMPTS
                 if normalized_platform in AMAZON_STORE_PLATFORMS
@@ -1489,7 +1493,7 @@ def _fetch_detail_candidate(
     cancellation_token: CancellationToken | None = None,
     before_request: Callable[[str], None] | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
-    on_successful_fetch: Callable[[str], None] | None = None,
+    on_successful_page_fetch: Callable[[str], None] | None = None,
     static_fetch_max_attempts: int = DEFAULT_FETCH_MAX_ATTEMPTS,
     amazon_browser_fetch_max_attempts: int = 1,
 ) -> DiscoveryItemCandidateRecord:
@@ -1686,8 +1690,8 @@ def _fetch_detail_candidate(
             f"{status_suffix}{amazon_browser_failure_suffix}{browser_failure_suffix}"
         )
 
-    if fetched_detail is not None and on_successful_fetch is not None:
-        on_successful_fetch(fetched_detail.url)
+    if fetched_detail is not None and on_successful_page_fetch is not None:
+        on_successful_page_fetch(fetched_detail.url)
 
     if detail_candidate is None:
         listing_candidate.source_listing_url = source_listing_url
