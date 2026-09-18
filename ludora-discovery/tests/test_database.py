@@ -194,7 +194,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("store_items.listing_status = 'listed'", due_sql)
         self.assertIn("store_items.store_active = true", due_sql)
         self.assertIn("store_items.next_update_at <= now()", due_sql)
-        self.assertEqual(normalized_sql.count("store_items.next_update_at <= now()"), 1)
+        self.assertEqual(due_sql.count("store_items.next_update_at <= now()"), 1)
         self.assertIn("store_items.update_lease_expires_at <= now()", due_sql)
         self.assertIn("store_item_update_store_cooldown", due_sql)
         self.assertIn("cooldown.store_id = store_items.store_id", due_sql)
@@ -209,7 +209,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("store_items.listing_status = 'listed'", target_sql)
         self.assertIn("store_items.store_active = true", target_sql)
         self.assertIn("store_items.update_lease_expires_at <= now()", target_sql)
-        self.assertNotIn("next_update_at <= now()", target_sql)
+        self.assertNotIn("and store_items.next_update_at <= now()", target_sql)
         self.assertIn("order by store_items.refreshed_date asc, store_items.id asc", target_sql)
         self.assertIn("when store_items.id = target.id then scheduled.next_update_at", normalized_sql)
         self.assertIn("else target.next_update_at", normalized_sql)
@@ -224,6 +224,35 @@ class DatabaseRepositoryTests(unittest.TestCase):
             ("continuous", "ee2bf2df-2330-430b-8f65-ad41dad4dc62", 300),
         )
         self.assertEqual(claim.record.store_item_id, 777)
+
+    def test_claim_due_store_item_update_target_skips_only_failed_items_still_in_backoff(self):
+        connection = FakeConnection(
+            fetchone_rows=[
+                (777,),
+                confirmed_store_item_row(store_item_id=777),
+                ("Example", "woocommerce", 0, 2),
+                (91,),
+            ]
+        )
+        repository = DiscoveryRepository(connection)
+
+        repository.claim_due_store_item_update(
+            worker_name="continuous",
+            worker_id="worker-1",
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            lease_seconds=300,
+        )
+
+        claim_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
+        _before_target, remainder = claim_sql.split("), target as (", 1)
+        target_sql, _updated_sql = remainder.split("), updated as (", 1)
+        self.assertIn(
+            "and ( store_items.consecutive_update_failures = 0 "
+            "or store_items.next_update_at is null "
+            "or store_items.next_update_at <= now() )",
+            target_sql,
+        )
+        self.assertEqual(target_sql.count("store_items.next_update_at <= now()"), 1)
 
     def test_claim_due_store_item_update_preserves_due_slot_when_scheduled_row_is_stalest(self):
         connection = FakeConnection(

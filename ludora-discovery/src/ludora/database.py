@@ -614,6 +614,11 @@ class DiscoveryRepository:
                       and store_items.listing_status = 'LISTED'
                       and store_items.store_active = true
                       and (
+                        store_items.consecutive_update_failures = 0
+                        or store_items.next_update_at is null
+                        or store_items.next_update_at <= now()
+                      )
+                      and (
                         store_items.update_lease_token is null
                         or store_items.update_lease_expires_at <= now()
                       )
