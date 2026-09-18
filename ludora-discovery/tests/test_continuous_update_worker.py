@@ -354,6 +354,168 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             ],
         )
 
+    def test_amazon_first_browser_attempt_redirect_deactivates_before_retry(self):
+        source_url = "https://www.amazon.com.mx/dp/B0D36CJG5N"
+        redirected_url = "https://www.amazon.com.mx/dp/B0REDIRECTED"
+        invalid_shell_html = """
+        <html><head><title>Amazon.com.mx</title></head><body></body></html>
+        """
+        valid_product_html = """
+        <html><head><title>Mi Villano Favorito 4</title></head><body>
+          <span id="productTitle">Mi Villano Favorito 4</span>
+          <span class="a-offscreen">$399.00</span>
+          <div id="availability">Disponible</div>
+          <input id="add-to-cart-button" type="submit" value="Agregar al carrito">
+          <div>ASIN: B0D36CJG5N</div>
+        </body></html>
+        """
+        amazon_record = replace(
+            self.record,
+            source_url=source_url,
+            source_listing_url=source_url,
+            title="Mi Villano Favorito 4",
+            original_title="Mi Villano Favorito 4",
+        )
+        amazon_claim = replace(self.claim, platform="amazon", record=amazon_record)
+        repository = Mock()
+        trace_logger = Mock()
+
+        class BrowserFetcher:
+            def __init__(self):
+                self.fetches = []
+                self.reset_count = 0
+
+            def fetch(self, url):
+                self.fetches.append(url)
+                if len(self.fetches) == 1:
+                    return FetchResult(url=redirected_url, text=invalid_shell_html, status_code=200)
+                return FetchResult(url=source_url, text=valid_product_html, status_code=200)
+
+            def reset_context(self):
+                self.reset_count += 1
+
+        browser = BrowserFetcher()
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=source_url, text="", status_code=500),
+        ):
+            _process_claim(
+                browser_fetcher=browser.fetch,
+                claim=amazon_claim,
+                item_title_extractor=Mock(),
+                job_id=17,
+                repository=repository,
+                request_headers_provider=Mock(),
+                run_id="continuous:test",
+                throttle=Mock(),
+                trace_logger=trace_logger,
+                worker_id="worker-1",
+            )
+
+        self.assertEqual(browser.fetches, [source_url])
+        self.assertEqual(browser.reset_count, 0)
+        repository.deactivate_claimed_store_item_update.assert_called_once_with(
+            amazon_record,
+            attempt_id=91,
+            job_id=17,
+            lease_token=self.claim.lease_token,
+            run_id="continuous:test",
+            worker_id="worker-1",
+            worker_name="continuous",
+        )
+        repository.complete_claimed_store_item_update.assert_not_called()
+        repository.fail_claimed_store_item_update.assert_not_called()
+        redirect_events = [
+            entry.kwargs
+            for entry in trace_logger.log.call_args_list
+            if entry.args == ("item_update.item.redirect.deactivated",)
+        ]
+        self.assertEqual(
+            redirect_events,
+            [
+                {
+                    "final_url": redirected_url,
+                    "source_store_item_id": 501,
+                    "source_url": source_url,
+                }
+            ],
+        )
+
+    def test_amazon_exact_invalid_browser_attempt_retries_and_completes(self):
+        source_url = "https://www.amazon.com.mx/dp/B0D36CJG5N"
+        invalid_shell_html = """
+        <html><head><title>Amazon.com.mx</title></head><body></body></html>
+        """
+        valid_product_html = """
+        <html><head><title>Mi Villano Favorito 4</title></head><body>
+          <span id="productTitle">Mi Villano Favorito 4</span>
+          <span class="a-offscreen">$399.00</span>
+          <div id="availability">Disponible</div>
+          <input id="add-to-cart-button" type="submit" value="Agregar al carrito">
+          <div>ASIN: B0D36CJG5N</div>
+        </body></html>
+        """
+        amazon_record = replace(
+            self.record,
+            source_url=source_url,
+            source_listing_url=source_url,
+            title="Mi Villano Favorito 4",
+            original_title="Mi Villano Favorito 4",
+        )
+        amazon_claim = replace(self.claim, platform="amazon", record=amazon_record)
+        repository = Mock()
+        repository.complete_claimed_store_item_update.return_value = ItemCandidateUpsertResult(
+            candidate_id=501,
+            listing_status="LISTED",
+            item_id=77,
+            should_process=False,
+            changed=True,
+        )
+        trace_logger = Mock()
+
+        class BrowserFetcher:
+            def __init__(self):
+                self.fetches = []
+                self.reset_count = 0
+
+            def fetch(self, url):
+                self.fetches.append(url)
+                html = invalid_shell_html if len(self.fetches) == 1 else valid_product_html
+                return FetchResult(url=source_url, text=html, status_code=200)
+
+            def reset_context(self):
+                self.reset_count += 1
+
+        browser = BrowserFetcher()
+        with patch(
+            "ludora.product_crawler.fetch_html",
+            return_value=FetchResult(url=source_url, text="", status_code=500),
+        ):
+            _process_claim(
+                browser_fetcher=browser.fetch,
+                claim=amazon_claim,
+                item_title_extractor=Mock(),
+                job_id=17,
+                repository=repository,
+                request_headers_provider=Mock(),
+                run_id="continuous:test",
+                throttle=Mock(),
+                trace_logger=trace_logger,
+                worker_id="worker-1",
+            )
+
+        self.assertEqual(browser.fetches, [source_url, source_url])
+        self.assertEqual(browser.reset_count, 1)
+        repository.deactivate_claimed_store_item_update.assert_not_called()
+        repository.complete_claimed_store_item_update.assert_called_once()
+        repository.fail_claimed_store_item_update.assert_not_called()
+        self.assertFalse(
+            any(
+                entry.args == ("item_update.item.redirect.deactivated",)
+                for entry in trace_logger.log.call_args_list
+            )
+        )
+
     def test_exact_and_fragment_only_final_urls_complete_normally(self):
         non_redirect_final_urls = (
             self.record.source_url,

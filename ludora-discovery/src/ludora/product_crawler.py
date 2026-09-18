@@ -1587,6 +1587,7 @@ def _fetch_detail_candidate(
                 browser_fetcher,
                 before_request=before_request,
                 max_attempts=amazon_browser_fetch_max_attempts,
+                on_successful_page_fetch=on_successful_page_fetch,
                 store_id=listing_candidate.store_id,
                 store_item_id=listing_candidate.store_item_id,
                 trace=trace,
@@ -1618,7 +1619,8 @@ def _fetch_detail_candidate(
                     if isinstance(last_failure, Mapping):
                         browser_failure = dict(last_failure)
         if (
-            fetched_detail is not None
+            not amazon_detail_request
+            and fetched_detail is not None
             and fetched_detail.status_code < 400
             and on_successful_page_fetch is not None
         ):
@@ -1770,6 +1772,7 @@ def _fetch_amazon_update_detail_with_browser(
     *,
     before_request: Callable[[str], None] | None,
     max_attempts: int,
+    on_successful_page_fetch: Callable[[str], None] | None,
     store_id: int | None,
     store_item_id: int | None,
     trace: TraceLogger,
@@ -1788,6 +1791,12 @@ def _fetch_amazon_update_detail_with_browser(
         if before_request is not None:
             before_request(source_url)
         fetched_detail = browser_fetcher(source_url)
+        if (
+            fetched_detail is not None
+            and fetched_detail.status_code < 400
+            and on_successful_page_fetch is not None
+        ):
+            on_successful_page_fetch(fetched_detail.url)
         if fetched_detail is None:
             fetcher_owner = getattr(browser_fetcher, "__self__", browser_fetcher)
             browser_failure = getattr(fetcher_owner, "last_failure", None)
