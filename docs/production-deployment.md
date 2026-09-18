@@ -134,8 +134,10 @@ The discovery `.env` uses the same `CODEX_API_BASE_URL` and configures its inten
 
 The continuous updater is a supervised Python child of admin-service. The
 admin service distributes eligible items daily from 3:00 AM across a 23-hour
-window. The worker claims one due item at a time, uses a five-minute expiring
-lease, and clears the due time after a successful update. It uses a PostgreSQL
+window. Each due slot selects a store, and the worker refreshes that store's
+stalest eligible product while atomically preserving the scheduled slots. It
+uses a five-minute expiring lease and clears the claimed product's due time
+after a successful update. It uses a PostgreSQL
 advisory lock, so a manual batch update cannot run concurrently and double the
 store request rate. HTTP 429 responses trigger independent store cooldowns for
 Shopify and WooCommerce, allowing the worker to continue with other stores,

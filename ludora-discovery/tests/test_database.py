@@ -74,9 +74,9 @@ def confirmed_store_item_record() -> DiscoveryItemCandidateRecord:
     )
 
 
-def confirmed_store_item_row() -> tuple[object, ...]:
+def confirmed_store_item_row(*, store_item_id: int = 501, store_id: int = 12) -> tuple[object, ...]:
     return (
-        12,
+        store_id,
         "https://example.mx/products/catan",
         "",
         "Catan",
@@ -117,7 +117,7 @@ def confirmed_store_item_row() -> tuple[object, ...]:
         None,
         None,
         "",
-        501,
+        store_item_id,
     )
 
 
@@ -161,6 +161,96 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn(normalized_platform, store_sql)
         self.assertEqual(claim.platform, "woocommerce")
         self.assertEqual(claim.store_consecutive_429s, 2)
+
+    def test_claim_due_store_item_update_uses_due_row_store_but_leases_its_stalest_item(self):
+        connection = FakeConnection(
+            fetchone_rows=[
+                (777,),
+                confirmed_store_item_row(store_item_id=777),
+                ("Example", "woocommerce", 0, 2),
+                (91,),
+            ]
+        )
+        repository = DiscoveryRepository(connection)
+
+        claim = repository.claim_due_store_item_update(
+            worker_name="continuous",
+            worker_id="worker-1",
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            lease_seconds=300,
+        )
+
+        claim_sql, claim_params = connection.cursor_instance.executions[0]
+        normalized_sql = " ".join(claim_sql.casefold().split())
+        due_sql, remainder = normalized_sql.split("), scheduled as (", 1)
+        scheduled_sql, remainder = remainder.split("), target as (", 1)
+        target_sql, _updated_sql = remainder.split("), updated as (", 1)
+        self.assertIn("with due_window as materialized", normalized_sql)
+        self.assertIn("stores.active = true", due_sql)
+        self.assertIn("store_items.is_boardgame = true", due_sql)
+        self.assertIn("store_items.is_boardgame_confirmed = true", due_sql)
+        self.assertIn("store_items.item_id is not null", due_sql)
+        self.assertIn("store_items.source_url <> ''", due_sql)
+        self.assertIn("store_items.listing_status = 'listed'", due_sql)
+        self.assertIn("store_items.store_active = true", due_sql)
+        self.assertIn("store_items.next_update_at <= now()", due_sql)
+        self.assertEqual(normalized_sql.count("store_items.next_update_at <= now()"), 1)
+        self.assertIn("store_items.update_lease_expires_at <= now()", due_sql)
+        self.assertIn("store_item_update_store_cooldown", due_sql)
+        self.assertIn("cooldown.store_id = store_items.store_id", due_sql)
+        self.assertIn("order by store_items.next_update_at, store_items.id limit 256", due_sql)
+        self.assertIn("order by random() for update of store_items skip locked limit 1", scheduled_sql)
+        self.assertIn("join scheduled on scheduled.store_id = store_items.store_id", target_sql)
+        self.assertIn("stores.active = true", target_sql)
+        self.assertIn("store_items.is_boardgame = true", target_sql)
+        self.assertIn("store_items.is_boardgame_confirmed = true", target_sql)
+        self.assertIn("store_items.item_id is not null", target_sql)
+        self.assertIn("store_items.source_url <> ''", target_sql)
+        self.assertIn("store_items.listing_status = 'listed'", target_sql)
+        self.assertIn("store_items.store_active = true", target_sql)
+        self.assertIn("store_items.update_lease_expires_at <= now()", target_sql)
+        self.assertNotIn("next_update_at <= now()", target_sql)
+        self.assertIn("order by store_items.refreshed_date asc, store_items.id asc", target_sql)
+        self.assertIn("when store_items.id = target.id then scheduled.next_update_at", normalized_sql)
+        self.assertIn("else target.next_update_at", normalized_sql)
+        self.assertIn(
+            "update_lease_token = case when store_items.id = target.id then %s::uuid "
+            "else store_items.update_lease_token end",
+            normalized_sql,
+        )
+        self.assertIn("select id from updated where id = target_id", normalized_sql)
+        self.assertEqual(
+            claim_params,
+            ("continuous", "ee2bf2df-2330-430b-8f65-ad41dad4dc62", 300),
+        )
+        self.assertEqual(claim.record.store_item_id, 777)
+
+    def test_claim_due_store_item_update_preserves_due_slot_when_scheduled_row_is_stalest(self):
+        connection = FakeConnection(
+            fetchone_rows=[
+                (501,),
+                confirmed_store_item_row(),
+                ("Example", "woocommerce", 0, 2),
+                (91,),
+            ]
+        )
+        repository = DiscoveryRepository(connection)
+
+        claim = repository.claim_due_store_item_update(
+            worker_name="continuous",
+            worker_id="worker-1",
+            lease_token="ee2bf2df-2330-430b-8f65-ad41dad4dc62",
+            lease_seconds=300,
+        )
+
+        claim_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
+        self.assertEqual(claim_sql.count("update store_items"), 1)
+        self.assertIn(
+            "when scheduled.id = target.id then store_items.next_update_at",
+            claim_sql,
+        )
+        self.assertIn("where store_items.id in (scheduled.id, target.id)", claim_sql)
+        self.assertEqual(claim.record.store_item_id, 501)
 
     def test_successful_update_clears_only_its_store_cooldown(self):
         connection = FakeConnection(fetchone_rows=[(501,)])

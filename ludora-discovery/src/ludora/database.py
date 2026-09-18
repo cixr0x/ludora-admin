@@ -589,21 +589,63 @@ class DiscoveryRepository:
                       )
                     order by store_items.next_update_at, store_items.id
                     limit 256
-                ), candidate as (
-                    select store_items.id
+                ), scheduled as (
+                    select
+                        store_items.id,
+                        store_items.store_id,
+                        store_items.next_update_at
                     from store_items
                     join due_window on due_window.id = store_items.id
                     order by random()
                     for update of store_items skip locked
                     limit 1
+                ), target as (
+                    select
+                        store_items.id,
+                        store_items.next_update_at
+                    from store_items
+                    join scheduled on scheduled.store_id = store_items.store_id
+                    join stores on stores.id = store_items.store_id
+                    where stores.active = true
+                      and store_items.is_boardgame = true
+                      and store_items.is_boardgame_confirmed = true
+                      and store_items.item_id is not null
+                      and store_items.source_url <> ''
+                      and store_items.listing_status = 'LISTED'
+                      and store_items.store_active = true
+                      and (
+                        store_items.update_lease_token is null
+                        or store_items.update_lease_expires_at <= now()
+                      )
+                    order by store_items.refreshed_date asc, store_items.id asc
+                    for update of store_items skip locked
+                    limit 1
+                ), updated as (
+                    update store_items
+                    set next_update_at = case
+                          when scheduled.id = target.id then store_items.next_update_at
+                          when store_items.id = target.id then scheduled.next_update_at
+                          else target.next_update_at
+                        end,
+                        update_lease_token = case
+                          when store_items.id = target.id then %s::uuid
+                          else store_items.update_lease_token
+                        end,
+                        update_lease_expires_at = case
+                          when store_items.id = target.id then now() + make_interval(secs => %s)
+                          else store_items.update_lease_expires_at
+                        end,
+                        last_update_attempt_at = case
+                          when store_items.id = target.id then now()
+                          else store_items.last_update_attempt_at
+                        end
+                    from scheduled, target
+                    where store_items.id in (scheduled.id, target.id)
+                    returning store_items.id, target.id as target_id
                 )
-                update store_items
-                set update_lease_token = %s::uuid,
-                    update_lease_expires_at = now() + make_interval(secs => %s),
-                    last_update_attempt_at = now()
-                from candidate
-                where store_items.id = candidate.id
-                returning store_items.id
+                select id
+                from updated
+                where id = target_id
                 """,
                 (worker_name, lease_token, lease_seconds),
             )
