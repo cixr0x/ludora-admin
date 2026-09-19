@@ -14,6 +14,7 @@ from urllib.parse import urldefrag
 
 from ludora.admin_title_extraction import AdminAmazonTitleExtractor
 from ludora.admin_web_bot_auth import AdminWebBotAuthHeadersProvider
+from ludora.amazon_discovery import _asin_from_url
 from ludora.browser_fetch import BrowserTextFetcher
 from ludora.config import (
     resolve_admin_api_url,
@@ -38,6 +39,7 @@ BROWSER_RECYCLE_MAX_AGE_SECONDS = 6 * 60 * 60
 ITEM_FAILURE_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 STORE_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
+AMAZON_PLATFORMS = {"amazon", "amazon_brand"}
 
 
 class _ClaimedRedirectDeactivated(RuntimeError):
@@ -253,6 +255,11 @@ def _process_claim(
     def check_successful_page_fetch(final_url: str) -> None:
         if urldefrag(final_url).url == urldefrag(claim.record.source_url).url:
             return
+        if claim.platform in AMAZON_PLATFORMS:
+            source_asin = _asin_from_url(claim.record.source_url)
+            final_asin = _asin_from_url(final_url)
+            if source_asin and source_asin == final_asin:
+                return
         repository.deactivate_claimed_store_item_update(
             claim.record,
             attempt_id=claim.attempt_id,

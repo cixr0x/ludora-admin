@@ -354,9 +354,9 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
             ],
         )
 
-    def test_amazon_first_browser_attempt_redirect_deactivates_before_retry(self):
+    def test_amazon_first_browser_attempt_with_different_asin_deactivates_before_retry(self):
         source_url = "https://www.amazon.com.mx/dp/B0D36CJG5N"
-        redirected_url = "https://www.amazon.com.mx/dp/B0REDIRECTED"
+        redirected_url = "https://www.amazon.com.mx/dp/B0D36CJG6N"
         invalid_shell_html = """
         <html><head><title>Amazon.com.mx</title></head><body></body></html>
         """
@@ -557,6 +557,115 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
 
                 repository.deactivate_claimed_store_item_update.assert_not_called()
                 repository.complete_claimed_store_item_update.assert_called_once()
+
+    def test_amazon_same_asin_canonical_redirect_completes_for_store_and_brand_platforms(self):
+        source_url = "https://www.amazon.com.mx/dp/B008EK6XEK"
+        final_url = "https://www.amazon.com.mx/Asmodee-Juego-de-Mesa-Dobble/dp/B008EK6XEK"
+        amazon_record = replace(
+            self.record,
+            source_url=source_url,
+            source_listing_url=source_url,
+        )
+
+        for platform in ("amazon", "amazon_brand"):
+            with self.subTest(platform=platform):
+                repository = Mock()
+                repository.complete_claimed_store_item_update.return_value = ItemCandidateUpsertResult(
+                    candidate_id=501,
+                    listing_status="LISTED",
+                    item_id=77,
+                    should_process=False,
+                    changed=False,
+                )
+                refreshed = replace(amazon_record)
+                trace_logger = Mock()
+
+                def refresh(_record, **kwargs):
+                    kwargs["on_successful_page_fetch"](final_url)
+                    return refreshed
+
+                with patch(
+                    "ludora.continuous_update_worker.refresh_confirmed_store_item_candidate",
+                    side_effect=refresh,
+                ):
+                    _process_claim(
+                        browser_fetcher=None,
+                        claim=replace(self.claim, platform=platform, record=amazon_record),
+                        item_title_extractor=Mock(),
+                        job_id=17,
+                        repository=repository,
+                        request_headers_provider=Mock(),
+                        run_id="continuous:test",
+                        throttle=Mock(),
+                        trace_logger=trace_logger,
+                        worker_id="worker-1",
+                    )
+
+                repository.deactivate_claimed_store_item_update.assert_not_called()
+                repository.complete_claimed_store_item_update.assert_called_once()
+                repository.fail_claimed_store_item_update.assert_not_called()
+                self.assertFalse(
+                    any(
+                        entry.args == ("item_update.item.redirect.deactivated",)
+                        for entry in trace_logger.log.call_args_list
+                    )
+                )
+
+    def test_amazon_redirect_with_missing_asin_deactivates(self):
+        redirect_pairs = (
+            (
+                "amazon",
+                "https://www.amazon.com.mx/product/B008EK6XEK",
+                "https://www.amazon.com.mx/dp/B008EK6XEK",
+            ),
+            (
+                "amazon_brand",
+                "https://www.amazon.com.mx/dp/B008EK6XEK",
+                "https://www.amazon.com.mx/s?k=dobble",
+            ),
+        )
+
+        for platform, source_url, final_url in redirect_pairs:
+            with self.subTest(platform=platform, source_url=source_url, final_url=final_url):
+                repository = Mock()
+                amazon_record = replace(
+                    self.record,
+                    source_url=source_url,
+                    source_listing_url=source_url,
+                )
+
+                def refresh(_record, **kwargs):
+                    kwargs["on_successful_page_fetch"](final_url)
+                    self.fail("redirect with a missing ASIN should stop refresh processing")
+
+                with patch(
+                    "ludora.continuous_update_worker.refresh_confirmed_store_item_candidate",
+                    side_effect=refresh,
+                ):
+                    _process_claim(
+                        browser_fetcher=None,
+                        claim=replace(self.claim, platform=platform, record=amazon_record),
+                        item_title_extractor=Mock(),
+                        job_id=17,
+                        repository=repository,
+                        request_headers_provider=Mock(),
+                        run_id="continuous:test",
+                        throttle=Mock(),
+                        trace_logger=Mock(),
+                        worker_id="worker-1",
+                    )
+
+                repository.deactivate_claimed_store_item_update.assert_called_once_with(
+                    amazon_record,
+                    attempt_id=91,
+                    job_id=17,
+                    lease_token=self.claim.lease_token,
+                    run_id="continuous:test",
+                    worker_id="worker-1",
+                    worker_name="continuous",
+                )
+                repository.complete_claimed_store_item_update.assert_not_called()
+                repository.fail_claimed_store_item_update.assert_not_called()
 
     def test_server_observable_url_changes_deactivate_claimed_source(self):
         redirect_final_urls = (
