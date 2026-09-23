@@ -33,6 +33,7 @@ from ludora.shopify_storefront import (
     shopify_storefront_endpoint,
 )
 from ludora.sitemap_discovery import _looks_like_site_protection_challenge, discover_product_urls_from_sitemaps
+from ludora.supervised_browser import BrowserFetchFailed
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import (
     DEFAULT_FETCH_MAX_ATTEMPTS,
@@ -227,9 +228,10 @@ def crawl_store_product_details(
     )
     browser_session = None
     if browser_sitemap_fallback_enabled and browser_fetcher is None:
-        from ludora.browser_fetch import BrowserTextFetcher
+        from ludora.browser_fetch import create_discovery_browser_fetcher
 
-        browser_session = BrowserTextFetcher(trace_logger=trace)
+        browser_session = create_discovery_browser_fetcher(trace_logger=trace,
+                                                           cancellation_token=cancellation_token)
         browser_fetcher = browser_session.__enter__().fetch
 
     try:
@@ -454,6 +456,15 @@ def crawl_listing_candidates(
             if exc.status_code is not None:
                 fields["status_code"] = exc.status_code
             trace.log("inventory.candidate.detail_fetch.skipped_transient", **fields)
+            continue
+        except BrowserFetchFailed as exc:
+            trace.log(
+                "inventory.candidate.detail_fetch.skipped_transient",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                source_url=listing_candidate.source_url,
+                store_id=listing_candidate.store_id,
+            )
             continue
         except ProductDetailRejectedError:
             continue
@@ -1695,6 +1706,7 @@ def _fetch_detail_candidate(
             last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES
             or amazon_detail_validation_failed
             or browser_error_type == "TimeoutError"
+            or (not detect_removed and browser_error_type and browser_error_type != "BrowserFetchUnavailable")
         ):
             raise TransientProductFetchError(
                 (

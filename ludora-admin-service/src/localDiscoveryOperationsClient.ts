@@ -144,6 +144,11 @@ export function createLocalDiscoveryOperationsClient({
     const childEnv = {
       ...process.env,
       LUDORA_DISCOVERY_BROWSER_WATCHDOG: type === 'item_discovery' ? '1' : '0',
+      // Reserve at least five seconds for owned-child cleanup at practical watchdog settings.
+      // Sub-five-second values are used by watchdog unit tests; their outer fallback stays authoritative.
+      LUDORA_DISCOVERY_INNER_BROWSER_TIMEOUT_SECONDS: String(
+        Math.min(100, browserFetchTimeoutSeconds * 0.83, Math.max(0.01, browserFetchTimeoutSeconds - 5))
+      ),
       PYTHONPATH: packagePath.join(packageDir, 'src'),
       ...(internalApiToken?.trim() ? { LUDORA_INTERNAL_API_TOKEN: internalApiToken.trim() } : {})
     };

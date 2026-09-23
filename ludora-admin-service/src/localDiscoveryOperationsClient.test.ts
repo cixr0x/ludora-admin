@@ -146,6 +146,23 @@ describe('local discovery operations client', () => {
     await expect(client.startStoreDiscoveryRun()).resolves.toMatchObject({ status: 'running' });
   });
 
+  it('passes an inner browser deadline that leaves time for two attempts and cleanup', async () => {
+    const { client, spawned } = createClient({ browserFetchTimeoutSeconds: 120 });
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    const deadline = Number((spawned[0].options as { env: Record<string, string> }).env.LUDORA_DISCOVERY_INNER_BROWSER_TIMEOUT_SECONDS);
+    expect(deadline).toBeGreaterThanOrEqual(90);
+    expect(deadline + 4).toBeLessThan(120);
+    spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME);
+    await started;
+
+    const shorter = createClient({ browserFetchTimeoutSeconds: 15 });
+    const shorterStarted = shorter.client.startItemDiscoveryRun({ all_stores: true });
+    const shorterDeadline = Number((shorter.spawned[0].options as { env: Record<string, string> }).env.LUDORA_DISCOVERY_INNER_BROWSER_TIMEOUT_SECONDS);
+    expect(shorterDeadline + 4).toBeLessThan(15);
+    shorter.spawned[0].child.acceptItemDiscovery(ITEM_DISCOVERY_ACCEPTANCE_FRAME);
+    await shorterStarted;
+  });
+
   it('clears only the matching fetch deadline and permits long batches between fetches', async () => {
     vi.useFakeTimers();
     const terminate = vi.fn(async () => undefined);

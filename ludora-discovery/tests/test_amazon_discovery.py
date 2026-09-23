@@ -648,6 +648,36 @@ class AmazonDiscoveryTests(unittest.TestCase):
             ],
         )
 
+    def test_hard_browser_timeout_skips_one_detail_after_two_worker_attempts(self):
+        from ludora.supervised_browser import BrowserFetchTimeout
+
+        failed_url = "https://www.amazon.com.mx/dp/B0BAD00001"
+        valid_url = "https://www.amazon.com.mx/dp/B0GOOD0001"
+        search_html = f'<a href="{failed_url}">Bad</a><a href="{valid_url}">Good</a>'
+        valid_html = '<span id="productTitle">Good</span><div>ASIN: B0GOOD0001</div>'
+        detail_fetches = []
+
+        def fetcher(url):
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            detail_fetches.append(url)
+            if url == failed_url:
+                raise BrowserFetchTimeout("two supervised attempts timed out")
+            return FetchResult(url=url, text=valid_html)
+
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11, repository, browser_fetcher=fetcher, trace_logger=trace, delay_seconds=0,
+        )
+
+        self.assertEqual(detail_fetches, [failed_url, valid_url])
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        skipped = [fields for event, fields in trace.entries if event == "amazon_inventory.candidate.detail_fetch.skipped_transient"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["source_url"], failed_url)
+
     def test_calls_product_callback_for_each_detail_retry_but_not_search_enumeration(self):
         product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
         search_html = f'<html><body><a href="{product_url}"></a></body></html>'

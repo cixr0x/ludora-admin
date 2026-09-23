@@ -349,6 +349,15 @@ def fetch_text_with_browser(url: str, timeout_ms: int = 30_000) -> FetchResult |
         return fetcher.fetch(url)
 
 
+def create_discovery_browser_fetcher(*, trace_logger: TraceLogger | None = None,
+                                     cancellation_token: CancellationToken | None = None):
+    from ludora.supervised_browser import SupervisedBrowserFetcher
+
+    configured = os.environ.get("LUDORA_DISCOVERY_INNER_BROWSER_TIMEOUT_SECONDS", "100")
+    return SupervisedBrowserFetcher(timeout_seconds=float(configured), trace_logger=trace_logger,
+                                    cancellation_token=cancellation_token)
+
+
 def fetch_product_detail_with_browser(
     browser_fetcher: Callable[[str], FetchResult | None],
     url: str,
@@ -357,7 +366,9 @@ def fetch_product_detail_with_browser(
     cancellation_token: CancellationToken | None,
 ) -> FetchResult | None:
     fetcher_owner = getattr(browser_fetcher, "__self__", None)
-    if isinstance(fetcher_owner, BrowserTextFetcher):
+    from ludora.supervised_browser import SupervisedBrowserFetcher
+
+    if isinstance(fetcher_owner, (BrowserTextFetcher, SupervisedBrowserFetcher)):
         return fetcher_owner.fetch(
             url,
             before_navigation=before_navigation,

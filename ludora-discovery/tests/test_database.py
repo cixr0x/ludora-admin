@@ -758,6 +758,28 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("completed", "", completed_at, 3, 5, 2, 1, 1, 1, "run-123"))
         self.assertEqual(connection.commits, 3)
 
+    def test_reaped_store_finalization_inserts_missing_row_and_preserves_existing_counters(self):
+        connection = FakeConnection(fetchone_rows=[(91,)])
+        repository = DiscoveryRepository(connection)
+        ended = datetime(2026, 9, 23, 10, 0, tzinfo=timezone.utc)
+
+        updated = repository.finalize_store_item_discovery_after_child_exit(
+            run_id="batch:12", store_id=12, website_url="https://example.mx/",
+            completed_at=ended, status="failed", error="child stalled",
+        )
+
+        self.assertTrue(updated)
+        sql, params = connection.cursor_instance.executions[0]
+        normalized = " ".join(sql.casefold().split())
+        self.assertIn("insert into job_store_item_discovery_log", normalized)
+        self.assertIn("on conflict (run_id) do update", normalized)
+        self.assertIn("status = 'running'", normalized)
+        self.assertIn("store_id = excluded.store_id", normalized)
+        self.assertNotIn("set new_items", normalized)
+        self.assertNotIn("items_discovered = excluded", normalized)
+        self.assertEqual(params[:5], ("batch:12", 12, "https://example.mx/", "failed", "child stalled"))
+        self.assertEqual(connection.commits, 1)
+
     def test_lists_only_active_store_item_discovery_sources_by_default(self):
         connection = FakeConnection(fetchall_rows=[[]])
         repository = DiscoveryRepository(connection)

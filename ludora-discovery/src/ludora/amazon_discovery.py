@@ -19,6 +19,7 @@ from ludora.product_crawler import (
     ItemCandidateRepository,
     ItemClassifier,
 )
+from ludora.supervised_browser import BrowserFetchFailed
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import FetchResult
 
@@ -187,9 +188,10 @@ def _crawl_amazon_search_inventory(
     )
     browser_session = None
     if browser_fetcher is None:
-        from ludora.browser_fetch import BrowserTextFetcher
+        from ludora.browser_fetch import create_discovery_browser_fetcher
 
-        browser_session = BrowserTextFetcher(trace_logger=trace)
+        browser_session = create_discovery_browser_fetcher(trace_logger=trace,
+                                                           cancellation_token=cancellation_token)
         browser_fetcher = browser_session.__enter__().fetch
 
     records: list[DiscoveryItemCandidateRecord] = []
@@ -257,6 +259,16 @@ def _crawl_amazon_search_inventory(
                             require_brand_byline=bool(expected_brand_name),
                             before_product_request=before_product_request,
                         )
+                    except BrowserFetchFailed as exc:
+                        skipped_detail_urls.append(listing_candidate.source_url)
+                        trace.log(
+                            "amazon_inventory.candidate.detail_fetch.skipped_transient",
+                            error=str(exc),
+                            error_type=type(exc).__name__,
+                            source_url=listing_candidate.source_url,
+                            store_id=listing_candidate.store_id,
+                        )
+                        continue
                     except AmazonDetailFetchError as exc:
                         skipped_detail_urls.append(exc.source_url)
                         resume_in_seconds = (

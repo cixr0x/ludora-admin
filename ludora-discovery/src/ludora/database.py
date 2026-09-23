@@ -292,6 +292,32 @@ class DiscoveryRepository:
             )
         self.connection.commit()
 
+    def finalize_store_item_discovery_after_child_exit(
+        self, *, run_id: str, store_id: int, website_url: str,
+        completed_at: datetime, status: str, error: str,
+    ) -> bool:
+        """Record a reaped child failure without overwriting persisted counters."""
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into job_store_item_discovery_log
+                    (run_id, store_id, website_url, status, error, started_at, completed_at)
+                values (%s, %s, %s, %s, %s, %s, %s)
+                on conflict (run_id) do update
+                set status = excluded.status,
+                    error = excluded.error,
+                    completed_at = excluded.completed_at,
+                    updated_at = now()
+                where job_store_item_discovery_log.store_id = excluded.store_id
+                    and job_store_item_discovery_log.status = 'running'
+                returning id
+                """,
+                (run_id, store_id, website_url, status, error, completed_at, completed_at),
+            )
+            updated = cursor.fetchone() is not None
+        self.connection.commit()
+        return updated
+
     def list_store_item_discovery_sources(self, *, store_ids: list[int] | None = None) -> list[StoreItemDiscoverySource]:
         sql = """
             select

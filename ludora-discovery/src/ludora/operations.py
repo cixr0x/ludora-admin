@@ -536,6 +536,7 @@ def run_item_discovery_batch(
     store_ids: list[int] | None = None,
     product_request_throttle: ProductDiscoveryRequestThrottle | None = None,
     on_accepted: Callable[[], None] | None = None,
+    supervise_store_children: bool = True,
 ) -> ItemDiscoveryRunResult:
     current_env = env if env is not None else os.environ
     database_url = resolve_database_url(None, env=current_env, dotenv_path=env_file)
@@ -576,10 +577,18 @@ def run_item_discovery_batch(
         unconfirmed_non_boardgames = 0
         stores_scanned = 0
         failures: list[ItemDiscoveryStoreFailure] = []
+        supervised_batch = supervise_store_children
+        if supervised_batch:
+            from ludora.store_discovery_supervisor import (
+                StoreChildCleanupFailed,
+                StoreChildFailed,
+                run_store_in_child,
+            )
         for store in stores:
             raise_if_cancelled(cancellation_token)
             try:
-                result = _run_item_discovery_for_store(
+                runner = run_store_in_child if supervised_batch else _run_item_discovery_for_store
+                runner_kwargs = dict(
                     database_url=database_url,
                     current_env=current_env,
                     store_id=store.store_id,
@@ -591,9 +600,34 @@ def run_item_discovery_batch(
                     run_id=f"{resolved_run_id}:{store.store_id}",
                     product_request_throttle=resolved_product_request_throttle,
                 )
+                if supervised_batch:
+                    runner_kwargs["store_stall_seconds"] = float(
+                        current_env.get("LUDORA_DISCOVERY_STORE_STALL_SECONDS", "900")
+                    )
+                result = runner(**runner_kwargs)
             except OperationCancelled:
+                if supervised_batch:
+                    _finalize_exited_store_child(
+                        database_url=database_url,
+                        run_id=f"{resolved_run_id}:{store.store_id}",
+                        store_id=store.store_id,
+                        website_url=store.website_url,
+                        status="cancelled",
+                        error="Discovery operation cancelled",
+                    )
                 raise
             except Exception as exc:
+                if supervised_batch and isinstance(exc, StoreChildCleanupFailed):
+                    raise
+                if supervised_batch:
+                    _finalize_exited_store_child(
+                        database_url=database_url,
+                        run_id=f"{resolved_run_id}:{store.store_id}",
+                        store_id=store.store_id,
+                        website_url=store.website_url,
+                        status="failed",
+                        error=str(exc),
+                    )
                 failures.append(
                     ItemDiscoveryStoreFailure(
                         store_id=store.store_id,
@@ -635,6 +669,24 @@ def run_item_discovery_batch(
         )
     finally:
         coordinator_connection.close()
+
+
+def _finalize_exited_store_child(*, database_url: str, run_id: str, store_id: int,
+                                 website_url: str, status: str, error: str) -> None:
+    connection = connect_database(database_url)
+    try:
+        repository = DiscoveryRepository(connection)
+        if repository.finalize_store_item_discovery_after_child_exit(
+            run_id=run_id, store_id=store_id, website_url=website_url,
+            completed_at=_utc_now(), status=status,
+            error=error[:ITEM_DISCOVERY_RUN_ERROR_MAX_LENGTH],
+        ):
+            trace = create_item_discovery_trace_logger(connection, run_id)
+            trace.log(f"item_discovery.run.{status}", error=error[:ITEM_DISCOVERY_RUN_ERROR_MAX_LENGTH],
+                      error_type="StoreChildFailed" if status == "failed" else "OperationCancelled", store_id=store_id,
+                      recovered_by_batch_coordinator=True)
+    finally:
+        connection.close()
 
 
 def _log_item_discovery_batch_failure(

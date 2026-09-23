@@ -1277,6 +1277,42 @@ class InventoryTests(unittest.TestCase):
             ],
         )
 
+    def test_crawl_skips_browser_connection_error_and_processes_next_product(self):
+        failed_url = "https://example.mx/products/reset"
+        valid_url = "https://example.mx/products/catan"
+        valid_html = '<script type="application/ld+json">{"@type":"Product","name":"Catan","offers":{"price":"899","priceCurrency":"MXN"}}</script>'
+        repository = FakeRepository(ItemCandidateUpsertResult(
+            candidate_id=701, listing_status="PENDING", item_id=None, should_process=False,
+        ))
+        trace = FakeTraceLogger()
+
+        class ErrorBrowserFetcher:
+            last_failure = None
+
+            def fetch(self, url):
+                self.last_failure = {"error": "net::ERR_CONNECTION_RESET", "error_type": "Error", "url": url}
+                return None
+
+        browser = ErrorBrowserFetcher()
+
+        def static_fetch(url, **_kwargs):
+            return None if url == failed_url else FetchResult(url=url, text=valid_html)
+
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps",
+                   return_value=[failed_url, valid_url]), patch(
+            "ludora.product_crawler.fetch_html", side_effect=static_fetch,
+        ):
+            records = crawl_store_product_details(
+                "https://example.mx/", 12, repository, browser_fetch_enabled=True,
+                browser_fetcher=browser.fetch, trace_logger=trace,
+            )
+
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        skipped = [fields for event, fields in trace.events
+                   if event == "inventory.candidate.detail_fetch.skipped_transient"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["error_type"], "Error")
+
     def test_crawl_store_product_details_retries_transient_http_status_and_honors_retry_after(self):
         detail_html = """
         <script type="application/ld+json">
@@ -1332,6 +1368,40 @@ class InventoryTests(unittest.TestCase):
                 }
             ],
         )
+
+    def test_crawl_skips_hard_browser_timeout_and_processes_later_product(self):
+        from ludora.supervised_browser import BrowserFetchTimeout
+
+        failed_url = "https://example.mx/products/stalled"
+        valid_url = "https://example.mx/products/catan"
+        valid_html = '<script type="application/ld+json">{"@type":"Product","name":"Catan","offers":{"price":"899","priceCurrency":"MXN"}}</script>'
+        repository = FakeRepository(ItemCandidateUpsertResult(
+            candidate_id=702, listing_status="PENDING", item_id=None, should_process=False,
+        ))
+        trace = FakeTraceLogger()
+
+        def fetched(url, **_kwargs):
+            return FetchResult(url=url, text=valid_html)
+
+        original = _fetch_detail_candidate
+
+        def fetch_candidate(*args, **kwargs):
+            if kwargs["listing_candidate"].source_url == failed_url:
+                raise BrowserFetchTimeout("two supervised attempts timed out")
+            return original(*args, **kwargs)
+
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps",
+                   return_value=[failed_url, valid_url]), patch(
+            "ludora.product_crawler.fetch_html", side_effect=fetched,
+        ), patch("ludora.product_crawler._fetch_detail_candidate", side_effect=fetch_candidate):
+            records = crawl_store_product_details("https://example.mx/", 12, repository,
+                                                  trace_logger=trace)
+
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        skipped = [fields for event, fields in trace.events
+                   if event == "inventory.candidate.detail_fetch.skipped_transient"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["source_url"], failed_url)
 
     def test_crawl_store_product_details_skips_transient_http_status_and_processes_later_candidate(self):
         unavailable_url = "https://example.mx/products/unavailable"
@@ -2270,6 +2340,32 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(repository.item_records, [])
         self.assertEqual(repository.update_change_log_calls, [])
+
+    def test_update_browser_timeout_retains_existing_fatal_behavior(self):
+        source_url = "https://example.mx/products/catan"
+        record = DiscoveryItemCandidateRecord(
+            store_id=12, source_url=source_url, title="Catan", item_id=77,
+            listing_status="LISTED", is_boardgame=True, is_boardgame_confirmed=True,
+        )
+        repository = FakeRepository(confirmed_items=[record])
+
+        class TimeoutBrowser:
+            last_failure = {"error_type": "TimeoutError", "error": "Page.goto timed out"}
+
+            def fetch(self, _url):
+                return None
+
+        browser = TimeoutBrowser()
+        with patch("ludora.product_crawler.fetch_html", return_value=None):
+            with self.assertRaises(RuntimeError) as raised:
+                update_confirmed_store_item_details(
+                    repository, browser_fetch_enabled=True, browser_fetcher=browser.fetch,
+                    job_id=99, run_id="run-123",
+                )
+
+        self.assertIs(type(raised.exception), RuntimeError)
+        self.assertIn(source_url, str(raised.exception))
+        self.assertEqual(repository.item_records, [])
 
     def test_update_confirmed_store_item_details_retries_transient_pool_after_normal_items(self):
         candidates = [

@@ -731,6 +731,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             side_effect=run_item_discovery_with_throttle,
         ) as run_item_discovery_for_store:
             result = run_item_discovery_batch(
+                supervise_store_children=False,
                 env_file="custom.env",
                 run_id="batch-run",
                 store_ids=[12, 34],
@@ -813,6 +814,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
         ) as run_item_discovery_for_store:
             with self.assertRaises(ItemDiscoveryBatchError) as raised:
                 run_item_discovery_batch(
+                    supervise_store_children=False,
                     run_id="batch-run",
                     product_request_throttle=throttle,
                 )
@@ -843,7 +845,56 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             stores_attempted=3,
         )
         listing_connection.close.assert_called_once_with()
+
+    def test_supervised_batch_reaps_failed_store_then_runs_next_with_shared_throttle(self):
+        coordinator_connection, listing_connection, trace_connection = Mock(), Mock(), Mock()
+        coordinator_repository, listing_repository = Mock(), Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
+        listing_repository.list_store_item_discovery_sources.return_value = [
+            SimpleNamespace(store_id=12, store_name="Alpha", website_url="https://alpha.mx/", platform="custom"),
+            SimpleNamespace(store_id=34, store_name="Beta", website_url="https://beta.mx/", platform="custom"),
+        ]
+        throttle = ProductDiscoveryRequestThrottle()
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, listing_connection, trace_connection]
+        ), patch("ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, listing_repository]), patch(
+            "ludora.operations.create_item_discovery_trace_logger"
+        ), patch("ludora.store_discovery_supervisor.run_store_in_child", side_effect=[
+            RuntimeError("store child stalled"),
+            ItemDiscoveryRunResult(store_id=34, website_url="https://beta.mx/", item_candidates=2),
+        ]) as child_runner, patch("ludora.operations._finalize_exited_store_child") as finalize:
+            with self.assertRaises(ItemDiscoveryBatchError):
+                run_item_discovery_batch(env={},
+                                         run_id="batch-run", product_request_throttle=throttle)
+
+        self.assertEqual([entry.kwargs["store_id"] for entry in child_runner.call_args_list], [12, 34])
+        self.assertTrue(all(entry.kwargs["product_request_throttle"] is throttle
+                            for entry in child_runner.call_args_list))
+        finalize.assert_called_once()
+        self.assertEqual(finalize.call_args.kwargs["run_id"], "batch-run:12")
+        self.assertEqual(finalize.call_args.kwargs["store_id"], 12)
         trace_connection.close.assert_called_once_with()
+        coordinator_connection.close.assert_called_once_with()
+
+    def test_supervised_batch_finalizes_cancelled_child_without_starting_next_store(self):
+        coordinator_connection, listing_connection = Mock(), Mock()
+        coordinator_repository, listing_repository = Mock(), Mock()
+        coordinator_repository.try_acquire_item_discovery_coordinator_lock.return_value = True
+        listing_repository.list_store_item_discovery_sources.return_value = [
+            SimpleNamespace(store_id=12, store_name="Alpha", website_url="https://alpha.mx/", platform="custom"),
+            SimpleNamespace(store_id=34, store_name="Beta", website_url="https://beta.mx/", platform="custom"),
+        ]
+        with patch("ludora.operations.resolve_database_url", return_value="postgresql://ludora"), patch(
+            "ludora.operations.connect_database", side_effect=[coordinator_connection, listing_connection]
+        ), patch("ludora.operations.DiscoveryRepository", side_effect=[coordinator_repository, listing_repository]), patch(
+            "ludora.store_discovery_supervisor.run_store_in_child", side_effect=OperationCancelled("cancelled")
+        ) as child_runner, patch("ludora.operations._finalize_exited_store_child") as finalize:
+            with self.assertRaises(OperationCancelled):
+                run_item_discovery_batch(env={}, run_id="batch-run")
+
+        self.assertEqual(child_runner.call_count, 1)
+        finalize.assert_called_once()
+        self.assertEqual(finalize.call_args.kwargs["status"], "cancelled")
         coordinator_connection.close.assert_called_once_with()
 
     def test_run_item_discovery_batch_normalizes_empty_store_name_in_failure(self):
@@ -870,7 +921,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             "ludora.operations._run_item_discovery_for_store", side_effect=RuntimeError()
         ):
             with self.assertRaises(ItemDiscoveryBatchError) as raised:
-                run_item_discovery_batch(run_id="batch-run")
+                run_item_discovery_batch(run_id="batch-run", supervise_store_children=False)
 
         self.assertEqual(raised.exception.failures[0].store_name, "Store 12")
         self.assertEqual(raised.exception.failures[0].error, "RuntimeError")
@@ -902,7 +953,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             side_effect=OperationCancelled("cancelled"),
         ) as run_item_discovery_for_store:
             with self.assertRaises(OperationCancelled):
-                run_item_discovery_batch(run_id="batch-run")
+                run_item_discovery_batch(run_id="batch-run", supervise_store_children=False)
 
         coordinated_run_item_discovery.assert_not_called()
         self.assertEqual(run_item_discovery_for_store.call_count, 1)
@@ -937,7 +988,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             side_effect=RuntimeError("store failure"),
         ):
             with self.assertRaises(ItemDiscoveryBatchError) as raised:
-                run_item_discovery_batch(run_id="batch-run")
+                run_item_discovery_batch(run_id="batch-run", supervise_store_children=False)
 
         self.assertEqual(raised.exception.failures[0].error, "store failure")
         coordinated_run_item_discovery.assert_not_called()
