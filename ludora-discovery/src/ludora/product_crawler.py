@@ -6,7 +6,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Mapping
 from html import unescape
 from typing import Protocol
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 
 from ludora.browser_fetch import fetch_product_detail_with_browser
 from ludora.cancellation import CancellationToken, raise_if_cancelled
@@ -1535,6 +1535,8 @@ def _fetch_detail_candidate(
         detect_removed=detect_removed,
         trace=trace,
     )
+    if not detect_removed:
+        _reject_discovery_redirect(fetched_detail, listing_candidate, trace=trace, fetch_method="static")
     last_failure_status_code = (
         fetched_detail.status_code if fetched_detail is not None and fetched_detail.status_code >= 400 else None
     )
@@ -1571,7 +1573,9 @@ def _fetch_detail_candidate(
     )
 
     if browser_fetcher is not None and not explicitly_throttled and (
-        fetched_detail is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate, platform=platform)
+        fetched_detail is None or _should_retry_detail_with_browser(
+            detail_candidate, listing_candidate, platform=platform, check_title_overlap=detect_removed
+        )
     ):
         trace.log(
             "item_update.item.browser_fetch.started" if detect_removed else "inventory.candidate.browser_fetch.started",
@@ -1631,6 +1635,8 @@ def _fetch_detail_candidate(
             detect_removed=detect_removed,
             trace=trace,
         )
+        if not detect_removed:
+            _reject_discovery_redirect(fetched_detail, listing_candidate, trace=trace, fetch_method="browser")
         if fetched_detail is not None and fetched_detail.status_code >= 400:
             last_failure_status_code = fetched_detail.status_code
             last_failure_retry_after_seconds = fetched_detail.retry_after_seconds
@@ -1708,7 +1714,9 @@ def _fetch_detail_candidate(
         listing_candidate.source_listing_url = source_listing_url
         return listing_candidate
 
-    rejection_reason = _detail_rejection_reason(detail_candidate, listing_candidate, platform=platform)
+    rejection_reason = _detail_rejection_reason(
+        detail_candidate, listing_candidate, platform=platform, check_title_overlap=detect_removed
+    )
     if detect_removed and rejection_reason == "title_mismatch":
         trace.log(
             "item_update.item.detail.title_mismatch_accepted",
@@ -2050,6 +2058,36 @@ def _handle_removed_product_detail(
     )
 
 
+def _is_redirected_product_url(source_url: str, final_url: str) -> bool:
+    return urldefrag(source_url).url != urldefrag(final_url).url
+
+
+def _reject_discovery_redirect(
+    fetched_detail: FetchResult | None,
+    listing_candidate: DiscoveryItemCandidateRecord,
+    *,
+    trace: TraceLogger,
+    fetch_method: str,
+) -> None:
+    if (
+        fetched_detail is None
+        or fetched_detail.status_code >= 400
+        or not _is_redirected_product_url(listing_candidate.source_url, fetched_detail.url)
+    ):
+        return
+
+    trace.log(
+        "inventory.candidate.detail_fetch.skipped_redirect",
+        source_url=listing_candidate.source_url,
+        final_url=fetched_detail.url,
+        store_id=listing_candidate.store_id,
+        fetch_method=fetch_method,
+    )
+    raise ProductDetailRejectedError(
+        f"Product detail redirected: {listing_candidate.source_url} -> {fetched_detail.url}"
+    )
+
+
 def _looks_like_removed_product_page(html: str) -> bool:
     headings = re.findall(r"<(?:title|h1)\b[^>]*>(.*?)</(?:title|h1)>", html, flags=re.IGNORECASE | re.DOTALL)
     normalized_headings = []
@@ -2108,8 +2146,13 @@ def _should_retry_detail_with_browser(
     listing_candidate: DiscoveryItemCandidateRecord,
     *,
     platform: str = "",
+    check_title_overlap: bool = False,
 ) -> bool:
-    return bool(_detail_rejection_reason(detail_candidate, listing_candidate, platform=platform))
+    return bool(
+        _detail_rejection_reason(
+            detail_candidate, listing_candidate, platform=platform, check_title_overlap=check_title_overlap
+        )
+    )
 
 
 def _detail_rejection_reason(
@@ -2117,6 +2160,7 @@ def _detail_rejection_reason(
     listing_candidate: DiscoveryItemCandidateRecord,
     *,
     platform: str = "",
+    check_title_overlap: bool = False,
 ) -> str:
     if detail_candidate is None:
         return "missing_detail_candidate"
@@ -2146,6 +2190,9 @@ def _detail_rejection_reason(
         and detail_sku
         and identity_sku == detail_sku
     ):
+        return ""
+
+    if not check_title_overlap:
         return ""
 
     listing_tokens = _significant_listing_tokens(listing_candidate)

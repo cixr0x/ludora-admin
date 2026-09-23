@@ -13,7 +13,13 @@ from ludora.cancellation import CancellationToken, raise_if_cancelled
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import _collapse_text, _extract_price
 from ludora.models import DiscoveryItemCandidateRecord, ItemCandidateType
-from ludora.product_crawler import BeforeProductRequest, ItemCandidateProcessor, ItemCandidateRepository, ItemClassifier
+from ludora.product_crawler import (
+    BeforeProductRequest,
+    ItemCandidateProcessor,
+    ItemCandidateRepository,
+    ItemClassifier,
+    _is_redirected_product_url,
+)
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import FetchResult
 
@@ -62,6 +68,13 @@ class AmazonDetailFetchError(RuntimeError):
         self.saw_response = saw_response
         qualifier = "valid " if saw_response else ""
         super().__init__(f"Failed to fetch {qualifier}Amazon product detail page: {source_url}")
+
+
+class AmazonDetailRedirectedError(RuntimeError):
+    def __init__(self, source_url: str, final_url: str) -> None:
+        self.source_url = source_url
+        self.final_url = final_url
+        super().__init__(f"Amazon product detail redirected: {source_url} -> {final_url}")
 
 
 def build_amazon_store_search_url(store_url: str, term: str) -> str:
@@ -188,7 +201,7 @@ def _crawl_amazon_search_inventory(
         browser_fetcher = browser_session.__enter__().fetch
 
     records: list[DiscoveryItemCandidateRecord] = []
-    detail_failures: list[AmazonDetailFetchError] = []
+    skipped_detail_urls: list[str] = []
     seen_asins: set[str] = set()
     try:
         for raw_search_url in search_urls:
@@ -252,8 +265,17 @@ def _crawl_amazon_search_inventory(
                             require_brand_byline=bool(expected_brand_name),
                             before_product_request=before_product_request,
                         )
+                    except AmazonDetailRedirectedError as exc:
+                        skipped_detail_urls.append(exc.source_url)
+                        trace.log(
+                            "amazon_inventory.candidate.detail_fetch.skipped_redirect",
+                            source_url=exc.source_url,
+                            final_url=exc.final_url,
+                            store_id=store_id,
+                        )
+                        continue
                     except AmazonDetailFetchError as exc:
-                        detail_failures.append(exc)
+                        skipped_detail_urls.append(exc.source_url)
                         resume_in_seconds = (
                             _jittered_delay_seconds(
                                 DEFAULT_AMAZON_EXHAUSTED_COOLDOWN_SECONDS,
@@ -342,14 +364,14 @@ def _crawl_amazon_search_inventory(
                         )
                     records.append(detail_candidate)
                     if limit is not None and len(records) >= limit:
-                        _log_amazon_detail_skips(detail_failures, records=records, store_id=store_id, trace=trace)
+                        _log_amazon_detail_skips(skipped_detail_urls, records=records, store_id=store_id, trace=trace)
                         return records
                     if delay_seconds > 0:
                         _wait_for_amazon_retry(delay_seconds, cancellation_token)
                 if limit is not None and len(records) >= limit:
-                    _log_amazon_detail_skips(detail_failures, records=records, store_id=store_id, trace=trace)
+                    _log_amazon_detail_skips(skipped_detail_urls, records=records, store_id=store_id, trace=trace)
                     return records
-        _log_amazon_detail_skips(detail_failures, records=records, store_id=store_id, trace=trace)
+        _log_amazon_detail_skips(skipped_detail_urls, records=records, store_id=store_id, trace=trace)
         return records
     finally:
         if browser_session is not None:
@@ -504,6 +526,8 @@ def _fetch_valid_amazon_detail_page(
                 )
         else:
             saw_response = True
+            if fetched_detail.status_code < 400 and _is_redirected_product_url(source_url, fetched_detail.url):
+                raise AmazonDetailRedirectedError(source_url, fetched_detail.url)
             diagnostics = _amazon_detail_page_diagnostics(
                 fetched_detail,
                 expected_asin=expected_asin,
@@ -617,20 +641,19 @@ def _jittered_delay_seconds(delay_seconds: float, jitter_fraction: float) -> flo
 
 
 def _log_amazon_detail_skips(
-    failures: list[AmazonDetailFetchError],
+    skipped_source_urls: list[str],
     *,
     records: list[DiscoveryItemCandidateRecord],
     store_id: int | None,
     trace: TraceLogger,
 ) -> None:
-    if not failures:
+    if not skipped_source_urls:
         return
 
-    skipped_urls = [failure.source_url for failure in failures]
     trace.log(
         "amazon_inventory.crawl.completed_with_skips",
-        skipped_detail_pages=len(skipped_urls),
-        skipped_source_urls=skipped_urls,
+        skipped_detail_pages=len(skipped_source_urls),
+        skipped_source_urls=skipped_source_urls,
         processed_items=len(records),
         store_id=store_id,
     )

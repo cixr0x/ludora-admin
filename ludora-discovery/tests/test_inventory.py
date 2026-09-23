@@ -200,7 +200,7 @@ class InventoryTests(unittest.TestCase):
             with self.subTest(heading=heading):
                 self.assertTrue(_looks_like_removed_product_page(f"<h1>  {heading.upper()}  </h1>"))
 
-    def test_title_validation_rejects_a_lone_generic_pack_overlap(self):
+    def test_discovery_does_not_retry_browser_for_unrelated_detail_title(self):
         listing = DiscoveryItemCandidateRecord(
             store_id=10,
             source_url="https://www.amigocalavera.mx/productos/arcs-en-espanol-combo/",
@@ -212,7 +212,78 @@ class InventoryTests(unittest.TestCase):
             title="SKS8810 Sleeve Kings Card Game (63.5x88mm) - 110 Pack - Standard 60micrones",
         )
 
-        self.assertTrue(_should_retry_detail_with_browser(detail, listing))
+        self.assertFalse(_should_retry_detail_with_browser(detail, listing))
+        self.assertTrue(_should_retry_detail_with_browser(detail, listing, check_title_overlap=True))
+
+    def test_discovery_skips_static_redirect_and_continues_with_next_product(self):
+        redirected_url = "https://example.mx/producto/old"
+        target_url = "https://example.mx/product/new"
+        valid_url = "https://example.mx/product/catan"
+        html = '<script type="application/ld+json">{"@type":"Product","name":"Catan"}</script>'
+        repository = FakeRepository()
+        trace = FakeTraceLogger()
+
+        def fetch_detail(url, **_kwargs):
+            return FetchResult(url=target_url if url == redirected_url else url, text=html)
+
+        with patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps",
+            return_value=[redirected_url, valid_url],
+        ), patch("ludora.product_crawler.fetch_html", side_effect=fetch_detail):
+            records = crawl_store_product_details("https://example.mx/", 12, repository, trace_logger=trace)
+
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
+        self.assertEqual(
+            [fields for event, fields in trace.events if event == "inventory.candidate.detail_fetch.skipped_redirect"],
+            [{"source_url": redirected_url, "final_url": target_url, "store_id": 12, "fetch_method": "static"}],
+        )
+
+    def test_discovery_skips_browser_redirect_before_detail_extraction(self):
+        requested_url = "https://example.mx/producto/old"
+        target_url = "https://example.mx/product/new"
+        listing = DiscoveryItemCandidateRecord(store_id=12, source_url=requested_url, title="Old")
+        trace = FakeTraceLogger()
+        challenge = "<html><title>One moment</title><script>window.location.reload()</script></html>"
+
+        with patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url=requested_url, text=challenge)):
+            with self.assertRaises(ProductDetailRejectedError):
+                _fetch_detail_candidate(
+                    listing_candidate=listing,
+                    source_listing_url="https://example.mx/sitemap.xml",
+                    browser_fetcher=lambda _url: FetchResult(url=target_url, text="<h1>Wrong product</h1>"),
+                    item_detail_extractor=lambda *_args: self.fail("Redirected HTML reached extraction"),
+                    trace_logger=trace,
+                )
+
+        self.assertEqual(
+            [fields for event, fields in trace.events if event == "inventory.candidate.detail_fetch.skipped_redirect"],
+            [{"source_url": requested_url, "final_url": target_url, "store_id": 12, "fetch_method": "browser"}],
+        )
+
+    def test_discovery_accepts_fragment_only_final_url_change(self):
+        requested_url = "https://example.mx/product/catan"
+        listing = DiscoveryItemCandidateRecord(store_id=12, source_url=requested_url, title="Catan")
+        html = '<script type="application/ld+json">{"@type":"Product","name":"Catan"}</script>'
+        with patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url=requested_url + "#details", text=html)):
+            detail = _fetch_detail_candidate(listing_candidate=listing, source_listing_url="https://example.mx/sitemap.xml")
+
+        self.assertEqual(detail.title, "Catan")
+
+    def test_discovery_accepts_translated_detail_title_without_browser_retry(self):
+        requested_url = "https://example.mx/product/wandering-towers"
+        listing = DiscoveryItemCandidateRecord(store_id=12, source_url=requested_url, title="Wandering Towers")
+        html = '<script type="application/ld+json">{"@type":"Product","name":"Las Torres Errantes"}</script>'
+        browser_fetcher = Mock(side_effect=AssertionError("Translated title must not trigger browser retry"))
+
+        with patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url=requested_url, text=html)):
+            detail = _fetch_detail_candidate(
+                listing_candidate=listing,
+                source_listing_url="https://example.mx/sitemap.xml",
+                browser_fetcher=browser_fetcher,
+            )
+
+        self.assertEqual(detail.title, "Las Torres Errantes")
 
     def test_collect_store_inventory_prefers_sitemap_product_urls(self):
         detail_html = """

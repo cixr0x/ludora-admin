@@ -41,6 +41,60 @@ class FakeTraceLogger:
 
 
 class AmazonDiscoveryTests(unittest.TestCase):
+    def test_skips_redirected_amazon_product_without_retrying_and_continues(self):
+        redirected_url = "https://www.amazon.com.mx/dp/B0DZL3YFC5"
+        final_url = "https://www.amazon.com.mx/Canonical/dp/B0DZL3YFC5"
+        valid_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
+        failed_url = "https://www.amazon.com.mx/dp/B0TEST1234"
+        search_html = (
+            f'<a href="{redirected_url}">Catfe game</a>'
+            f'<a href="{valid_url}">Disney game</a>'
+            f'<a href="{failed_url}">Failed game</a>'
+        )
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+        detail_requests = []
+
+        def fetcher(url):
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            detail_requests.append(url)
+            if url == failed_url:
+                return None
+            asin = url.rsplit("/", 1)[-1]
+            html = (
+                '<span id="productTitle">Juego de Mesa</span>'
+                '<input id="add-to-cart-button" type="submit">'
+                f'<table><tr><th>ASIN</th><td>{asin}</td></tr></table>'
+            )
+            return FetchResult(url=final_url if url == redirected_url else url, text=html)
+
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11,
+            repository,
+            browser_fetcher=fetcher,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(detail_requests, [redirected_url, valid_url, failed_url, failed_url, failed_url])
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
+        self.assertEqual(
+            [fields for event, fields in trace.entries if event == "amazon_inventory.candidate.detail_fetch.skipped_redirect"],
+            [{"source_url": redirected_url, "final_url": final_url, "store_id": 11}],
+        )
+        self.assertEqual(
+            [fields for event, fields in trace.entries if event == "amazon_inventory.crawl.completed_with_skips"],
+            [{
+                "skipped_detail_pages": 2,
+                "skipped_source_urls": [redirected_url, failed_url],
+                "processed_items": 1,
+                "store_id": 11,
+            }],
+        )
+
     def test_builds_storefront_search_url_from_named_store_page(self):
         url = build_amazon_store_search_url(
             "https://www.amazon.com.mx/stores/LaCompa%C3%B1%C3%ADadelosJuegos/page/00565807-102E-497A-894A-3434B4619BD2",
