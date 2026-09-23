@@ -41,7 +41,7 @@ class FakeTraceLogger:
 
 
 class AmazonDiscoveryTests(unittest.TestCase):
-    def test_skips_redirected_amazon_product_without_retrying_and_continues(self):
+    def test_accepts_valid_same_asin_redirect_and_reports_only_exhausted_fetch_as_skipped(self):
         redirected_url = "https://www.amazon.com.mx/dp/B0DZL3YFC5"
         final_url = "https://www.amazon.com.mx/Canonical/dp/B0DZL3YFC5"
         valid_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
@@ -79,21 +79,104 @@ class AmazonDiscoveryTests(unittest.TestCase):
         )
 
         self.assertEqual(detail_requests, [redirected_url, valid_url, failed_url, failed_url, failed_url])
-        self.assertEqual([record.source_url for record in records], [valid_url])
-        self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
-        self.assertEqual(
-            [fields for event, fields in trace.entries if event == "amazon_inventory.candidate.detail_fetch.skipped_redirect"],
-            [{"source_url": redirected_url, "final_url": final_url, "store_id": 11}],
-        )
+        self.assertEqual([record.source_url for record in records], [redirected_url, valid_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [redirected_url, valid_url])
         self.assertEqual(
             [fields for event, fields in trace.entries if event == "amazon_inventory.crawl.completed_with_skips"],
             [{
-                "skipped_detail_pages": 2,
-                "skipped_source_urls": [redirected_url, failed_url],
-                "processed_items": 1,
+                "skipped_detail_pages": 1,
+                "skipped_source_urls": [failed_url],
+                "processed_items": 2,
                 "store_id": 11,
             }],
         )
+
+    def test_brand_discovery_accepts_valid_same_asin_redirect(self):
+        source_url = "https://www.amazon.com.mx/dp/B0HASBRO01"
+        final_url = "https://www.amazon.com.mx/Hasbro-Clue/dp/B0HASBRO01"
+        search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"
+        detail_html = (
+            '<span id="productTitle">Hasbro Gaming Clue</span>'
+            '<a id="bylineInfo">Marca: Hasbro Gaming</a>'
+            '<table><tr><th>Marca</th><td>Hasbro Gaming</td></tr>'
+            '<tr><th>ASIN</th><td>B0HASBRO01</td></tr></table>'
+        )
+        repository = FakeRepository()
+        trace = FakeTraceLogger()
+        detail_requests = []
+
+        def fetcher(url):
+            if url == search_url:
+                return FetchResult(url=url, text=f'<a href="{source_url}">Hasbro Gaming Clue</a>')
+            if "/s?" in url:
+                return FetchResult(url=url, text="<html>No more results</html>")
+            detail_requests.append(url)
+            return FetchResult(url=final_url, text=detail_html)
+
+        records = crawl_amazon_brand_inventory(
+            search_url,
+            12,
+            repository,
+            brand_name="Hasbro Gaming",
+            browser_fetcher=fetcher,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(detail_requests, [source_url])
+        self.assertEqual([record.source_url for record in records], [source_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [source_url])
+        self.assertFalse(any(event == "amazon_inventory.crawl.completed_with_skips" for event, _ in trace.entries))
+
+    def test_redirected_amazon_pages_still_require_valid_product_and_matching_asin(self):
+        source_url = "https://www.amazon.com.mx/dp/B0TEST1234"
+        search_url = "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC"
+        cases = (
+            (
+                "different_asin",
+                "https://www.amazon.com.mx/Other/dp/B0B7QXY8ZS",
+                '<span id="productTitle">Other game</span><div>ASIN: B0TEST1234</div>',
+                "redirected_asin",
+            ),
+            (
+                "non_product",
+                "https://www.amazon.com.mx/gp/aw/landing",
+                "<html><title>Amazon.com.mx</title><body>Inicio</body></html>",
+                "missing_product_title",
+            ),
+        )
+        for case, final_url, html, reason in cases:
+            with self.subTest(case=case):
+                repository = FakeRepository()
+                trace = FakeTraceLogger()
+                detail_requests = []
+
+                def fetcher(url):
+                    if "/search?" in url:
+                        return FetchResult(url=url, text=f'<a href="{source_url}">Test game</a>')
+                    detail_requests.append(url)
+                    return FetchResult(url=final_url, text=html)
+
+                records = crawl_amazon_store_inventory(
+                    search_url,
+                    11,
+                    repository,
+                    browser_fetcher=fetcher,
+                    trace_logger=trace,
+                    delay_seconds=0,
+                )
+
+                self.assertEqual(records, [])
+                self.assertEqual(repository.item_records, [])
+                self.assertEqual(detail_requests, [source_url] * 3)
+                self.assertEqual(
+                    [fields["reason"] for event, fields in trace.entries if event == "amazon_inventory.candidate.detail_fetch.invalid"],
+                    [reason] * 3,
+                )
+                self.assertEqual(
+                    [fields["skipped_source_urls"] for event, fields in trace.entries if event == "amazon_inventory.crawl.completed_with_skips"],
+                    [[source_url]],
+                )
 
     def test_builds_storefront_search_url_from_named_store_page(self):
         url = build_amazon_store_search_url(

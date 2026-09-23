@@ -18,7 +18,6 @@ from ludora.product_crawler import (
     ItemCandidateProcessor,
     ItemCandidateRepository,
     ItemClassifier,
-    _is_redirected_product_url,
 )
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import FetchResult
@@ -68,13 +67,6 @@ class AmazonDetailFetchError(RuntimeError):
         self.saw_response = saw_response
         qualifier = "valid " if saw_response else ""
         super().__init__(f"Failed to fetch {qualifier}Amazon product detail page: {source_url}")
-
-
-class AmazonDetailRedirectedError(RuntimeError):
-    def __init__(self, source_url: str, final_url: str) -> None:
-        self.source_url = source_url
-        self.final_url = final_url
-        super().__init__(f"Amazon product detail redirected: {source_url} -> {final_url}")
 
 
 def build_amazon_store_search_url(store_url: str, term: str) -> str:
@@ -265,15 +257,6 @@ def _crawl_amazon_search_inventory(
                             require_brand_byline=bool(expected_brand_name),
                             before_product_request=before_product_request,
                         )
-                    except AmazonDetailRedirectedError as exc:
-                        skipped_detail_urls.append(exc.source_url)
-                        trace.log(
-                            "amazon_inventory.candidate.detail_fetch.skipped_redirect",
-                            source_url=exc.source_url,
-                            final_url=exc.final_url,
-                            store_id=store_id,
-                        )
-                        continue
                     except AmazonDetailFetchError as exc:
                         skipped_detail_urls.append(exc.source_url)
                         resume_in_seconds = (
@@ -526,8 +509,6 @@ def _fetch_valid_amazon_detail_page(
                 )
         else:
             saw_response = True
-            if fetched_detail.status_code < 400 and _is_redirected_product_url(source_url, fetched_detail.url):
-                raise AmazonDetailRedirectedError(source_url, fetched_detail.url)
             diagnostics = _amazon_detail_page_diagnostics(
                 fetched_detail,
                 expected_asin=expected_asin,

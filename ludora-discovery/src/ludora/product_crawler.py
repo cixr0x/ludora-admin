@@ -1535,7 +1535,7 @@ def _fetch_detail_candidate(
         detect_removed=detect_removed,
         trace=trace,
     )
-    if not detect_removed:
+    if not detect_removed and not amazon_detail_request:
         _reject_discovery_redirect(fetched_detail, listing_candidate, trace=trace, fetch_method="static")
     last_failure_status_code = (
         fetched_detail.status_code if fetched_detail is not None and fetched_detail.status_code >= 400 else None
@@ -1635,7 +1635,7 @@ def _fetch_detail_candidate(
             detect_removed=detect_removed,
             trace=trace,
         )
-        if not detect_removed:
+        if not detect_removed and not amazon_detail_request:
             _reject_discovery_redirect(fetched_detail, listing_candidate, trace=trace, fetch_method="browser")
         if fetched_detail is not None and fetched_detail.status_code >= 400:
             last_failure_status_code = fetched_detail.status_code

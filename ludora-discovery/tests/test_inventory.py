@@ -285,6 +285,38 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(detail.title, "Las Torres Errantes")
 
+    def test_amazon_discovery_accepts_valid_same_asin_redirects_from_static_and_browser_fetches(self):
+        source_url = "https://www.amazon.com.mx/dp/B0TEST1234"
+        final_url = "https://www.amazon.com.mx/Canonical/dp/B0TEST1234"
+        detail_html = (
+            '<span id="productTitle">Juego de Mesa Catan</span>'
+            '<table><tr><th>ASIN</th><td>B0TEST1234</td></tr></table>'
+        )
+        listing = DiscoveryItemCandidateRecord(store_id=12, source_url=source_url, title="Catan")
+
+        for platform in ("amazon", "amazon_brand"):
+            for fetch_method in ("static", "browser"):
+                with self.subTest(platform=platform, fetch_method=fetch_method):
+                    trace = FakeTraceLogger()
+                    static_result = FetchResult(url=final_url, text=detail_html) if fetch_method == "static" else None
+                    browser_fetcher = (
+                        (lambda _url: FetchResult(url=final_url, text=detail_html))
+                        if fetch_method == "browser"
+                        else None
+                    )
+                    with patch("ludora.product_crawler.fetch_html", return_value=static_result):
+                        detail = _fetch_detail_candidate(
+                            listing_candidate=listing,
+                            source_listing_url="https://www.amazon.com.mx/sitemap.xml",
+                            platform=platform,
+                            browser_fetcher=browser_fetcher,
+                            trace_logger=trace,
+                        )
+
+                    self.assertEqual(detail.source_url, source_url)
+                    self.assertEqual(detail.title, "Juego de Mesa Catan")
+                    self.assertFalse(any(event == "inventory.candidate.detail_fetch.skipped_redirect" for event, _ in trace.events))
+
     def test_collect_store_inventory_prefers_sitemap_product_urls(self):
         detail_html = """
         <script type="application/ld+json">
