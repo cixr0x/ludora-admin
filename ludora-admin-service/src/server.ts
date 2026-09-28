@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
+import { createNodeCatalogImageHasher } from './catalogImageHash.js';
 import { createApp } from './app.js';
 import { createAmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
 import { createOpenAiAmazonTitleExtractionClient } from './amazonTitleExtraction/openAiAmazonTitleExtractionClient.js';
@@ -85,7 +86,14 @@ const storeProfileDetectionService = createStoreProfileDetectionService({
   aiClient: storeProfileAiClient,
   model: config.codexAiModel
 });
-const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient) : undefined;
+const externalCoverImageOptimizerDependencies = createNodeExternalCoverImageOptimizerDependencies(config.localCoverWorkflow);
+const catalogImageHasher = createNodeCatalogImageHasher({
+  downloadImage: externalCoverImageOptimizerDependencies.downloadImage,
+  packageDir: config.discoveryRunner.packageDir,
+  pythonExecutable: config.discoveryRunner.pythonExecutable
+});
+externalCoverImageOptimizerDependencies.catalogImageHasher = catalogImageHasher;
+const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient, catalogImageHasher) : undefined;
 const localOperationsClient =
   config.discoveryRunner.mode === 'local'
     ? createLocalDiscoveryOperationsClient({
@@ -130,9 +138,8 @@ const runtimeManagerLifecycle = createRuntimeManagerLifecycle({
 });
 const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   database,
-  createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow)
+  { ...createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow), catalogImageHasher }
 );
-const externalCoverImageOptimizerDependencies = createNodeExternalCoverImageOptimizerDependencies(config.localCoverWorkflow);
 const imageSimilarityService = createImageSimilarityService(
   createNodeImageSimilarityDependencies({
     downloadImage: externalCoverImageOptimizerDependencies.downloadImage,
@@ -153,13 +160,14 @@ const itemMatchingService = createItemMatchingService(database, {
 });
 const coverFlatteningWorkflowManager = createCoverFlatteningWorkflowManager(
   database,
-  createNodeCoverFlatteningWorkflowDependencies({
+  { ...createNodeCoverFlatteningWorkflowDependencies({
     config: { ...config.localCoverWorkflow, workDir: config.coverFlatteningWorkDir },
     packageDir: config.discoveryRunner.packageDir,
     pythonExecutable: config.discoveryRunner.pythonExecutable
-  })
+  }), catalogImageHasher }
 );
 const app = createApp({
+  catalogImageHasher,
   adminAuth: { ...config.adminAuth, internalApiToken },
   amazonTitleExtractionService,
   bggItemImporter,

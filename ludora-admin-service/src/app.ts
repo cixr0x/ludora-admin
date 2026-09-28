@@ -7,6 +7,7 @@ import { requireAdminAuth, requireInternalApiAuth } from './auth/adminAuth.js';
 import type { BggItemImporter } from './bgg/bggItemImporter.js';
 import type { DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
 import type { Database } from './db.js';
+import type { CatalogImageHasher } from './catalogImageHash.js';
 import type { DiscoveryOperationsClient } from './discoveryOperations.js';
 import type { CoverFlatteningWorkflowManager } from './coverFlatteningWorkflow.js';
 import type { ContinuousItemUpdateWorkerManager } from './continuousItemUpdateWorkerManager.js';
@@ -43,6 +44,7 @@ type HttpError = Error & {
 };
 
 type CreateAppOptions = {
+  catalogImageHasher?: CatalogImageHasher;
   adminAuth?: AdminAuthOptions;
   amazonTitleExtractionService?: AmazonTitleExtractionService;
   bggItemImporter?: BggItemImporter;
@@ -64,6 +66,7 @@ type CreateAppOptions = {
 };
 
 export function createApp({
+  catalogImageHasher,
   adminAuth,
   amazonTitleExtractionService,
   bggItemImporter,
@@ -96,7 +99,7 @@ export function createApp({
     app.use(requireAdminAuth(adminAuth));
   }
   app.use(createStoresRouter(database, storeProfileDetectionService));
-  app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter, productDetailsEnrichmentService));
+  app.use(createDiscoveryRouter(database, itemMatchingService, bggItemImporter, productDetailsEnrichmentService, catalogImageHasher));
   app.use(
     createStoreItemReviewRouter(
       descriptionGenerationService

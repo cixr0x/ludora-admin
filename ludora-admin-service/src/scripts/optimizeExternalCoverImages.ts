@@ -5,6 +5,7 @@ import { createExternalCoverImageReport } from '../externalCoverImageReport.js';
 import { createNodeExternalCoverImageOptimizerDependencies, optimizeExternalCoverImages } from '../externalCoverImageOptimizer.js';
 import { loadConfig } from '../config.js';
 import { createDatabase } from '../db.js';
+import { createNodeCatalogImageHasher } from '../catalogImageHash.js';
 
 const config = loadConfig();
 
@@ -16,6 +17,11 @@ const options = parseOptions(process.argv.slice(2));
 const sampleSize = options.sampleSize;
 const database = createDatabase(config.databaseUrl);
 const dependencies = createNodeExternalCoverImageOptimizerDependencies(config.localCoverWorkflow);
+dependencies.catalogImageHasher = createNodeCatalogImageHasher({
+  downloadImage: dependencies.downloadImage,
+  packageDir: config.discoveryRunner.packageDir,
+  pythonExecutable: config.discoveryRunner.pythonExecutable
+});
 
 try {
   const result = await optimizeExternalCoverImages(database, dependencies, options);

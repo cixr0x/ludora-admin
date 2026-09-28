@@ -67,6 +67,7 @@ describe('local cover workflow', () => {
       uploadFile: async (filePath, upload) => {
         calls.push(`upload:${filePath}:${upload.bucket}:${upload.key}:${upload.contentType}`);
       },
+      readImageFile: async () => Buffer.from('edited'),
       waitForFile: async (expectedPaths) =>
         new Promise<string>((resolve) => {
           expect(expectedPaths).toEqual([
@@ -104,18 +105,18 @@ describe('local cover workflow', () => {
 
     expect(manager.getCurrent()).toMatchObject({
       status: 'completed',
-      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/dontgetgot.es.webp',
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/dontgetgot.es.1fb9f4097256.webp',
       target_field: 'image_url_es'
     });
     expect(calls).toContain(
-      'upload:C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\dontgetgot.es.webp:ludora:boardgame/dontgetgot.es.webp:image/webp'
+      'upload:C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\dontgetgot.es.webp:ludora:boardgame/dontgetgot.es.1fb9f4097256.webp:image/webp'
     );
     expect(
       queries.some(
         (query) =>
           query.sql.includes('update items') &&
           query.sql.includes('image_url_es = $1') &&
-          query.params?.[0] === 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/dontgetgot.es.webp'
+          query.params?.[0] === 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/dontgetgot.es.1fb9f4097256.webp'
       )
     ).toBe(true);
   });
@@ -158,6 +159,7 @@ describe('local cover workflow', () => {
       uploadFile: async (filePath, upload) => {
         calls.push(`upload:${filePath}:${upload.key}`);
       },
+      readImageFile: async () => Buffer.from('edited'),
       waitForFile: async (expectedPaths) =>
         new Promise<string>((resolve) => {
           releaseEditedFile = () => {
@@ -181,20 +183,20 @@ describe('local cover workflow', () => {
     await manager.waitForIdle();
 
     expect(manager.getCurrent()).toMatchObject({
-      filename: 'drunkstonedorstupidapartygame.en.webp',
-      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/drunkstonedorstupidapartygame.en.webp',
+      filename: 'drunkstonedorstupidapartygame.en.1fb9f4097256.webp',
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/drunkstonedorstupidapartygame.en.1fb9f4097256.webp',
       status: 'completed',
       target_field: 'image_url'
     });
     expect(calls).toEqual([
-      'upload:C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\drunkstonedorstupidapartygame.en.webp:boardgame/drunkstonedorstupidapartygame.en.webp'
+      'upload:C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\drunkstonedorstupidapartygame.en.webp:boardgame/drunkstonedorstupidapartygame.en.1fb9f4097256.webp'
     ]);
     expect(
       queries.some(
         (query) =>
           query.sql.includes('update items') &&
           query.sql.includes('image_url = $1') &&
-          query.params?.[0] === 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/drunkstonedorstupidapartygame.en.webp'
+          query.params?.[0] === 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/drunkstonedorstupidapartygame.en.1fb9f4097256.webp'
       )
     ).toBe(true);
   });
@@ -243,6 +245,7 @@ describe('local cover workflow', () => {
       uploadFile: async (filePath, upload) => {
         calls.push(`upload:${filePath}:${upload.key}`);
       },
+      readImageFile: async () => Buffer.from('edited'),
       waitForFile: async (expectedPaths) =>
         new Promise<string>((resolve) => {
           releaseEditedFile = () => {
@@ -275,19 +278,19 @@ describe('local cover workflow', () => {
     await manager.waitForIdle();
 
     expect(manager.getCurrent()).toMatchObject({
-      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.es.webp',
+      public_url: 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.es.1fb9f4097256.webp',
       status: 'completed',
       target_field: 'image_url_es'
     });
     expect(calls).toContain(
-      'upload:C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.es.webp:boardgame/coffeerush.es.webp'
+      'upload:C:\\Users\\mcp13\\OneDrive\\Documentos\\boardgame\\coffeerush.es.webp:boardgame/coffeerush.es.1fb9f4097256.webp'
     );
     expect(
       queries.some(
         (query) =>
           query.sql.includes('update items') &&
           query.sql.includes('image_url_es = $1') &&
-          query.params?.[0] === 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.es.webp' &&
+          query.params?.[0] === 'https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.es.1fb9f4097256.webp' &&
           query.params?.[1] === 77
       )
     ).toBe(true);

@@ -4,6 +4,7 @@ import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import { parseBggThingResponse } from '../bgg/bggParser.js';
 import { BGG_LEGACY_REQUEST_TYPE, BGG_REQUEST_TYPE } from '../bgg/bggTypes.js';
 import type { Database } from '../db.js';
+import { prepareCatalogImageHash, type CatalogImageHasher } from '../catalogImageHash.js';
 import type { ItemMatchingService, ManualAiItemMatchResult } from '../itemMatching/itemMatchingService.js';
 import {
   hasMissingProductDetails,
@@ -823,7 +824,8 @@ export function createDiscoveryRouter(
   database: Database,
   itemMatchingService?: ItemMatchingService,
   bggItemImporter?: BggItemImporter,
-  productDetailsEnrichmentService?: ProductDetailsEnrichmentService
+  productDetailsEnrichmentService?: ProductDetailsEnrichmentService,
+  catalogImageHasher?: CatalogImageHasher
 ): Router {
   const router = Router();
 
@@ -1456,6 +1458,10 @@ export function createDiscoveryRouter(
   router.patch('/items/:id', async (request, response, next) => {
     try {
       const input = parseItemInput(request.body);
+      const [imageHash, spanishImageHash] = await Promise.all([
+        prepareCatalogImageHash(catalogImageHasher, input.image_url),
+        prepareCatalogImageHash(catalogImageHasher, input.image_url_es)
+      ]);
       const result = await database.query(
         `
         with updated_item as (
@@ -1481,6 +1487,8 @@ export function createDiscoveryRouter(
               min_age = $19,
               image_url = $20,
               image_url_es = $21,
+              image_phash = $24,
+              image_phash_es = $25,
               status = $22,
               updated_at = now()
           where id = $23
@@ -1501,7 +1509,7 @@ export function createDiscoveryRouter(
            )
          ))
         `,
-        [...itemParams(input), request.params.id]
+        [...itemParams(input), request.params.id, imageHash, spanishImageHash]
       );
 
       if (!result.rows[0]) {
@@ -1890,6 +1898,9 @@ export function createDiscoveryRouter(
         await productDetailsEnrichmentService.enrichCandidate(integerPathParam(request.params.id), { updateLinkedItem: false });
       }
 
+      const imageUrl = rowString(candidate, 'image_url');
+      const imageHash = await prepareCatalogImageHash(catalogImageHasher, imageUrl);
+
       const result = await database.query(
         `
         with candidate as (
@@ -1914,6 +1925,7 @@ export function createDiscoveryRouter(
             max_minutes,
             min_age,
             image_url,
+            image_phash,
             status,
             updated_at
           )
@@ -1939,7 +1951,8 @@ export function createDiscoveryRouter(
             candidate.min_minutes,
             candidate.max_minutes,
             candidate.min_age,
-            candidate.image_url,
+            $12,
+            $13,
             'active',
             now()
           from candidate
@@ -2046,7 +2059,9 @@ export function createDiscoveryRouter(
           createOptions.implementsBggItem ? String(createOptions.bggId) : null,
           createOptions.extendsItemId,
           createOptions.extendsItem ? String(createOptions.extendsItemId) : null,
-          createOptions.overrideDescription
+          createOptions.overrideDescription,
+          imageUrl,
+          imageHash
         ]
       );
 
@@ -2279,15 +2294,27 @@ export function createDiscoveryRouter(
     try {
       const candidateId = integerPathParam(request.params.id);
       const targetField = coverImageField(request.body);
+      const sourceResult = await database.query('select item_id, image_url from store_items where id = $1', [candidateId]);
+      const source = sourceResult.rows[0] as Record<string, unknown> | undefined;
+      const sourceUrl = source ? rowString(source, 'image_url') : '';
+      const sourceItemId = source?.item_id;
+      if (!sourceUrl.trim() || !sourceItemId) {
+        throw httpError(400, 'Store item must have a linked catalog item and cover image');
+      }
+      const imageHash = await prepareCatalogImageHash(catalogImageHasher, sourceUrl);
+      const hashField = targetField === 'image_url' ? 'image_phash' : 'image_phash_es';
       const result = await database.query(
         `
         with updated_item as (
           update items i
-          set ${targetField} = source.image_url,
+          set ${targetField} = $2,
+              ${hashField} = $3,
               updated_at = now()
           from store_items source
           where source.id = $1
             and source.item_id = i.id
+            and source.item_id = $4
+            and source.image_url is not distinct from $2
             and nullif(trim(source.image_url), '') is not null
           returning
             i.id, i.canonical_name, i.normalized_name, i.canonical_name_es, i.normalized_name_es,
@@ -2311,11 +2338,11 @@ export function createDiscoveryRouter(
            )
          ))
         `,
-        [candidateId]
+        [candidateId, sourceUrl, imageHash, sourceItemId]
       );
 
       if (!result.rows[0]) {
-        throw httpError(400, 'Store item must have a linked catalog item and cover image');
+        throw httpError(409, 'Store item cover or linked item changed while preparing the cover; retry');
       }
 
       response.json({ data: itemDetailResponse(result.rows[0] as Record<string, unknown>) });

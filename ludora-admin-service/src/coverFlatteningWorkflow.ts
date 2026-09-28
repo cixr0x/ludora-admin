@@ -6,6 +6,7 @@ import { promisify } from 'node:util';
 import sharp from 'sharp';
 
 import type { Database } from './db.js';
+import { prepareCatalogImageHash, type CatalogImageHasher } from './catalogImageHash.js';
 import {
   createNodeExternalCoverImageOptimizerDependencies,
   type CoverImageField,
@@ -114,6 +115,7 @@ type FlatteningMetadata = {
 };
 
 export type CoverFlatteningWorkflowDependencies = {
+  catalogImageHasher?: CatalogImageHasher;
   config: LocalCoverWorkflowConfig;
   cropImage(
     image: Buffer,
@@ -368,6 +370,7 @@ export function createCoverFlatteningWorkflowManager(
     }
 
     const hash = createHash('sha256').update(optimized).digest('hex').slice(0, 12);
+    const imageHash = await prepareCatalogImageHash(dependencies.catalogImageHasher, optimized);
     const baseFilename = normalizeCoverFilename(workflow.itemNames).replace(/\.webp$/i, '');
     const language = targetField === 'image_url' ? 'en' : 'es';
     const filename = `${workflow.item_id}-${baseFilename}.${language}.${hash}.webp`;
@@ -380,7 +383,7 @@ export function createCoverFlatteningWorkflowManager(
       contentType: 'image/webp',
       key: s3Key
     });
-    await updateItemImage(database, workflow.item_id, targetField, publicUrl);
+    await updateItemImage(database, workflow.item_id, targetField, publicUrl, imageHash);
     workflows.delete(workflowId);
     await dependencies.removeDirectory(workflow.outputDir);
 
@@ -674,18 +677,21 @@ async function updateItemImage(
   database: Database,
   itemId: number,
   targetField: CoverFlatteningTargetField,
-  publicUrl: string
+  publicUrl: string,
+  imageHash: string | null
 ): Promise<void> {
   const column = targetField === 'image_url' ? 'image_url' : 'image_url_es';
+  const hashColumn = targetField === 'image_url' ? 'image_phash' : 'image_phash_es';
   await database.query(
     `
     update items
     set ${column} = $1,
+        ${hashColumn} = $3,
         updated_at = now()
     where id = $2
     returning id
     `,
-    [publicUrl, itemId]
+    [publicUrl, itemId, imageHash]
   );
 }
 

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import logging
+import re
 import unicodedata
+from collections.abc import Callable
 from typing import Any
 
 from ludora.bgg import BggLink, BggThing
+from ludora.image_phash import hash_image_url
 
 
 def normalize_title(value: str) -> str:
@@ -19,9 +23,10 @@ def normalize_title(value: str) -> str:
 
 
 class BggItemImporter:
-    def __init__(self, connection: Any, bgg_client: Any | None = None) -> None:
+    def __init__(self, connection: Any, bgg_client: Any | None = None, image_hasher: Callable[[str], str] = hash_image_url) -> None:
         self.connection = connection
         self.bgg_client = bgg_client
+        self.image_hasher = image_hasher
 
     def import_bgg_id(self, bgg_id: int) -> int | None:
         if not self.bgg_client:
@@ -95,6 +100,16 @@ class BggItemImporter:
         cursor.execute("select id from items where bgg_id = %s", (thing.bgg_id,))
         existing = cursor.fetchone()
         item_type = _bgg_type_to_item_type(thing.item_type)
+        image_url = thing.image or thing.thumbnail
+        image_hash = None
+        if image_url.strip():
+            try:
+                image_hash = self.image_hasher(image_url)
+                if not isinstance(image_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", image_hash):
+                    raise ValueError("Generator returned an invalid catalog image hash")
+            except Exception as error:
+                image_hash = None
+                logging.getLogger(__name__).warning("Catalog image hash failed for BGG %s: %s", thing.bgg_id, error)
         params = (
             thing.name,
             normalize_title(thing.name),
@@ -109,7 +124,8 @@ class BggItemImporter:
             thing.min_playtime or thing.playing_time,
             thing.max_playtime or thing.playing_time,
             thing.min_age,
-            thing.image or thing.thumbnail,
+            image_url,
+            image_hash,
         )
         if existing:
             cursor.execute(
@@ -130,6 +146,7 @@ class BggItemImporter:
                     max_minutes = %s,
                     min_age = %s,
                     image_url = %s,
+                    image_phash = %s,
                     status = 'active',
                     updated_at = now()
                 where id = %s
@@ -156,10 +173,11 @@ class BggItemImporter:
                 max_minutes,
                 min_age,
                 image_url,
+                image_phash,
                 status,
                 updated_at
             )
-            values (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s, %s, %s, %s, %s, 'active', now())
+            values (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', now())
             returning id
             """,
             params,

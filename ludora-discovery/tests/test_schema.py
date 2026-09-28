@@ -19,6 +19,17 @@ def patches_path() -> Path:
 
 
 class SchemaTests(unittest.TestCase):
+    def test_catalog_image_hash_storage_has_a_focused_incremental_patch(self):
+        schema = schema_path().read_text(encoding="utf-8")
+        patch_path = patches_path() / "20260928_001_add_item_image_phashes.sql"
+        self.assertTrue(patch_path.is_file(), "Catalog hash columns need an incremental patch")
+        patch = patch_path.read_text(encoding="utf-8")
+        for field in ("image_phash", "image_phash_es"):
+            self.assertIn(f"{field} text", schema)
+            self.assertIn(f"add column if not exists {field} text", patch.casefold())
+            self.assertIn(f"{field} ~ '^[0-9a-f]{{64}}$'", patch)
+        self.assertNotIn("update items", patch.casefold())
+
     def test_daily_update_schedule_patch_is_sequential_and_nullable(self):
         patches = patches_path()
         patch_names = sorted(path.name for path in patches.glob("*.sql"))

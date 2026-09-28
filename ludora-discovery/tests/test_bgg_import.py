@@ -1,5 +1,6 @@
 import sys
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -116,6 +117,36 @@ class FakeConnection:
 
 
 class BggImportTests(unittest.TestCase):
+    def test_image_and_hash_are_written_together_on_insert_update_and_removal(self):
+        connection = FakeConnection()
+        importer = BggItemImporter(connection)
+        importer.image_hasher = lambda url: "abcd" * 16
+        thing = BggThing(bgg_id=7, item_type="boardgame", name="Game", image="https://bgg.test/cover")
+        importer.import_thing(thing)
+        importer.import_thing(thing)
+        writes = [(sql, params) for sql, params in connection.cursor_instance.executions if "image_url" in sql]
+        self.assertEqual(len(writes), 2)
+        for sql, params in writes:
+            self.assertIn("image_phash", sql)
+            self.assertIn("abcd" * 16, params)
+        thing = replace(thing, image="")
+        importer.import_thing(thing)
+        sql, params = connection.cursor_instance.executions[-1]
+        self.assertIn("image_phash = %s", sql)
+        self.assertIsNone(params[-2])
+
+    def test_failed_new_cover_hash_does_not_abort_import_or_keep_old_hash(self):
+        connection = FakeConnection()
+        importer = BggItemImporter(connection)
+        def failed_hash(url):
+            raise ValueError("download failed")
+        importer.image_hasher = failed_hash
+        with self.assertLogs("ludora.item_import", level="WARNING"):
+            importer.import_thing(BggThing(bgg_id=7, item_type="boardgame", name="Game", image="https://bgg.test/new"))
+        sql, params = connection.cursor_instance.executions[-1]
+        self.assertIn("image_phash", sql)
+        self.assertIsNone(params[-1])
+
     def test_normalize_title_removes_accents_and_symbols(self):
         self.assertEqual(normalize_title("Café Barista: Edición México"), "cafe barista edicion mexico")
 

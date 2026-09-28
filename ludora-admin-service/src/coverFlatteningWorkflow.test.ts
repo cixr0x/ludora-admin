@@ -43,6 +43,10 @@ describe('cover flattening workflow', () => {
       }
     };
     const dependencies = fakeDependencies(root, {
+      catalogImageHasher: {
+        hashBytes: async (image) => { expect(image).toEqual(Buffer.alloc(90_000)); return 'abcd'.repeat(16); },
+        hashUrl: async () => { throw new Error('final bytes must not be downloaded'); }
+      },
       optimizeImage: async () => Buffer.alloc(90_000),
       uploadImage: async (image, upload) => {
         uploads.push({ bytes: image.length, key: upload.key });
@@ -75,7 +79,8 @@ describe('cover flattening workflow', () => {
     expect(uploads).toEqual([{ bytes: 90_000, key: accepted.s3_key }]);
     const update = queries.find((query) => query.sql.includes('update items'));
     expect(normalizeSql(update?.sql ?? '')).toContain('set image_url_es = $1');
-    expect(update?.params).toEqual([accepted.public_url, 77]);
+    expect(update?.params).toEqual([accepted.public_url, 77, 'abcd'.repeat(16)]);
+    expect(normalizeSql(update?.sql ?? '')).toContain('image_phash_es = $3');
     await expect(manager.getCandidateFile(workflow.workflow_id, 1)).rejects.toMatchObject({ status: 404 });
   });
 

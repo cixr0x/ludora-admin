@@ -1,4 +1,5 @@
 import type { Database } from '../db.js';
+import { prepareCatalogImageHash, type CatalogImageHasher } from '../catalogImageHash.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggClient } from './bggClient.js';
 import type { BggNamedLink, BggRelatedLink, BggThingDetails } from './bggParser.js';
@@ -10,7 +11,7 @@ export type BggItemImporter = {
   importBggId(bggId: number): Promise<number | null>;
 };
 
-export function createBggItemImporter(database: Database, bggClient?: BggClient): BggItemImporter {
+export function createBggItemImporter(database: Database, bggClient?: BggClient, catalogImageHasher?: CatalogImageHasher): BggItemImporter {
   return {
     async importBggId(bggId: number): Promise<number | null> {
       const cachedItemId = await freshExistingItemId(database, bggId);
@@ -27,7 +28,7 @@ export function createBggItemImporter(database: Database, bggClient?: BggClient)
         return null;
       }
 
-      return importThing(database, bggClient, fetched.details, new Set());
+      return importThing(database, bggClient, fetched.details, new Set(), catalogImageHasher);
     }
   };
 }
@@ -36,14 +37,15 @@ async function importThing(
   database: Database,
   bggClient: BggClient,
   thing: BggThingDetails,
-  visited: Set<number>
+  visited: Set<number>,
+  catalogImageHasher?: CatalogImageHasher
 ): Promise<number> {
   if (visited.has(thing.bggId)) {
     return (await existingItemId(database, thing.bggId)) ?? 0;
   }
   visited.add(thing.bggId);
 
-  const itemId = await upsertItem(database, thing);
+  const itemId = await upsertItem(database, thing, catalogImageHasher);
   await upsertAliases(database, itemId, thing.alternateNames);
   await upsertTaxonomyLinks(database, itemId, 'boardgame_categories', 'item_categories', 'category_id', thing.categories);
   await upsertTaxonomyLinks(database, itemId, 'boardgame_mechanics', 'item_mechanics', 'mechanic_id', thing.mechanics);
@@ -51,12 +53,14 @@ async function importThing(
   await upsertContributors(database, itemId, thing.designers, 'designer');
   await upsertContributors(database, itemId, thing.artists, 'artist');
   await upsertPublishers(database, itemId, thing.publishers);
-  await upsertRelatedItems(database, bggClient, itemId, thing, visited);
+  await upsertRelatedItems(database, bggClient, itemId, thing, visited, catalogImageHasher);
   return itemId;
 }
 
-async function upsertItem(database: Database, thing: BggThingDetails): Promise<number> {
+async function upsertItem(database: Database, thing: BggThingDetails, catalogImageHasher?: CatalogImageHasher): Promise<number> {
   const existingId = await existingItemId(database, thing.bggId);
+  const imageUrl = thing.image || thing.thumbnail;
+  const imageHash = await prepareCatalogImageHash(catalogImageHasher, imageUrl);
   const params = [
     thing.name,
     normalizeTitle(thing.name),
@@ -74,7 +78,8 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
     thing.minPlaytime ?? thing.playingTime,
     thing.maxPlaytime ?? thing.playingTime,
     thing.minAge,
-    thing.image || thing.thumbnail
+    imageUrl,
+    imageHash
   ];
 
   if (existingId !== null) {
@@ -99,9 +104,10 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
           max_minutes = $15,
           min_age = $16,
           image_url = $17,
+          image_phash = $18,
           status = 'active',
           updated_at = now()
-      where id = $18
+      where id = $19
       returning id
       `,
       [...params, existingId]
@@ -130,10 +136,11 @@ async function upsertItem(database: Database, thing: BggThingDetails): Promise<n
       max_minutes,
       min_age,
       image_url,
+      image_phash,
       status,
       updated_at
     )
-    values ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'active', now())
+    values ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'active', now())
     returning id
     `,
     params
@@ -150,10 +157,11 @@ async function upsertRelatedItems(
   bggClient: BggClient,
   itemId: number,
   thing: BggThingDetails,
-  visited: Set<number>
+  visited: Set<number>,
+  catalogImageHasher?: CatalogImageHasher
 ) {
   for (const parentLink of thing.parentLinks) {
-    const parentId = await importLinkedThing(database, bggClient, parentLink, visited);
+    const parentId = await importLinkedThing(database, bggClient, parentLink, visited, catalogImageHasher);
     if (!parentId) {
       continue;
     }
@@ -163,7 +171,7 @@ async function upsertRelatedItems(
   }
 
   for (const implementationLink of thing.implementationLinks) {
-    const implementationId = await importLinkedThing(database, bggClient, implementationLink, visited);
+    const implementationId = await importLinkedThing(database, bggClient, implementationLink, visited, catalogImageHasher);
     if (!implementationId) {
       continue;
     }
@@ -180,7 +188,8 @@ async function importLinkedThing(
   database: Database,
   bggClient: BggClient,
   link: BggRelatedLink,
-  visited: Set<number>
+  visited: Set<number>,
+  catalogImageHasher?: CatalogImageHasher
 ): Promise<number | null> {
   const cachedItemId = await freshExistingItemId(database, link.bggId);
   if (cachedItemId !== null) {
@@ -191,7 +200,7 @@ async function importLinkedThing(
   if (!fetched) {
     return null;
   }
-  const linkedId = await importThing(database, bggClient, fetched.details, visited);
+  const linkedId = await importThing(database, bggClient, fetched.details, visited, catalogImageHasher);
   return linkedId || null;
 }
 

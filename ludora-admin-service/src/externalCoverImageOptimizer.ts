@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import sharp from 'sharp';
 
 import type { Database } from './db.js';
+import { prepareCatalogImageHash, type CatalogImageHasher } from './catalogImageHash.js';
 import { normalizeCoverFilename, type LocalCoverWorkflowConfig } from './localCoverWorkflow.js';
 
 export type CoverImageField = 'image_url' | 'image_url_es';
@@ -25,6 +26,7 @@ export type CoverImageOptimizeOptions = {
 };
 
 export type ExternalCoverImageOptimizerDependencies = {
+  catalogImageHasher?: CatalogImageHasher;
   config: LocalCoverWorkflowConfig;
   downloadImage(url: string): Promise<Buffer>;
   inspectImage(url: string): Promise<RemoteImageInspection>;
@@ -210,15 +212,12 @@ export async function optimizeExternalCoverImages(
         maxBytes,
         maxDimension
       });
-      let s3Key = coverImageS3Key(dependencies.config.s3Prefix, item, itemId, field);
-      let publicUrl = publicUrlFor(dependencies.config.publicBaseUrl, s3Key);
-      if (sourceUrl === publicUrl) {
-        const contentVersion = createHash('sha256').update(optimizedImage).digest('hex').slice(0, 12);
-        s3Key = coverImageS3Key(dependencies.config.s3Prefix, item, itemId, field, `-${contentVersion}`);
-        publicUrl = publicUrlFor(dependencies.config.publicBaseUrl, s3Key);
-      }
+      const contentVersion = createHash('sha256').update(optimizedImage).digest('hex').slice(0, 12);
+      const s3Key = coverImageS3Key(dependencies.config.s3Prefix, item, itemId, field, `-${contentVersion}`);
+      const publicUrl = publicUrlFor(dependencies.config.publicBaseUrl, s3Key);
 
       if (apply) {
+        const imageHash = await prepareCatalogImageHash(dependencies.catalogImageHasher, optimizedImage);
         await dependencies.uploadImage(optimizedImage, {
           bucket: dependencies.config.s3Bucket,
           cacheControl: DEFAULT_CACHE_CONTROL,
@@ -226,7 +225,7 @@ export async function optimizeExternalCoverImages(
           key: s3Key
         });
         uploadedImages += 1;
-        await updateItemImageUrl(database, itemId, field, publicUrl);
+        await updateItemImageUrl(database, itemId, field, publicUrl, imageHash);
         updatedRows += 1;
       }
 
@@ -329,17 +328,19 @@ function coverImageS3Key(
   return keyFor(prefix, `${itemId}-${baseFilename}${version}.${suffix}.webp`);
 }
 
-async function updateItemImageUrl(database: Database, itemId: number, field: CoverImageField, publicUrl: string): Promise<void> {
+async function updateItemImageUrl(database: Database, itemId: number, field: CoverImageField, publicUrl: string, imageHash: string | null): Promise<void> {
   const column = field === 'image_url' ? 'image_url' : 'image_url_es';
+  const hashColumn = field === 'image_url' ? 'image_phash' : 'image_phash_es';
   await database.query(
     `
     update items
     set ${column} = $1,
+        ${hashColumn} = $3,
         updated_at = now()
     where id = $2
     returning id
     `,
-    [publicUrl, itemId]
+    [publicUrl, itemId, imageHash]
   );
 }
 
@@ -359,9 +360,10 @@ async function inspectImage(url: string): Promise<RemoteImageInspection> {
   };
 }
 
-async function downloadImageWithLimit(url: string): Promise<Buffer> {
+export async function downloadImageWithLimit(url: string): Promise<Buffer> {
   const response = await fetch(url, {
-    headers: userAgentHeaders()
+    headers: { ...userAgentHeaders(), 'Cache-Control': 'no-cache' },
+    signal: AbortSignal.timeout(30_000)
   });
   if (!response.ok) {
     throw new Error(`Could not download image: ${response.status} ${response.statusText}`);

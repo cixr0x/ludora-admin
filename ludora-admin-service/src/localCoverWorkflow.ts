@@ -1,10 +1,11 @@
 import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-import { createReadStream } from 'node:fs';
-import { mkdir, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import path from 'node:path';
 
 import type { Database } from './db.js';
+import { prepareCatalogImageHash, type CatalogImageHasher } from './catalogImageHash.js';
 
 export type LocalCoverWorkflowStatus = 'waiting_for_edit' | 'uploading' | 'completed' | 'failed';
 export type LocalCoverWorkflowTargetField = 'image_url' | 'image_url_es';
@@ -50,10 +51,12 @@ export type LocalCoverWorkflowUpload = {
 };
 
 export type LocalCoverWorkflowDependencies = {
+  catalogImageHasher?: CatalogImageHasher;
+  readImageFile?(filePath: string): Promise<Buffer>;
   config?: Partial<LocalCoverWorkflowConfig>;
   downloadFile(sourceUrl: string, destinationPath: string): Promise<void>;
   openEditor(sourcePath: string): Promise<void> | void;
-  uploadFile(filePath: string, upload: LocalCoverWorkflowUpload): Promise<void>;
+  uploadFile(filePath: string, upload: LocalCoverWorkflowUpload, image: Buffer): Promise<void>;
   waitForFile(expectedPaths: string[]): Promise<string>;
 };
 
@@ -198,10 +201,11 @@ export function createNodeLocalCoverWorkflowDependencies(
     config: runtimeConfig,
     downloadFile: (sourceUrl, destinationPath) => downloadFile(sourceUrl, destinationPath),
     openEditor: (sourcePath) => openGimp(runtimeConfig.gimpPath, sourcePath),
-    uploadFile: async (filePath, upload) => {
+    readImageFile: readFile,
+    uploadFile: async (_filePath, upload, image) => {
       await s3Client.send(
         new PutObjectCommand({
-          Body: createReadStream(filePath),
+          Body: image,
           Bucket: upload.bucket,
           ContentType: upload.contentType,
           Key: upload.key
@@ -304,11 +308,15 @@ async function completeWhenEditedFileExists(
     const editedPath = await dependencies.waitForFile(state.expected_paths);
     const editedFilename = configuredPathApi(config.workDir).basename(editedPath);
     const targetField = targetFieldForEditedFilename(editedFilename);
-    const s3Key = keyFor(config.s3Prefix, editedFilename);
+    const image = await (dependencies.readImageFile ?? readFile)(editedPath);
+    const contentVersion = createHash('sha256').update(image).digest('hex').slice(0, 12);
+    const savedFilename = editedFilename.replace(/\.webp$/i, `.${contentVersion}.webp`);
+    const s3Key = keyFor(config.s3Prefix, savedFilename);
     const publicUrl = publicUrlFor(config.publicBaseUrl, s3Key);
+    const imageHash = await prepareCatalogImageHash(dependencies.catalogImageHasher, image);
 
     state.expected_path = editedPath;
-    state.filename = editedFilename;
+    state.filename = savedFilename;
     state.public_url = publicUrl;
     state.target_field = targetField;
     state.status = 'uploading';
@@ -316,8 +324,8 @@ async function completeWhenEditedFileExists(
       bucket: config.s3Bucket,
       contentType: 'image/webp',
       key: s3Key
-    });
-    await updateItemImageUrl(database, state.item_id, targetField, publicUrl);
+    }, image);
+    await updateItemImageUrl(database, state.item_id, targetField, publicUrl, imageHash);
     state.status = 'completed';
   } catch (error) {
     state.status = 'failed';
@@ -339,18 +347,21 @@ async function updateItemImageUrl(
   database: Database,
   itemId: number,
   targetField: LocalCoverWorkflowTargetField,
-  publicUrl: string
+  publicUrl: string,
+  imageHash: string | null
 ): Promise<void> {
   const column = targetField === 'image_url' ? 'image_url' : 'image_url_es';
+  const hashColumn = targetField === 'image_url' ? 'image_phash' : 'image_phash_es';
   await database.query(
     `
     update items
     set ${column} = $1,
+        ${hashColumn} = $3,
         updated_at = now()
     where id = $2
     returning id, ${column}
     `,
-    [publicUrl, itemId]
+    [publicUrl, itemId, imageHash]
   );
 }
 

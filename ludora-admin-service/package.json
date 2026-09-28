@@ -6,6 +6,7 @@
   "scripts": {
     "backfill:bgg-things": "tsx src/scripts/backfillBggThingCache.ts",
     "optimize:external-covers": "tsx src/scripts/optimizeExternalCoverImages.ts",
+    "prepare:catalog-image-hashes": "tsx src/scripts/prepareCatalogImageHashes.ts",
     "repair:bgg-relationships": "tsx src/scripts/repairBggRelationshipsFromCache.ts",
     "sync:bgg-ratings": "tsx src/scripts/syncBggRatingsFromCache.ts",
     "verify:ai-bgg": "tsx src/scripts/verifyAiBggMatching.ts",

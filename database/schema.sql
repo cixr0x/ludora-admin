@@ -659,6 +659,8 @@ create table if not exists items (
     min_age integer,
     image_url text not null default '',
     image_url_es text not null default '',
+    image_phash text constraint items_image_phash_format_check check (image_phash is null or image_phash ~ '^[0-9a-f]{64}$'),
+    image_phash_es text constraint items_image_phash_es_format_check check (image_phash_es is null or image_phash_es ~ '^[0-9a-f]{64}$'),
     status text not null default 'draft',
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
@@ -668,6 +670,8 @@ alter table if exists items add column if not exists canonical_name_es text not 
 alter table if exists items add column if not exists normalized_name_es text not null default '';
 alter table if exists items add column if not exists description_es text not null default '';
 alter table if exists items add column if not exists image_url_es text not null default '';
+alter table if exists items add column if not exists image_phash text;
+alter table if exists items add column if not exists image_phash_es text;
 
 create extension if not exists vector;
 

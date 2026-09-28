@@ -1668,7 +1668,9 @@ describe('ludora admin service', () => {
       'https://cf.geekdo-images.com/coffee.jpg',
       'https://cf.geekdo-images.com/coffee-es.jpg',
       'active',
-      '377061'
+      '377061',
+      null,
+      null
     ]);
   });
 
@@ -2281,7 +2283,9 @@ describe('ludora admin service', () => {
       null,
       null,
       null,
-      false
+      false,
+      'https://store.mx/cafe-barista.jpg',
+      null
     ]);
   });
 
@@ -2485,7 +2489,9 @@ describe('ludora admin service', () => {
       '377061',
       null,
       null,
-      true
+      true,
+      'https://store.mx/cafe-barista.jpg',
+      null
     ]);
   });
 
@@ -2554,7 +2560,9 @@ describe('ludora admin service', () => {
       null,
       55,
       '55',
-      false
+      false,
+      'https://store.mx/cafe-barista-expansion.jpg',
+      null
     ]);
   });
 
@@ -3137,7 +3145,7 @@ describe('ludora admin service', () => {
       const database: Database = {
         query: async (sql, params) => {
           queries.push({ params, sql });
-          return { rows: [row] };
+          return { rows: sql.startsWith('select item_id') ? [{ item_id: 77, image_url: 'https://store.mx/kitchen-rush.jpg' }] : [row] };
         }
       };
 
@@ -3147,15 +3155,15 @@ describe('ludora admin service', () => {
 
       expect(response.status).toBe(200);
       expect(response.body).toEqual({ data: row });
-      const sql = normalizeSql(queries[0].sql);
-      expect(sql).toContain(`set ${targetField} = source.image_url`);
+      const sql = normalizeSql(queries[1].sql);
+      expect(sql).toContain(`set ${targetField} = $2`);
       expect(sql).toContain('from store_items source');
       expect(sql).toContain('source.item_id = i.id');
       expect(sql).toContain("nullif(trim(source.image_url), '') is not null");
       expect(sql).toContain('returning i.id, i.canonical_name');
       expect(sql).toContain('i.is_accessory');
       expect(sql).toContain('select updated_item.*, thing_cache.raw_xml as bgg_thing_raw_xml');
-      expect(queries[0].params).toEqual([42]);
+      expect(queries[1].params).toEqual([42, 'https://store.mx/kitchen-rush.jpg', null, 77]);
     }
   );
 

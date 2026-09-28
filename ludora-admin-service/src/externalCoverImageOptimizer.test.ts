@@ -8,6 +8,18 @@ import {
 } from './externalCoverImageOptimizer.js';
 
 describe('external cover image optimizer', () => {
+  it('uses distinct content keys for concurrent optimizations of one catalog URL', async () => {
+    const database: Database = { query: async (sql) => ({ rows: sql.includes('from items')
+      ? [{ id: 10, normalized_name: 'game', image_url: 'https://external.test/cover', image_url_es: '' }]
+      : [{ id: 10 }] }) };
+    const run = (bytes: string) => optimizeExternalCoverImages(database, fakeDependencies({
+      inspectImage: async () => ({ contentLength: 200000, contentType: 'image/jpeg' }),
+      downloadImage: async () => Buffer.from('source'), optimizeImage: async () => Buffer.from(bytes)
+    }), { apply: true });
+    const [first, second] = await Promise.all([run('first content'), run('second content')]);
+    expect(first.optimized[0].publicUrl).not.toBe(second.optimized[0].publicUrl);
+    expect(first.optimized[0].s3Key).toMatch(/game-[a-f0-9]{12}\.en\.webp$/);
+  });
   it('dry-runs oversized external and managed item cover fields without uploading or updating rows', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
@@ -100,12 +112,12 @@ describe('external cover image optimizer', () => {
       uploadedImages: 0
     });
     expect(result.optimized.map((image) => `${image.itemId}:${image.field}:${image.publicUrl}:${image.applied}`)).toEqual([
-      '10:image_url:https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush.en.webp:false',
-      '10:image_url_es:https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush.es.webp:false',
-      '11:image_url_es:https://ludora.s3.us-east-2.amazonaws.com/boardgame/11-fiestadelosmuertos.es.webp:false'
+      '10:image_url:https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush-f8c784aa6b57.en.webp:false',
+      '10:image_url_es:https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush-f8c784aa6b57.es.webp:false',
+      '11:image_url_es:https://ludora.s3.us-east-2.amazonaws.com/boardgame/11-fiestadelosmuertos-f8c784aa6b57.es.webp:false'
     ]);
     expect(result.optimized[0]).toMatchObject({
-      newName: '10-coffeerush.en.webp',
+      newName: '10-coffeerush-f8c784aa6b57.en.webp',
       sourceName: 'coffee.jpg'
     });
   });
@@ -135,6 +147,10 @@ describe('external cover image optimizer', () => {
     };
     const calls: string[] = [];
     const dependencies = fakeDependencies({
+      catalogImageHasher: {
+        hashBytes: async (image) => { expect(image.length).toBe(80000); return 'abcd'.repeat(16); },
+        hashUrl: async () => { throw new Error('must hash final bytes'); }
+      },
       downloadImage: async (url) => {
         calls.push(`download:${url}`);
         return Buffer.alloc(150000);
@@ -153,16 +169,17 @@ describe('external cover image optimizer', () => {
       apply: true,
       maxBytes: 100 * 1024
     });
+    expect(queries.find((query) => query.sql.includes('update items'))?.params).toContain('abcd'.repeat(16));
 
     expect(calls).toEqual([
       'download:https://ludora.s3.us-east-2.amazonaws.com/boardgame/coffeerush.webp',
       'optimize:150000:102400',
-      'upload:80000:ludora:boardgame/10-coffeerush.en.webp:image/webp:public, max-age=31536000, immutable'
+      'upload:80000:ludora:boardgame/10-coffeerush-f8c784aa6b57.en.webp:image/webp:public, max-age=31536000, immutable'
     ]);
     const update = queries.find((query) => normalizeSql(query.sql).startsWith('update items'));
     expect(normalizeSql(update?.sql ?? '')).toContain('set image_url = $1');
     expect(normalizeSql(update?.sql ?? '')).toContain('updated_at = now()');
-    expect(update?.params).toEqual(['https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush.en.webp', 10]);
+    expect(update?.params).toEqual(['https://ludora.s3.us-east-2.amazonaws.com/boardgame/10-coffeerush-f8c784aa6b57.en.webp', 10, 'abcd'.repeat(16)]);
     expect(result.summary.updatedRows).toBe(1);
     expect(result.optimized[0]).toMatchObject({
       applied: true,
@@ -170,8 +187,8 @@ describe('external cover image optimizer', () => {
       itemId: 10,
       optimizedSizeBytes: 80000,
       originalSizeBytes: 150000,
-      newName: '10-coffeerush.en.webp',
-      s3Key: 'boardgame/10-coffeerush.en.webp'
+      newName: '10-coffeerush-f8c784aa6b57.en.webp',
+      s3Key: 'boardgame/10-coffeerush-f8c784aa6b57.en.webp'
     });
   });
 
