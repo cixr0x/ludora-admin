@@ -164,8 +164,8 @@ const itemCandidateSelect = `
   classification_reasons, match_source,
   matched_bgg_id, matched_name, match_score, match_reasons, match_payload,
   auto_list_result, matched_at, processed_at, processing_error, last_seen_at, last_updated, refreshed_date,
-  source_url_origin, store_active, discovery_disabled_reason, discovery_duplicate_of_id,
-  discovery_superseded_by_id, discovery_store_active_before_suppression, discovery_processing_complete
+  source_url_origin, store_active, discovery_hidden_reason, discovery_duplicate_of_id,
+  discovery_superseded_by_id, discovery_visibility_before_suppression, discovery_processing_complete
 `;
 
 const itemSelect = `
@@ -183,7 +183,7 @@ const itemLinkedCandidateSelect = `
   dic.language, dic.image_url, dic.listing_status, dic.raw_price, dic.price, dic.currency,
   dic.availability, dic.match_source, dic.match_score,
   dic.last_seen_at, dic.last_updated, dic.source_url_origin, dic.store_active,
-  dic.discovery_disabled_reason, dic.discovery_duplicate_of_id, dic.discovery_superseded_by_id
+  dic.discovery_hidden_reason, dic.discovery_duplicate_of_id, dic.discovery_superseded_by_id
 `;
 
 const itemRelationshipSelect = `
@@ -630,6 +630,8 @@ const itemCandidatesTableConfig: TableQueryConfig = {
       sortSql: "coalesce(auto_list_result ->> 'verdict', auto_list_result ->> 'status', '')"
     },
     availability: columnSql('availability'),
+    store_active: columnSql('store_active'),
+    discovery_hidden_reason: columnSql('discovery_hidden_reason'),
     availability_source: columnSql('availability_source'),
     category_confidence: columnSql('category_confidence'),
     classification_reasons: columnSql('classification_reasons'),

@@ -74,7 +74,7 @@ describe('StoreItemUpdateHistoryPage', () => {
               created_at: '2026-07-11T20:00:00Z',
               field_name: 'availability',
               id: 90,
-              new_value: 'in_stock',
+              new_value: 'unavailable',
               old_value: 'unknown',
               run_id: 'older-run',
               store_item_id: 501,
@@ -97,6 +97,7 @@ describe('StoreItemUpdateHistoryPage', () => {
     expect(within(dataRows[0]).getByText('store_active')).toBeInTheDocument();
     expect(within(dataRows[1]).getByText('Catan')).toBeInTheDocument();
     expect(within(dataRows[2]).getByText('Coffee Rush')).toBeInTheDocument();
+    expect(within(dataRows[2]).getByText('Item unavailable')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '502' })).toHaveAttribute('href', '#listings?id=502');
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);

@@ -27,7 +27,7 @@ class DiscoveryPairPersistenceTests(unittest.TestCase):
         self.assertIn("insert into store_items", insert_sql)
         self.assertEqual(insert_params[-2:], (A, False))
         pending_sql, pending_params = connection.cursor_instance.executions[3]
-        self.assertIn("discovery_disabled_reason = 'pending'", pending_sql)
+        self.assertIn("discovery_hidden_reason = 'pending'", pending_sql)
         self.assertEqual(pending_params, (True, 7))
         self.assertEqual(record.store_item_id, 7)
         self.assertEqual(connection.commits, 1)
@@ -46,7 +46,7 @@ class DiscoveryPairPersistenceTests(unittest.TestCase):
 
     def test_winner_replacement_disables_loser_before_activation(self):
         redirect = DiscoveryPairState(1, B, A, True, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True)
-        direct = DiscoveryPairState(2, B, None, False, "LISTED", "pending", active_before_suppression=True, item_id=9, is_boardgame_confirmed=True, is_boardgame=True)
+        direct = DiscoveryPairState(2, B, None, False, "LISTED", "pending", visibility_before_suppression=True, item_id=9, is_boardgame_confirmed=True, is_boardgame=True)
         connection = FakeConnection(fetchone_rows=[(12,), (None, B, "")], fetchall_rows=[[astuple(redirect), astuple(direct)]])
         self.assertTrue(DiscoveryRepository(connection).complete_discovery_pair(2))
         writes = [(sql, params) for sql, params in connection.cursor_instance.executions if "update store_items set" in sql]
@@ -55,7 +55,7 @@ class DiscoveryPairPersistenceTests(unittest.TestCase):
         self.assertEqual(writes[0][1][0:2], ("duplicate", 2))
 
     def test_repeat_disabled_pair_touches_without_erasing_saved_eligibility(self):
-        redirect = DiscoveryPairState(1, B, A, False, "LISTED", "duplicate", 2, active_before_suppression=True)
+        redirect = DiscoveryPairState(1, B, A, False, "LISTED", "duplicate", 2, visibility_before_suppression=True)
         direct = DiscoveryPairState(2, B, None, True, "LISTED")
         connection = FakeConnection(fetchone_rows=[(1, "duplicate", "", True)], fetchall_rows=[[astuple(redirect), astuple(direct)]])
         self.assertTrue(DiscoveryRepository(connection).observe_discovery_pair(12, A, B))
@@ -78,16 +78,35 @@ class DiscoveryPairPersistenceTests(unittest.TestCase):
                 self.assertFalse(DiscoveryRepository(connection).observe_discovery_pair(12, A, B))
                 self.assertFalse(any("update store_items" in sql for sql, _params in connection.cursor_instance.executions))
 
-    def test_both_update_deactivation_paths_reach_suppressed_rows(self):
-        record = DiscoveryItemCandidateRecord(store_id=12, store_item_id=7, source_url=B, title="Catan")
-        connection = FakeConnection(fetchone_rows=[(7,)])
-        repository = DiscoveryRepository(connection)
-        repository.mark_item_candidate_inactive(record)
-        self.assertIn("store_active = true or discovery_disabled_reason is not null", connection.cursor_instance.executions[0][0])
-        connection = FakeConnection(fetchone_rows=[(7,)])
-        repository = DiscoveryRepository(connection)
-        repository.deactivate_claimed_store_item_update(record, attempt_id=1, job_id=2, lease_token="00000000-0000-0000-0000-000000000001", run_id="test", worker_id="test", worker_name="test")
-        self.assertIn("store_active = true or discovery_disabled_reason is not null", connection.cursor_instance.executions[0][0])
+    def test_both_unavailable_paths_preserve_concurrent_hidden_visibility(self):
+        # Input snapshot is visible; SQL must neither read nor overwrite visibility.
+        record = DiscoveryItemCandidateRecord(store_id=12, store_item_id=7, source_url=B, title="Catan", availability="available", store_active=True)
+        for claimed in (False, True):
+            with self.subTest(claimed=claimed):
+                connection = FakeConnection(fetchone_rows=[("out_of_stock",)])
+                repository = DiscoveryRepository(connection)
+                if claimed:
+                    repository.deactivate_claimed_store_item_update(record, attempt_id=1, job_id=2, lease_token="00000000-0000-0000-0000-000000000001", run_id="test", worker_id="test", worker_name="test")
+                else:
+                    repository.mark_item_candidate_inactive(record, job_id=2, run_id="test")
+                sql = connection.cursor_instance.executions[0][0]
+                self.assertIn("for update", sql)
+                self.assertIn("returning previous.availability", sql)
+                self.assertNotIn("store_active", sql)
+                log_params = connection.cursor_instance.executions[1][1]
+                self.assertIn('"out_of_stock"', log_params)
+                self.assertIn('"unavailable"', log_params)
+                self.assertEqual(record.availability, "unavailable")
+                self.assertTrue(record.store_active)
+
+    def test_already_unavailable_claim_completes_without_false_change(self):
+        record = DiscoveryItemCandidateRecord(store_id=12, store_item_id=7, source_url=B, title="Catan", store_active=False)
+        connection = FakeConnection(fetchone_rows=[("unavailable",)])
+        DiscoveryRepository(connection).deactivate_claimed_store_item_update(record, attempt_id=1, job_id=2, lease_token="00000000-0000-0000-0000-000000000001", run_id="test", worker_id="test", worker_name="test")
+        self.assertFalse(any("insert into store_item_update_change_log" in sql for sql, _params in connection.cursor_instance.executions))
+        self.assertEqual(connection.cursor_instance.executions[1][1], (False, 1))
+        self.assertEqual(connection.cursor_instance.executions[-1][1], (0, 2))
+        self.assertFalse(record.store_active)
 
 
 if __name__ == "__main__":

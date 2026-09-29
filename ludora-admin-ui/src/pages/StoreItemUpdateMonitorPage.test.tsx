@@ -69,7 +69,7 @@ const monitor: StoreItemUpdateMonitor = {
     duration_ms: 820,
     id: 91,
     started_at: '2026-08-04T17:59:00Z',
-    status: 'succeeded',
+    status: 'deactivated',
     store_item_id: 501,
     store_item_title: 'Catan',
     store_name: 'Alpha'
@@ -181,6 +181,8 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(screen.getByText('No data')).toBeInTheDocument();
     expect(screen.getByText('40')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catan' })).toHaveAttribute('href', '#listings?id=501');
+    expect(screen.getByText('unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('deactivated')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'View failed attempts for Alpha (shopify)' }));
     expect(await screen.findByText('HTTP 429: Too Many Requests')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catan Junior' })).toHaveAttribute('href', '#listings?id=502');

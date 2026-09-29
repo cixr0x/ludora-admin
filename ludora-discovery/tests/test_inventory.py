@@ -159,7 +159,7 @@ class FakeRepository:
 
     def mark_item_candidate_inactive(self, existing_record, *, job_id=None, run_id=None):
         self.inactive_update_calls.append((existing_record, job_id, run_id))
-        existing_record.store_active = False
+        existing_record.availability = "unavailable"
         self.item_records.append(existing_record)
         return ItemCandidateUpsertResult(
             candidate_id=existing_record.store_item_id or 101,
@@ -2664,7 +2664,8 @@ class InventoryTests(unittest.TestCase):
             records = update_confirmed_store_item_details(repository, job_id=99, run_id="run-123")
 
         self.assertEqual(len(records), 1)
-        self.assertFalse(records[0].store_active)
+        self.assertTrue(records[0].store_active)
+        self.assertEqual(records[0].availability, "unavailable")
         self.assertEqual(records.updated_items, 1)
         self.assertEqual(repository.inactive_update_calls, [(existing_record, 99, "run-123")])
         self.assertEqual(repository.update_change_log_calls, [])
@@ -2694,7 +2695,8 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(fetch_html.call_count, 2)
         self.assertEqual(len(records), 1)
-        self.assertFalse(records[0].store_active)
+        self.assertTrue(records[0].store_active)
+        self.assertEqual(records[0].availability, "unavailable")
         self.assertEqual(records.updated_items, 1)
         self.assertEqual(repository.inactive_update_calls, [(existing_record, 12, "run-retry")])
 
@@ -2719,7 +2721,8 @@ class InventoryTests(unittest.TestCase):
             )
 
         self.assertEqual(len(records), 1)
-        self.assertFalse(records[0].store_active)
+        self.assertTrue(records[0].store_active)
+        self.assertEqual(records[0].availability, "unavailable")
         self.assertEqual(records.updated_items, 1)
         self.assertEqual(repository.inactive_update_calls, [(existing_record, None, None)])
 
@@ -2744,7 +2747,8 @@ class InventoryTests(unittest.TestCase):
             records = update_confirmed_store_item_details(repository)
 
         self.assertEqual(len(records), 1)
-        self.assertFalse(records[0].store_active)
+        self.assertTrue(records[0].store_active)
+        self.assertEqual(records[0].availability, "unavailable")
         self.assertEqual(records.updated_items, 1)
         self.assertEqual(repository.inactive_update_calls, [(existing_record, None, None)])
 

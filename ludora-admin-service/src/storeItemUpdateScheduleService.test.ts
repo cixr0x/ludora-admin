@@ -89,6 +89,8 @@ describe('store item update schedule service', () => {
     expect(distributionSql).toContain('(ranked.schedule_rank + store_phases.phase)');
     expect(distributionSql).toContain('stores.active = true');
     expect(distributionSql).toContain('store_items.store_active = true');
+    expect(distributionSql).toContain("store_items.availability <> 'unavailable'");
+    expect(distributionSql).not.toContain("store_items.availability <> 'out_of_stock'");
     expect(distributionSql).toContain('store_items.is_boardgame = true');
     expect(distributionSql).toContain('store_items.is_boardgame_confirmed = true');
     expect(distributionSql).toContain('store_items.item_id is not null');

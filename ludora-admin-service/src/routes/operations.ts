@@ -69,6 +69,7 @@ const storeItemUpdateChangeSelect = `
 `;
 
 const storeItemUpdateEventSql = `case
+  when changes.field_name = 'availability' and changes.new_value = '"unavailable"'::jsonb then 'Item unavailable'
   when changes.field_name = 'store_active' and changes.new_value = 'false'::jsonb then 'Item deactivated'
   when changes.field_name = 'store_active' and changes.new_value = 'true'::jsonb then 'Item activated'
   when changes.field_name = '' then 'Item updated'
@@ -571,6 +572,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and store_items.availability <> 'unavailable'
      )
      select
        count(*)::int as eligible_items,
@@ -650,6 +652,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and store_items.availability <> 'unavailable'
      ), hourly as (
        select staleness_hour, count(*)::int as item_count
        from eligible
@@ -684,6 +687,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and store_items.availability <> 'unavailable'
        group by store_items.store_id
      )
      select

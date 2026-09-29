@@ -20,7 +20,7 @@ def patches_path() -> Path:
 
 class SchemaTests(unittest.TestCase):
     def test_discovery_redirect_pair_patch_preserves_records_and_active_intent(self):
-        patch = (patches_path() / "20260928_001_discovery_redirect_pairs.sql").read_text(encoding="utf-8")
+        patch = (patches_path() / "20260929_001_store_item_visibility_and_redirect_pairs.sql").read_text(encoding="utf-8")
         normalized = " ".join(patch.casefold().split())
         self.assertIn("add column if not exists source_url_origin text", normalized)
         self.assertIn("discovery_processing_complete boolean not null default true", normalized)
@@ -29,13 +29,25 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("where store_id is not null and store_active = true and listing_status <> 'rejected'", normalized)
         self.assertNotIn("delete from store_items", normalized)
         self.assertNotIn("update store_items set source_url_origin", normalized)
-        self.assertIn("discovery_disabled_reason is not null and discovery_disabled_reason in", normalized)
+        self.assertIn("discovery_hidden_reason is not null and discovery_hidden_reason in", normalized)
         self.assertIn("before update of store_active", normalized)
-        self.assertIn("new.discovery_store_active_before_suppression := new.store_active", normalized)
+        self.assertIn("new.discovery_visibility_before_suppression := new.store_active", normalized)
         self.assertIn("new.store_active := false", normalized)
         self.assertIn("new.discovery_duplicate_of_id is not distinct from old.discovery_duplicate_of_id", normalized)
         self.assertIn("store_items_discovery_pair_identity_guard", normalized)
         self.assertNotIn("pg_advisory", normalized)
+
+    def test_visibility_backfill_is_guarded_and_precedes_redirect_metadata(self):
+        patch = (patches_path() / "20260929_001_store_item_visibility_and_redirect_pairs.sql").read_text(encoding="utf-8")
+        normalized = " ".join(patch.casefold().split())
+        backfill = "set availability = 'unavailable', availability_source = 'legacy_store_active', store_active = true where store_active = false"
+        self.assertIn(backfill, normalized)
+        self.assertLess(normalized.index("raise exception 'store-item visibility migration"), normalized.index(backfill))
+        self.assertLess(normalized.index(backfill), normalized.index("add column if not exists source_url_origin"))
+        self.assertIn("column_name in ('discovery_disabled_reason', 'discovery_visibility_before_suppression')", normalized)
+        self.assertNotIn("refreshed_date =", normalized)
+        self.assertNotIn("set price", normalized)
+        self.assertIn("and availability <> 'unavailable'", normalized)
 
     def test_daily_update_schedule_patch_is_sequential_and_nullable(self):
         patches = patches_path()

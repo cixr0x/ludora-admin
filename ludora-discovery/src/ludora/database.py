@@ -602,6 +602,7 @@ class DiscoveryRepository:
                       and store_items.source_url <> ''
                       and store_items.listing_status = 'LISTED'
                       and store_items.store_active = true
+              and store_items.availability <> 'unavailable'
                       and store_items.next_update_at <= now()
                       and (
                         store_items.update_lease_token is null
@@ -640,6 +641,7 @@ class DiscoveryRepository:
                       and store_items.source_url <> ''
                       and store_items.listing_status = 'LISTED'
                       and store_items.store_active = true
+              and store_items.availability <> 'unavailable'
                       and (
                         store_items.consecutive_update_failures = 0
                         or store_items.next_update_at is null
@@ -904,43 +906,51 @@ class DiscoveryRepository:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
-                update store_items
-                set store_active = false,
+                with previous as (
+                    select id, availability from store_items
+                    where id = %s and update_lease_token = %s::uuid
+                    for update
+                )
+                update store_items si
+                set availability = 'unavailable',
+                    availability_source = 'product_page_unavailable',
                     refreshed_date = now(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = 0,
                     last_update_error = ''
-                where id = %s
-                  and update_lease_token = %s::uuid
-                  and (store_active = true or discovery_disabled_reason is not null)
-                returning id
+                from previous
+                where si.id = previous.id
+                returning previous.availability
                 """,
                 (store_item_id, lease_token),
             )
-            if not cursor.fetchone():
+            previous = cursor.fetchone()
+            if previous is None:
                 self._mark_attempt_lease_lost(cursor, attempt_id, worker_name, worker_id)
                 self.connection.commit()
                 raise RuntimeError(f"Store item {store_item_id} update lease was lost")
-            cursor.execute(
-                """
-                insert into store_item_update_change_log (
-                    job_id, run_id, store_item_id, field_name, old_value, new_value
+            changed = previous[0] != "unavailable"
+            if changed:
+                cursor.execute(
+                    """
+                    insert into store_item_update_change_log (
+                        job_id, run_id, store_item_id, field_name, old_value, new_value
+                    )
+                    values (%s, %s, %s, 'availability', %s::jsonb, %s::jsonb)
+                    """,
+                    (job_id, run_id, store_item_id, _jsonb_log_value(previous[0]), _jsonb_log_value("unavailable")),
                 )
-                values (%s, %s, %s, 'store_active', 'true'::jsonb, 'false'::jsonb)
-                """,
-                (job_id, run_id, store_item_id),
-            )
             cursor.execute(
                 """
                 update store_item_update_attempt_log
                 set status = 'deactivated',
-                    changed = true,
+                    changed = %s,
                     completed_at = now(),
                     duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
                 where id = %s
                 """,
-                (attempt_id,),
+                (changed, attempt_id),
             )
             cursor.execute(
                 """
@@ -960,13 +970,15 @@ class DiscoveryRepository:
                 """
                 update job_store_item_update_log
                 set scanned_items = scanned_items + 1,
-                    updated_items = updated_items + 1,
+                    updated_items = updated_items + %s,
                     updated_at = now()
                 where id = %s
                 """,
-                (job_id,),
+                (1 if changed else 0, job_id),
             )
         self.connection.commit()
+        existing_record.availability = "unavailable"
+        existing_record.availability_source = "product_page_unavailable"
 
     def fail_claimed_store_item_update(
         self,
@@ -1151,9 +1163,9 @@ class DiscoveryRepository:
                 if pending_discovery:
                     cursor.execute("""
                         update store_items
-                        set discovery_disabled_reason = 'pending',
+                        set discovery_hidden_reason = 'pending',
                             discovery_processing_complete = false,
-                            discovery_store_active_before_suppression = %s
+                            discovery_visibility_before_suppression = %s
                         where id = %s
                     """, (record.store_active, result.candidate_id))
             record.store_item_id = result.candidate_id
@@ -1169,7 +1181,7 @@ class DiscoveryRepository:
         with self.connection.cursor() as cursor:
             self._lock_discovery_pairs(cursor, store_id)
             cursor.execute("""
-                select id, discovery_disabled_reason, processing_error, discovery_processing_complete
+                select id, discovery_hidden_reason, processing_error, discovery_processing_complete
                 from store_items
                 where store_id is not distinct from %s
                   and source_url_origin is not distinct from %s
@@ -1211,9 +1223,9 @@ class DiscoveryRepository:
     def _reconcile_discovery_pair(self, cursor: Any, store_id: int | None, discovered_url: str, target_url: str, candidate_id: int) -> None:
         cursor.execute("""
             select id, source_url, source_url_origin, store_active, listing_status,
-                   discovery_disabled_reason, discovery_duplicate_of_id,
-                   discovery_superseded_by_id, discovery_store_active_before_suppression,
-                   item_id, is_boardgame_confirmed, discovery_processing_complete, is_boardgame
+                   discovery_hidden_reason, discovery_duplicate_of_id,
+                   discovery_superseded_by_id, discovery_visibility_before_suppression,
+                   item_id, is_boardgame_confirmed, discovery_processing_complete, is_boardgame, availability
             from store_items
             where store_id is not distinct from %s
               and source_url in (
@@ -1230,8 +1242,8 @@ class DiscoveryRepository:
         # The partial unique active-target index also protects manual writes.
         # Release old representatives before activating their replacements.
         for row in sorted(changes, key=lambda changed: changed.store_active):
-            assignments = ["discovery_disabled_reason = %s", "discovery_duplicate_of_id = %s", "discovery_superseded_by_id = %s", "discovery_store_active_before_suppression = %s"]
-            params = [row.disabled_reason, row.duplicate_of_id, row.superseded_by_id, row.active_before_suppression]
+            assignments = ["discovery_hidden_reason = %s", "discovery_duplicate_of_id = %s", "discovery_superseded_by_id = %s", "discovery_visibility_before_suppression = %s"]
+            params = [row.hidden_reason, row.duplicate_of_id, row.superseded_by_id, row.visibility_before_suppression]
             if row.processing_complete != original[row.id].processing_complete:
                 assignments.append("discovery_processing_complete = %s")
                 params.append(row.processing_complete)
@@ -1346,16 +1358,21 @@ class DiscoveryRepository:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
-                update store_items
-                set store_active = false,
+                with previous as (
+                    select id, availability from store_items where id = %s for update
+                )
+                update store_items si
+                set availability = 'unavailable',
+                    availability_source = 'product_page_unavailable',
                     refreshed_date = now()
-                where id = %s
-                  and (store_active = true or discovery_disabled_reason is not null)
-                returning id
+                from previous
+                where si.id = previous.id
+                returning previous.availability
                 """,
                 (store_item_id,),
             )
-            changed = cursor.fetchone() is not None
+            previous = cursor.fetchone()
+            changed = previous is not None and previous[0] != "unavailable"
             if changed and run_id is not None:
                 cursor.execute(
                     """
@@ -1373,13 +1390,14 @@ class DiscoveryRepository:
                         job_id,
                         run_id,
                         store_item_id,
-                        "store_active",
-                        _jsonb_log_value(True),
-                        _jsonb_log_value(False),
+                        "availability",
+                        _jsonb_log_value(previous[0]),
+                        _jsonb_log_value("unavailable"),
                     ),
                 )
         self.connection.commit()
-        existing_record.store_active = False
+        existing_record.availability = "unavailable"
+        existing_record.availability_source = "product_page_unavailable"
         return ItemCandidateUpsertResult(
             candidate_id=store_item_id,
             listing_status=existing_record.listing_status,
@@ -1392,7 +1410,7 @@ class DiscoveryRepository:
     def _find_item_candidate(self, cursor: Any, record: DiscoveryItemCandidateRecord):
         cursor.execute(
             """
-            select id, listing_status, item_id, match_source, processed_at, discovery_disabled_reason, processing_error, discovery_processing_complete
+            select id, listing_status, item_id, match_source, processed_at, discovery_hidden_reason, processing_error, discovery_processing_complete
             from store_items
             where store_id is not distinct from %s
               and source_url = %s
@@ -1498,6 +1516,7 @@ class DiscoveryRepository:
               and store_items.source_url <> ''
               and store_items.listing_status = 'LISTED'
               and store_items.store_active = true
+              and store_items.availability <> 'unavailable'
               and (
                 store_items.update_lease_token is null
                 or store_items.update_lease_expires_at <= now()
@@ -1873,10 +1892,10 @@ def _item_candidate_select_columns() -> str:
         processing_error,
         id,
         source_url_origin,
-        discovery_disabled_reason,
+        discovery_hidden_reason,
         discovery_duplicate_of_id,
         discovery_superseded_by_id,
-        discovery_store_active_before_suppression,
+        discovery_visibility_before_suppression,
         discovery_processing_complete
     """
 
@@ -1931,10 +1950,10 @@ def _item_candidate_from_row(row: Any) -> DiscoveryItemCandidateRecord:
         processing_error=_text(row[40]),
         store_item_id=_optional_int(row[41]),
         source_url_origin=_text(row[42]) or None,
-        discovery_disabled_reason=_text(row[43]) or None,
+        discovery_hidden_reason=_text(row[43]) or None,
         discovery_duplicate_of_id=_optional_int(row[44]),
         discovery_superseded_by_id=_optional_int(row[45]),
-        discovery_store_active_before_suppression=row[46],
+        discovery_visibility_before_suppression=row[46],
         discovery_processing_complete=bool(row[47]),
     )
 

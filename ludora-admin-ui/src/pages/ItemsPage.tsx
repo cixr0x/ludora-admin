@@ -402,9 +402,17 @@ const baseLinkedCandidateColumns: DataTableColumn<AdminRecord>[] = [
     sortValue: (row) => numericField(row, ['price']) ?? field(row, ['price', 'raw_price'])
   },
   {
+    filterValue: (row) => field(row, ['store_active']),
+    id: 'store_active',
+    label: 'Public visibility',
+    minWidth: 150,
+    render: (row) => field(row, ['store_active'], '') === 'false' ? 'Hidden' : 'Visible',
+    sortValue: (row) => field(row, ['store_active'])
+  },
+  {
     filterValue: (row) => field(row, ['availability']),
     id: 'availability',
-    label: 'Availability',
+    label: 'Product availability',
     minWidth: 140,
     render: (row) => field(row, ['availability']),
     sortValue: (row) => field(row, ['availability'])

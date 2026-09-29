@@ -2075,6 +2075,8 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: row });
     const query = queries[0];
     expect(normalizeSql(query.sql)).toContain('from store_items');
+    expect(normalizeSql(query.sql)).toContain('store_active, discovery_hidden_reason');
+    expect(normalizeSql(query.sql)).toContain('discovery_visibility_before_suppression');
     expect(normalizeSql(query.sql)).toContain('where id = $1');
     expect(query.params).toEqual(['920']);
   });
@@ -2853,6 +2855,9 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('update store_items');
     expect(sql).toContain('last_updated = now()');
+    expect(sql).not.toContain('store_active =');
+    expect(sql).not.toContain('discovery_visibility_before_suppression =');
+    expect(sql).toContain('discovery_hidden_reason');
     expect(sql).toContain('where id = $39');
     expect(sql).toContain('returning id, store_id, source_url, source_listing_url');
     expect(sql).toContain('delete from store_item_additional_items siai');

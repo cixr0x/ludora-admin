@@ -546,7 +546,7 @@ function AttemptRow({ row }: { row: AdminRecord }) {
         <Link href={`#listings?id=${encodeURIComponent(itemId)}`}>{recordText(row, 'store_item_title', `#${itemId}`)}</Link>
       </TableCell>
       <TableCell>{recordText(row, 'store_name')}</TableCell>
-      <TableCell><Chip color={color} label={status} size="small" variant="outlined" /></TableCell>
+      <TableCell><Chip color={color} label={status === 'deactivated' ? 'unavailable' : status} size="small" variant="outlined" /></TableCell>
       <TableCell align="right">{recordText(row, 'duration_ms')}</TableCell>
     </TableRow>
   );

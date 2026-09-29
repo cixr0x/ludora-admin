@@ -194,6 +194,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("store_items.source_url <> ''", due_sql)
         self.assertIn("store_items.listing_status = 'listed'", due_sql)
         self.assertIn("store_items.store_active = true", due_sql)
+        self.assertIn("store_items.availability <> 'unavailable'", due_sql)
         self.assertIn("store_items.next_update_at <= now()", due_sql)
         self.assertEqual(due_sql.count("store_items.next_update_at <= now()"), 1)
         self.assertIn("store_items.update_lease_expires_at <= now()", due_sql)
@@ -209,6 +210,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("store_items.source_url <> ''", target_sql)
         self.assertIn("store_items.listing_status = 'listed'", target_sql)
         self.assertIn("store_items.store_active = true", target_sql)
+        self.assertIn("store_items.availability <> 'unavailable'", target_sql)
         self.assertIn("store_items.update_lease_expires_at <= now()", target_sql)
         self.assertNotIn("and store_items.next_update_at <= now()", target_sql)
         self.assertIn("order by store_items.refreshed_date asc, store_items.id asc", target_sql)
@@ -352,7 +354,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertTrue(result.changed)
 
     def test_deactivate_claimed_store_item_update_completes_claim_lifecycle(self):
-        connection = FakeConnection(fetchone_rows=[(501,)])
+        connection = FakeConnection(fetchone_rows=[("out_of_stock",)])
         repository = DiscoveryRepository(connection)
 
         repository.deactivate_claimed_store_item_update(
@@ -368,7 +370,9 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(len(connection.cursor_instance.executions), 5)
         source_update, source_params = connection.cursor_instance.executions[0]
         normalized_source_update = " ".join(source_update.casefold().split())
-        self.assertIn("store_active = false", normalized_source_update)
+        self.assertIn("availability = 'unavailable'", normalized_source_update)
+        self.assertNotIn("store_active", normalized_source_update)
+        self.assertIn("for update", normalized_source_update)
         self.assertIn("update_lease_token = null", normalized_source_update)
         self.assertIn("update_lease_expires_at = null", normalized_source_update)
         self.assertIn("consecutive_update_failures = 0", normalized_source_update)
@@ -380,13 +384,13 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         change_log, change_params = connection.cursor_instance.executions[1]
         self.assertIn("insert into store_item_update_change_log", change_log.casefold())
-        self.assertEqual(change_params, (17, "continuous:test", 501))
+        self.assertEqual(change_params, (17, "continuous:test", 501, '"out_of_stock"', '"unavailable"'))
 
         attempt_update, attempt_params = connection.cursor_instance.executions[2]
         normalized_attempt_update = " ".join(attempt_update.casefold().split())
         self.assertIn("status = 'deactivated'", normalized_attempt_update)
-        self.assertIn("changed = true", normalized_attempt_update)
-        self.assertEqual(attempt_params, (91,))
+        self.assertIn("changed = %s", normalized_attempt_update)
+        self.assertEqual(attempt_params, (True, 91))
 
         worker_update, worker_params = connection.cursor_instance.executions[3]
         normalized_worker_update = " ".join(worker_update.casefold().split())
@@ -399,8 +403,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         job_update, job_params = connection.cursor_instance.executions[4]
         normalized_job_update = " ".join(job_update.casefold().split())
         self.assertIn("scanned_items = scanned_items + 1", normalized_job_update)
-        self.assertIn("updated_items = updated_items + 1", normalized_job_update)
-        self.assertEqual(job_params, (17,))
+        self.assertIn("updated_items = updated_items + %s", normalized_job_update)
+        self.assertEqual(job_params, (1, 17))
         self.assertEqual(connection.commits, 1)
 
     def test_new_item_candidates_do_not_assign_an_update_schedule(self):
@@ -1072,7 +1076,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(connection.commits, 0)
 
     def test_mark_item_candidate_inactive_updates_flag_and_logs_change(self):
-        connection = FakeConnection(fetchone_rows=[(56,)])
+        connection = FakeConnection(fetchone_rows=[("out_of_stock",)])
         repository = DiscoveryRepository(connection)
         existing_record = DiscoveryItemCandidateRecord(
             store_item_id=56,
@@ -1091,22 +1095,24 @@ class DatabaseRepositoryTests(unittest.TestCase):
         )
 
         self.assertTrue(result.changed)
-        self.assertFalse(existing_record.store_active)
+        self.assertTrue(existing_record.store_active)
+        self.assertEqual(existing_record.availability, "unavailable")
         self.assertEqual(len(connection.cursor_instance.executions), 2)
         update_sql, update_params = connection.cursor_instance.executions[0]
-        self.assertIn("store_active = false", update_sql.casefold())
+        self.assertIn("availability = 'unavailable'", update_sql.casefold())
+        self.assertNotIn("store_active", update_sql.casefold())
         self.assertIn("refreshed_date = now()", update_sql.casefold())
-        self.assertIn("store_active = true", update_sql.casefold())
+        self.assertIn("for update", update_sql.casefold())
         self.assertEqual(update_params, (56,))
         log_sql, log_params = connection.cursor_instance.executions[1]
         self.assertIn("insert into store_item_update_change_log", log_sql.casefold())
-        self.assertEqual(log_params[:4], (99, "run-123", 56, "store_active"))
-        self.assertEqual(json.loads(log_params[4]), True)
-        self.assertEqual(json.loads(log_params[5]), False)
+        self.assertEqual(log_params[:4], (99, "run-123", 56, "availability"))
+        self.assertEqual(json.loads(log_params[4]), "out_of_stock")
+        self.assertEqual(json.loads(log_params[5]), "unavailable")
         self.assertEqual(connection.commits, 1)
 
     def test_mark_item_candidate_inactive_does_not_log_when_already_inactive(self):
-        connection = FakeConnection(fetchone_rows=[])
+        connection = FakeConnection(fetchone_rows=[("unavailable",)])
         repository = DiscoveryRepository(connection)
         existing_record = DiscoveryItemCandidateRecord(
             store_item_id=56,

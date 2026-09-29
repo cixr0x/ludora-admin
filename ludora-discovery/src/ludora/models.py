@@ -175,10 +175,10 @@ class DiscoveryItemCandidateRecord:
     processing_error: str = ""
     store_item_id: int | None = None
     source_url_origin: str | None = None
-    discovery_disabled_reason: str | None = None
+    discovery_hidden_reason: str | None = None
     discovery_duplicate_of_id: int | None = None
     discovery_superseded_by_id: int | None = None
-    discovery_store_active_before_suppression: bool | None = None
+    discovery_visibility_before_suppression: bool | None = None
     discovery_processing_complete: bool = True
 
     def __post_init__(self) -> None:

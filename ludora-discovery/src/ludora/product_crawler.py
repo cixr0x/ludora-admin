@@ -716,7 +716,7 @@ def update_confirmed_store_item_details(
                     trace.log(
                         "item_update.item.removed",
                         **item_trace_fields,
-                        message=f"Product page was removed; marking the store item inactive: {exc}",
+                        message=f"Product page was removed; marking the store item unavailable: {exc}",
                         reason=str(exc),
                     )
                     update_result = repository.mark_item_candidate_inactive(
@@ -726,14 +726,15 @@ def update_confirmed_store_item_details(
                     )
                     if getattr(update_result, "changed", False):
                         records.updated_items += 1
-                    existing_record.store_active = False
+                    existing_record.availability = "unavailable"
+                    existing_record.availability_source = "product_page_unavailable"
                     records.append(existing_record)
                     _persist_store_item_update_progress(repository, job_id, records)
                     trace.log(
                         "item_update.item.completed",
                         **item_trace_fields,
                         changed=bool(getattr(update_result, "changed", False)),
-                        message="Store item marked inactive",
+                        message="Store item marked unavailable",
                         scanned_items=len(records),
                         updated_items=records.updated_items,
                     )

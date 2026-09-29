@@ -44,7 +44,7 @@ AMAZON_PLATFORMS = {"amazon", "amazon_brand"}
 
 class _ClaimedRedirectDeactivated(RuntimeError):
     def __init__(self, *, final_url: str) -> None:
-        super().__init__(f"Redirected store item deactivated: {final_url}")
+        super().__init__(f"Redirected store item made unavailable: {final_url}")
         self.final_url = final_url
 
 
@@ -308,6 +308,8 @@ def _process_claim(
             )
         _log(
             "worker.item.deactivated",
+            message="Store item marked unavailable after redirect",
+            availability="unavailable",
             final_url=exc.final_url,
             source_store_item_id=store_item_id,
             source_url=claim.record.source_url,
@@ -322,7 +324,7 @@ def _process_claim(
             worker_id=worker_id,
             worker_name=WORKER_NAME,
         )
-        _log("worker.item.deactivated", error=str(exc), store_item_id=store_item_id)
+        _log("worker.item.deactivated", message="Store item marked unavailable after removed product", availability="unavailable", error=str(exc), store_item_id=store_item_id)
     except Exception as exc:
         status_code = exc.status_code if isinstance(exc, TransientProductFetchError) else None
         retry_after_seconds = exc.retry_after_seconds if isinstance(exc, TransientProductFetchError) else None
