@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { loadConfig } from './config.js';
 import { createDatabase } from './db.js';
 import { createNodeCatalogImageHasher } from './catalogImageHash.js';
+import { createNodeListingImageQueryHasher } from './listingImageQueryHash.js';
 import { createApp } from './app.js';
 import { createAmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
 import { createOpenAiAmazonTitleExtractionClient } from './amazonTitleExtraction/openAiAmazonTitleExtractionClient.js';
@@ -92,6 +93,11 @@ const catalogImageHasher = createNodeCatalogImageHasher({
   packageDir: config.discoveryRunner.packageDir,
   pythonExecutable: config.discoveryRunner.pythonExecutable
 });
+const listingImageQueryHasher = createNodeListingImageQueryHasher({
+  downloadImage: externalCoverImageOptimizerDependencies.downloadImage,
+  packageDir: config.discoveryRunner.packageDir,
+  pythonExecutable: config.discoveryRunner.pythonExecutable
+});
 externalCoverImageOptimizerDependencies.catalogImageHasher = catalogImageHasher;
 const bggItemImporter = bggClient ? createBggItemImporter(database, bggClient, catalogImageHasher) : undefined;
 const localOperationsClient =
@@ -156,7 +162,10 @@ const itemMatchingService = createItemMatchingService(database, {
   autoListEvaluationService,
   bggClient,
   bggItemImporter,
-  bggMatchCache
+  bggMatchCache,
+  catalogImageHasher,
+  listingImageQueryHasher,
+  imageSimilarityService
 });
 const coverFlatteningWorkflowManager = createCoverFlatteningWorkflowManager(
   database,

@@ -30,6 +30,7 @@ export type ImageSimilarityResult = {
 
 export type ImageSimilarityService = {
   estimate(referenceImageUrl: string, candidateImageUrl: string): Promise<ImageSimilarityResult>;
+  estimateBytes?(referenceImageUrl: string, candidateImage: Buffer): Promise<ImageSimilarityResult>;
 };
 
 export type ImageSimilarityDependencies = {
@@ -48,6 +49,13 @@ export class ImageSimilarityServiceError extends Error {
 
 export function createImageSimilarityService(dependencies: ImageSimilarityDependencies): ImageSimilarityService {
   return {
+    async estimateBytes(referenceImageUrl, candidateImage) {
+      let reference: Buffer;
+      try { reference = await dependencies.downloadImage(referenceImageUrl); }
+      catch (error) { throw new ImageSimilarityServiceError(`Reference image could not be downloaded: ${errorMessage(error)}`, 422); }
+      try { return await dependencies.compareImages(reference, candidateImage); }
+      catch (error) { throw new ImageSimilarityServiceError(`Images could not be compared: ${errorMessage(error)}`, 422); }
+    },
     async estimate(referenceImageUrl, candidateImageUrl) {
       const [referenceDownload, candidateDownload] = await Promise.allSettled([
         dependencies.downloadImage(referenceImageUrl),
@@ -78,11 +86,13 @@ export function createImageSimilarityService(dependencies: ImageSimilarityDepend
 export function createNodeImageSimilarityDependencies({
   downloadImage,
   packageDir,
-  pythonExecutable
+  pythonExecutable,
+  processTimeoutMs = 30_000
 }: {
   downloadImage(url: string): Promise<Buffer>;
   packageDir: string;
   pythonExecutable: string;
+  processTimeoutMs?: number;
 }): ImageSimilarityDependencies {
   return {
     downloadImage,
@@ -104,7 +114,8 @@ export function createNodeImageSimilarityDependencies({
               ...process.env,
               PYTHONPATH: path.join(packageDir, 'src')
             },
-            maxBuffer: 1024 * 1024
+            maxBuffer: 1024 * 1024,
+            timeout: processTimeoutMs, killSignal: 'SIGKILL', windowsHide: true
           }
         );
         return parseImageSimilarityResult(stdout);

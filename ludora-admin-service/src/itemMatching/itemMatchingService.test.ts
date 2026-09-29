@@ -1198,6 +1198,7 @@ describe('item matching service', () => {
       'item_matcher.candidate.loaded',
       'item_matcher.boardgame.confirmed',
       'item_matcher.local_match.start',
+      'item_matcher.local_image.completed',
       'item_matcher.local_match.completed',
       'item_matcher.bgg_match.start',
       'item_matcher.bgg_cache.start',
@@ -1216,7 +1217,7 @@ describe('item matching service', () => {
       'auto_list_evaluation.completed',
       'item_matcher.confirm.completed'
     ]);
-    expect(events[11]?.fields).toMatchObject({
+    expect(traceFields(events, 'item_matcher.ai_match.completed')).toMatchObject({
       bgg_id: 115746,
       candidate_id: 42,
       confidence: 0.83,
@@ -1225,11 +1226,11 @@ describe('item matching service', () => {
       matched_name: 'War of the Ring: Second Edition',
       name_assessment: 'MATCH'
     });
-    expect(events[12]?.fields).toMatchObject({ bgg_id: 115746, candidate_id: 42, validated: true });
-    expect(events[13]?.fields).toMatchObject({ bgg_id: 115746, candidate_id: 42, query_count: 2 });
-    expect(events[16]?.fields).toMatchObject({ bgg_id: 115746, item_id: 88 });
-    expect(events[18]?.fields).toEqual({ item_id: 88, store_item_id: 42 });
-    expect(events[19]?.fields).toEqual({
+    expect(traceFields(events, 'item_matcher.ai_match.validation.completed')).toMatchObject({ bgg_id: 115746, candidate_id: 42, validated: true });
+    expect(traceFields(events, 'item_matcher.ai_match.cache.completed')).toMatchObject({ bgg_id: 115746, candidate_id: 42, query_count: 2 });
+    expect(traceFields(events, 'item_matcher.link.completed')).toMatchObject({ matched_bgg_id: 115746, item_id: 88 });
+    expect(traceFields(events, 'auto_list_evaluation.start')).toEqual({ item_id: 88, store_item_id: 42 });
+    expect(traceFields(events, 'auto_list_evaluation.completed')).toEqual({
       auto_list_eligible: false,
       image_similarity_pass: false,
       image_similarity_score: null,

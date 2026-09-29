@@ -5,16 +5,18 @@ import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import type { BggCachedMatch, BggMatchCache } from '../bgg/bggMatchCache.js';
 import type { BggSearchItem } from '../bgg/bggParser.js';
 import type { Database } from '../db.js';
+import type { CatalogImageHasher } from '../catalogImageHash.js';
+import type { ImageSimilarityService } from '../imageSimilarity/imageSimilarityService.js';
+import type { ListingImageQueryHasher, ListingImageQueryVariant } from '../listingImageQueryHash.js';
+import { rankLocalCatalogMatches, LOCAL_IMAGE_MATCH_THRESHOLDS, type CatalogItemForMatching } from './localCatalogMatcher.js';
 import { nullTraceLogger, type TraceLogger } from '../trace.js';
 import {
   localMatchSearchTokens,
   normalizeTitle,
   normalizeTitleVariants,
   scoreBggThing,
-  scoreLocalItem,
   type BggThingForMatch,
   type DiscoveryCandidateForMatch,
-  type LocalItemForMatch
 } from './itemMatcher.js';
 
 export type ItemMatchCandidateRow = {
@@ -85,6 +87,7 @@ type GeneratedMatchCandidate = {
   matchedName: string;
   rawPayload: unknown;
   source: 'LOCAL' | 'BGG';
+  retainForReview?: boolean;
 };
 
 const matchCandidateSelect = `
@@ -92,10 +95,10 @@ const matchCandidateSelect = `
   match_score, match_reasons, status, raw_payload, created_at, updated_at
 `;
 
-const LOCAL_AUTO_MATCH_SCORE_THRESHOLD = 0.85;
 const BGG_AUTO_MATCH_SCORE_THRESHOLD = 0.9;
 const MAX_LOCAL_MATCH_CANDIDATES = 100;
 const MAX_LIVE_BGG_THING_FETCHES = 10;
+const MAX_NEAREST_IMAGE_ITEMS = 20;
 
 export type ItemMatchingDependencies = {
   aiBggMatchingService?: AiBggMatchingService;
@@ -103,6 +106,9 @@ export type ItemMatchingDependencies = {
   bggClient?: BggClient;
   bggItemImporter?: BggItemImporter;
   bggMatchCache: BggMatchCache;
+  catalogImageHasher?: CatalogImageHasher;
+  listingImageQueryHasher?: ListingImageQueryHasher;
+  imageSimilarityService?: ImageSimilarityService;
 };
 
 export function createItemMatchingService(
@@ -155,7 +161,7 @@ export function createItemMatchingService(
 
       try {
         traceLog(traceLogger, 'item_matcher.local_match.start', { candidate_id: discoveryItemCandidateId });
-        const localMatches = await generateLocalMatches(database, candidate);
+        const localMatches = await generateLocalMatches(database, candidate, dependencies, traceLogger);
         const localMatch = bestAcceptedMatch(localMatches);
         traceLog(traceLogger, 'item_matcher.local_match.completed', {
           best_item_id: localMatch?.itemId ?? null,
@@ -353,14 +359,21 @@ export function createItemMatchingService(
 
     async generateMatchCandidates(discoveryItemCandidateId: number): Promise<ItemMatchCandidateRow[]> {
       const candidate = await loadDiscoveryItemCandidate(database, discoveryItemCandidateId);
-      const localMatches = await generateLocalMatches(database, candidate);
+      const localMatches = await generateLocalMatches(database, candidate, dependencies);
       const bggMatches = hasAcceptedMatch(localMatches)
         ? []
         : await generateBggMatches(candidate, { aiBggMatchingService, bggClient, bggMatchCache });
       const generated = [
         ...localMatches,
         ...bggMatches
-      ].filter((match) => match.accepted || match.matchScore >= 0.3);
+      ].filter((match) => match.accepted || match.matchScore >= 0.3 || match.retainForReview)
+        .sort((left, right) => {
+          const acceptedFirst = Number(right.accepted) - Number(left.accepted);
+          if (acceptedFirst) return acceptedFirst;
+          if (left.source !== right.source) return left.source === 'LOCAL' ? -1 : 1;
+          if (left.source === 'LOCAL' && right.source === 'LOCAL') return localRank(left) - localRank(right);
+          return right.matchScore - left.matchScore;
+        });
 
       await database.query(
         `
@@ -372,7 +385,8 @@ export function createItemMatchingService(
       );
 
       const storedRows: ItemMatchCandidateRow[] = [];
-      for (const match of generated) {
+      const persistRanking = generated.some((entry) => entry.source === 'LOCAL');
+      for (const [index, match] of generated.entries()) {
         const result = await database.query(
           `
           insert into item_match_candidates (
@@ -398,7 +412,9 @@ export function createItemMatchingService(
             match.matchedName,
             match.matchScore,
             JSON.stringify(match.matchReasons),
-            JSON.stringify(match.rawPayload)
+            JSON.stringify(persistRanking
+              ? { ...(match.rawPayload as Record<string, unknown>), candidate_rank: index + 1 }
+              : match.rawPayload)
           ]
         );
         storedRows.push(...(result.rows as ItemMatchCandidateRow[]));
@@ -417,7 +433,13 @@ export function createItemMatchingService(
         `,
         [discoveryItemCandidateId]
       );
-      return result.rows as ItemMatchCandidateRow[];
+      return (result.rows as ItemMatchCandidateRow[]).sort((left, right) => {
+        const leftRank = persistedCandidateRank(left.raw_payload), rightRank = persistedCandidateRank(right.raw_payload);
+        if (leftRank !== null || rightRank !== null) return (leftRank ?? Number.MAX_SAFE_INTEGER) - (rightRank ?? Number.MAX_SAFE_INTEGER)
+          || Number(right.match_score ?? 0) - Number(left.match_score ?? 0);
+        // Preserve the database's legacy score/date order for unranked records.
+        return Number(right.match_score ?? 0) - Number(left.match_score ?? 0);
+      });
     }
   };
 }
@@ -552,7 +574,7 @@ async function loadDiscoveryItemCandidate(database: Database, discoveryItemCandi
   return row;
 }
 
-async function generateLocalMatches(database: Database, candidate: DiscoveryItemCandidateRow): Promise<GeneratedMatchCandidate[]> {
+async function generateLocalMatches(database: Database, candidate: DiscoveryItemCandidateRow, dependencies: ItemMatchingDependencies, traceLogger: TraceLogger = nullTraceLogger): Promise<GeneratedMatchCandidate[]> {
   const normalizedTitleVariants = normalizeTitleVariants(candidate.title);
   const searchTokens = localMatchSearchTokens(discoveryCandidateForMatch(candidate));
   const result = await database.query(
@@ -594,6 +616,7 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
       i.normalized_name_es,
       i.item_type,
       i.bgg_id,
+      i.image_url, i.image_url_es, i.image_phash, i.image_phash_es,
       coalesce((
         select json_agg(distinct ia.alias)
         from item_aliases ia
@@ -620,20 +643,81 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
     [normalizedTitleVariants, searchTokens]
   );
 
-  return result.rows.map((row) => {
-    const item = localItemFromRow(row as Record<string, unknown>);
-    const score = scoreLocalItem(discoveryCandidateForMatch(candidate), item);
+  const ranked = await rankLocalCatalogMatches(
+    { ...discoveryCandidateForMatch(candidate), imageUrl: candidate.image_url },
+    result.rows.map((row) => localItemFromRow(row as Record<string, unknown>)),
+    {
+      catalogImageHasher: dependencies.catalogImageHasher,
+      listingImageQueryHasher: dependencies.listingImageQueryHasher,
+      imageSimilarityService: dependencies.imageSimilarityService,
+      findNearestItems: (variants) => findNearestCatalogImageItems(database, variants),
+      trace: (fields) => traceLog(traceLogger, 'item_matcher.local_image.completed', { candidate_id: candidate.id, ...fields })
+    }
+  );
+  return ranked.map(({ item, accepted, matchReasons, matchScore, evidence }) => {
     return {
-      accepted: score.matchScore >= LOCAL_AUTO_MATCH_SCORE_THRESHOLD,
+      accepted,
       bggId: item.bggId ?? null,
       itemId: item.id,
-      matchReasons: score.matchReasons,
-      matchScore: score.matchScore,
+      matchReasons,
+      matchScore,
       matchedName: item.name,
-      rawPayload: { item },
+      rawPayload: { item, local_match: evidence },
+      retainForReview: evidence.query_variant !== null && evidence.mode !== 'name',
       source: 'LOCAL' as const
     };
   });
+}
+
+async function findNearestCatalogImageItems(database: Database, variants: ListingImageQueryVariant[]): Promise<CatalogItemForMatching[]> {
+  const result = await database.query(`
+    with catalog_image_covers as (
+      select id as item_id, image_phash as image_hash from items
+      where trim(image_url) <> '' and image_phash ~ '^[0-9a-f]{64}$'
+      union all
+      select id as item_id, image_phash_es as image_hash from items
+      where trim(image_url_es) <> '' and image_phash_es ~ '^[0-9a-f]{64}$'
+    ), image_distances as (
+      select covers.item_id, query_variants.radius,
+        bit_count((('x' || covers.image_hash)::bit(256)) # (('x' || query_variants.image_hash)::bit(256))) as distance
+      from catalog_image_covers covers
+      cross join unnest($1::text[], $2::integer[]) as query_variants(image_hash, radius)
+    ), ranked_image_items as (
+      select item_id, min(distance) as best_distance,
+        min(distance) filter (where distance <= radius) as viable_distance
+      from image_distances group by item_id
+    ), shortlisted_items as (
+      (select item_id from ranked_image_items order by best_distance, item_id limit ${MAX_NEAREST_IMAGE_ITEMS})
+      union
+      (select item_id from ranked_image_items where viable_distance is not null
+       order by viable_distance, item_id limit ${MAX_NEAREST_IMAGE_ITEMS})
+    )
+    select i.id, i.canonical_name, i.canonical_name_es, i.normalized_name, i.normalized_name_es,
+      i.item_type, i.bgg_id, i.image_url, i.image_url_es, i.image_phash, i.image_phash_es,
+      coalesce((select json_agg(distinct ia.alias) from item_aliases ia where ia.item_id = i.id), '[]'::json) as aliases,
+      coalesce((
+        select json_agg(distinct publisher_name) from (
+          select p.name as publisher_name from item_publishers ip join publishers p on p.id = ip.publisher_id where ip.item_id = i.id
+          union
+          select pa.alias as publisher_name from item_publishers ip join publisher_aliases pa on pa.publisher_id = ip.publisher_id where ip.item_id = i.id
+        ) item_publisher_names
+      ), '[]'::json) as publishers
+    from shortlisted_items shortlist join items i on i.id = shortlist.item_id
+    join ranked_image_items ranked on ranked.item_id = i.id
+    order by ranked.best_distance, i.id
+  `, [variants.map((variant) => variant.hash), variants.map((variant) => variant.origin === 'raw'
+    ? LOCAL_IMAGE_MATCH_THRESHOLDS.max_raw_hash_distance : LOCAL_IMAGE_MATCH_THRESHOLDS.max_normalized_hash_distance)]);
+  return result.rows.map((row) => localItemFromRow(row as Record<string, unknown>));
+}
+
+function localRank(match: GeneratedMatchCandidate): number {
+  return Number(((match.rawPayload as { local_match?: { rank?: number } }).local_match?.rank) ?? Number.MAX_SAFE_INTEGER);
+}
+
+function persistedCandidateRank(payload: unknown): number | null {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return null;
+  const rank = (payload as Record<string, unknown>).candidate_rank;
+  return typeof rank === 'number' && Number.isSafeInteger(rank) && rank > 0 ? rank : null;
 }
 
 async function generateBggMatches(
@@ -1017,15 +1101,17 @@ function discoveryCandidateForMatch(candidate: DiscoveryItemCandidateRow): Disco
   };
 }
 
-function localItemFromRow(row: Record<string, unknown>): LocalItemForMatch {
-  const item: LocalItemForMatch = {
+function localItemFromRow(row: Record<string, unknown>): CatalogItemForMatching {
+  const item: CatalogItemForMatching = {
     aliases: stringList(row.aliases),
     bggId: numberOrNull(row.bgg_id),
     id: Number(row.id),
     itemType: stringOrNull(row.item_type),
     name: String(row.canonical_name ?? ''),
     normalizedName: String(row.normalized_name ?? ''),
-    publishers: stringList(row.publishers)
+    publishers: stringList(row.publishers),
+    imageUrl: stringOrNull(row.image_url), imageUrlEs: stringOrNull(row.image_url_es),
+    imagePhash: stringOrNull(row.image_phash), imagePhashEs: stringOrNull(row.image_phash_es)
   };
   const nameEs = stringOrNull(row.canonical_name_es)?.trim();
   const normalizedNameEs = stringOrNull(row.normalized_name_es)?.trim();
