@@ -1130,6 +1130,13 @@ describe('fetchRows', () => {
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
+    fetchMock.mockClear();
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ data: result }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    await adminApi.estimateImageSimilarity('https://catalog.test/current', 'https://store.test/current', { includeHashSimilarity: true });
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/image-similarity', {
+      body: JSON.stringify({ reference_image_url: 'https://catalog.test/current', candidate_image_url: 'https://store.test/current', include_hash_similarity: true }),
+      headers: { 'Content-Type': 'application/json' }, method: 'POST'
+    });
   });
 
   it('updates store items with a JSON body', async () => {

@@ -14,29 +14,30 @@ export type ListingImageQueryHashes = {
   // This buffer remains in memory for one attempt; never persist it in JSON.
   imageBytes?: Buffer;
 };
-export type ListingImageQueryHasher = { hashUrl(url: string): Promise<ListingImageQueryHashes> };
+export type ListingImageQueryHasher = {
+  hashUrl(url: string): Promise<ListingImageQueryHashes>;
+  hashBytes?(image: Buffer): Promise<ListingImageQueryHashes>;
+};
 
 export function createNodeListingImageQueryHasher(options: {
   packageDir: string; pythonExecutable: string; downloadImage(url: string): Promise<Buffer>; processTimeoutMs?: number;
 }): ListingImageQueryHasher {
-  return {
-    async hashUrl(url) {
-      const imageBytes = await options.downloadImage(url);
-      if (!imageBytes.length || imageBytes.length > 25 * 1024 * 1024) throw new Error('Listing image is empty or exceeds 25 MB');
-      const stdout = await new Promise<string>((resolve, reject) => {
-        const child = execFile(options.pythonExecutable, ['-m', 'ludora.listing_image_query_hash'], {
-          cwd: options.packageDir,
-          env: { ...process.env, PYTHONPATH: path.join(options.packageDir, 'src'), OPENCV_IO_MAX_IMAGE_PIXELS: '16000000' },
-          windowsHide: true, timeout: options.processTimeoutMs ?? 30_000, killSignal: 'SIGKILL', maxBuffer: 128 * 1024
-        }, (error, stdout, stderr) => {
-          if (error) reject(new Error(stderr.trim() || error.message)); else resolve(stdout);
-        });
-        child.stdin?.on('error', () => { /* execFile's callback reports process failure. */ });
-        child.stdin?.end(imageBytes);
+  async function hashBytes(imageBytes: Buffer): Promise<ListingImageQueryHashes> {
+    if (!imageBytes.length || imageBytes.length > 25 * 1024 * 1024) throw new Error('Listing image is empty or exceeds 25 MB');
+    const stdout = await new Promise<string>((resolve, reject) => {
+      const child = execFile(options.pythonExecutable, ['-m', 'ludora.listing_image_query_hash'], {
+        cwd: options.packageDir,
+        env: { ...process.env, PYTHONPATH: path.join(options.packageDir, 'src'), OPENCV_IO_MAX_IMAGE_PIXELS: '16000000' },
+        windowsHide: true, timeout: options.processTimeoutMs ?? 30_000, killSignal: 'SIGKILL', maxBuffer: 128 * 1024
+      }, (error, stdout, stderr) => {
+        if (error) reject(new Error(stderr.trim() || error.message)); else resolve(stdout);
       });
-      return { ...parseListingImageQueryHashes(stdout), imageBytes };
-    }
-  };
+      child.stdin?.on('error', () => { /* execFile's callback reports process failure. */ });
+      child.stdin?.end(imageBytes);
+    });
+    return { ...parseListingImageQueryHashes(stdout), imageBytes };
+  }
+  return { hashBytes, hashUrl: async (url) => hashBytes(await options.downloadImage(url)) };
 }
 
 export function parseListingImageQueryHashes(stdout: string): ListingImageQueryHashes {

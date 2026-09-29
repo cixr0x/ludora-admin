@@ -147,11 +147,16 @@ const localCoverWorkflowManager = createLocalCoverWorkflowManager(
   { ...createNodeLocalCoverWorkflowDependencies(config.localCoverWorkflow), catalogImageHasher }
 );
 const imageSimilarityService = createImageSimilarityService(
-  createNodeImageSimilarityDependencies({
+  { ...createNodeImageSimilarityDependencies({
     downloadImage: externalCoverImageOptimizerDependencies.downloadImage,
     packageDir: config.discoveryRunner.packageDir,
     pythonExecutable: config.discoveryRunner.pythonExecutable
-  })
+  }), listingImageQueryHasher, catalogImageHasher: createNodeCatalogImageHasher({
+    downloadImage: externalCoverImageOptimizerDependencies.downloadImage,
+    packageDir: config.discoveryRunner.packageDir,
+    pythonExecutable: config.discoveryRunner.pythonExecutable,
+    maxDecodePixels: 16_000_000
+  }) }
 );
 const autoListEvaluationService = createAutoListEvaluationService(database, autoListEvaluationClient, {
   imageSimilarityService,

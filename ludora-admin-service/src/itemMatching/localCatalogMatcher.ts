@@ -1,4 +1,5 @@
 import { CATALOG_IMAGE_HASH_METHOD, isCatalogImageHash, type CatalogImageHasher } from '../catalogImageHash.js';
+import { imageHashDistance } from '../imageHashDistance.js';
 import type { ImageSimilarityResult, ImageSimilarityService } from '../imageSimilarity/imageSimilarityService.js';
 import { parseListingImageQueryHashes, type ListingImageQueryHashes, type ListingImageQueryHasher, type ListingImageQueryVariant } from '../listingImageQueryHash.js';
 import { scoreLocalItem, type DiscoveryCandidateForMatch, type LocalItemForMatch } from './itemMatcher.js';
@@ -147,7 +148,7 @@ function compareItem(match: RankedLocalMatch, variants: ListingImageQueryVariant
     if (!cover.url?.trim() || !isCatalogImageHash(cover.hash)) continue;
     for (const variant of variants) pairs.push({
       field: cover.field, url: cover.url.trim(), hash: cover.hash, variant,
-      distance: hammingDistance(cover.hash, variant.hash),
+      distance: imageHashDistance(cover.hash, variant.hash),
       radius: variant.origin === 'raw' ? LOCAL_IMAGE_MATCH_THRESHOLDS.max_raw_hash_distance : LOCAL_IMAGE_MATCH_THRESHOLDS.max_normalized_hash_distance
     });
   }
@@ -178,10 +179,5 @@ function finish(entries: ComparedItem[], selected: RankedLocalMatch | null, comm
 
 function observedOrder(left: ComparedItem, right: ComparedItem): number {
   return (left.observed?.distance ?? 257) - (right.observed?.distance ?? 257);
-}
-function hammingDistance(left: string, right: string): number {
-  let different = BigInt(`0x${left}`) ^ BigInt(`0x${right}`), count = 0;
-  while (different !== 0n) { different &= different - 1n; count++; }
-  return count;
 }
 function errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }

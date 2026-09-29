@@ -9,13 +9,14 @@ export type CatalogImageHasher = {
 };
 
 export function createNodeCatalogImageHasher(options: {
-  packageDir: string; pythonExecutable: string; downloadImage(url: string): Promise<Buffer>;
+  packageDir: string; pythonExecutable: string; downloadImage(url: string): Promise<Buffer>; maxDecodePixels?: number;
 }): CatalogImageHasher {
   async function hashBytes(image: Buffer): Promise<string> {
     const stdout = await new Promise<string>((resolve, reject) => {
       const child = execFile(options.pythonExecutable, ['-m', 'ludora.image_phash'], {
         cwd: options.packageDir,
-        env: { ...process.env, PYTHONPATH: path.join(options.packageDir, 'src') },
+        env: { ...process.env, PYTHONPATH: path.join(options.packageDir, 'src'),
+          ...(options.maxDecodePixels ? { OPENCV_IO_MAX_IMAGE_PIXELS: String(options.maxDecodePixels) } : {}) },
         windowsHide: true,
         timeout: 30_000,
         maxBuffer: 64 * 1024

@@ -28,6 +28,14 @@ Unresolved close names, missing images/hashes, download/decode/normalization/que
 
 These radii are provisional retrieval limits, not identity probabilities. A read-only six-item comparison recovered four cleaner pairs with existing silhouette normalization (14-36 bits); this is **not full-catalog precision/recall validation**. Reference artifacts are `.worktrees/task/matching/real-image-comparison-results.json`, `silhouette-probe-results.json`, and `normalized-hash-ranking-probe.json`. Crop, perspective, poor backgrounds, unflattened catalog images, editions and bundles can still miss or share artwork. A high SIFT score can identify artwork inside a larger product photo; it does not by itself establish equivalent edition or bundle contents.
 
+## On-demand review comparison
+
+Listing Candidates cover comparison also displays fingerprint similarity for the **currently displayed** catalog and store covers. It opts into `POST /admin/image-similarity` with `include_hash_similarity: true`. The original two downloads are shared by SIFT and hashing; the catalog reference is canonically hashed from its original bytes and the listing uses raw plus the existing bounded flattened variants. This pair inspection works for historical MANUAL/BGG/name-only rows without stored hashes or a backfill, and performs no database calls or writes.
+
+Hash similarity is `100 * (256 - differing bits) / 256`, shown to two decimals. The best pair variant is labeled Raw photo or Flattened cover, with the differing-bit count; expandable details retain the raw photo score and normalization status. The best display score can use a flattened variant regardless of matching radii because this is inspection, not an automatic match decision. It is not an identity probability or a replacement for SIFT/name scores. Hash failures preserve any available SIFT result and display Unavailable; legacy responses and missing images also display Unavailable. Changed cover URLs trigger a fresh comparison and stale responses are ignored.
+
+Default endpoint calls retain their existing request/response and do no new hashing. Review hashing keeps the existing 25 MiB input, 16 MP decode, 2048 detector input, 1200 flattened output, two-face and 30-second process limits. The 16 MP reference decode cap is configured only on the review hasher; catalog storage writers keep their prior behavior and canonical method.
+
 ## Rollout
 
 1. Review `database/patches/20260928_001_add_item_image_phashes.sql` and obtain explicit approval for its exact DDL before applying it. Do not apply `schema.sql`; it is a reference snapshot.

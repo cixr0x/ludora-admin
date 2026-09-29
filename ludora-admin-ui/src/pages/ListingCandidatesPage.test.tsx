@@ -1570,13 +1570,15 @@ describe('ListingCandidatesPage', () => {
     const similarityStatus = await within(coverComparison).findByRole('status', { name: 'Image similarity' });
     expect(similarityStatus).toHaveTextContent('Image similarity: 84.25 / 100');
     expect(similarityStatus).toHaveTextContent('Compared with Spanish item image · 42 geometric inliers');
+    expect(within(coverComparison).getByRole('status', { name: 'Hash similarity' })).toHaveTextContent('Hash similarity: Unavailable');
     const similarityRequest = fetchMock.mock.calls.find(
       ([requestInput, requestInit]) =>
         pathOf(String(requestInput)) === '/admin/image-similarity' && requestInit?.method === 'POST'
     );
     expect(JSON.parse(String(similarityRequest?.[1]?.body))).toEqual({
       reference_image_url: 'https://images.example/cafe-barista.jpg',
-      candidate_image_url: 'https://store.mx/cafe-barista.jpg'
+      candidate_image_url: 'https://store.mx/cafe-barista.jpg',
+      include_hash_similarity: true
     });
     const translationStatus = within(coverComparison).getByRole('status', { name: 'Translation generated' });
     expect(translationStatus).toHaveTextContent('Translation generated');

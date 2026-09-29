@@ -3,6 +3,9 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { CATALOG_IMAGE_HASH_METHOD, type CatalogImageHasher } from '../catalogImageHash.js';
+import type { ListingImageQueryHasher } from '../listingImageQueryHash.js';
+import { compareHashSimilarity, type HashSimilarityResult } from './hashSimilarity.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -22,6 +25,7 @@ export type ImageSimilarityDiagnostics = {
 };
 
 export type ImageSimilarityResult = {
+  hash_similarity?: HashSimilarityResult;
   score: number;
   method: 'sift_homography_v1';
   matched_region: Array<{ x: number; y: number }> | null;
@@ -29,13 +33,15 @@ export type ImageSimilarityResult = {
 };
 
 export type ImageSimilarityService = {
-  estimate(referenceImageUrl: string, candidateImageUrl: string): Promise<ImageSimilarityResult>;
+  estimate(referenceImageUrl: string, candidateImageUrl: string, options?: { includeHashSimilarity?: boolean }): Promise<ImageSimilarityResult>;
   estimateBytes?(referenceImageUrl: string, candidateImage: Buffer): Promise<ImageSimilarityResult>;
 };
 
 export type ImageSimilarityDependencies = {
   compareImages(reference: Buffer, candidate: Buffer): Promise<ImageSimilarityResult>;
   downloadImage(url: string): Promise<Buffer>;
+  catalogImageHasher?: Pick<CatalogImageHasher, 'hashBytes'>;
+  listingImageQueryHasher?: ListingImageQueryHasher;
 };
 
 export class ImageSimilarityServiceError extends Error {
@@ -56,7 +62,7 @@ export function createImageSimilarityService(dependencies: ImageSimilarityDepend
       try { return await dependencies.compareImages(reference, candidateImage); }
       catch (error) { throw new ImageSimilarityServiceError(`Images could not be compared: ${errorMessage(error)}`, 422); }
     },
-    async estimate(referenceImageUrl, candidateImageUrl) {
+    async estimate(referenceImageUrl, candidateImageUrl, options) {
       const [referenceDownload, candidateDownload] = await Promise.allSettled([
         dependencies.downloadImage(referenceImageUrl),
         dependencies.downloadImage(candidateImageUrl)
@@ -75,12 +81,29 @@ export function createImageSimilarityService(dependencies: ImageSimilarityDepend
       }
 
       try {
-        return await dependencies.compareImages(referenceDownload.value, candidateDownload.value);
+        const visual = dependencies.compareImages(referenceDownload.value, candidateDownload.value);
+        if (!options?.includeHashSimilarity) return await visual;
+        const [result, hashSimilarity] = await Promise.all([
+          visual, estimateHashSimilarity(dependencies, referenceDownload.value, candidateDownload.value)
+        ]);
+        return { ...result, hash_similarity: hashSimilarity };
       } catch (error) {
         throw new ImageSimilarityServiceError(`Images could not be compared: ${errorMessage(error)}`, 422);
       }
     }
   };
+}
+
+async function estimateHashSimilarity(dependencies: ImageSimilarityDependencies, reference: Buffer, candidate: Buffer): Promise<HashSimilarityResult> {
+  try {
+    if (!dependencies.catalogImageHasher || !dependencies.listingImageQueryHasher?.hashBytes) throw new Error('Hash comparison is not configured');
+    const [referenceHash, query] = await Promise.all([
+      dependencies.catalogImageHasher.hashBytes(reference), dependencies.listingImageQueryHasher.hashBytes(candidate)
+    ]);
+    return compareHashSimilarity(referenceHash, query);
+  } catch (error) {
+    return { status: 'unavailable', method: CATALOG_IMAGE_HASH_METHOD, error: errorMessage(error) };
+  }
 }
 
 export function createNodeImageSimilarityDependencies({

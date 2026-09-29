@@ -12,7 +12,13 @@ export function createImageSimilarityRouter(service: ImageSimilarityService): Ro
     try {
       const referenceImageUrl = requiredHttpUrl(request.body, 'reference_image_url');
       const candidateImageUrl = requiredHttpUrl(request.body, 'candidate_image_url');
-      response.json({ data: await service.estimate(referenceImageUrl, candidateImageUrl) });
+      const includeHashSimilarity = request.body?.include_hash_similarity;
+      if (includeHashSimilarity !== undefined && typeof includeHashSimilarity !== 'boolean') {
+        throw httpError(400, 'include_hash_similarity must be a boolean');
+      }
+      response.json({ data: includeHashSimilarity === true
+        ? await service.estimate(referenceImageUrl, candidateImageUrl, { includeHashSimilarity: true })
+        : await service.estimate(referenceImageUrl, candidateImageUrl) });
     } catch (error) {
       next(asHttpError(error));
     }

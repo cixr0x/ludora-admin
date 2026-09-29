@@ -216,6 +216,7 @@ export type AcceptedCoverFlattening = {
 };
 
 export type ImageSimilarityResult = {
+  hash_similarity?: HashSimilarityResult;
   score: number;
   method: 'sift_homography_v1';
   matched_region: Array<{ x: number; y: number }> | null;
@@ -234,6 +235,12 @@ export type ImageSimilarityResult = {
     homography_valid: boolean;
   };
 };
+
+export type HashSimilarityResult = {
+  status: 'ready'; method: 'phash_dct256_v1'; score: number; distance: number;
+  origin: 'raw' | 'box_silhouette'; raw: { score: number; distance: number };
+  variant_count: number; normalization_status: 'completed' | 'no_faces' | 'error';
+} | { status: 'unavailable'; method: 'phash_dct256_v1'; error: string };
 
 export type OptimizedCoverImage = {
   applied: boolean;
@@ -709,10 +716,11 @@ export const adminApi = {
   updateItemCandidate: (id: string, input: ItemCandidateInput) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`, 'PATCH', input),
   getItem: (id: string) => fetchData<AdminRecord>(`/items/${encodeURIComponent(id)}`),
-  estimateImageSimilarity: (referenceImageUrl: string, candidateImageUrl: string) =>
+  estimateImageSimilarity: (referenceImageUrl: string, candidateImageUrl: string, options?: { includeHashSimilarity?: boolean }) =>
     sendJson<ImageSimilarityResult>('/admin/image-similarity', 'POST', {
       reference_image_url: referenceImageUrl,
-      candidate_image_url: candidateImageUrl
+      candidate_image_url: candidateImageUrl,
+      ...(options?.includeHashSimilarity ? { include_hash_similarity: true } : {})
     }),
   getItemLinkedCandidates: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/candidates`),
   getItemRelationships: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/relationships`),
