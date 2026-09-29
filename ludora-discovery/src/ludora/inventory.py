@@ -34,6 +34,15 @@ class ItemCandidateRepository(Protocol):
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         ...
 
+    def observe_discovery_pair(self, store_id: int | None, discovered_url: str, target_url: str) -> bool:
+        ...
+
+    def prepare_discovery_pair(self, record: DiscoveryItemCandidateRecord) -> object | None:
+        ...
+
+    def complete_discovery_pair(self, candidate_id: int) -> bool:
+        ...
+
     def list_confirmed_boardgame_item_candidates(
         self,
         limit: int | None = None,

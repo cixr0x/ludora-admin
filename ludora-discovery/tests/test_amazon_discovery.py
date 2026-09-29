@@ -27,6 +27,15 @@ class FakeRepository:
         self.exists_checks.append((store_id, source_url))
         return (store_id, source_url) in self.existing_urls
 
+    def observe_discovery_pair(self, store_id, discovered_url, target_url):
+        return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
+
+    def prepare_discovery_pair(self, record):
+        return self.upsert_item_candidate(record)
+
+    def complete_discovery_pair(self, candidate_id):
+        return True
+
     def upsert_item_candidate(self, record):
         self.item_records.append(record)
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="PENDING", item_id=None, should_process=True)
@@ -79,8 +88,9 @@ class AmazonDiscoveryTests(unittest.TestCase):
         )
 
         self.assertEqual(detail_requests, [redirected_url, valid_url, failed_url, failed_url, failed_url])
-        self.assertEqual([record.source_url for record in records], [redirected_url, valid_url])
-        self.assertEqual([record.source_url for record in repository.item_records], [redirected_url, valid_url])
+        self.assertEqual([record.source_url for record in records], [final_url, valid_url])
+        self.assertEqual([record.source_url_origin for record in records], [redirected_url, None])
+        self.assertEqual([record.source_url for record in repository.item_records], [final_url, valid_url])
         self.assertEqual(
             [fields for event, fields in trace.entries if event == "amazon_inventory.crawl.completed_with_skips"],
             [{
@@ -124,8 +134,9 @@ class AmazonDiscoveryTests(unittest.TestCase):
         )
 
         self.assertEqual(detail_requests, [source_url])
-        self.assertEqual([record.source_url for record in records], [source_url])
-        self.assertEqual([record.source_url for record in repository.item_records], [source_url])
+        self.assertEqual([record.source_url for record in records], [final_url])
+        self.assertEqual([record.source_url_origin for record in records], [source_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [final_url])
         self.assertFalse(any(event == "amazon_inventory.crawl.completed_with_skips" for event, _ in trace.entries))
 
     def test_redirected_amazon_pages_still_require_valid_product_and_matching_asin(self):
@@ -1074,13 +1085,15 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(repository.item_records), 5)
         self.assertNotIn("page=6", " ".join(fetched_urls))
 
-    def test_skips_existing_asins_before_fetching_details(self):
+    def test_resolves_existing_asins_before_skipping_extraction(self):
         product_url = "https://www.amazon.com.mx/dp/B0DZL3YFC5"
         repository = FakeRepository(existing_urls={(12, product_url)})
         fetched_urls = []
 
         def fetcher(url):
             fetched_urls.append(url)
+            if "/dp/" in url:
+                return FetchResult(url=url, text='<span id="productTitle">Catfe</span><input id="add-to-cart-button"><span>B0DZL3YFC5</span>')
             return FetchResult(
                 url=url,
                 text='<a href="/Compa%C3%B1%C3%ADa-Juegos-Catfe/dp/B0DZL3YFC5?ref_=ast_sto_dp">Catfé</a>',
@@ -1096,7 +1109,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(records, [])
         self.assertEqual(repository.exists_checks, [(12, product_url)])
-        self.assertEqual(len(fetched_urls), 1)
+        self.assertEqual(len(fetched_urls), 2)
 
 
 def _page_number(url):

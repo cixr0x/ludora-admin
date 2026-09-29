@@ -118,6 +118,7 @@ def confirmed_store_item_row(*, store_item_id: int = 501, store_id: int = 12) ->
         None,
         "",
         store_item_id,
+        None, None, None, None, None, True,
     )
 
 
@@ -575,10 +576,10 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         result = repository.upsert_item_candidate(record)
 
-        sql, params = connection.cursor_instance.executions[1]
+        sql, params = connection.cursor_instance.executions[2]
         self.assertEqual(sql.count("%s"), len(params))
         self.assertIn("insert into store_items", sql.casefold())
-        self.assertNotIn("store_active", sql.casefold())
+        self.assertIn("store_active", sql.casefold())
         self.assertNotIn("on conflict (store_id, source_url)", sql.casefold())
         self.assertNotIn("title = excluded.title", sql.casefold())
         self.assertNotIn("on conflict (store_id, source_url, title)", sql.casefold())
@@ -651,7 +652,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
 
         repository.upsert_item_candidate(record)
 
-        _sql, params = connection.cursor_instance.executions[1]
+        _sql, params = connection.cursor_instance.executions[2]
         self.assertEqual(
             json.loads(params[26]),
             {
@@ -1164,8 +1165,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(result.candidate_id, 55)
         self.assertFalse(result.should_process)
         self.assertFalse(result.created)
-        self.assertEqual(len(connection.cursor_instance.executions), 2)
-        sql, params = connection.cursor_instance.executions[1]
+        self.assertEqual(len(connection.cursor_instance.executions), 3)
+        sql, params = connection.cursor_instance.executions[2]
         normalized_sql = sql.casefold()
         self.assertIn("update store_items", normalized_sql)
         self.assertIn("last_seen_at = now()", normalized_sql)
@@ -1195,8 +1196,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertFalse(result.should_process)
         self.assertFalse(result.created)
         self.assertEqual(result.item_id, 7)
-        self.assertEqual(len(connection.cursor_instance.executions), 2)
-        candidate_sql, candidate_params = connection.cursor_instance.executions[1]
+        self.assertEqual(len(connection.cursor_instance.executions), 3)
+        candidate_sql, candidate_params = connection.cursor_instance.executions[2]
         self.assertIn("update store_items", candidate_sql.casefold())
         self.assertIn("raw_price = %s", candidate_sql.casefold())
         self.assertEqual(candidate_params[18], "LISTED")
@@ -1214,7 +1215,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("from store_items", normalized_sql)
         self.assertIn("store_id is not distinct from %s", normalized_sql)
         self.assertIn("source_url = %s", normalized_sql)
-        self.assertEqual(params, (12, "https://example.mx/products/catan"))
+        self.assertEqual(params, (12, "https://example.mx/products/catan", None))
         self.assertEqual(connection.commits, 0)
 
     def test_lists_confirmed_boardgame_item_candidates_for_updates(self):
@@ -1264,6 +1265,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
                         "2026-05-01T00:00:00Z",
                         "",
                         56,
+                        None, None, None, None, None, True,
                     )
                 ]
             ]

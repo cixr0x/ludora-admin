@@ -23,6 +23,27 @@ import type { StoreItemUpdateScheduleManager } from './storeItemUpdateScheduleMa
 import { StoreItemUpdateScheduleConflictError } from './storeItemUpdateScheduleService.js';
 
 describe('ludora admin service', () => {
+  it.each([
+    ['23505', 'store_items_active_target_uidx', 'Another active record already represents this target URL in this store. Disable it before activating this record.'],
+    ['23514', 'store_items_discovery_pair_identity_guard', 'Discovery URL-pair identity cannot be edited; discover the new source/target pair instead.']
+  ])('reports discovery identity conflict %s %s clearly', async (code, constraint, message) => {
+    const database: Database = {
+      query: async () => { throw Object.assign(new Error('database conflict'), { code, constraint }); }
+    };
+    const response = await request(createApp({ database })).get('/discovery/listings');
+    expect(response.status).toBe(409);
+    expect(response.body.error.message).toBe(message);
+  });
+
+  it('keeps unrelated database uniqueness errors as server errors', async () => {
+    const database: Database = {
+      query: async () => { throw Object.assign(new Error('unrelated conflict'), { code: '23505', constraint: 'other_index' }); }
+    };
+    const response = await request(createApp({ database })).get('/discovery/listings');
+    expect(response.status).toBe(500);
+    expect(response.body.error.message).toBe('unrelated conflict');
+  });
+
   const normalizeSql = (sql: string): string => sql.replace(/\s+/g, ' ').trim().toLowerCase();
   const authOptions = {
     cookieName: 'ludora_admin_session',

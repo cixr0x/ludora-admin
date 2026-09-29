@@ -150,6 +150,15 @@ const jsonErrorHandler: ErrorRequestHandler = (error, _request, response, _next)
     return;
   }
 
+  const databaseError = error as { code?: string; constraint?: string };
+  if (databaseError.code === '23505' && databaseError.constraint === 'store_items_active_target_uidx') {
+    response.status(409).json({ error: { message: 'Another active record already represents this target URL in this store. Disable it before activating this record.' } });
+    return;
+  }
+  if (databaseError.code === '23514' && databaseError.constraint === 'store_items_discovery_pair_identity_guard') {
+    response.status(409).json({ error: { message: 'Discovery URL-pair identity cannot be edited; discover the new source/target pair instead.' } });
+    return;
+  }
   const message = error instanceof Error ? error.message : 'Internal server error';
   const httpError = error as HttpError;
   const status = typeof httpError.status === 'number' ? httpError.status : 500;

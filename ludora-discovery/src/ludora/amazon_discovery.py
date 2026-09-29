@@ -9,6 +9,7 @@ from html.parser import HTMLParser
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
 from ludora.browser_fetch import fetch_product_detail_with_browser
+from ludora.discovery_pairs import discovery_url_pair
 from ludora.cancellation import CancellationToken, raise_if_cancelled
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import _collapse_text, _extract_price
@@ -18,6 +19,7 @@ from ludora.product_crawler import (
     ItemCandidateProcessor,
     ItemCandidateRepository,
     ItemClassifier,
+    _valid_discovery_response,
 )
 from ludora.supervised_browser import BrowserFetchFailed
 from ludora.trace import NullTraceLogger, TraceLogger
@@ -233,15 +235,6 @@ def _crawl_amazon_search_inventory(
                     if asin in seen_asins:
                         continue
                     seen_asins.add(asin)
-                    if repository.item_candidate_exists(listing_candidate.store_id, listing_candidate.source_url):
-                        trace.log(
-                            "amazon_inventory.candidate.skipped_existing",
-                            source_url=listing_candidate.source_url,
-                            store_id=listing_candidate.store_id,
-                            title=listing_candidate.title,
-                        )
-                        continue
-
                     trace.log(
                         "amazon_inventory.candidate.detail_fetch.start",
                         source_url=listing_candidate.source_url,
@@ -291,13 +284,23 @@ def _crawl_amazon_search_inventory(
                         if resume_in_seconds > 0:
                             _wait_for_amazon_retry(resume_in_seconds, cancellation_token)
                         continue
+                    if not _valid_discovery_response(fetched_detail, listing_candidate.source_url, amazon_detail_request=True):
+                        skipped_detail_urls.append(listing_candidate.source_url)
+                        trace.log("amazon_inventory.candidate.detail_fetch.invalid_target", source_url=listing_candidate.source_url, final_url=fetched_detail.url, store_id=store_id)
+                        continue
+                    origin, target = discovery_url_pair(listing_candidate.source_url, fetched_detail.url)
+                    if repository.observe_discovery_pair(listing_candidate.store_id, origin or target, target):
+                        trace.log("amazon_inventory.candidate.skipped_existing", source_url=target, source_url_origin=origin, store_id=listing_candidate.store_id, title=listing_candidate.title)
+                        continue
                     detail_candidate = _extract_amazon_detail_candidate(
                         html=fetched_detail.text,
-                        product_url=listing_candidate.source_url,
+                        product_url=target,
                         store_id=store_id,
                         source_listing_url=listing_url,
                         search_title=listing_candidate.title,
                     )
+                    detail_candidate.source_url_origin = origin
+                    detail_candidate.source_url = target
                     trace.log(
                         "amazon_inventory.candidate.detail_fetch.completed",
                         source_url=detail_candidate.source_url,
@@ -319,7 +322,7 @@ def _crawl_amazon_search_inventory(
                     raise_if_cancelled(cancellation_token)
                     _apply_item_title_extractor(detail_candidate, item_title_extractor)
                     item_classifier(detail_candidate)
-                    upsert_result = repository.upsert_item_candidate(detail_candidate)
+                    upsert_result = repository.prepare_discovery_pair(detail_candidate)
                     candidate_id = getattr(upsert_result, "candidate_id", None)
                     trace.log(
                         "amazon_inventory.candidate.upsert.completed",
@@ -357,6 +360,8 @@ def _crawl_amazon_search_inventory(
                             store_id=detail_candidate.store_id,
                             title=detail_candidate.title,
                         )
+                    if candidate_id is not None:
+                        repository.complete_discovery_pair(int(candidate_id))
                     records.append(detail_candidate)
                     if limit is not None and len(records) >= limit:
                         _log_amazon_detail_skips(skipped_detail_urls, records=records, store_id=store_id, trace=trace)

@@ -19,6 +19,24 @@ def patches_path() -> Path:
 
 
 class SchemaTests(unittest.TestCase):
+    def test_discovery_redirect_pair_patch_preserves_records_and_active_intent(self):
+        patch = (patches_path() / "20260928_001_discovery_redirect_pairs.sql").read_text(encoding="utf-8")
+        normalized = " ".join(patch.casefold().split())
+        self.assertIn("add column if not exists source_url_origin text", normalized)
+        self.assertIn("discovery_processing_complete boolean not null default true", normalized)
+        self.assertIn("drop constraint if exists store_items_store_id_source_url_key", normalized)
+        self.assertIn("on store_items (store_id, coalesce(source_url_origin, ''), source_url)", normalized)
+        self.assertIn("where store_id is not null and store_active = true and listing_status <> 'rejected'", normalized)
+        self.assertNotIn("delete from store_items", normalized)
+        self.assertNotIn("update store_items set source_url_origin", normalized)
+        self.assertIn("discovery_disabled_reason is not null and discovery_disabled_reason in", normalized)
+        self.assertIn("before update of store_active", normalized)
+        self.assertIn("new.discovery_store_active_before_suppression := new.store_active", normalized)
+        self.assertIn("new.store_active := false", normalized)
+        self.assertIn("new.discovery_duplicate_of_id is not distinct from old.discovery_duplicate_of_id", normalized)
+        self.assertIn("store_items_discovery_pair_identity_guard", normalized)
+        self.assertNotIn("pg_advisory", normalized)
+
     def test_daily_update_schedule_patch_is_sequential_and_nullable(self):
         patches = patches_path()
         patch_names = sorted(path.name for path in patches.glob("*.sql"))
@@ -421,7 +439,8 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("update store_items set listing_status = 'pending' where listing_status is null", schema)
         self.assertNotIn("update store_items set listing_status = 'pending';", schema)
         self.assertIn("alter table if exists store_items drop column if exists status", schema)
-        self.assertIn("unique (store_id, source_url)", item_candidate_table)
+        self.assertNotIn("unique (store_id, source_url)", item_candidate_table)
+        self.assertIn("store_items_discovery_url_pair_uidx", schema)
         self.assertIn(
             "alter table if exists store_items drop constraint if exists discovery_item_candidates_store_id_source_url_title_key",
             schema,

@@ -137,6 +137,15 @@ class DiscoveryRepository:
         self.exists_checks.append((store_id, source_url))
         return (store_id, source_url) in self.existing_urls
 
+    def observe_discovery_pair(self, store_id, discovered_url, target_url):
+        return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
+
+    def prepare_discovery_pair(self, record):
+        return self.upsert_item_candidate(record)
+
+    def complete_discovery_pair(self, candidate_id):
+        return True
+
     def upsert_item_candidate(self, record):
         self.records.append(record)
         return None
@@ -275,7 +284,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
         browser_fetcher.assert_not_called()
         self.assertEqual(before_product_request.call_args_list, [call(product_url)])
 
-    def test_existing_shopify_sitemap_candidate_is_checked_before_graphql(self):
+    def test_existing_shopify_sitemap_candidate_is_checked_after_graphql(self):
         store_url = "https://tienda.example.mx/"
         product_url = PRODUCT_URL.split("?")[0]
         repository = DiscoveryRepository(existing_urls={(31, product_url)})
@@ -283,7 +292,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=[product_url],
-        ), patch("ludora.product_crawler.fetch_shopify_storefront_product") as fetch_product:
+        ), patch("ludora.product_crawler.fetch_shopify_storefront_product", return_value=FetchResult(url=GRAPHQL_ENDPOINT, text=json.dumps({"data": {"product": _shopify_product()}}))) as fetch_product:
             records = crawl_store_product_details(
                 store_url,
                 31,
@@ -294,7 +303,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
 
         self.assertEqual(records, [])
         self.assertEqual(repository.exists_checks, [(31, product_url)])
-        fetch_product.assert_not_called()
+        fetch_product.assert_called_once()
 
     def test_null_shopify_graphql_product_is_omitted_and_the_store_continues(self):
         first_url = PRODUCT_URL.split("?")[0]

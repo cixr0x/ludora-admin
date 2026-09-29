@@ -445,6 +445,13 @@ class _StoreItemDiscoveryTrackingRepository:
 
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         result = self.repository.upsert_item_candidate(record)
+        return self._track_upsert(record, result)
+
+    def prepare_discovery_pair(self, record: DiscoveryItemCandidateRecord) -> object | None:
+        result = self.repository.prepare_discovery_pair(record)
+        return self._track_upsert(record, result)
+
+    def _track_upsert(self, record: DiscoveryItemCandidateRecord, result: object | None) -> object | None:
         if getattr(result, "created", False):
             self.new_items += 1
         self.items_discovered += 1

@@ -111,6 +111,15 @@ class FakeRepository:
         self.exists_checks.append((store_id, source_url))
         return (store_id, source_url) in self.existing_urls
 
+    def observe_discovery_pair(self, store_id, discovered_url, target_url):
+        return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
+
+    def prepare_discovery_pair(self, record):
+        return self.upsert_item_candidate(record)
+
+    def complete_discovery_pair(self, candidate_id):
+        return True
+
     def upsert_item_candidate(self, record):
         self.item_records.append(record)
         return self.upsert_result
@@ -215,7 +224,7 @@ class InventoryTests(unittest.TestCase):
         self.assertFalse(_should_retry_detail_with_browser(detail, listing))
         self.assertTrue(_should_retry_detail_with_browser(detail, listing, check_title_overlap=True))
 
-    def test_discovery_skips_static_redirect_and_continues_with_next_product(self):
+    def test_discovery_records_static_redirect_and_continues_with_next_product(self):
         redirected_url = "https://example.mx/producto/old"
         target_url = "https://example.mx/product/new"
         valid_url = "https://example.mx/product/catan"
@@ -232,14 +241,15 @@ class InventoryTests(unittest.TestCase):
         ), patch("ludora.product_crawler.fetch_html", side_effect=fetch_detail):
             records = crawl_store_product_details("https://example.mx/", 12, repository, trace_logger=trace)
 
-        self.assertEqual([record.source_url for record in records], [valid_url])
-        self.assertEqual([record.source_url for record in repository.item_records], [valid_url])
+        self.assertEqual([record.source_url for record in records], [target_url, valid_url])
+        self.assertEqual([record.source_url_origin for record in records], [redirected_url, None])
+        self.assertEqual([record.source_url for record in repository.item_records], [target_url, valid_url])
         self.assertEqual(
             [fields for event, fields in trace.events if event == "inventory.candidate.detail_fetch.skipped_redirect"],
-            [{"source_url": redirected_url, "final_url": target_url, "store_id": 12, "fetch_method": "static"}],
+            [],
         )
 
-    def test_discovery_skips_browser_redirect_before_detail_extraction(self):
+    def test_discovery_rejects_nonproduct_browser_redirect_before_detail_extraction(self):
         requested_url = "https://example.mx/producto/old"
         target_url = "https://example.mx/product/new"
         listing = DiscoveryItemCandidateRecord(store_id=12, source_url=requested_url, title="Old")
@@ -258,7 +268,7 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(
             [fields for event, fields in trace.events if event == "inventory.candidate.detail_fetch.skipped_redirect"],
-            [{"source_url": requested_url, "final_url": target_url, "store_id": 12, "fetch_method": "browser"}],
+            [],
         )
 
     def test_discovery_accepts_fragment_only_final_url_change(self):
@@ -313,7 +323,8 @@ class InventoryTests(unittest.TestCase):
                             trace_logger=trace,
                         )
 
-                    self.assertEqual(detail.source_url, source_url)
+                    self.assertEqual(detail.source_url, final_url)
+                    self.assertEqual(detail.source_url_origin, source_url)
                     self.assertEqual(detail.title, "Juego de Mesa Catan")
                     self.assertFalse(any(event == "inventory.candidate.detail_fetch.skipped_redirect" for event, _ in trace.events))
 
@@ -1737,21 +1748,21 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(processor.processed, [])
 
-    def test_crawl_store_product_details_skips_existing_product_urls_before_fetching_details(self):
+    def test_crawl_store_product_details_resolves_existing_product_urls_before_skipping(self):
         product_url = "https://example.mx/products/catan"
         repository = FakeRepository(existing_urls={(12, product_url)})
 
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=[product_url],
-        ), patch("ludora.product_crawler.fetch_html") as fetch_html:
+        ), patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url=product_url, text='<script type="application/ld+json">{"@type":"Product","name":"Catan"}</script>')) as fetch_html:
             records = crawl_store_product_details(
                 "https://example.mx/",
                 12,
                 repository,
             )
 
-        fetch_html.assert_not_called()
+        self.assertEqual(fetch_html.call_count, 1)
         self.assertEqual(records, [])
         self.assertEqual(repository.item_records, [])
         self.assertEqual(repository.exists_checks, [(12, product_url)])
