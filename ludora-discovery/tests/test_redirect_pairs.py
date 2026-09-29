@@ -40,7 +40,7 @@ class PairRepository:
         self.records.append(record)
         return SimpleNamespace(candidate_id=len(self.records), should_process=True, created=True)
 
-    def complete_discovery_pair(self, candidate_id):
+    def complete_discovery_pair(self, candidate_id, *, activate_if_ready=False, non_boardgame_success=False):
         self.completions.append(candidate_id)
 
 
@@ -104,112 +104,58 @@ class DiscoveryPairFlowTests(unittest.TestCase):
 
 
 class PairActivationTests(unittest.TestCase):
-    def test_non_boardgame_direct_cannot_displace_published_boardgame(self):
-        redirect = DiscoveryPairState(1, B, A, True, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True)
-        direct = DiscoveryPairState(2, B, None, False, "LISTED", "pending", visibility_before_suppression=True, item_id=9, is_boardgame_confirmed=True, is_boardgame=False)
-        changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
-        self.assertNotIn(1, changes)
-        self.assertFalse(changes[2].store_active)
-        self.assertEqual(changes[2].duplicate_of_id, 1)
+    def _changes(self, rows, current_id, *, allow_activation=True):
+        return {row.id: row for row in reconcile_discovery_pairs(rows, current_id, allow_activation=allow_activation)}
 
-    def test_published_redirect_is_retained_until_matched_direct_is_listed(self):
-        redirect = DiscoveryPairState(1, B, A, True, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True)
-        for status in ("PENDING", "UNLISTED"):
-            with self.subTest(status=status):
-                direct = DiscoveryPairState(2, B, None, False, status, "pending", visibility_before_suppression=True, item_id=9, is_boardgame_confirmed=True, is_boardgame=True)
-                changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
-                self.assertNotIn(1, changes)
-                self.assertEqual(changes[2].hidden_reason, "duplicate")
-                self.assertEqual(changes[2].duplicate_of_id, 1)
-        direct = DiscoveryPairState(2, B, None, False, "LISTED", "duplicate", 1, visibility_before_suppression=True, item_id=9, is_boardgame_confirmed=True, is_boardgame=True)
-        changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
-        self.assertEqual(changes[1].duplicate_of_id, 2)
-        self.assertTrue(changes[2].store_active)
-        self.assertIsNone(changes[2].hidden_reason)
-
-    def test_unfinished_pair_stays_retryable_after_superseded_and_reappearing(self):
-        unfinished = DiscoveryPairState(1, C, A, False, "PENDING", "pending", visibility_before_suppression=True, processing_complete=False)
-        known = DiscoveryPairState(2, B, A, True, "LISTED")
-        changes = {row.id: row for row in reconcile_discovery_pairs([unfinished, known], 2)}
-        self.assertEqual(changes[1].hidden_reason, "superseded")
-        self.assertFalse(changes[1].processing_complete)
-        self.assertFalse(changes[1].eligible)
-
-    def test_completed_no_match_direct_does_not_hide_usable_redirect(self):
-        redirect = DiscoveryPairState(1, B, A, True, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True)
-        direct = DiscoveryPairState(2, B, None, False, "PENDING", "pending", visibility_before_suppression=True)
-        changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
-        self.assertNotIn(1, changes)
-        self.assertEqual(changes[2].hidden_reason, "duplicate")
-        self.assertEqual(changes[2].duplicate_of_id, 1)
-        self.assertTrue(changes[2].visibility_before_suppression)
-
-    def test_rejected_direct_does_not_displace_eligible_redirect(self):
-        redirect = DiscoveryPairState(1, B, A, True, "LISTED")
-        direct = DiscoveryPairState(2, B, None, False, "REJECTED", "pending", visibility_before_suppression=True)
-        changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
-        self.assertNotIn(1, changes)
-        self.assertFalse(changes[2].store_active)
-
-    def test_direct_pair_wins_after_successful_processing(self):
-        redirect = DiscoveryPairState(1, B, A, True, "LISTED")
-        direct = DiscoveryPairState(2, B, None, False, "LISTED", "pending", visibility_before_suppression=True)
-        changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
+    def test_new_direct_displaces_equal_redirect_after_success(self):
+        redirect = DiscoveryPairState(1, B, A, True, "LISTED", processed_at="2026-09-01")
+        direct = DiscoveryPairState(2, B, None, False, "LISTED", processed_at="2026-09-02")
+        changes = self._changes([redirect, direct], 2)
         self.assertFalse(changes[1].store_active)
-        self.assertEqual(changes[1].duplicate_of_id, 2)
         self.assertTrue(changes[2].store_active)
-        self.assertIsNone(changes[2].hidden_reason)
 
-    def test_changed_target_and_reappearance_keep_historical_rows(self):
-        old = DiscoveryPairState(1, B, A, True, "LISTED")
-        new = DiscoveryPairState(2, C, A, False, "LISTED", "pending", visibility_before_suppression=True)
-        states = {row.id: row for row in [old, new]}
-        states.update({row.id: row for row in reconcile_discovery_pairs(list(states.values()), 2)})
-        self.assertEqual(states[1].hidden_reason, "superseded")
-        self.assertEqual(states[1].superseded_by_id, 2)
-        self.assertTrue(states[2].store_active)
-        states.update({row.id: row for row in reconcile_discovery_pairs(list(states.values()), 1)})
-        self.assertTrue(states[1].store_active)
-        self.assertEqual(states[2].hidden_reason, "superseded")
-        self.assertEqual(states[2].superseded_by_id, 1)
+    def test_incomplete_or_failed_candidate_does_not_change_visibility(self):
+        redirect = DiscoveryPairState(1, B, A, True, "LISTED", processed_at="2026-09-01")
+        for processed_at, error in [(None, ""), ("2026-09-02", "Matcher failed")]:
+            with self.subTest(processed_at=processed_at, error=error):
+                candidate = DiscoveryPairState(2, B, None, False, "LISTED", processed_at=processed_at, processing_error=error)
+                self.assertEqual(self._changes([redirect, candidate], 2), {})
 
-    def test_repeat_duplicate_leaves_saved_eligibility_untouched(self):
-        redirect = DiscoveryPairState(1, B, A, False, "LISTED", "duplicate", 2, visibility_before_suppression=True)
-        direct = DiscoveryPairState(2, B, None, True, "LISTED")
-        self.assertEqual(reconcile_discovery_pairs([redirect, direct], 1), [])
+    def test_published_match_outranks_direct_without_match(self):
+        redirect = DiscoveryPairState(1, B, A, True, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True, processed_at="2026-09-01")
+        direct = DiscoveryPairState(2, B, None, False, "PENDING", processed_at="2026-09-02")
+        self.assertEqual(self._changes([redirect, direct], 2), {})
 
-    def test_external_inactive_direct_does_not_displace_redirect(self):
-        redirect = DiscoveryPairState(1, B, A, True, "LISTED")
-        direct = DiscoveryPairState(2, B, None, False, "LISTED")
-        changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
+    def test_available_redirect_outranks_unavailable_direct(self):
+        redirect = DiscoveryPairState(1, B, A, True, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True, availability="available", processed_at="2026-09-01")
+        direct = DiscoveryPairState(2, B, None, False, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True, availability="unavailable", processed_at="2026-09-02")
+        self.assertEqual(self._changes([redirect, direct], 2), {})
+
+    def test_unavailable_only_candidate_can_be_visible(self):
+        candidate = DiscoveryPairState(2, B, None, False, "LISTED", availability="unavailable", processed_at="2026-09-02")
+        self.assertTrue(self._changes([candidate], 2)[2].store_active)
+
+    def test_rejected_candidate_stays_hidden(self):
+        candidate = DiscoveryPairState(2, B, None, False, "REJECTED", processed_at="2026-09-02")
+        self.assertEqual(self._changes([candidate], 2), {})
+
+    def test_previously_hidden_completed_pair_is_not_reactivated(self):
+        hidden = DiscoveryPairState(1, B, None, False, "LISTED", processed_at="2026-09-01")
+        self.assertEqual(self._changes([hidden], 1, allow_activation=False), {})
+
+    def test_reappearing_historical_pair_retires_visible_old_target_without_reactivation(self):
+        historical = DiscoveryPairState(1, B, A, False, "LISTED", processed_at="2026-09-01")
+        latest = DiscoveryPairState(2, C, A, True, "LISTED", processed_at="2026-09-02")
+        changes = self._changes([historical, latest], 1, allow_activation=False)
+        self.assertFalse(changes[2].store_active)
         self.assertNotIn(1, changes)
-        self.assertFalse(changes[2].visibility_before_suppression)
 
-    def test_unavailable_direct_cannot_hide_equally_published_usable_redirect(self):
-        redirect = DiscoveryPairState(1, B, A, True, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True, availability="out_of_stock")
-        direct = DiscoveryPairState(2, B, None, False, "LISTED", "pending", visibility_before_suppression=True, item_id=9, is_boardgame_confirmed=True, is_boardgame=True, availability="unavailable")
-        changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
-        self.assertNotIn(1, changes)
-        self.assertEqual(changes[2].duplicate_of_id, 1)
-        self.assertEqual(changes[2].availability, "unavailable")
-
-    def test_unavailable_only_representative_remains_visible(self):
-        direct = DiscoveryPairState(2, B, None, False, "LISTED", "pending", visibility_before_suppression=True, availability="unavailable")
-        changes = reconcile_discovery_pairs([direct], 2)
-        self.assertTrue(changes[0].store_active)
-        self.assertEqual(changes[0].availability, "unavailable")
-
-    def test_published_unavailable_kept_over_unmatched_available_direct(self):
-        redirect = DiscoveryPairState(1, B, A, True, "LISTED", item_id=9, is_boardgame_confirmed=True, is_boardgame=True, availability="unavailable")
-        direct = DiscoveryPairState(2, B, None, False, "PENDING", "pending", visibility_before_suppression=True, availability="available")
-        changes = {row.id: row for row in reconcile_discovery_pairs([redirect, direct], 2)}
-        self.assertNotIn(1, changes)
-        self.assertEqual(changes[2].duplicate_of_id, 1)
-
-    def test_stable_redirect_winner_is_preserved(self):
-        earlier = DiscoveryPairState(1, B, C, False, "LISTED", "duplicate", 2, visibility_before_suppression=True)
-        winner = DiscoveryPairState(2, B, A, True, "LISTED")
-        self.assertEqual(reconcile_discovery_pairs([earlier, winner], 1), [])
+    def test_same_source_history_is_hidden_before_new_target_activation(self):
+        old = DiscoveryPairState(1, B, A, True, "LISTED", processed_at="2026-09-01")
+        new = DiscoveryPairState(2, C, A, False, "LISTED", processed_at="2026-09-02")
+        changes = self._changes([old, new], 2)
+        self.assertFalse(changes[1].store_active)
+        self.assertTrue(changes[2].store_active)
 
 
 if __name__ == "__main__":

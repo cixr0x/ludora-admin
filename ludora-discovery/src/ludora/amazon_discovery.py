@@ -361,7 +361,11 @@ def _crawl_amazon_search_inventory(
                             title=detail_candidate.title,
                         )
                     if candidate_id is not None:
-                        repository.complete_discovery_pair(int(candidate_id))
+                        repository.complete_discovery_pair(
+                            int(candidate_id),
+                            activate_if_ready=bool(getattr(upsert_result, "activate_if_ready", False)),
+                            non_boardgame_success=not detail_candidate.is_boardgame,
+                        )
                     records.append(detail_candidate)
                     if limit is not None and len(records) >= limit:
                         _log_amazon_detail_skips(skipped_detail_urls, records=records, store_id=store_id, trace=trace)

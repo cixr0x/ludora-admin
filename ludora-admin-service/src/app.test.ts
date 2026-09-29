@@ -25,7 +25,6 @@ import { StoreItemUpdateScheduleConflictError } from './storeItemUpdateScheduleS
 describe('ludora admin service', () => {
   it.each([
     ['23505', 'store_items_active_target_uidx', 'Another active record already represents this target URL in this store. Disable it before activating this record.'],
-    ['23514', 'store_items_discovery_pair_identity_guard', 'Discovery URL-pair identity cannot be edited; discover the new source/target pair instead.']
   ])('reports discovery identity conflict %s %s clearly', async (code, constraint, message) => {
     const database: Database = {
       query: async () => { throw Object.assign(new Error('database conflict'), { code, constraint }); }
@@ -2075,8 +2074,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: row });
     const query = queries[0];
     expect(normalizeSql(query.sql)).toContain('from store_items');
-    expect(normalizeSql(query.sql)).toContain('store_active, discovery_hidden_reason');
-    expect(normalizeSql(query.sql)).toContain('discovery_visibility_before_suppression');
+    expect(normalizeSql(query.sql)).toContain('source_url_origin, store_active');
     expect(normalizeSql(query.sql)).toContain('where id = $1');
     expect(query.params).toEqual(['920']);
   });
@@ -2855,9 +2853,8 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('update store_items');
     expect(sql).toContain('last_updated = now()');
-    expect(sql).not.toContain('store_active =');
-    expect(sql).not.toContain('discovery_visibility_before_suppression =');
-    expect(sql).toContain('discovery_hidden_reason');
+    expect(sql).not.toMatch(/(?:set|,) store_active =/);
+    expect(sql).toContain('source_url_origin is null');
     expect(sql).toContain('where id = $39');
     expect(sql).toContain('returning id, store_id, source_url, source_listing_url');
     expect(sql).toContain('delete from store_item_additional_items siai');
@@ -2903,6 +2900,59 @@ describe('ludora admin service', () => {
       '',
       '3365'
     ]);
+  });
+
+  it('rejects redirect-pair identity edits while allowing metadata edits', async () => {
+    const origin = 'https://store.mx/old-path';
+    const target = 'https://store.mx/products/kitchen-rush';
+    const existing = { id: 3365, source_url_origin: origin, source_url: target, store_id: 42, store_active: true };
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        if (normalizeSql(sql).startsWith('select source_url_origin')) return { rows: [existing] };
+        if (params?.[0] === 42 && params?.[1] === target) return { rows: [{ ...existing, title: 'Edited' }] };
+        return { rows: [] };
+      }
+    };
+    const app = createApp({ database });
+    const metadata = await request(app).patch('/discovery/listings/3365').send({
+      store_id: 42, source_url: target, title: 'Edited', listing_status: 'LISTED'
+    });
+    expect(metadata.status).toBe(200);
+    const identity = await request(app).patch('/discovery/listings/3365').send({
+      store_id: 42, source_url: 'https://store.mx/products/other', title: 'Edited', listing_status: 'LISTED'
+    });
+    expect(identity.status).toBe(409);
+    expect(identity.body.error.message).toContain('Discovery URL-pair identity cannot be edited');
+    expect(normalizeSql(queries[0].sql)).toContain('(source_url_origin is null and store_active = true) or (store_id is not distinct from $1 and source_url = $2)');
+  });
+
+  it('protects hidden direct row identity while allowing metadata edits', async () => {
+    const target = 'https://store.mx/products/kitchen-rush';
+    const hiddenDirect = { id: 3366, source_url_origin: null, source_url: target, store_id: 42, store_active: false };
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        if (normalizeSql(sql).startsWith('select source_url_origin')) return { rows: [hiddenDirect] };
+        if (params?.[0] === 42 && params?.[1] === target) return { rows: [{ ...hiddenDirect, title: 'Edited' }] };
+        return { rows: [] };
+      }
+    };
+    const app = createApp({ database });
+    const body = { store_id: 42, source_url: target, title: 'Edited', listing_status: 'LISTED' };
+    const metadata = await request(app).patch('/discovery/listings/3366').send(body);
+    expect(metadata.status).toBe(200);
+    for (const changed of [
+      { ...body, source_url: 'https://store.mx/products/other' },
+      { ...body, store_id: 43 }
+    ]) {
+      const response = await request(app).patch('/discovery/listings/3366').send(changed);
+      expect(response.status).toBe(409);
+      expect(response.body.error.message).toContain('Discovery URL-pair identity cannot be edited');
+    }
+    expect(normalizeSql(queries[0].sql)).toContain('(source_url_origin is null and store_active = true) or (store_id is not distinct from $1 and source_url = $2)');
   });
 
   it('queries confirmed boardgame store items with optional item comparison data', async () => {

@@ -1,4 +1,4 @@
-"""Discovery URL identity and visibility decisions, independent of persistence."""
+"""Discovery URL identity and public visibility decisions."""
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
@@ -18,24 +18,16 @@ class DiscoveryPairState:
     source_url_origin: str | None
     store_active: bool
     listing_status: str
-    hidden_reason: str | None = None
-    duplicate_of_id: int | None = None
-    superseded_by_id: int | None = None
-    visibility_before_suppression: bool | None = None
     item_id: int | None = None
     is_boardgame_confirmed: bool = False
-    processing_complete: bool = True
     is_boardgame: bool = False
     availability: str = "unknown"
+    processed_at: str | None = None
+    processing_error: str = ""
 
     @property
     def discovered_url(self) -> str:
         return self.source_url_origin or self.source_url
-
-    @property
-    def eligible(self) -> bool:
-        visible = self.store_active if self.visibility_before_suppression is None else self.visibility_before_suppression
-        return visible and self.listing_status != "REJECTED" and self.processing_complete
 
     @property
     def usability_tier(self) -> int:
@@ -45,30 +37,35 @@ class DiscoveryPairState:
         return 1 if matched_boardgame else 2
 
 
-def reconcile_discovery_pairs(rows: list[DiscoveryPairState], current_id: int) -> list[DiscoveryPairState]:
-    """Return only changed rows; unrelated inactive intent is never promoted."""
-    current = next(row for row in rows if row.id == current_id)
-    states = {}
-    for row in rows:
-        if row.discovered_url == current.discovered_url:
-            row = replace(row, hidden_reason=None, duplicate_of_id=None, superseded_by_id=None, processing_complete=True) if row.id == current_id else _suppress(row, "superseded", superseded_by_id=current_id)
-        states[row.id] = row
+def reconcile_discovery_pairs(rows: list[DiscoveryPairState], current_id: int, *, allow_activation: bool) -> list[DiscoveryPairState]:
+    """Hide old source history and select among visible rows and this run's candidate.
 
-    for target in {row.source_url for row in rows}:
-        group = [row for row in states.values() if row.source_url == target]
-        eligible = [row for row in group if row.eligible and row.hidden_reason not in {"superseded", "pending"}]
-        winner = min(eligible, key=lambda row: (row.usability_tier, row.availability == "unavailable", row.source_url_origin is not None, row.hidden_reason is not None or not row.store_active, row.id), default=None)
-        for row in group:
-            if row.hidden_reason in {"superseded", "pending"}:
-                continue
-            if winner is not None and row.id != winner.id:
-                states[row.id] = _suppress(row, "duplicate", duplicate_of_id=winner.id)
-            elif row.visibility_before_suppression is not None:
-                states[row.id] = replace(row, store_active=row.visibility_before_suppression, hidden_reason=None, duplicate_of_id=None, superseded_by_id=None, visibility_before_suppression=None)
+    Hidden completed rows are never considered for promotion. The caller grants
+    activation only when preparation observed a new, unfinished, or failed pair.
+    """
+    current = next(row for row in rows if row.id == current_id)
+    states = {row.id: row for row in rows}
+    if current.processed_at is None or current.processing_error:
+        return []
+
+    for row in rows:
+        if row.id != current_id and row.discovered_url == current.discovered_url and row.store_active:
+            states[row.id] = replace(row, store_active=False)
+
+    if not allow_activation:
+        return [states[row.id] for row in rows if states[row.id] != row]
+
+    target_rows = [row for row in states.values() if row.source_url == current.source_url]
+    eligible = [row for row in target_rows if row.listing_status != "REJECTED"
+                and not row.processing_error and (row.store_active or row.id == current_id)]
+    winner = min(eligible, key=lambda row: (
+        row.usability_tier, row.availability == "unavailable",
+        row.source_url_origin is not None, row.id,
+    ), default=None)
+    for row in target_rows:
+        if row.store_active and (winner is None or row.id != winner.id):
+            states[row.id] = replace(row, store_active=False)
+    if winner is not None and winner.id == current_id and not current.store_active:
+        states[current_id] = replace(current, store_active=True)
 
     return [states[row.id] for row in rows if states[row.id] != row]
-
-
-def _suppress(row: DiscoveryPairState, reason: str, *, duplicate_of_id: int | None = None, superseded_by_id: int | None = None) -> DiscoveryPairState:
-    original_active = row.store_active if row.visibility_before_suppression is None else row.visibility_before_suppression
-    return replace(row, store_active=False, hidden_reason=reason, duplicate_of_id=duplicate_of_id, superseded_by_id=superseded_by_id, visibility_before_suppression=original_active)

@@ -16,7 +16,6 @@ describe('ListingCandidatesPage', () => {
             {
               availability: 'in_stock',
               store_active: false,
-              discovery_hidden_reason: 'duplicate',
               id: 'item-candidate-1',
               image_url: 'https://store.mx/azul.jpg',
               is_boardgame: true,
@@ -89,7 +88,6 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByText('unavailable')).toBeInTheDocument();
     expect(screen.getByText('Hidden')).toBeInTheDocument();
     expect(screen.getByText('Visible')).toBeInTheDocument();
-    expect(screen.getByText('duplicate')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Public visibility' })).toBeInTheDocument();
     expect(screen.getByText('2026-05-26T09:00:00.000Z')).toBeInTheDocument();
     expect(screen.getAllByText('json_ld_offer').length).toBeGreaterThanOrEqual(2);

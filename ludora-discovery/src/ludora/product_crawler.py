@@ -104,7 +104,7 @@ class ItemCandidateRepository(Protocol):
     def prepare_discovery_pair(self, record: DiscoveryItemCandidateRecord) -> object | None:
         ...
 
-    def complete_discovery_pair(self, candidate_id: int) -> bool:
+    def complete_discovery_pair(self, candidate_id: int, *, activate_if_ready: bool = False, non_boardgame_success: bool = False) -> bool:
         ...
 
     def list_confirmed_boardgame_item_candidates(
@@ -524,7 +524,11 @@ def crawl_listing_candidates(
                 title=detail_candidate.title,
             )
         if candidate_id is not None:
-            repository.complete_discovery_pair(int(candidate_id))
+            repository.complete_discovery_pair(
+                int(candidate_id),
+                activate_if_ready=bool(getattr(upsert_result, "activate_if_ready", False)),
+                non_boardgame_success=not detail_candidate.is_boardgame,
+            )
         records.append(detail_candidate)
     return records
 

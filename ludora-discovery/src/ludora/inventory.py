@@ -40,7 +40,7 @@ class ItemCandidateRepository(Protocol):
     def prepare_discovery_pair(self, record: DiscoveryItemCandidateRecord) -> object | None:
         ...
 
-    def complete_discovery_pair(self, candidate_id: int) -> bool:
+    def complete_discovery_pair(self, candidate_id: int, *, activate_if_ready: bool = False, non_boardgame_success: bool = False) -> bool:
         ...
 
     def list_confirmed_boardgame_item_candidates(

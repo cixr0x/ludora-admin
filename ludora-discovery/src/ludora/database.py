@@ -60,6 +60,7 @@ class ItemCandidateUpsertResult:
     should_process: bool
     created: bool = False
     changed: bool = False
+    activate_if_ready: bool = False
 
 
 @dataclass(frozen=True)
@@ -1145,8 +1146,9 @@ class DiscoveryRepository:
                     candidate_id=int(existing[0]),
                     listing_status=str(existing[1]),
                     item_id=item_id,
-                    should_process=(len(existing) > 5 and existing[5] == "pending") or (len(existing) > 6 and bool(existing[6])) or (len(existing) > 7 and not existing[7]) or (item_id is None and not existing[3] and existing[4] is None),
+                    should_process=existing[4] is None or (len(existing) > 5 and bool(existing[5])),
                     created=False,
+                    activate_if_ready=pending_discovery and (existing[4] is None or (len(existing) > 5 and bool(existing[5]))),
                 )
             else:
                 if pending_discovery:
@@ -1159,15 +1161,8 @@ class DiscoveryRepository:
                     item_id=_optional_int(row[2]) if row else _optional_int(data["item_id"]),
                     should_process=True,
                     created=True,
+                    activate_if_ready=pending_discovery,
                 )
-                if pending_discovery:
-                    cursor.execute("""
-                        update store_items
-                        set discovery_hidden_reason = 'pending',
-                            discovery_processing_complete = false,
-                            discovery_visibility_before_suppression = %s
-                        where id = %s
-                    """, (record.store_active, result.candidate_id))
             record.store_item_id = result.candidate_id
         self.connection.commit()
         return result
@@ -1181,7 +1176,7 @@ class DiscoveryRepository:
         with self.connection.cursor() as cursor:
             self._lock_discovery_pairs(cursor, store_id)
             cursor.execute("""
-                select id, discovery_hidden_reason, processing_error, discovery_processing_complete
+                select id, processed_at, processing_error
                 from store_items
                 where store_id is not distinct from %s
                   and source_url_origin is not distinct from %s
@@ -1189,15 +1184,15 @@ class DiscoveryRepository:
                 for update
             """, (store_id, origin, target))
             row = cursor.fetchone()
-            if row is None or row[1] == "pending" or row[2] or not row[3]:
+            if row is None or row[1] is None or row[2]:
                 self.connection.commit()
                 return False
-            self._reconcile_discovery_pair(cursor, store_id, origin or target, target, int(row[0]))
+            self._reconcile_discovery_pair(cursor, store_id, origin or target, target, int(row[0]), allow_activation=False)
             cursor.execute("update store_items set last_seen_at = now() where id = %s", (row[0],))
         self.connection.commit()
         return True
 
-    def complete_discovery_pair(self, candidate_id: int) -> bool:
+    def complete_discovery_pair(self, candidate_id: int, *, activate_if_ready: bool = False, non_boardgame_success: bool = False) -> bool:
         # Read scope, then acquire the advisory lock before row locks. The
         # second read catches concurrent manual edits and processing failures.
         with self.connection.cursor() as cursor:
@@ -1208,24 +1203,35 @@ class DiscoveryRepository:
                 return False
             self._lock_discovery_pairs(cursor, scope[0])
             cursor.execute("""
-                select source_url_origin, source_url, processing_error
+                select source_url_origin, source_url, processing_error, processed_at, is_boardgame
                 from store_items where id = %s and store_id is not distinct from %s
                 for update
             """, (candidate_id, scope[0]))
             row = cursor.fetchone()
-            if row is None or row[2]:
+            if row is None:
                 self.connection.commit()
                 return False
-            self._reconcile_discovery_pair(cursor, scope[0], row[0] or row[1], row[1], candidate_id)
+            if row[2]:
+                if not non_boardgame_success or row[4]:
+                    self.connection.commit()
+                    return False
+                # This run successfully classified the row as a non-boardgame.
+                # The old matcher error no longer describes this candidate.
+                cursor.execute("update store_items set processing_error = '', processed_at = now() where id = %s", (candidate_id,))
+            # A non-boardgame candidate can complete without a matcher write.
+            # Persist completion so later rediscovery cannot promote a manual hide.
+            if row[3] is None and not row[2]:
+                cursor.execute("update store_items set processed_at = now() where id = %s", (candidate_id,))
+            if activate_if_ready:
+                self._reconcile_discovery_pair(cursor, scope[0], row[0] or row[1], row[1], candidate_id, allow_activation=True)
         self.connection.commit()
         return True
 
-    def _reconcile_discovery_pair(self, cursor: Any, store_id: int | None, discovered_url: str, target_url: str, candidate_id: int) -> None:
+    def _reconcile_discovery_pair(self, cursor: Any, store_id: int | None, discovered_url: str, target_url: str, candidate_id: int, *, allow_activation: bool) -> None:
         cursor.execute("""
             select id, source_url, source_url_origin, store_active, listing_status,
-                   discovery_hidden_reason, discovery_duplicate_of_id,
-                   discovery_superseded_by_id, discovery_visibility_before_suppression,
-                   item_id, is_boardgame_confirmed, discovery_processing_complete, is_boardgame, availability
+                   item_id, is_boardgame_confirmed, is_boardgame, availability,
+                   processed_at, processing_error
             from store_items
             where store_id is not distinct from %s
               and source_url in (
@@ -1237,20 +1243,11 @@ class DiscoveryRepository:
             order by id for update
         """, (store_id, store_id, discovered_url, target_url))
         rows = [DiscoveryPairState(*row) for row in cursor.fetchall()]
-        original = {row.id: row for row in rows}
-        changes = reconcile_discovery_pairs(rows, candidate_id)
+        changes = reconcile_discovery_pairs(rows, candidate_id, allow_activation=allow_activation)
         # The partial unique active-target index also protects manual writes.
         # Release old representatives before activating their replacements.
         for row in sorted(changes, key=lambda changed: changed.store_active):
-            assignments = ["discovery_hidden_reason = %s", "discovery_duplicate_of_id = %s", "discovery_superseded_by_id = %s", "discovery_visibility_before_suppression = %s"]
-            params = [row.hidden_reason, row.duplicate_of_id, row.superseded_by_id, row.visibility_before_suppression]
-            if row.processing_complete != original[row.id].processing_complete:
-                assignments.append("discovery_processing_complete = %s")
-                params.append(row.processing_complete)
-            if row.store_active != original[row.id].store_active:
-                assignments.append("store_active = %s")
-                params.append(row.store_active)
-            cursor.execute(f"update store_items set {', '.join(assignments)}, last_updated = now() where id = %s", (*params, row.id))
+            cursor.execute("update store_items set store_active = %s, last_updated = now() where id = %s", (row.store_active, row.id))
 
     def update_item_candidate_with_change_log(
         self,
@@ -1410,7 +1407,7 @@ class DiscoveryRepository:
     def _find_item_candidate(self, cursor: Any, record: DiscoveryItemCandidateRecord):
         cursor.execute(
             """
-            select id, listing_status, item_id, match_source, processed_at, discovery_hidden_reason, processing_error, discovery_processing_complete
+            select id, listing_status, item_id, match_source, processed_at, processing_error
             from store_items
             where store_id is not distinct from %s
               and source_url = %s
@@ -1891,12 +1888,7 @@ def _item_candidate_select_columns() -> str:
         processed_at,
         processing_error,
         id,
-        source_url_origin,
-        discovery_hidden_reason,
-        discovery_duplicate_of_id,
-        discovery_superseded_by_id,
-        discovery_visibility_before_suppression,
-        discovery_processing_complete
+        source_url_origin
     """
 
 
@@ -1950,11 +1942,6 @@ def _item_candidate_from_row(row: Any) -> DiscoveryItemCandidateRecord:
         processing_error=_text(row[40]),
         store_item_id=_optional_int(row[41]),
         source_url_origin=_text(row[42]) or None,
-        discovery_hidden_reason=_text(row[43]) or None,
-        discovery_duplicate_of_id=_optional_int(row[44]),
-        discovery_superseded_by_id=_optional_int(row[45]),
-        discovery_visibility_before_suppression=row[46],
-        discovery_processing_complete=bool(row[47]),
     )
 
 

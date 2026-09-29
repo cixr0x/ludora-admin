@@ -437,11 +437,6 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { key: 'availability', label: 'Product availability' },
   { fieldType: 'boolean', key: 'store_active', label: 'Public visibility', readOnly: true },
   { key: 'source_url_origin', label: 'Redirect origin URL', readOnly: true },
-  { key: 'discovery_hidden_reason', label: 'Discovery hidden reason', readOnly: true },
-  { key: 'discovery_duplicate_of_id', label: 'Duplicate of record', readOnly: true },
-  { key: 'discovery_superseded_by_id', label: 'Superseded by record', readOnly: true },
-  { fieldType: 'boolean', key: 'discovery_visibility_before_suppression', label: 'Visibility before suppression', readOnly: true },
-  { fieldType: 'boolean', key: 'discovery_processing_complete', label: 'Discovery processing complete', readOnly: true },
   { key: 'availability_source', label: 'Availability Source' },
   { key: 'store_sku', label: 'Store SKU' },
   { fieldType: 'boolean', key: 'is_boardgame', label: 'Is Boardgame' },
@@ -601,14 +596,6 @@ function buildItemCandidateColumns(
     minWidth: 160,
     render: (row) => field(row, ['store_active'], '') === 'false' ? 'Hidden' : 'Visible',
     sortValue: (row) => field(row, ['store_active'])
-  },
-  {
-    filterValue: (row) => field(row, ['discovery_hidden_reason']),
-    id: 'discovery_hidden_reason',
-    label: 'Discovery hidden reason',
-    minWidth: 180,
-    render: (row) => field(row, ['discovery_hidden_reason']),
-    sortValue: (row) => field(row, ['discovery_hidden_reason'])
   },
   {
     filterValue: (row) => field(row, ['availability_source']),

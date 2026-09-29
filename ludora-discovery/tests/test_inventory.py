@@ -117,7 +117,7 @@ class FakeRepository:
     def prepare_discovery_pair(self, record):
         return self.upsert_item_candidate(record)
 
-    def complete_discovery_pair(self, candidate_id):
+    def complete_discovery_pair(self, candidate_id, *, activate_if_ready=False, non_boardgame_success=False):
         return True
 
     def upsert_item_candidate(self, record):
