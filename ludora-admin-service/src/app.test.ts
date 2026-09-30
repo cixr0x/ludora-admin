@@ -4705,6 +4705,7 @@ describe('ludora admin service', () => {
                 rate_limited: 3,
                 store_id: 12,
                 store_name: 'Alpha',
+                stale_items: 7,
                 success_rate_percent: 92.5,
                 successes: 37
               },
@@ -4716,6 +4717,19 @@ describe('ludora admin service', () => {
                 rate_limited: 0,
                 store_id: 13,
                 store_name: 'Beta',
+                stale_items: 3,
+                success_rate_percent: 0,
+                successes: 0
+              },
+              {
+                attempts: 0,
+                eligible_items: 0,
+                failures: 0,
+                platform: 'unknown',
+                rate_limited: 0,
+                store_id: 14,
+                store_name: 'Gamma',
+                stale_items: 0,
                 success_rate_percent: 0,
                 successes: 0
               }
@@ -4780,6 +4794,7 @@ describe('ludora admin service', () => {
           rate_limited: 3,
           store_id: 12,
           store_name: 'Alpha',
+          stale_items: 7,
           success_rate_percent: 92.5,
           successes: 37
         },
@@ -4791,6 +4806,19 @@ describe('ludora admin service', () => {
           rate_limited: 0,
           store_id: 13,
           store_name: 'Beta',
+          stale_items: 3,
+          success_rate_percent: 0,
+          successes: 0
+        },
+        {
+          attempts: 0,
+          eligible_items: 0,
+          failures: 0,
+          platform: 'unknown',
+          rate_limited: 0,
+          store_id: 14,
+          store_name: 'Gamma',
+          stale_items: 0,
           success_rate_percent: 0,
           successes: 0
         }
@@ -4828,7 +4856,23 @@ describe('ludora admin service', () => {
     expect(storeStatisticsSql).not.toContain('raw_payload');
     expect(storeStatisticsSql).not.toContain('ilike');
     expect(storeStatisticsSql).toContain('where stores.active = true');
+    const eligibleItemsSql = storeStatisticsSql.match(/eligible_items as \((.*?)\) select stores.id/)?.[1] ?? '';
+    expect(eligibleItemsSql).toContain("count(*) filter (where store_items.refreshed_date < now() - interval '24 hours')::int as stale_items");
+    expect(eligibleItemsSql).toContain('store_items.is_boardgame = true');
+    expect(eligibleItemsSql).toContain('store_items.is_boardgame_confirmed = true');
+    expect(eligibleItemsSql).toContain('store_items.item_id is not null');
+    expect(eligibleItemsSql).toContain("store_items.source_url <> ''");
+    expect(eligibleItemsSql).toContain("store_items.listing_status = 'listed'");
+    expect(eligibleItemsSql).toContain('store_items.store_active = true');
+    expect(eligibleItemsSql).toContain("store_items.availability <> 'unavailable'");
+    expect(eligibleItemsSql).toContain('group by store_items.store_id');
+    expect(storeStatisticsSql).toContain('coalesce(eligible_items.stale_items, 0)::int as stale_items');
+    expect(storeStatisticsSql).toContain('left join eligible_items on eligible_items.store_id = stores.id');
+    expect(storeStatisticsSql).not.toContain('join store_items');
+    expect(storeStatisticsSql).toContain('group by stores.id, stores.name, stores.platform, eligible_items.item_count, eligible_items.stale_items');
     expect(storeStatisticsSql).toContain('left join store_item_update_attempt_log attempts');
+    expect(storeStatisticsSql).toContain("attempts.started_at >= now() - interval '24 hours'");
+    expect(storeStatisticsSql).toContain('order by failures desc, attempts desc, stores.name asc');
     expect(storeStatisticsSql).not.toContain('having count(*)');
     expect(storeStatisticsSql).not.toContain('limit 12');
   });

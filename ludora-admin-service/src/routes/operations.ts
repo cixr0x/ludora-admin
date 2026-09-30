@@ -679,7 +679,10 @@ async function loadStoreItemUpdateMonitor(
        from stores
        where stores.active = true
      ), eligible_items as (
-       select store_items.store_id, count(*)::int as item_count
+       select
+         store_items.store_id,
+         count(*)::int as item_count,
+         count(*) filter (where store_items.refreshed_date < now() - interval '24 hours')::int as stale_items
        from store_items
        where store_items.is_boardgame = true
          and store_items.is_boardgame_confirmed = true
@@ -695,6 +698,7 @@ async function loadStoreItemUpdateMonitor(
        stores.name as store_name,
        stores.platform,
        coalesce(eligible_items.item_count, 0)::int as eligible_items,
+       coalesce(eligible_items.stale_items, 0)::int as stale_items,
        count(attempts.id)::int as attempts,
        count(attempts.id) filter (
          where attempts.status in ('succeeded', 'deactivated')
@@ -725,7 +729,7 @@ async function loadStoreItemUpdateMonitor(
      left join store_item_update_attempt_log attempts
        on attempts.store_id = stores.id
       and attempts.started_at >= now() - interval '24 hours'
-     group by stores.id, stores.name, stores.platform, eligible_items.item_count
+     group by stores.id, stores.name, stores.platform, eligible_items.item_count, eligible_items.stale_items
      order by failures desc, attempts desc, stores.name asc`
   );
 
