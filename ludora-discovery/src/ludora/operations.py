@@ -736,6 +736,28 @@ def _resolve_item_classifier(current_env: Mapping[str, str], env_file: str) -> I
     ).apply_item_classification
 
 
+def create_item_update_redirect_handler(repository, *, current_env=None, env_file=".env"):
+    """Resolve discovery AI only when an update actually encounters a redirect."""
+    classifier = None
+
+    def handle(existing_record, fetched, *, trace_logger=None, **kwargs):
+        nonlocal classifier
+        from ludora.product_crawler import prepare_item_update_redirect
+
+        env = current_env if current_env is not None else os.environ
+        if classifier is None:
+            classifier = _resolve_item_classifier(env, env_file)
+        processor = AdminItemMatcher(
+            resolve_admin_api_url(env=env, dotenv_path=env_file), repository,
+            internal_api_token=resolve_internal_api_token(env=env, dotenv_path=env_file),
+            trace_logger=trace_logger)
+        return prepare_item_update_redirect(
+            existing_record, fetched, repository, item_classifier=classifier,
+            item_processor=processor, trace_logger=trace_logger, **kwargs)
+
+    return handle
+
+
 def run_item_update(
     *,
     env: Mapping[str, str] | None = None,
@@ -802,6 +824,8 @@ def run_item_update(
                 item_title_extractor=item_title_extractor,
                 request_headers_provider=web_bot_auth_headers_provider,
                 trace_logger=trace_logger,
+                redirect_handler=create_item_update_redirect_handler(
+                    repository, current_env=current_env, env_file=env_file),
                 **update_kwargs,
             )
         except OperationCancelled as exc:

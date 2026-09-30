@@ -185,6 +185,7 @@ def update_confirmed_store_items(
     item_title_extractor: Callable[[DiscoveryItemCandidateRecord], str] | None = None,
     trace_logger: TraceLogger | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
+    redirect_handler: Callable | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
         repository,
@@ -197,4 +198,5 @@ def update_confirmed_store_items(
         item_title_extractor=item_title_extractor,
         request_headers_provider=request_headers_provider,
         trace_logger=trace_logger,
+        redirect_handler=redirect_handler,
     )

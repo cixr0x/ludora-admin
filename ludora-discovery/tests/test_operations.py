@@ -1042,6 +1042,7 @@ class StoreDiscoveryOperationsTests(unittest.TestCase):
             item_title_extractor=ANY,
             request_headers_provider=None,
             trace_logger=ANY,
+            redirect_handler=ANY,
         )
         repository.start_store_item_update_log.assert_called_once()
         update_run_id = repository.start_store_item_update_log.call_args.kwargs["run_id"]

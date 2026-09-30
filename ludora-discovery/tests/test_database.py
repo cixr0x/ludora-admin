@@ -51,12 +51,16 @@ class FakeConnection:
     def __init__(self, fetchone_rows=None, fetchall_rows=None):
         self.cursor_instance = FakeCursor(fetchone_rows=fetchone_rows, fetchall_rows=fetchall_rows)
         self.commits = 0
+        self.rollbacks = 0
 
     def cursor(self):
         return self.cursor_instance
 
     def commit(self):
         self.commits += 1
+
+    def rollback(self):
+        self.rollbacks += 1
 
 
 def confirmed_store_item_record() -> DiscoveryItemCandidateRecord:

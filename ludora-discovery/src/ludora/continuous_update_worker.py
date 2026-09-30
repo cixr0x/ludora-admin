@@ -10,11 +10,9 @@ import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Mapping
-from urllib.parse import urldefrag
 
 from ludora.admin_title_extraction import AdminAmazonTitleExtractor
 from ludora.admin_web_bot_auth import AdminWebBotAuthHeadersProvider
-from ludora.amazon_discovery import _asin_from_url
 from ludora.browser_fetch import BrowserTextFetcher
 from ludora.config import (
     resolve_admin_api_url,
@@ -26,6 +24,8 @@ from ludora.config import (
 from ludora.database import ClaimedStoreItemUpdate, DiscoveryRepository, connect_database
 from ludora.product_crawler import (
     ProductPageRemovedError,
+    ProductDetailRedirect,
+    finalize_item_update_redirect,
     TransientProductFetchError,
     refresh_confirmed_store_item_candidate,
 )
@@ -39,13 +39,6 @@ BROWSER_RECYCLE_MAX_AGE_SECONDS = 6 * 60 * 60
 ITEM_FAILURE_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 STORE_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
-AMAZON_PLATFORMS = {"amazon", "amazon_brand"}
-
-
-class _ClaimedRedirectDeactivated(RuntimeError):
-    def __init__(self, *, final_url: str) -> None:
-        super().__init__(f"Redirected store item made unavailable: {final_url}")
-        self.final_url = final_url
 
 
 class _ContextTraceLogger:
@@ -55,6 +48,10 @@ class _ContextTraceLogger:
 
     def log(self, event: str, **fields: object) -> None:
         self.delegate.log(event, **{**self.context, **fields})
+
+    @property
+    def run_id(self) -> str:
+        return getattr(self.delegate, "run_id", "")
 
 
 def _create_continuous_browser_session(trace_logger: TraceLogger) -> BrowserTextFetcher:
@@ -134,6 +131,9 @@ def _run_worker_session(
 
     connection = connect_database(database_url)
     repository = DiscoveryRepository(connection)
+    from ludora.operations import create_item_update_redirect_handler
+
+    redirect_handler = create_item_update_redirect_handler(repository, current_env=current_env, env_file=env_file)
     job_id: int | None = None
     browser_session: BrowserTextFetcher | None = None
     try:
@@ -201,6 +201,7 @@ def _run_worker_session(
                     throttle=throttle,
                     trace_logger=attempt_trace_logger,
                     worker_id=worker_id,
+                    redirect_handler=redirect_handler,
                 )
             finally:
                 if browser_session is not None:
@@ -242,6 +243,7 @@ def _process_claim(
     throttle: PerHostRequestThrottle,
     trace_logger: TraceLogger | None = None,
     worker_id: str,
+    redirect_handler=None,
 ) -> None:
     store_item_id = claim.record.store_item_id
     _log(
@@ -252,67 +254,46 @@ def _process_claim(
         store_name=claim.store_name,
     )
 
-    def check_successful_page_fetch(final_url: str) -> None:
-        if urldefrag(final_url).url == urldefrag(claim.record.source_url).url:
-            return
-        if claim.platform in AMAZON_PLATFORMS:
-            source_asin = _asin_from_url(claim.record.source_url)
-            final_asin = _asin_from_url(final_url)
-            if source_asin and source_asin == final_asin:
-                return
-        repository.deactivate_claimed_store_item_update(
-            claim.record,
-            attempt_id=claim.attempt_id,
-            job_id=job_id,
-            lease_token=claim.lease_token,
-            run_id=run_id,
-            worker_id=worker_id,
-            worker_name=WORKER_NAME,
-        )
-        raise _ClaimedRedirectDeactivated(final_url=final_url)
-
     try:
-        refreshed_record = refresh_confirmed_store_item_candidate(
-            claim.record,
-            platform=claim.platform,
-            browser_fetcher=browser_fetcher,
-            item_title_extractor=item_title_extractor,
-            before_request=lambda url: throttle.wait_before_request(url),
-            request_headers_provider=request_headers_provider if claim.platform == "shopify" else None,
-            trace_logger=trace_logger,
-            on_successful_page_fetch=check_successful_page_fetch,
-        )
-        result = repository.complete_claimed_store_item_update(
-            claim.record,
-            refreshed_record,
-            attempt_id=claim.attempt_id,
-            job_id=job_id,
-            lease_token=claim.lease_token,
-            run_id=run_id,
-            worker_id=worker_id,
-            worker_name=WORKER_NAME,
-        )
+        try:
+            refreshed_record = refresh_confirmed_store_item_candidate(
+                claim.record,
+                platform=claim.platform,
+                browser_fetcher=browser_fetcher,
+                item_title_extractor=item_title_extractor,
+                before_request=lambda url: throttle.wait_before_request(url),
+                request_headers_provider=request_headers_provider if claim.platform == "shopify" else None,
+                trace_logger=trace_logger,
+            )
+        except ProductDetailRedirect as redirect:
+            if redirect_handler is None:
+                from ludora.operations import create_item_update_redirect_handler
+
+                redirect_handler = create_item_update_redirect_handler(repository)
+            pair = redirect_handler(
+                claim.record, redirect.fetched, platform=claim.platform,
+                browser_fetcher=browser_fetcher, item_title_extractor=item_title_extractor,
+                before_request=lambda url: throttle.wait_before_request(url), trace_logger=trace_logger)
+            result = finalize_item_update_redirect(
+                repository, claim.record, pair, trace_logger=trace_logger,
+                attempt_id=claim.attempt_id, job_id=job_id, lease_token=claim.lease_token,
+                run_id=run_id, worker_id=worker_id, worker_name=WORKER_NAME)
+        else:
+            result = repository.complete_claimed_store_item_update(
+                claim.record,
+                refreshed_record,
+                attempt_id=claim.attempt_id,
+                job_id=job_id,
+                lease_token=claim.lease_token,
+                run_id=run_id,
+                worker_id=worker_id,
+                worker_name=WORKER_NAME,
+            )
         _log(
             "worker.item.succeeded",
             attempt_id=claim.attempt_id,
             changed=result.changed,
             store_item_id=store_item_id,
-        )
-    except _ClaimedRedirectDeactivated as exc:
-        if trace_logger is not None:
-            trace_logger.log(
-                "item_update.item.redirect.deactivated",
-                final_url=exc.final_url,
-                source_store_item_id=store_item_id,
-                source_url=claim.record.source_url,
-            )
-        _log(
-            "worker.item.deactivated",
-            message="Store item marked unavailable after redirect",
-            availability="unavailable",
-            final_url=exc.final_url,
-            source_store_item_id=store_item_id,
-            source_url=claim.record.source_url,
         )
     except ProductPageRemovedError as exc:
         repository.deactivate_claimed_store_item_update(

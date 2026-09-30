@@ -13,6 +13,7 @@ from ludora.database import ItemCandidateUpsertResult
 from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import (
+    ProductDetailRedirect,
     ProductDetailRejectedError,
     ProductPageRemovedError,
     TransientProductFetchError,
@@ -1897,7 +1898,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.update_change_log_calls, [])
         self.assertEqual(repository.item_records, [])
 
-    def test_continuous_refresh_reports_final_page_url_before_sku_rejection_without_refetching(self):
+    def test_continuous_refresh_hands_off_redirect_before_original_sku_validation(self):
         final_url = "https://example.mx/product/catan"
         detail_html = """
         <script type="application/ld+json">
@@ -1927,7 +1928,7 @@ class InventoryTests(unittest.TestCase):
             "ludora.product_crawler.fetch_html",
             return_value=FetchResult(url=final_url, text=detail_html),
         ) as fetch_html:
-            with self.assertRaisesRegex(ProductDetailRejectedError, "store_sku_mismatch"):
+            with self.assertRaises(ProductDetailRedirect) as redirect:
                 refresh_confirmed_store_item_candidate(
                     existing_record,
                     platform="custom",
@@ -1935,7 +1936,10 @@ class InventoryTests(unittest.TestCase):
                 )
 
         fetch_html.assert_called_once()
-        self.assertEqual(final_urls, [final_url])
+        self.assertEqual(redirect.exception.fetched.url, final_url)
+        self.assertEqual(redirect.exception.fetched.text, detail_html)
+        self.assertEqual(existing_record.item_id, 77)
+        self.assertEqual(final_urls, [])
 
     def test_continuous_refresh_does_not_report_unsuccessful_static_or_browser_fetches(self):
         existing_record = DiscoveryItemCandidateRecord(

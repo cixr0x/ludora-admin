@@ -16,6 +16,63 @@ B = "https://example.mx/product/catan"
 
 
 class DiscoveryPairPersistenceTests(unittest.TestCase):
+    def test_update_completed_pair_lookup_has_no_visibility_side_effects(self):
+        connection = FakeConnection(fetchone_rows=[(7,)])
+        repository = DiscoveryRepository(connection)
+        self.assertEqual(repository.get_completed_discovery_pair_id(12, A + "#old", B + "#buy"), 7)
+        sql, params = connection.cursor_instance.executions[0]
+        self.assertEqual(params, (12, A, B))
+        self.assertIn("processed_at is not null", sql)
+        self.assertFalse(any("update " in query.lower() for query, _ in connection.cursor_instance.executions))
+
+    def test_redirect_finalization_locks_store_then_checks_unexpired_lease_before_visibility(self):
+        original = DiscoveryItemCandidateRecord(store_id=12, store_item_id=1, source_url=A,
+                                               title="Catan", price="799", availability="available")
+        candidate = DiscoveryPairState(7, B, A, False, "LISTED", item_id=99,
+                                       is_boardgame=True, is_boardgame_confirmed=True,
+                                       processed_at="2026-09-30")
+        connection = FakeConnection(fetchone_rows=[(True,), (A, B, "", "2026-09-30", True)],
+                                    fetchall_rows=[[astuple(candidate)]])
+        result = DiscoveryRepository(connection).complete_item_update_redirect(
+            original, 7, target_url=B, activate_if_ready=True, non_boardgame_success=False,
+            job_id=2, run_id="test", attempt_id=3, lease_token="lease",
+            worker_name="continuous", worker_id="worker")
+        queries = connection.cursor_instance.executions
+        self.assertIn("pg_advisory_xact_lock", queries[0][0])
+        self.assertIn("update_lease_token = %s::uuid", queries[1][0])
+        self.assertIn("update_lease_expires_at > clock_timestamp()", queries[1][0])
+        self.assertIn("for update", queries[1][0])
+        original_write = next(sql for sql, _ in queries if "update store_items" in sql and "where id = %s" in sql)
+        self.assertIn("store_active = false", original_write)
+        self.assertNotIn("availability =", original_write)
+        self.assertNotIn("price =", original_write)
+        self.assertTrue(result.changed)
+        self.assertEqual((original.price, original.availability), ("799", "available"))
+        self.assertEqual(connection.commits, 1)
+        self.assertTrue(any("status = 'succeeded'" in sql for sql, _ in queries))
+        self.assertEqual(queries[-1][1], (1, 2))
+
+    def test_lost_redirect_lease_does_not_touch_pairs_or_original(self):
+        connection = FakeConnection(fetchone_rows=[None])
+        original = DiscoveryItemCandidateRecord(store_id=12, store_item_id=1, source_url=A, title="Catan")
+        with self.assertRaisesRegex(RuntimeError, "lease was lost"):
+            DiscoveryRepository(connection).complete_item_update_redirect(
+                original, 7, target_url=B, activate_if_ready=True, non_boardgame_success=False,
+                job_id=2, run_id="test", attempt_id=3, lease_token="lease",
+                worker_name="continuous", worker_id="worker")
+        self.assertFalse(any("update store_items" in sql for sql, _ in connection.cursor_instance.executions))
+        self.assertTrue(any("status = 'lease_lost'" in sql for sql, _ in connection.cursor_instance.executions))
+
+    def test_incomplete_redirect_target_does_not_hide_original(self):
+        connection = FakeConnection(fetchone_rows=[(True,), (A, B, "", None, True)])
+        connection.rollback = lambda: None
+        original = DiscoveryItemCandidateRecord(store_id=12, store_item_id=1, source_url=A, title="Catan")
+        with self.assertRaisesRegex(RuntimeError, "did not complete"):
+            DiscoveryRepository(connection).complete_item_update_redirect(
+                original, 7, target_url=B, activate_if_ready=True, non_boardgame_success=False)
+        self.assertFalse(any("update store_items" in sql for sql, _ in connection.cursor_instance.executions))
+        self.assertEqual(connection.commits, 0)
+
     def test_new_pair_is_persisted_inactive_and_activation_is_run_scoped(self):
         connection = FakeConnection(fetchone_rows=[None, (7, "PENDING", None)])
         record = DiscoveryItemCandidateRecord(store_id=12, source_url=B, source_url_origin=A, title="Catan")
