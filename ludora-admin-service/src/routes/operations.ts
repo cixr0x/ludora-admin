@@ -69,6 +69,7 @@ const storeItemUpdateChangeSelect = `
 `;
 
 const storeItemUpdateEventSql = `case
+  when changes.field_name = 'availability' and changes.new_value = '"unavailable"'::jsonb then 'Item unavailable'
   when changes.field_name = 'store_active' and changes.new_value = 'false'::jsonb then 'Item deactivated'
   when changes.field_name = 'store_active' and changes.new_value = 'true'::jsonb then 'Item activated'
   when changes.field_name = '' then 'Item updated'
@@ -571,6 +572,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and store_items.availability <> 'unavailable'
      )
      select
        count(*)::int as eligible_items,
@@ -650,6 +652,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and store_items.availability <> 'unavailable'
      ), hourly as (
        select staleness_hour, count(*)::int as item_count
        from eligible
@@ -676,7 +679,10 @@ async function loadStoreItemUpdateMonitor(
        from stores
        where stores.active = true
      ), eligible_items as (
-       select store_items.store_id, count(*)::int as item_count
+       select
+         store_items.store_id,
+         count(*)::int as item_count,
+         count(*) filter (where store_items.refreshed_date < now() - interval '24 hours')::int as stale_items
        from store_items
        where store_items.is_boardgame = true
          and store_items.is_boardgame_confirmed = true
@@ -684,6 +690,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and store_items.availability <> 'unavailable'
        group by store_items.store_id
      )
      select
@@ -691,6 +698,7 @@ async function loadStoreItemUpdateMonitor(
        stores.name as store_name,
        stores.platform,
        coalesce(eligible_items.item_count, 0)::int as eligible_items,
+       coalesce(eligible_items.stale_items, 0)::int as stale_items,
        count(attempts.id)::int as attempts,
        count(attempts.id) filter (
          where attempts.status in ('succeeded', 'deactivated')
@@ -721,7 +729,7 @@ async function loadStoreItemUpdateMonitor(
      left join store_item_update_attempt_log attempts
        on attempts.store_id = stores.id
       and attempts.started_at >= now() - interval '24 hours'
-     group by stores.id, stores.name, stores.platform, eligible_items.item_count
+     group by stores.id, stores.name, stores.platform, eligible_items.item_count, eligible_items.stale_items
      order by failures desc, attempts desc, stores.name asc`
   );
 

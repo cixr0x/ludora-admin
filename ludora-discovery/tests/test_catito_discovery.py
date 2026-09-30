@@ -26,6 +26,15 @@ class FakeRepository:
         self.exists_checks.append((store_id, source_url))
         return False
 
+    def observe_discovery_pair(self, store_id, discovered_url, target_url):
+        return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
+
+    def prepare_discovery_pair(self, record):
+        return self.upsert_item_candidate(record)
+
+    def complete_discovery_pair(self, candidate_id, *, activate_if_ready=False, non_boardgame_success=False):
+        return True
+
     def upsert_item_candidate(self, record):
         self.item_records.append(record)
         return SimpleNamespace(candidate_id=44, created=True, should_process=False)

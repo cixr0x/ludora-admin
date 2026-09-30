@@ -30,6 +30,32 @@ class SchemaTests(unittest.TestCase):
             self.assertIn(f"{field} ~ '^[0-9a-f]{{64}}$'", patch)
         self.assertNotIn("update items", patch.casefold())
 
+    def test_discovery_redirect_pair_patch_adds_only_origin_and_pair_indexes(self):
+        patch = (patches_path() / "20260929_001_store_item_visibility_and_redirect_pairs.sql").read_text(encoding="utf-8")
+        normalized = " ".join(patch.casefold().split())
+        self.assertIn("add column if not exists source_url_origin text", normalized)
+        self.assertEqual(normalized.count("add column if not exists"), 1)
+        self.assertIn("drop constraint if exists store_items_store_id_source_url_key", normalized)
+        self.assertIn("on store_items (store_id, coalesce(source_url_origin, ''), source_url)", normalized)
+        self.assertIn("where store_id is not null and store_active = true and listing_status <> 'rejected'", normalized)
+        self.assertNotIn("delete from store_items", normalized)
+        self.assertNotIn("update store_items set source_url_origin", normalized)
+        self.assertNotIn("create trigger", normalized)
+        self.assertNotIn("create or replace function", normalized)
+        self.assertNotIn("pg_advisory", normalized)
+
+    def test_visibility_backfill_is_guarded_and_precedes_redirect_metadata(self):
+        patch = (patches_path() / "20260929_001_store_item_visibility_and_redirect_pairs.sql").read_text(encoding="utf-8")
+        normalized = " ".join(patch.casefold().split())
+        backfill = "set availability = 'unavailable', availability_source = 'legacy_store_active', store_active = true where store_active = false"
+        self.assertIn(backfill, normalized)
+        self.assertLess(normalized.index("raise exception 'store-item visibility migration"), normalized.index(backfill))
+        self.assertLess(normalized.index(backfill), normalized.index("add column if not exists source_url_origin"))
+        self.assertIn("'source_url_origin', 'discovery_disabled_reason', 'discovery_hidden_reason'", normalized)
+        self.assertNotIn("refreshed_date =", normalized)
+        self.assertNotIn("set price", normalized)
+        self.assertIn("and availability <> 'unavailable'", normalized)
+
     def test_daily_update_schedule_patch_is_sequential_and_nullable(self):
         patches = patches_path()
         patch_names = sorted(path.name for path in patches.glob("*.sql"))
@@ -432,7 +458,8 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("update store_items set listing_status = 'pending' where listing_status is null", schema)
         self.assertNotIn("update store_items set listing_status = 'pending';", schema)
         self.assertIn("alter table if exists store_items drop column if exists status", schema)
-        self.assertIn("unique (store_id, source_url)", item_candidate_table)
+        self.assertNotIn("unique (store_id, source_url)", item_candidate_table)
+        self.assertIn("store_items_discovery_url_pair_uidx", schema)
         self.assertIn(
             "alter table if exists store_items drop constraint if exists discovery_item_candidates_store_id_source_url_title_key",
             schema,

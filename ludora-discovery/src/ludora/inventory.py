@@ -34,6 +34,15 @@ class ItemCandidateRepository(Protocol):
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         ...
 
+    def observe_discovery_pair(self, store_id: int | None, discovered_url: str, target_url: str) -> bool:
+        ...
+
+    def prepare_discovery_pair(self, record: DiscoveryItemCandidateRecord) -> object | None:
+        ...
+
+    def complete_discovery_pair(self, candidate_id: int, *, activate_if_ready: bool = False, non_boardgame_success: bool = False) -> bool:
+        ...
+
     def list_confirmed_boardgame_item_candidates(
         self,
         limit: int | None = None,
@@ -176,6 +185,7 @@ def update_confirmed_store_items(
     item_title_extractor: Callable[[DiscoveryItemCandidateRecord], str] | None = None,
     trace_logger: TraceLogger | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
+    redirect_handler: Callable | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
         repository,
@@ -188,4 +198,5 @@ def update_confirmed_store_items(
         item_title_extractor=item_title_extractor,
         request_headers_provider=request_headers_provider,
         trace_logger=trace_logger,
+        redirect_handler=redirect_handler,
     )

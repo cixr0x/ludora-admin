@@ -359,6 +359,7 @@ function formatValue(value: unknown): string {
 
 function changeEventLabel(row: AdminRecord): string {
   const fieldName = recordText(row, 'field_name');
+  if (fieldName === 'availability' && row.new_value === 'unavailable') return 'Item unavailable';
   if (fieldName === 'store_active') {
     if (row.new_value === false || row.new_value === 'false') {
       return 'Item deactivated';

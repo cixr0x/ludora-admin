@@ -23,6 +23,26 @@ import type { StoreItemUpdateScheduleManager } from './storeItemUpdateScheduleMa
 import { StoreItemUpdateScheduleConflictError } from './storeItemUpdateScheduleService.js';
 
 describe('ludora admin service', () => {
+  it.each([
+    ['23505', 'store_items_active_target_uidx', 'Another active record already represents this target URL in this store. Disable it before activating this record.'],
+  ])('reports discovery identity conflict %s %s clearly', async (code, constraint, message) => {
+    const database: Database = {
+      query: async () => { throw Object.assign(new Error('database conflict'), { code, constraint }); }
+    };
+    const response = await request(createApp({ database })).get('/discovery/listings');
+    expect(response.status).toBe(409);
+    expect(response.body.error.message).toBe(message);
+  });
+
+  it('keeps unrelated database uniqueness errors as server errors', async () => {
+    const database: Database = {
+      query: async () => { throw Object.assign(new Error('unrelated conflict'), { code: '23505', constraint: 'other_index' }); }
+    };
+    const response = await request(createApp({ database })).get('/discovery/listings');
+    expect(response.status).toBe(500);
+    expect(response.body.error.message).toBe('unrelated conflict');
+  });
+
   const normalizeSql = (sql: string): string => sql.replace(/\s+/g, ' ').trim().toLowerCase();
   const authOptions = {
     cookieName: 'ludora_admin_session',
@@ -2056,6 +2076,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: row });
     const query = queries[0];
     expect(normalizeSql(query.sql)).toContain('from store_items');
+    expect(normalizeSql(query.sql)).toContain('source_url_origin, store_active');
     expect(normalizeSql(query.sql)).toContain('where id = $1');
     expect(query.params).toEqual(['920']);
   });
@@ -2840,6 +2861,8 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('update store_items');
     expect(sql).toContain('last_updated = now()');
+    expect(sql).not.toMatch(/(?:set|,) store_active =/);
+    expect(sql).toContain('source_url_origin is null');
     expect(sql).toContain('where id = $39');
     expect(sql).toContain('returning id, store_id, source_url, source_listing_url');
     expect(sql).toContain('delete from store_item_additional_items siai');
@@ -2885,6 +2908,59 @@ describe('ludora admin service', () => {
       '',
       '3365'
     ]);
+  });
+
+  it('rejects redirect-pair identity edits while allowing metadata edits', async () => {
+    const origin = 'https://store.mx/old-path';
+    const target = 'https://store.mx/products/kitchen-rush';
+    const existing = { id: 3365, source_url_origin: origin, source_url: target, store_id: 42, store_active: true };
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        if (normalizeSql(sql).startsWith('select source_url_origin')) return { rows: [existing] };
+        if (params?.[0] === 42 && params?.[1] === target) return { rows: [{ ...existing, title: 'Edited' }] };
+        return { rows: [] };
+      }
+    };
+    const app = createApp({ database });
+    const metadata = await request(app).patch('/discovery/listings/3365').send({
+      store_id: 42, source_url: target, title: 'Edited', listing_status: 'LISTED'
+    });
+    expect(metadata.status).toBe(200);
+    const identity = await request(app).patch('/discovery/listings/3365').send({
+      store_id: 42, source_url: 'https://store.mx/products/other', title: 'Edited', listing_status: 'LISTED'
+    });
+    expect(identity.status).toBe(409);
+    expect(identity.body.error.message).toContain('Discovery URL-pair identity cannot be edited');
+    expect(normalizeSql(queries[0].sql)).toContain('(source_url_origin is null and store_active = true) or (store_id is not distinct from $1 and source_url = $2)');
+  });
+
+  it('protects hidden direct row identity while allowing metadata edits', async () => {
+    const target = 'https://store.mx/products/kitchen-rush';
+    const hiddenDirect = { id: 3366, source_url_origin: null, source_url: target, store_id: 42, store_active: false };
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        if (normalizeSql(sql).startsWith('select source_url_origin')) return { rows: [hiddenDirect] };
+        if (params?.[0] === 42 && params?.[1] === target) return { rows: [{ ...hiddenDirect, title: 'Edited' }] };
+        return { rows: [] };
+      }
+    };
+    const app = createApp({ database });
+    const body = { store_id: 42, source_url: target, title: 'Edited', listing_status: 'LISTED' };
+    const metadata = await request(app).patch('/discovery/listings/3366').send(body);
+    expect(metadata.status).toBe(200);
+    for (const changed of [
+      { ...body, source_url: 'https://store.mx/products/other' },
+      { ...body, store_id: 43 }
+    ]) {
+      const response = await request(app).patch('/discovery/listings/3366').send(changed);
+      expect(response.status).toBe(409);
+      expect(response.body.error.message).toContain('Discovery URL-pair identity cannot be edited');
+    }
+    expect(normalizeSql(queries[0].sql)).toContain('(source_url_origin is null and store_active = true) or (store_id is not distinct from $1 and source_url = $2)');
   });
 
   it('queries confirmed boardgame store items with optional item comparison data', async () => {
@@ -4637,6 +4713,7 @@ describe('ludora admin service', () => {
                 rate_limited: 3,
                 store_id: 12,
                 store_name: 'Alpha',
+                stale_items: 7,
                 success_rate_percent: 92.5,
                 successes: 37
               },
@@ -4648,6 +4725,19 @@ describe('ludora admin service', () => {
                 rate_limited: 0,
                 store_id: 13,
                 store_name: 'Beta',
+                stale_items: 3,
+                success_rate_percent: 0,
+                successes: 0
+              },
+              {
+                attempts: 0,
+                eligible_items: 0,
+                failures: 0,
+                platform: 'unknown',
+                rate_limited: 0,
+                store_id: 14,
+                store_name: 'Gamma',
+                stale_items: 0,
                 success_rate_percent: 0,
                 successes: 0
               }
@@ -4712,6 +4802,7 @@ describe('ludora admin service', () => {
           rate_limited: 3,
           store_id: 12,
           store_name: 'Alpha',
+          stale_items: 7,
           success_rate_percent: 92.5,
           successes: 37
         },
@@ -4723,6 +4814,19 @@ describe('ludora admin service', () => {
           rate_limited: 0,
           store_id: 13,
           store_name: 'Beta',
+          stale_items: 3,
+          success_rate_percent: 0,
+          successes: 0
+        },
+        {
+          attempts: 0,
+          eligible_items: 0,
+          failures: 0,
+          platform: 'unknown',
+          rate_limited: 0,
+          store_id: 14,
+          store_name: 'Gamma',
+          stale_items: 0,
           success_rate_percent: 0,
           successes: 0
         }
@@ -4760,7 +4864,23 @@ describe('ludora admin service', () => {
     expect(storeStatisticsSql).not.toContain('raw_payload');
     expect(storeStatisticsSql).not.toContain('ilike');
     expect(storeStatisticsSql).toContain('where stores.active = true');
+    const eligibleItemsSql = storeStatisticsSql.match(/eligible_items as \((.*?)\) select stores.id/)?.[1] ?? '';
+    expect(eligibleItemsSql).toContain("count(*) filter (where store_items.refreshed_date < now() - interval '24 hours')::int as stale_items");
+    expect(eligibleItemsSql).toContain('store_items.is_boardgame = true');
+    expect(eligibleItemsSql).toContain('store_items.is_boardgame_confirmed = true');
+    expect(eligibleItemsSql).toContain('store_items.item_id is not null');
+    expect(eligibleItemsSql).toContain("store_items.source_url <> ''");
+    expect(eligibleItemsSql).toContain("store_items.listing_status = 'listed'");
+    expect(eligibleItemsSql).toContain('store_items.store_active = true');
+    expect(eligibleItemsSql).toContain("store_items.availability <> 'unavailable'");
+    expect(eligibleItemsSql).toContain('group by store_items.store_id');
+    expect(storeStatisticsSql).toContain('coalesce(eligible_items.stale_items, 0)::int as stale_items');
+    expect(storeStatisticsSql).toContain('left join eligible_items on eligible_items.store_id = stores.id');
+    expect(storeStatisticsSql).not.toContain('join store_items');
+    expect(storeStatisticsSql).toContain('group by stores.id, stores.name, stores.platform, eligible_items.item_count, eligible_items.stale_items');
     expect(storeStatisticsSql).toContain('left join store_item_update_attempt_log attempts');
+    expect(storeStatisticsSql).toContain("attempts.started_at >= now() - interval '24 hours'");
+    expect(storeStatisticsSql).toContain('order by failures desc, attempts desc, stores.name asc');
     expect(storeStatisticsSql).not.toContain('having count(*)');
     expect(storeStatisticsSql).not.toContain('limit 12');
   });

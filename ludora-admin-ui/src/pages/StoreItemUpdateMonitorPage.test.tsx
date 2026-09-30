@@ -69,7 +69,7 @@ const monitor: StoreItemUpdateMonitor = {
     duration_ms: 820,
     id: 91,
     started_at: '2026-08-04T17:59:00Z',
-    status: 'succeeded',
+    status: 'deactivated',
     store_item_id: 501,
     store_item_title: 'Catan',
     store_name: 'Alpha'
@@ -84,6 +84,7 @@ const monitor: StoreItemUpdateMonitor = {
       rate_limited: 3,
       store_id: 12,
       store_name: 'Alpha',
+      stale_items: 7,
       success_rate_percent: 92.5,
       successes: 37
     },
@@ -96,6 +97,20 @@ const monitor: StoreItemUpdateMonitor = {
       rate_limited: 0,
       store_id: 13,
       store_name: 'Beta',
+      stale_items: 3,
+      success_rate_percent: 0,
+      successes: 0
+    },
+    {
+      attempts: 0,
+      eligible_items: 0,
+      failures: 0,
+      last_attempt_at: null,
+      platform: 'unknown',
+      rate_limited: 0,
+      store_id: 14,
+      store_name: 'Gamma',
+      stale_items: 0,
       success_rate_percent: 0,
       successes: 0
     }
@@ -176,11 +191,13 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(screen.getAllByText('Alpha')).toHaveLength(2);
     expect(screen.getByText('Beta')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Store update statistics · last 24h' })).toBeInTheDocument();
-    expect(screen.getByText(/All 2 active stores/)).toBeInTheDocument();
+    expect(screen.getByText(/All 3 active stores/)).toBeInTheDocument();
     expect(screen.getByText('92.5%')).toBeInTheDocument();
-    expect(screen.getByText('No data')).toBeInTheDocument();
+    expect(screen.getAllByText('No data')).toHaveLength(2);
     expect(screen.getByText('40')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catan' })).toHaveAttribute('href', '#listings?id=501');
+    expect(screen.getByText('unavailable')).toBeInTheDocument();
+    expect(screen.queryByText('deactivated')).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('button', { name: 'View failed attempts for Alpha (shopify)' }));
     expect(await screen.findByText('HTTP 429: Too Many Requests')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Catan Junior' })).toHaveAttribute('href', '#listings?id=502');
@@ -192,6 +209,36 @@ describe('StoreItemUpdateMonitorPage', () => {
 
     await waitFor(() => expect(adminApi.getStoreItemUpdateMonitor).toHaveBeenCalledWith(48, 12));
     expect(screen.getByText(/Showing Alpha/)).toBeInTheDocument();
+  });
+
+  it('shows current stale inventory per store independently of attempts in the last 24 hours', async () => {
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue(monitor);
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    const staleHeader = await screen.findByRole('columnheader', { name: 'Stale items' });
+    const table = staleHeader.closest('table')!;
+    expect(within(table).getAllByRole('columnheader').slice(2, 5).map((cell) => cell.textContent)).toEqual([
+      'Products', 'Stale items', 'Attempts'
+    ]);
+    const alphaCells = within(within(table).getByRole('row', { name: /^Alpha shopify/ })).getAllByRole('cell');
+    const betaCells = within(within(table).getByRole('row', { name: /^Beta woocommerce/ })).getAllByRole('cell');
+    const gammaCells = within(within(table).getByRole('row', { name: /^Gamma unknown/ })).getAllByRole('cell');
+    expect(alphaCells.slice(2, 5).map((cell) => cell.textContent)).toEqual(['120', '7', '40']);
+    expect(betaCells.slice(2, 5).map((cell) => cell.textContent)).toEqual(['45', '3', '0']);
+    expect(gammaCells.slice(2, 5).map((cell) => cell.textContent)).toEqual(['0', '0', '0']);
+  });
+
+  it('spans every statistics column when no active stores are returned', async () => {
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue({ ...monitor, store_statistics: [] });
+    vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    const emptyCell = await screen.findByRole('cell', { name: 'No active stores' });
+    expect(emptyCell).toHaveAttribute('colspan', '11');
+    expect(within(emptyCell.closest('table')!).getAllByRole('columnheader')).toHaveLength(11);
   });
 
   it('pauses the automatic updater and refreshes monitor state', async () => {

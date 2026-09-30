@@ -9,6 +9,7 @@ from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
+from ludora.discovery_pairs import DiscoveryPairState, discovery_url_pair, reconcile_discovery_pairs
 
 
 def connect_database(database_url: str):
@@ -59,6 +60,7 @@ class ItemCandidateUpsertResult:
     should_process: bool
     created: bool = False
     changed: bool = False
+    activate_if_ready: bool = False
 
 
 @dataclass(frozen=True)
@@ -291,6 +293,32 @@ class DiscoveryRepository:
                 ),
             )
         self.connection.commit()
+
+    def finalize_store_item_discovery_after_child_exit(
+        self, *, run_id: str, store_id: int, website_url: str,
+        completed_at: datetime, status: str, error: str,
+    ) -> bool:
+        """Record a reaped child failure without overwriting persisted counters."""
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                insert into job_store_item_discovery_log
+                    (run_id, store_id, website_url, status, error, started_at, completed_at)
+                values (%s, %s, %s, %s, %s, %s, %s)
+                on conflict (run_id) do update
+                set status = excluded.status,
+                    error = excluded.error,
+                    completed_at = excluded.completed_at,
+                    updated_at = now()
+                where job_store_item_discovery_log.store_id = excluded.store_id
+                    and job_store_item_discovery_log.status = 'running'
+                returning id
+                """,
+                (run_id, store_id, website_url, status, error, completed_at, completed_at),
+            )
+            updated = cursor.fetchone() is not None
+        self.connection.commit()
+        return updated
 
     def list_store_item_discovery_sources(self, *, store_ids: list[int] | None = None) -> list[StoreItemDiscoverySource]:
         sql = """
@@ -575,6 +603,7 @@ class DiscoveryRepository:
                       and store_items.source_url <> ''
                       and store_items.listing_status = 'LISTED'
                       and store_items.store_active = true
+              and store_items.availability <> 'unavailable'
                       and store_items.next_update_at <= now()
                       and (
                         store_items.update_lease_token is null
@@ -613,6 +642,7 @@ class DiscoveryRepository:
                       and store_items.source_url <> ''
                       and store_items.listing_status = 'LISTED'
                       and store_items.store_active = true
+              and store_items.availability <> 'unavailable'
                       and (
                         store_items.consecutive_update_failures = 0
                         or store_items.next_update_at is null
@@ -877,43 +907,51 @@ class DiscoveryRepository:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
-                update store_items
-                set store_active = false,
+                with previous as (
+                    select id, availability from store_items
+                    where id = %s and update_lease_token = %s::uuid
+                    for update
+                )
+                update store_items si
+                set availability = 'unavailable',
+                    availability_source = 'product_page_unavailable',
                     refreshed_date = now(),
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = 0,
                     last_update_error = ''
-                where id = %s
-                  and update_lease_token = %s::uuid
-                  and store_active = true
-                returning id
+                from previous
+                where si.id = previous.id
+                returning previous.availability
                 """,
                 (store_item_id, lease_token),
             )
-            if not cursor.fetchone():
+            previous = cursor.fetchone()
+            if previous is None:
                 self._mark_attempt_lease_lost(cursor, attempt_id, worker_name, worker_id)
                 self.connection.commit()
                 raise RuntimeError(f"Store item {store_item_id} update lease was lost")
-            cursor.execute(
-                """
-                insert into store_item_update_change_log (
-                    job_id, run_id, store_item_id, field_name, old_value, new_value
+            changed = previous[0] != "unavailable"
+            if changed:
+                cursor.execute(
+                    """
+                    insert into store_item_update_change_log (
+                        job_id, run_id, store_item_id, field_name, old_value, new_value
+                    )
+                    values (%s, %s, %s, 'availability', %s::jsonb, %s::jsonb)
+                    """,
+                    (job_id, run_id, store_item_id, _jsonb_log_value(previous[0]), _jsonb_log_value("unavailable")),
                 )
-                values (%s, %s, %s, 'store_active', 'true'::jsonb, 'false'::jsonb)
-                """,
-                (job_id, run_id, store_item_id),
-            )
             cursor.execute(
                 """
                 update store_item_update_attempt_log
                 set status = 'deactivated',
-                    changed = true,
+                    changed = %s,
                     completed_at = now(),
                     duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
                 where id = %s
                 """,
-                (attempt_id,),
+                (changed, attempt_id),
             )
             cursor.execute(
                 """
@@ -933,13 +971,15 @@ class DiscoveryRepository:
                 """
                 update job_store_item_update_log
                 set scanned_items = scanned_items + 1,
-                    updated_items = updated_items + 1,
+                    updated_items = updated_items + %s,
                     updated_at = now()
                 where id = %s
                 """,
-                (job_id,),
+                (1 if changed else 0, job_id),
             )
         self.connection.commit()
+        existing_record.availability = "unavailable"
+        existing_record.availability_source = "product_page_unavailable"
 
     def fail_claimed_store_item_update(
         self,
@@ -1081,8 +1121,15 @@ class DiscoveryRepository:
         )
 
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> ItemCandidateUpsertResult:
+        return self._upsert_item_candidate(record, pending_discovery=False)
+
+    def prepare_discovery_pair(self, record: DiscoveryItemCandidateRecord) -> ItemCandidateUpsertResult:
+        return self._upsert_item_candidate(record, pending_discovery=True)
+
+    def _upsert_item_candidate(self, record: DiscoveryItemCandidateRecord, *, pending_discovery: bool) -> ItemCandidateUpsertResult:
         data = record.to_db_dict()
         with self.connection.cursor() as cursor:
+            self._lock_discovery_pairs(cursor, record.store_id)
             existing = self._find_item_candidate(cursor, record)
             if existing:
                 item_id = _optional_int(existing[2])
@@ -1099,11 +1146,14 @@ class DiscoveryRepository:
                     candidate_id=int(existing[0]),
                     listing_status=str(existing[1]),
                     item_id=item_id,
-                    should_process=item_id is None and not existing[3] and existing[4] is None,
+                    should_process=existing[4] is None or (len(existing) > 5 and bool(existing[5])),
                     created=False,
+                    activate_if_ready=pending_discovery and (existing[4] is None or (len(existing) > 5 and bool(existing[5]))),
                 )
             else:
-                cursor.execute(_insert_item_candidate_sql(), self._item_candidate_write_params(data))
+                if pending_discovery:
+                    data["store_active"] = False
+                cursor.execute(_insert_item_candidate_sql(), (*self._item_candidate_write_params(data), data["store_active"]))
                 row = cursor.fetchone()
                 result = ItemCandidateUpsertResult(
                     candidate_id=int(row[0]) if row else 0,
@@ -1111,9 +1161,223 @@ class DiscoveryRepository:
                     item_id=_optional_int(row[2]) if row else _optional_int(data["item_id"]),
                     should_process=True,
                     created=True,
+                    activate_if_ready=pending_discovery,
                 )
+            record.store_item_id = result.candidate_id
         self.connection.commit()
         return result
+
+    @staticmethod
+    def _lock_discovery_pairs(cursor: Any, store_id: int | None) -> None:
+        cursor.execute("select pg_advisory_xact_lock(hashtext(%s))", (f"ludora:discovery-pairs:{store_id}",))
+
+    def observe_discovery_pair(self, store_id: int | None, discovered_url: str, target_url: str) -> bool:
+        origin, target = discovery_url_pair(discovered_url, target_url)
+        with self.connection.cursor() as cursor:
+            self._lock_discovery_pairs(cursor, store_id)
+            cursor.execute("""
+                select id, processed_at, processing_error
+                from store_items
+                where store_id is not distinct from %s
+                  and source_url_origin is not distinct from %s
+                  and source_url = %s
+                for update
+            """, (store_id, origin, target))
+            row = cursor.fetchone()
+            if row is None or row[1] is None or row[2]:
+                self.connection.commit()
+                return False
+            self._reconcile_discovery_pair(cursor, store_id, origin or target, target, int(row[0]), allow_activation=False)
+            cursor.execute("update store_items set last_seen_at = now() where id = %s", (row[0],))
+        self.connection.commit()
+        return True
+
+    def get_completed_discovery_pair_id(self, store_id: int | None, discovered_url: str, target_url: str) -> int | None:
+        """Read pair identity without reconciling visibility during a claimed fetch."""
+        origin, target = discovery_url_pair(discovered_url, target_url)
+        with self.connection.cursor() as cursor:
+            cursor.execute("""
+                select id from store_items
+                where store_id is not distinct from %s
+                  and source_url_origin is not distinct from %s and source_url = %s
+                  and processed_at is not null and coalesce(processing_error, '') = ''
+            """, (store_id, origin, target))
+            row = cursor.fetchone()
+        self.connection.commit()
+        return int(row[0]) if row is not None else None
+
+    def mark_item_update_redirect_retryable(self, store_id: int | None, candidate_id: int, error: str) -> None:
+        """A caught finalization failure must not strand this run's hidden candidate."""
+        with self.connection.cursor() as cursor:
+            self._lock_discovery_pairs(cursor, store_id)
+            cursor.execute("""
+                update store_items set processing_error = %s, last_updated = now()
+                where id = %s and store_id is not distinct from %s and store_active = false
+            """, (f"Redirect finalization failed: {error}", candidate_id, store_id))
+        self.connection.commit()
+
+    def complete_item_update_redirect(
+        self, existing_record: DiscoveryItemCandidateRecord, candidate_id: int, *,
+        target_url: str, activate_if_ready: bool, non_boardgame_success: bool,
+        job_id: int | None = None, run_id: str | None = None,
+        attempt_id: int | None = None, lease_token: str | None = None,
+        worker_name: str | None = None, worker_id: str | None = None,
+    ) -> ItemCandidateUpsertResult:
+        """Reconcile a completed target and hide history after checking claim ownership.
+
+        Network and matching have finished before this transaction acquires the
+        per-store advisory lock and then the item row locks.
+        """
+        original_id = existing_record.store_item_id
+        if original_id is None:
+            raise ValueError("store item id is required to finalize a redirect")
+        if run_id and job_id is None:
+            raise ValueError("job id is required to log update changes")
+        claimed = lease_token is not None
+        if claimed and (attempt_id is None or job_id is None or not worker_name or not worker_id):
+            raise ValueError("claimed redirect requires attempt, job, and worker context")
+        origin, target = discovery_url_pair(existing_record.source_url, target_url)
+        if origin is None or candidate_id == original_id:
+            raise ValueError("redirect requires an independent target pair")
+        try:
+            with self.connection.cursor() as cursor:
+                self._lock_discovery_pairs(cursor, existing_record.store_id)
+                cursor.execute("""
+                    select store_active from store_items
+                    where id = %s and store_id is not distinct from %s
+                """ + ("""
+                      and update_lease_token = %s::uuid
+                      and update_lease_expires_at > clock_timestamp()
+                """ if claimed else "") + " for update", (
+                    original_id, existing_record.store_id, *((lease_token,) if claimed else ())))
+                original = cursor.fetchone()
+                if original is None:
+                    if claimed:
+                        self._mark_attempt_lease_lost(cursor, attempt_id, worker_name, worker_id)
+                        self.connection.commit()
+                        raise RuntimeError(f"Store item {original_id} update lease was lost")
+                    raise RuntimeError(f"Store item {original_id} no longer exists")
+                cursor.execute("""
+                    select source_url_origin, source_url, processing_error, processed_at, is_boardgame,
+                           listing_status, item_id
+                    from store_items where id = %s and store_id is not distinct from %s for update
+                """, (candidate_id, existing_record.store_id))
+                row = cursor.fetchone()
+                if row is None or (row[0], row[1]) != (origin, target):
+                    raise RuntimeError("Redirect target pair changed before persistence")
+                if row[2] and not (non_boardgame_success and not row[4]):
+                    raise RuntimeError("Redirect target processing did not complete")
+                if row[3] is None and not (non_boardgame_success and not row[4]):
+                    raise RuntimeError("Redirect target processing did not complete")
+                if non_boardgame_success and not row[4] and (row[2] or row[3] is None):
+                    cursor.execute("update store_items set processing_error = '', processed_at = now() where id = %s", (candidate_id,))
+                cursor.execute("""
+                    update store_items set store_active = false, refreshed_date = now(),
+                        last_update_attempt_at = clock_timestamp(), next_update_at = null,
+                        update_lease_token = null, update_lease_expires_at = null,
+                        consecutive_update_failures = 0, last_update_error = '', last_updated = now()
+                    where id = %s
+                """, (original_id,))
+                visibility_changes = self._reconcile_discovery_pair(
+                    cursor, existing_record.store_id, origin, target, candidate_id,
+                    allow_activation=activate_if_ready)
+                changed = bool(original[0]) or bool(visibility_changes)
+                logged_changes = [(original_id, True, False)] if original[0] else []
+                logged_changes += [(state.id, not state.store_active, state.store_active)
+                                   for state in visibility_changes]
+                if job_id is not None and run_id is not None:
+                    for row_id, old_value, new_value in logged_changes:
+                        cursor.execute("""
+                            insert into store_item_update_change_log (
+                                job_id, run_id, store_item_id, field_name, old_value, new_value
+                            ) values (%s, %s, %s, 'store_active', %s::jsonb, %s::jsonb)
+                        """, (job_id, run_id, row_id, _jsonb_log_value(old_value), _jsonb_log_value(new_value)))
+                if claimed:
+                    cursor.execute("""
+                        update store_item_update_attempt_log set status = 'succeeded', changed = %s,
+                            completed_at = now(),
+                            duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
+                        where id = %s
+                    """, (changed, attempt_id))
+                    cursor.execute("""
+                        update store_item_update_worker_state set status = 'idle', heartbeat_at = now(),
+                            current_store_item_id = null, last_success_at = now(), last_error = '', updated_at = now()
+                        where worker_name = %s and worker_id = %s
+                    """, (worker_name, worker_id))
+                    cursor.execute("""
+                        update store_item_update_store_cooldown set blocked_until = null,
+                            consecutive_429s = 0, updated_at = now()
+                        where worker_name = %s and store_id = %s
+                    """, (worker_name, existing_record.store_id))
+                    cursor.execute("""
+                        update job_store_item_update_log set scanned_items = scanned_items + 1,
+                            updated_items = updated_items + %s, updated_at = now() where id = %s
+                    """, (1 if changed else 0, job_id))
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+        existing_record.store_active = False
+        return ItemCandidateUpsertResult(candidate_id, str(row[5]) if len(row) > 5 else "PENDING",
+                                        _optional_int(row[6]) if len(row) > 6 else None, False, changed=changed)
+
+    def complete_discovery_pair(self, candidate_id: int, *, activate_if_ready: bool = False, non_boardgame_success: bool = False) -> bool:
+        # Read scope, then acquire the advisory lock before row locks. The
+        # second read catches concurrent manual edits and processing failures.
+        with self.connection.cursor() as cursor:
+            cursor.execute("select store_id from store_items where id = %s", (candidate_id,))
+            scope = cursor.fetchone()
+            if scope is None:
+                self.connection.commit()
+                return False
+            self._lock_discovery_pairs(cursor, scope[0])
+            cursor.execute("""
+                select source_url_origin, source_url, processing_error, processed_at, is_boardgame
+                from store_items where id = %s and store_id is not distinct from %s
+                for update
+            """, (candidate_id, scope[0]))
+            row = cursor.fetchone()
+            if row is None:
+                self.connection.commit()
+                return False
+            if row[2]:
+                if not non_boardgame_success or row[4]:
+                    self.connection.commit()
+                    return False
+                # This run successfully classified the row as a non-boardgame.
+                # The old matcher error no longer describes this candidate.
+                cursor.execute("update store_items set processing_error = '', processed_at = now() where id = %s", (candidate_id,))
+            # A non-boardgame candidate can complete without a matcher write.
+            # Persist completion so later rediscovery cannot promote a manual hide.
+            if row[3] is None and not row[2]:
+                cursor.execute("update store_items set processed_at = now() where id = %s", (candidate_id,))
+            if activate_if_ready:
+                self._reconcile_discovery_pair(cursor, scope[0], row[0] or row[1], row[1], candidate_id, allow_activation=True)
+        self.connection.commit()
+        return True
+
+    def _reconcile_discovery_pair(self, cursor: Any, store_id: int | None, discovered_url: str, target_url: str, candidate_id: int, *, allow_activation: bool) -> list[DiscoveryPairState]:
+        cursor.execute("""
+            select id, source_url, source_url_origin, store_active, listing_status,
+                   item_id, is_boardgame_confirmed, is_boardgame, availability,
+                   processed_at, processing_error
+            from store_items
+            where store_id is not distinct from %s
+              and source_url in (
+                  select source_url from store_items
+                  where store_id is not distinct from %s
+                    and coalesce(source_url_origin, source_url) = %s
+                  union select %s
+              )
+            order by id for update
+        """, (store_id, store_id, discovered_url, target_url))
+        rows = [DiscoveryPairState(*row) for row in cursor.fetchall()]
+        changes = reconcile_discovery_pairs(rows, candidate_id, allow_activation=allow_activation)
+        # The partial unique active-target index also protects manual writes.
+        # Release old representatives before activating their replacements.
+        for row in sorted(changes, key=lambda changed: changed.store_active):
+            cursor.execute("update store_items set store_active = %s, last_updated = now() where id = %s", (row.store_active, row.id))
+        return changes
 
     def update_item_candidate_with_change_log(
         self,
@@ -1221,16 +1485,21 @@ class DiscoveryRepository:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
-                update store_items
-                set store_active = false,
+                with previous as (
+                    select id, availability from store_items where id = %s for update
+                )
+                update store_items si
+                set availability = 'unavailable',
+                    availability_source = 'product_page_unavailable',
                     refreshed_date = now()
-                where id = %s
-                  and store_active = true
-                returning id
+                from previous
+                where si.id = previous.id
+                returning previous.availability
                 """,
                 (store_item_id,),
             )
-            changed = cursor.fetchone() is not None
+            previous = cursor.fetchone()
+            changed = previous is not None and previous[0] != "unavailable"
             if changed and run_id is not None:
                 cursor.execute(
                     """
@@ -1248,13 +1517,14 @@ class DiscoveryRepository:
                         job_id,
                         run_id,
                         store_item_id,
-                        "store_active",
-                        _jsonb_log_value(True),
-                        _jsonb_log_value(False),
+                        "availability",
+                        _jsonb_log_value(previous[0]),
+                        _jsonb_log_value("unavailable"),
                     ),
                 )
         self.connection.commit()
-        existing_record.store_active = False
+        existing_record.availability = "unavailable"
+        existing_record.availability_source = "product_page_unavailable"
         return ItemCandidateUpsertResult(
             candidate_id=store_item_id,
             listing_status=existing_record.listing_status,
@@ -1267,16 +1537,18 @@ class DiscoveryRepository:
     def _find_item_candidate(self, cursor: Any, record: DiscoveryItemCandidateRecord):
         cursor.execute(
             """
-            select id, listing_status, item_id, match_source, processed_at
+            select id, listing_status, item_id, match_source, processed_at, processing_error
             from store_items
             where store_id is not distinct from %s
               and source_url = %s
+              and source_url_origin is not distinct from %s
+            for update
             """,
-            (record.store_id, record.source_url),
+            (record.store_id, record.source_url, record.source_url_origin),
         )
         return cursor.fetchone()
 
-    def item_candidate_exists(self, store_id: int | None, source_url: str) -> bool:
+    def item_candidate_exists(self, store_id: int | None, source_url: str, source_url_origin: str | None = None) -> bool:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 """
@@ -1284,9 +1556,10 @@ class DiscoveryRepository:
                 from store_items
                 where store_id is not distinct from %s
                   and source_url = %s
+                  and source_url_origin is not distinct from %s
                 limit 1
                 """,
-                (store_id, source_url),
+                (store_id, source_url, source_url_origin),
             )
             return cursor.fetchone() is not None
 
@@ -1370,6 +1643,7 @@ class DiscoveryRepository:
               and store_items.source_url <> ''
               and store_items.listing_status = 'LISTED'
               and store_items.store_active = true
+              and store_items.availability <> 'unavailable'
               and (
                 store_items.update_lease_token is null
                 or store_items.update_lease_expires_at <= now()
@@ -1535,6 +1809,7 @@ class DiscoveryRepository:
             data["is_boardgame_confirmed"],
             data["category_confidence"],
             _jsonb_dumps(data["classification_reasons"]),
+            data["source_url_origin"],
         )
 
     def _item_candidate_price_availability_params(
@@ -1617,11 +1892,13 @@ def _insert_item_candidate_sql() -> str:
         is_boardgame_confirmed,
         category_confidence,
         classification_reasons,
+        source_url_origin,
+        store_active,
         last_seen_at,
         last_updated,
         refreshed_date
     )
-    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, now(), now(), now())
+    values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s::jsonb, %s, %s, now(), now(), now())
     returning id, listing_status, item_id
     """
 
@@ -1671,6 +1948,7 @@ def _update_item_candidate_sql(*, refresh_from_source: bool = False) -> str:
         is_boardgame_confirmed = %s,
         category_confidence = %s,
         classification_reasons = %s::jsonb,
+        source_url_origin = %s,
         {timestamp_sql.strip()}
     where id = %s
     """
@@ -1739,7 +2017,8 @@ def _item_candidate_select_columns() -> str:
         matched_at,
         processed_at,
         processing_error,
-        id
+        id,
+        source_url_origin
     """
 
 
@@ -1792,6 +2071,7 @@ def _item_candidate_from_row(row: Any) -> DiscoveryItemCandidateRecord:
         processed_at=_text(row[39]) or None,
         processing_error=_text(row[40]),
         store_item_id=_optional_int(row[41]),
+        source_url_origin=_text(row[42]) or None,
     )
 
 

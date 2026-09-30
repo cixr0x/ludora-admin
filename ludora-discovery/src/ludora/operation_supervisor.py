@@ -144,10 +144,19 @@ def main(argv: list[str] | None = None) -> int:
 
     previous_handlers = {value: signal.signal(value, handle) for value in
                          (signal.SIGCHLD, signal.SIGTERM, signal.SIGINT, signal.SIGUSR1)}
+    arguments = sys.argv[1:] if argv is None else argv
+    owned_mode = bool(arguments and arguments[0] == '--owned-child')
+    command = (
+        arguments[1:]
+        if owned_mode
+        else [sys.executable, '-m', 'ludora.operation_cli', *arguments]
+    )
+    if not command:
+        raise ValueError('Missing owned-child command')
     try:
         # Inherit stdin/stdout/stderr unchanged. The parent sees the operation's
         # original acceptance frames, diagnostics and result JSON directly.
-        worker = subprocess.Popen([sys.executable, '-m', 'ludora.operation_cli', *(sys.argv[1:] if argv is None else argv)])
+        worker = subprocess.Popen(command)
         worker_identity = _identity(worker.pid)
         cleanup_failed = False
         while True:
@@ -167,7 +176,7 @@ def main(argv: list[str] | None = None) -> int:
                     # or invokes its bounded external process-tree fallback.
                     _report_cleanup_failure(error)
                 else:
-                    return 137 if requested_hard_stop else _exit_code(worker.returncode or 0)
+                    return 137 if requested_hard_stop else (0 if owned_mode else _exit_code(worker.returncode or 0))
             select.select([read_fd], [], [])
             try:
                 os.read(read_fd, 4096)

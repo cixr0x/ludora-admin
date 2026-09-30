@@ -27,6 +27,15 @@ class FakeRepository:
         self.exists_checks.append((store_id, source_url))
         return (store_id, source_url) in self.existing_urls
 
+    def observe_discovery_pair(self, store_id, discovered_url, target_url):
+        return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
+
+    def prepare_discovery_pair(self, record):
+        return self.upsert_item_candidate(record)
+
+    def complete_discovery_pair(self, candidate_id, *, activate_if_ready=False, non_boardgame_success=False):
+        return True
+
     def upsert_item_candidate(self, record):
         self.item_records.append(record)
         return ItemCandidateUpsertResult(candidate_id=101, listing_status="PENDING", item_id=None, should_process=True)
@@ -41,6 +50,145 @@ class FakeTraceLogger:
 
 
 class AmazonDiscoveryTests(unittest.TestCase):
+    def test_accepts_valid_same_asin_redirect_and_reports_only_exhausted_fetch_as_skipped(self):
+        redirected_url = "https://www.amazon.com.mx/dp/B0DZL3YFC5"
+        final_url = "https://www.amazon.com.mx/Canonical/dp/B0DZL3YFC5"
+        valid_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
+        failed_url = "https://www.amazon.com.mx/dp/B0TEST1234"
+        search_html = (
+            f'<a href="{redirected_url}">Catfe game</a>'
+            f'<a href="{valid_url}">Disney game</a>'
+            f'<a href="{failed_url}">Failed game</a>'
+        )
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+        detail_requests = []
+
+        def fetcher(url):
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            detail_requests.append(url)
+            if url == failed_url:
+                return None
+            asin = url.rsplit("/", 1)[-1]
+            html = (
+                '<span id="productTitle">Juego de Mesa</span>'
+                '<input id="add-to-cart-button" type="submit">'
+                f'<table><tr><th>ASIN</th><td>{asin}</td></tr></table>'
+            )
+            return FetchResult(url=final_url if url == redirected_url else url, text=html)
+
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11,
+            repository,
+            browser_fetcher=fetcher,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(detail_requests, [redirected_url, valid_url, failed_url, failed_url, failed_url])
+        self.assertEqual([record.source_url for record in records], [final_url, valid_url])
+        self.assertEqual([record.source_url_origin for record in records], [redirected_url, None])
+        self.assertEqual([record.source_url for record in repository.item_records], [final_url, valid_url])
+        self.assertEqual(
+            [fields for event, fields in trace.entries if event == "amazon_inventory.crawl.completed_with_skips"],
+            [{
+                "skipped_detail_pages": 1,
+                "skipped_source_urls": [failed_url],
+                "processed_items": 2,
+                "store_id": 11,
+            }],
+        )
+
+    def test_brand_discovery_accepts_valid_same_asin_redirect(self):
+        source_url = "https://www.amazon.com.mx/dp/B0HASBRO01"
+        final_url = "https://www.amazon.com.mx/Hasbro-Clue/dp/B0HASBRO01"
+        search_url = "https://www.amazon.com.mx/s?srs=19815643011&rh=p_89%3AHasbro%2BGaming"
+        detail_html = (
+            '<span id="productTitle">Hasbro Gaming Clue</span>'
+            '<a id="bylineInfo">Marca: Hasbro Gaming</a>'
+            '<table><tr><th>Marca</th><td>Hasbro Gaming</td></tr>'
+            '<tr><th>ASIN</th><td>B0HASBRO01</td></tr></table>'
+        )
+        repository = FakeRepository()
+        trace = FakeTraceLogger()
+        detail_requests = []
+
+        def fetcher(url):
+            if url == search_url:
+                return FetchResult(url=url, text=f'<a href="{source_url}">Hasbro Gaming Clue</a>')
+            if "/s?" in url:
+                return FetchResult(url=url, text="<html>No more results</html>")
+            detail_requests.append(url)
+            return FetchResult(url=final_url, text=detail_html)
+
+        records = crawl_amazon_brand_inventory(
+            search_url,
+            12,
+            repository,
+            brand_name="Hasbro Gaming",
+            browser_fetcher=fetcher,
+            trace_logger=trace,
+            delay_seconds=0,
+        )
+
+        self.assertEqual(detail_requests, [source_url])
+        self.assertEqual([record.source_url for record in records], [final_url])
+        self.assertEqual([record.source_url_origin for record in records], [source_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [final_url])
+        self.assertFalse(any(event == "amazon_inventory.crawl.completed_with_skips" for event, _ in trace.entries))
+
+    def test_redirected_amazon_pages_still_require_valid_product_and_matching_asin(self):
+        source_url = "https://www.amazon.com.mx/dp/B0TEST1234"
+        search_url = "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC"
+        cases = (
+            (
+                "different_asin",
+                "https://www.amazon.com.mx/Other/dp/B0B7QXY8ZS",
+                '<span id="productTitle">Other game</span><div>ASIN: B0TEST1234</div>',
+                "redirected_asin",
+            ),
+            (
+                "non_product",
+                "https://www.amazon.com.mx/gp/aw/landing",
+                "<html><title>Amazon.com.mx</title><body>Inicio</body></html>",
+                "missing_product_title",
+            ),
+        )
+        for case, final_url, html, reason in cases:
+            with self.subTest(case=case):
+                repository = FakeRepository()
+                trace = FakeTraceLogger()
+                detail_requests = []
+
+                def fetcher(url):
+                    if "/search?" in url:
+                        return FetchResult(url=url, text=f'<a href="{source_url}">Test game</a>')
+                    detail_requests.append(url)
+                    return FetchResult(url=final_url, text=html)
+
+                records = crawl_amazon_store_inventory(
+                    search_url,
+                    11,
+                    repository,
+                    browser_fetcher=fetcher,
+                    trace_logger=trace,
+                    delay_seconds=0,
+                )
+
+                self.assertEqual(records, [])
+                self.assertEqual(repository.item_records, [])
+                self.assertEqual(detail_requests, [source_url] * 3)
+                self.assertEqual(
+                    [fields["reason"] for event, fields in trace.entries if event == "amazon_inventory.candidate.detail_fetch.invalid"],
+                    [reason] * 3,
+                )
+                self.assertEqual(
+                    [fields["skipped_source_urls"] for event, fields in trace.entries if event == "amazon_inventory.crawl.completed_with_skips"],
+                    [[source_url]],
+                )
+
     def test_builds_storefront_search_url_from_named_store_page(self):
         url = build_amazon_store_search_url(
             "https://www.amazon.com.mx/stores/LaCompa%C3%B1%C3%ADadelosJuegos/page/00565807-102E-497A-894A-3434B4619BD2",
@@ -511,6 +659,36 @@ class AmazonDiscoveryTests(unittest.TestCase):
             ],
         )
 
+    def test_hard_browser_timeout_skips_one_detail_after_two_worker_attempts(self):
+        from ludora.supervised_browser import BrowserFetchTimeout
+
+        failed_url = "https://www.amazon.com.mx/dp/B0BAD00001"
+        valid_url = "https://www.amazon.com.mx/dp/B0GOOD0001"
+        search_html = f'<a href="{failed_url}">Bad</a><a href="{valid_url}">Good</a>'
+        valid_html = '<span id="productTitle">Good</span><div>ASIN: B0GOOD0001</div>'
+        detail_fetches = []
+
+        def fetcher(url):
+            if "/search?" in url:
+                return FetchResult(url=url, text=search_html)
+            detail_fetches.append(url)
+            if url == failed_url:
+                raise BrowserFetchTimeout("two supervised attempts timed out")
+            return FetchResult(url=url, text=valid_html)
+
+        trace = FakeTraceLogger()
+        repository = FakeRepository()
+        records = crawl_amazon_store_inventory(
+            "https://www.amazon.com.mx/stores/Novelty/page/63DBDD5C-19BE-4897-A1AE-57B94E8DA3FC",
+            11, repository, browser_fetcher=fetcher, trace_logger=trace, delay_seconds=0,
+        )
+
+        self.assertEqual(detail_fetches, [failed_url, valid_url])
+        self.assertEqual([record.source_url for record in records], [valid_url])
+        skipped = [fields for event, fields in trace.entries if event == "amazon_inventory.candidate.detail_fetch.skipped_transient"]
+        self.assertEqual(len(skipped), 1)
+        self.assertEqual(skipped[0]["source_url"], failed_url)
+
     def test_calls_product_callback_for_each_detail_retry_but_not_search_enumeration(self):
         product_url = "https://www.amazon.com.mx/dp/B0B7QXY8ZS"
         search_html = f'<html><body><a href="{product_url}"></a></body></html>'
@@ -907,13 +1085,15 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(repository.item_records), 5)
         self.assertNotIn("page=6", " ".join(fetched_urls))
 
-    def test_skips_existing_asins_before_fetching_details(self):
+    def test_resolves_existing_asins_before_skipping_extraction(self):
         product_url = "https://www.amazon.com.mx/dp/B0DZL3YFC5"
         repository = FakeRepository(existing_urls={(12, product_url)})
         fetched_urls = []
 
         def fetcher(url):
             fetched_urls.append(url)
+            if "/dp/" in url:
+                return FetchResult(url=url, text='<span id="productTitle">Catfe</span><input id="add-to-cart-button"><span>B0DZL3YFC5</span>')
             return FetchResult(
                 url=url,
                 text='<a href="/Compa%C3%B1%C3%ADa-Juegos-Catfe/dp/B0DZL3YFC5?ref_=ast_sto_dp">Catfé</a>',
@@ -929,7 +1109,7 @@ class AmazonDiscoveryTests(unittest.TestCase):
 
         self.assertEqual(records, [])
         self.assertEqual(repository.exists_checks, [(12, product_url)])
-        self.assertEqual(len(fetched_urls), 1)
+        self.assertEqual(len(fetched_urls), 2)
 
 
 def _page_number(url):

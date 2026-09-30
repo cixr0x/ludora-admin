@@ -174,6 +174,7 @@ class DiscoveryItemCandidateRecord:
     processed_at: str | None = None
     processing_error: str = ""
     store_item_id: int | None = None
+    source_url_origin: str | None = None
 
     def __post_init__(self) -> None:
         if not self.original_title.strip():
@@ -183,6 +184,7 @@ class DiscoveryItemCandidateRecord:
         return {
             "store_id": self.store_id,
             "source_url": self.source_url,
+            "source_url_origin": self.source_url_origin,
             "source_listing_url": self.source_listing_url,
             "title": self.title,
             "original_title": self.original_title,

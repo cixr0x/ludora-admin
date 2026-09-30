@@ -4,9 +4,10 @@ import random
 import re
 import unicodedata
 from collections.abc import Callable, Collection, Mapping
+from dataclasses import dataclass
 from html import unescape
 from typing import Protocol
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urldefrag, urljoin, urlparse
 
 from ludora.browser_fetch import fetch_product_detail_with_browser
 from ludora.cancellation import CancellationToken, raise_if_cancelled
@@ -18,6 +19,7 @@ from ludora.hidralistico_discovery import (
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import extract_listing_candidates
 from ludora.models import DiscoveryItemCandidateRecord
+from ludora.discovery_pairs import discovery_url_pair
 from ludora.product_detail_extraction import extract_product_detail_candidate
 from ludora.product_discovery_throttle import wait_for_discovery_delay
 from ludora.shopify_storefront import (
@@ -33,6 +35,7 @@ from ludora.shopify_storefront import (
     shopify_storefront_endpoint,
 )
 from ludora.sitemap_discovery import _looks_like_site_protection_challenge, discover_product_urls_from_sitemaps
+from ludora.supervised_browser import BrowserFetchFailed
 from ludora.trace import NullTraceLogger, TraceLogger
 from ludora.webfetch import (
     DEFAULT_FETCH_MAX_ATTEMPTS,
@@ -94,6 +97,24 @@ class ItemCandidateRepository(Protocol):
         ...
 
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
+        ...
+
+    def observe_discovery_pair(self, store_id: int | None, discovered_url: str, target_url: str) -> bool:
+        ...
+
+    def prepare_discovery_pair(self, record: DiscoveryItemCandidateRecord) -> object | None:
+        ...
+
+    def complete_discovery_pair(self, candidate_id: int, *, activate_if_ready: bool = False, non_boardgame_success: bool = False) -> bool:
+        ...
+
+    def get_completed_discovery_pair_id(self, store_id: int | None, discovered_url: str, target_url: str) -> int | None:
+        ...
+
+    def complete_item_update_redirect(self, existing_record: DiscoveryItemCandidateRecord, candidate_id: int, **kwargs: object) -> object:
+        ...
+
+    def mark_item_update_redirect_retryable(self, store_id: int | None, candidate_id: int, error: str) -> None:
         ...
 
     def list_confirmed_boardgame_item_candidates(
@@ -190,6 +211,141 @@ class ProductDetailRejectedError(RuntimeError):
     pass
 
 
+class ProductDetailRedirect(RuntimeError):
+    """A fetched target must be processed independently of the tracked item."""
+
+    def __init__(self, fetched: FetchResult):
+        super().__init__(f"Product detail redirected to {fetched.url}")
+        self.fetched = fetched
+
+
+def _check_item_update_redirect(existing: DiscoveryItemCandidateRecord, fetched: FetchResult, platform: str) -> None:
+    if not _is_redirected_product_url(existing.source_url, fetched.url):
+        return
+    if platform.strip().casefold() in AMAZON_STORE_PLATFORMS:
+        from ludora.amazon_discovery import _asin_from_url
+
+        original_asin = _asin_from_url(existing.source_url)
+        if original_asin and original_asin == _asin_from_url(fetched.url):
+            return
+    raise ProductDetailRedirect(fetched)
+
+
+@dataclass(frozen=True)
+class PreparedItemUpdateRedirect:
+    candidate_id: int
+    target_url: str
+    activate_if_ready: bool = False
+    non_boardgame_success: bool = False
+
+
+def prepare_item_update_redirect(
+    existing_record: DiscoveryItemCandidateRecord,
+    fetched: FetchResult,
+    repository: ItemCandidateRepository,
+    *,
+    platform: str,
+    item_classifier: ItemClassifier,
+    item_processor: ItemCandidateProcessor,
+    browser_fetcher: Callable[[str], FetchResult | None] | None = None,
+    item_title_extractor: ItemTitleExtractor | None = None,
+    before_request: BeforeProductRequest | None = None,
+    trace_logger: TraceLogger | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> PreparedItemUpdateRedirect:
+    """Use discovery extraction and processing, leaving visibility for finalization."""
+    trace = trace_logger or NullTraceLogger()
+    requested_url = urldefrag(existing_record.source_url).url
+    trace.log("item_update.item.redirect.started", source_store_item_id=existing_record.store_item_id,
+              source_url=requested_url, source_url_origin=existing_record.source_url_origin,
+              final_url=urldefrag(fetched.url).url, target_store_item_id=None)
+    candidate = None
+    try:
+        neutral = DiscoveryItemCandidateRecord(
+            store_id=existing_record.store_id, source_url=urldefrag(fetched.url).url,
+            source_listing_url=existing_record.source_listing_url, title="")
+
+        def observe(fetched_target: FetchResult) -> None:
+            target = urldefrag(fetched_target.url).url
+            amazon_request = platform.strip().casefold() in AMAZON_STORE_PLATFORMS
+            if not _valid_discovery_response(fetched_target, requested_url, amazon_detail_request=amazon_request):
+                raise ProductDetailRejectedError(f"Redirect target was not a valid product page: {target}")
+            if amazon_request:
+                from ludora.amazon_discovery import _asin_from_url
+
+                if not _asin_from_url(target):
+                    raise ProductDetailRejectedError(f"Amazon redirect target has no ASIN: {target}")
+            candidate_id = repository.get_completed_discovery_pair_id(existing_record.store_id, requested_url, target)
+            if candidate_id is not None:
+                raise ExistingDiscoveryPair(candidate_id=int(candidate_id), target_url=target)
+
+        try:
+            candidate = _fetch_detail_candidate(
+                listing_candidate=neutral,
+                source_listing_url=neutral.source_listing_url or requested_url,
+                platform=platform, browser_fetcher=browser_fetcher, initial_fetch=fetched,
+                trace_logger=trace, cancellation_token=cancellation_token,
+                before_request=before_request, on_resolved_discovery_response=observe)
+        except ExistingDiscoveryPair as pair:
+            return PreparedItemUpdateRedirect(pair.candidate_id, pair.target_url)
+        if not candidate.title or candidate is neutral:
+            raise ProductDetailRejectedError(f"No product details were extracted from redirect target: {fetched.url}")
+        candidate.source_url_origin, candidate.source_url = discovery_url_pair(requested_url, candidate.source_url)
+        candidate.store_active = False
+        if candidate.source_url_origin is None:
+            raise ProductDetailRejectedError("Redirect target returned to the tracked source URL")
+        if platform.strip().casefold() in AMAZON_STORE_PLATFORMS and item_title_extractor is not None:
+            extracted_title = item_title_extractor(candidate).strip()
+            if extracted_title:
+                candidate.original_title = candidate.title
+                candidate.title = extracted_title
+        result = prepare_discovery_candidate(
+            candidate, repository, item_classifier=item_classifier, item_processor=item_processor,
+            trace_logger=trace, cancellation_token=cancellation_token)
+        candidate_id = getattr(result, "candidate_id", None)
+        if candidate_id is None:
+            raise RuntimeError("Redirect target persistence did not return a candidate ID")
+        return PreparedItemUpdateRedirect(int(candidate_id), candidate.source_url,
+                                         bool(getattr(result, "activate_if_ready", False)),
+                                         not candidate.is_boardgame)
+    except Exception as exc:
+        # A failed candidate write may leave the connection in an aborted
+        # transaction. Release it before trace and updater failure persistence.
+        connection = getattr(repository, "connection", None)
+        if connection is not None:
+            connection.rollback()
+        trace.log("item_update.item.redirect.failed", source_store_item_id=existing_record.store_item_id,
+                  source_url=requested_url, source_url_origin=existing_record.source_url_origin,
+                  final_url=getattr(candidate, "source_url", fetched.url),
+                  target_store_item_id=getattr(candidate, "store_item_id", None), error=str(exc))
+        raise
+
+
+def finalize_item_update_redirect(repository: ItemCandidateRepository, existing_record: DiscoveryItemCandidateRecord,
+                                  pair: PreparedItemUpdateRedirect, *, trace_logger: TraceLogger | None = None,
+                                  cancellation_token: CancellationToken | None = None,
+                                  **kwargs: object) -> object:
+    trace = trace_logger or NullTraceLogger()
+    fields = dict(source_store_item_id=existing_record.store_item_id, source_url=existing_record.source_url,
+                  source_url_origin=existing_record.source_url_origin,
+                  target_store_item_id=pair.candidate_id, final_url=pair.target_url)
+    try:
+        raise_if_cancelled(cancellation_token)
+        result = repository.complete_item_update_redirect(
+            existing_record, pair.candidate_id, target_url=pair.target_url,
+            activate_if_ready=pair.activate_if_ready, non_boardgame_success=pair.non_boardgame_success, **kwargs)
+    except Exception as exc:
+        if pair.activate_if_ready:
+            try:
+                repository.mark_item_update_redirect_retryable(existing_record.store_id, pair.candidate_id, str(exc))
+            except Exception as retry_error:
+                trace.log("item_update.item.redirect.retry_state.failed", **fields, error=str(retry_error))
+        trace.log("item_update.item.redirect.failed", **fields, error=str(exc))
+        raise
+    trace.log("item_update.item.redirect.completed", **fields, changed=bool(getattr(result, "changed", False)))
+    return result
+
+
 class StoreItemUpdateRecords(list[DiscoveryItemCandidateRecord]):
     def __init__(self, records: list[DiscoveryItemCandidateRecord] | None = None, *, updated_items: int = 0):
         super().__init__(records or [])
@@ -227,9 +383,10 @@ def crawl_store_product_details(
     )
     browser_session = None
     if browser_sitemap_fallback_enabled and browser_fetcher is None:
-        from ludora.browser_fetch import BrowserTextFetcher
+        from ludora.browser_fetch import create_discovery_browser_fetcher
 
-        browser_session = BrowserTextFetcher(trace_logger=trace)
+        browser_session = create_discovery_browser_fetcher(trace_logger=trace,
+                                                           cancellation_token=cancellation_token)
         browser_fetcher = browser_session.__enter__().fetch
 
     try:
@@ -398,21 +555,6 @@ def crawl_listing_candidates(
     for listing_candidate in listing_candidates:
         raise_if_cancelled(cancellation_token)
         trace.log(
-            "inventory.candidate.exists_check.start",
-            source_url=listing_candidate.source_url,
-            store_id=listing_candidate.store_id,
-            title=listing_candidate.title,
-        )
-        if repository.item_candidate_exists(listing_candidate.store_id, listing_candidate.source_url):
-            trace.log(
-                "inventory.candidate.skipped_existing",
-                source_url=listing_candidate.source_url,
-                store_id=listing_candidate.store_id,
-                title=listing_candidate.title,
-            )
-            continue
-
-        trace.log(
             "inventory.candidate.detail_fetch.start",
             source_url=listing_candidate.source_url,
             store_id=listing_candidate.store_id,
@@ -430,6 +572,7 @@ def crawl_listing_candidates(
                 )
                 if detail_candidate is None:
                     continue
+                _observe_resolved_discovery_pair(repository, listing_candidate, detail_candidate.source_url, trace)
             else:
                 detail_candidate = _fetch_detail_candidate(
                     listing_candidate=listing_candidate,
@@ -441,7 +584,10 @@ def crawl_listing_candidates(
                     trace_logger=trace,
                     cancellation_token=cancellation_token,
                     before_request=before_product_request,
+                    on_resolved_discovery_response=lambda fetched: _observe_resolved_discovery_pair(repository, listing_candidate, fetched.url, trace),
                 )
+        except ExistingDiscoveryPair:
+            continue
         except TransientProductFetchError as exc:
             fields: dict[str, object] = {
                 "error": str(exc),
@@ -455,6 +601,15 @@ def crawl_listing_candidates(
                 fields["status_code"] = exc.status_code
             trace.log("inventory.candidate.detail_fetch.skipped_transient", **fields)
             continue
+        except BrowserFetchFailed as exc:
+            trace.log(
+                "inventory.candidate.detail_fetch.skipped_transient",
+                error=str(exc),
+                error_type=type(exc).__name__,
+                source_url=listing_candidate.source_url,
+                store_id=listing_candidate.store_id,
+            )
+            continue
         except ProductDetailRejectedError:
             continue
         if item_candidate_enricher is not None:
@@ -466,55 +621,80 @@ def crawl_listing_candidates(
             title=detail_candidate.title,
         )
         raise_if_cancelled(cancellation_token)
-        item_classifier(detail_candidate)
-        trace.log(
-            "inventory.candidate.classified",
-            category_confidence=detail_candidate.category_confidence,
-            is_boardgame=detail_candidate.is_boardgame,
-            source_url=detail_candidate.source_url,
-            store_id=detail_candidate.store_id,
-            title=detail_candidate.title,
-        )
-        upsert_result = repository.upsert_item_candidate(detail_candidate)
+        upsert_result = prepare_discovery_candidate(
+            detail_candidate, repository, item_classifier=item_classifier,
+            item_processor=item_processor, trace_logger=trace, cancellation_token=cancellation_token)
         candidate_id = getattr(upsert_result, "candidate_id", None)
-        trace.log(
-            "inventory.candidate.upsert.completed",
-            candidate_id=candidate_id,
-            created=getattr(upsert_result, "created", None),
-            should_process=getattr(upsert_result, "should_process", None),
-            source_url=detail_candidate.source_url,
-            store_id=detail_candidate.store_id,
-            title=detail_candidate.title,
-        )
-        if item_processor is not None and getattr(upsert_result, "should_process", False):
-            trace.log(
-                "inventory.candidate.process.start",
-                candidate_id=candidate_id,
-                source_url=detail_candidate.source_url,
-                store_id=detail_candidate.store_id,
-                title=detail_candidate.title,
-            )
-            try:
-                item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
-            except Exception as exc:
-                trace.log(
-                    "inventory.candidate.process.failed",
-                    candidate_id=candidate_id,
-                    error=str(exc),
-                    source_url=detail_candidate.source_url,
-                    store_id=detail_candidate.store_id,
-                    title=detail_candidate.title,
-                )
-                raise
-            trace.log(
-                "inventory.candidate.process.completed",
-                candidate_id=candidate_id,
-                source_url=detail_candidate.source_url,
-                store_id=detail_candidate.store_id,
-                title=detail_candidate.title,
+        if candidate_id is not None:
+            repository.complete_discovery_pair(
+                int(candidate_id),
+                activate_if_ready=bool(getattr(upsert_result, "activate_if_ready", False)),
+                non_boardgame_success=not detail_candidate.is_boardgame,
             )
         records.append(detail_candidate)
     return records
+
+
+def prepare_discovery_candidate(
+    detail_candidate: DiscoveryItemCandidateRecord,
+    repository: ItemCandidateRepository,
+    *,
+    item_classifier: ItemClassifier,
+    item_processor: ItemCandidateProcessor | None,
+    trace_logger: TraceLogger | None = None,
+    cancellation_token: CancellationToken | None = None,
+) -> object | None:
+    """Classify, persist a hidden discovery pair, and independently match it."""
+    trace = trace_logger or NullTraceLogger()
+    raise_if_cancelled(cancellation_token)
+    item_classifier(detail_candidate)
+    trace.log(
+        "inventory.candidate.classified",
+        category_confidence=detail_candidate.category_confidence,
+        is_boardgame=detail_candidate.is_boardgame,
+        source_url=detail_candidate.source_url,
+        store_id=detail_candidate.store_id,
+        title=detail_candidate.title,
+    )
+    upsert_result = repository.prepare_discovery_pair(detail_candidate)
+    candidate_id = getattr(upsert_result, "candidate_id", None)
+    trace.log(
+        "inventory.candidate.upsert.completed",
+        candidate_id=candidate_id,
+        created=getattr(upsert_result, "created", None),
+        should_process=getattr(upsert_result, "should_process", None),
+        source_url=detail_candidate.source_url,
+        store_id=detail_candidate.store_id,
+        title=detail_candidate.title,
+    )
+    if item_processor is not None and getattr(upsert_result, "should_process", False):
+        trace.log(
+            "inventory.candidate.process.start",
+            candidate_id=candidate_id,
+            source_url=detail_candidate.source_url,
+            store_id=detail_candidate.store_id,
+            title=detail_candidate.title,
+        )
+        try:
+            item_processor.process_candidate(int(getattr(upsert_result, "candidate_id")), detail_candidate)
+        except Exception as exc:
+            trace.log(
+                "inventory.candidate.process.failed",
+                candidate_id=candidate_id,
+                error=str(exc),
+                source_url=detail_candidate.source_url,
+                store_id=detail_candidate.store_id,
+                title=detail_candidate.title,
+            )
+            raise
+        trace.log(
+            "inventory.candidate.process.completed",
+            candidate_id=candidate_id,
+            source_url=detail_candidate.source_url,
+            store_id=detail_candidate.store_id,
+            title=detail_candidate.title,
+        )
+    return upsert_result
 
 
 def update_confirmed_store_item_details(
@@ -530,6 +710,7 @@ def update_confirmed_store_item_details(
     trace_logger: TraceLogger | None = None,
     request_throttle: PerHostRequestThrottle | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
+    redirect_handler: Callable[..., PreparedItemUpdateRedirect] | None = None,
 ) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
@@ -645,17 +826,36 @@ def update_confirmed_store_item_details(
                     item_request_headers_provider = (
                         request_headers_provider if platform == "shopify" else None
                     )
-                    refreshed_record = _fetch_detail_candidate(
-                        listing_candidate=existing_record,
-                        source_listing_url=existing_record.source_listing_url or existing_record.source_url,
-                        platform=platform,
-                        browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
-                        detect_removed=True,
-                        trace_logger=trace,
-                        cancellation_token=cancellation_token,
-                        before_request=request_waiter,
-                        request_headers_provider=item_request_headers_provider,
-                    )
+                    try:
+                        refreshed_record = _fetch_detail_candidate(
+                            listing_candidate=existing_record,
+                            source_listing_url=existing_record.source_listing_url or existing_record.source_url,
+                            platform=platform,
+                            browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
+                            detect_removed=True,
+                            trace_logger=trace,
+                            cancellation_token=cancellation_token,
+                            before_request=request_waiter,
+                            request_headers_provider=item_request_headers_provider,
+                        )
+                    except ProductDetailRedirect as redirect:
+                        if redirect_handler is None:
+                            from ludora.operations import create_item_update_redirect_handler
+
+                            redirect_handler = create_item_update_redirect_handler(repository)
+                        pair = redirect_handler(
+                            existing_record, redirect.fetched, platform=platform,
+                            browser_fetcher=browser_fetcher if browser_fetch_enabled else None,
+                            before_request=request_waiter, trace_logger=trace,
+                            item_title_extractor=item_title_extractor, cancellation_token=cancellation_token)
+                        update_result = finalize_item_update_redirect(
+                            repository, existing_record, pair, job_id=job_id, run_id=run_id,
+                            trace_logger=trace, cancellation_token=cancellation_token)
+                        if getattr(update_result, "changed", False):
+                            records.updated_items += 1
+                        records.append(existing_record)
+                        _persist_store_item_update_progress(repository, job_id, records)
+                        continue
                 except TransientProductFetchError as exc:
                     if exc.status_code == 429:
                         cooldown_seconds = resolved_request_throttle.start_cooldown(
@@ -704,7 +904,7 @@ def update_confirmed_store_item_details(
                     trace.log(
                         "item_update.item.removed",
                         **item_trace_fields,
-                        message=f"Product page was removed; marking the store item inactive: {exc}",
+                        message=f"Product page was removed; marking the store item unavailable: {exc}",
                         reason=str(exc),
                     )
                     update_result = repository.mark_item_candidate_inactive(
@@ -714,14 +914,15 @@ def update_confirmed_store_item_details(
                     )
                     if getattr(update_result, "changed", False):
                         records.updated_items += 1
-                    existing_record.store_active = False
+                    existing_record.availability = "unavailable"
+                    existing_record.availability_source = "product_page_unavailable"
                     records.append(existing_record)
                     _persist_store_item_update_progress(repository, job_id, records)
                     trace.log(
                         "item_update.item.completed",
                         **item_trace_fields,
                         changed=bool(getattr(update_result, "changed", False)),
-                        message="Store item marked inactive",
+                        message="Store item marked unavailable",
                         scanned_items=len(records),
                         updated_items=records.updated_items,
                     )
@@ -1496,6 +1697,8 @@ def _fetch_detail_candidate(
     on_successful_page_fetch: Callable[[str], None] | None = None,
     static_fetch_max_attempts: int = DEFAULT_FETCH_MAX_ATTEMPTS,
     amazon_browser_fetch_max_attempts: int = 1,
+    on_resolved_discovery_response: Callable[[FetchResult], None] | None = None,
+    initial_fetch: FetchResult | None = None,
 ) -> DiscoveryItemCandidateRecord:
     trace = trace_logger or NullTraceLogger()
     amazon_detail_request = platform.strip().casefold() in AMAZON_STORE_PLATFORMS
@@ -1503,7 +1706,7 @@ def _fetch_detail_candidate(
     amazon_detail_validation_failed = False
     amazon_browser_failure: dict[str, object] | None = None
     browser_failure: dict[str, object] | None = None
-    fetched_detail = _fetch_static_product_detail(
+    fetched_detail = initial_fetch if initial_fetch is not None else _fetch_static_product_detail(
         listing_candidate.source_url,
         detect_removed=detect_removed,
         trace_logger=trace,
@@ -1523,18 +1726,17 @@ def _fetch_detail_candidate(
         request_headers_provider=request_headers_provider,
         max_attempts=static_fetch_max_attempts,
     )
+    _handle_removed_product_detail(
+        fetched_detail, listing_candidate, detect_removed=detect_removed, trace=trace,
+    )
+    if detect_removed and fetched_detail is not None and fetched_detail.status_code < 400:
+        _check_item_update_redirect(listing_candidate, fetched_detail, platform)
     if (
         fetched_detail is not None
         and fetched_detail.status_code < 400
         and on_successful_page_fetch is not None
     ):
         on_successful_page_fetch(fetched_detail.url)
-    _handle_removed_product_detail(
-        fetched_detail,
-        listing_candidate,
-        detect_removed=detect_removed,
-        trace=trace,
-    )
     last_failure_status_code = (
         fetched_detail.status_code if fetched_detail is not None and fetched_detail.status_code >= 400 else None
     )
@@ -1558,6 +1760,17 @@ def _fetch_detail_candidate(
         static_fetch_failed = True
         amazon_detail_validation_failed = True
 
+    invalid_redirect_target = False
+    resolved_discovery_response = None
+    if not detect_removed and fetched_detail is not None:
+        invalid_redirect_target = not _valid_discovery_response(fetched_detail, listing_candidate.source_url, amazon_detail_request=amazon_detail_request)
+        if invalid_redirect_target:
+            fetched_detail = None
+            static_fetch_failed = True
+        elif on_resolved_discovery_response is not None and (_has_product_page_evidence(fetched_detail.text) or amazon_detail_request):
+            on_resolved_discovery_response(fetched_detail)
+            resolved_discovery_response = fetched_detail
+
     detail_candidate = (
         _extract_fetched_detail_candidate(
             fetched_detail=fetched_detail,
@@ -1571,7 +1784,9 @@ def _fetch_detail_candidate(
     )
 
     if browser_fetcher is not None and not explicitly_throttled and (
-        fetched_detail is None or _should_retry_detail_with_browser(detail_candidate, listing_candidate, platform=platform)
+        fetched_detail is None or _should_retry_detail_with_browser(
+            detail_candidate, listing_candidate, platform=platform, check_title_overlap=detect_removed
+        )
     ):
         trace.log(
             "item_update.item.browser_fetch.started" if detect_removed else "inventory.candidate.browser_fetch.started",
@@ -1588,6 +1803,10 @@ def _fetch_detail_candidate(
                 before_request=before_request,
                 max_attempts=amazon_browser_fetch_max_attempts,
                 on_successful_page_fetch=on_successful_page_fetch,
+                on_page_response=(
+                    lambda fetched: _check_item_update_redirect(listing_candidate, fetched, platform)
+                    if detect_removed and _removed_product_page_reason(fetched) is None else None
+                ),
                 store_id=listing_candidate.store_id,
                 store_item_id=listing_candidate.store_item_id,
                 trace=trace,
@@ -1618,6 +1837,11 @@ def _fetch_detail_candidate(
                     last_failure = getattr(fetcher_owner, "last_failure", None)
                     if isinstance(last_failure, Mapping):
                         browser_failure = dict(last_failure)
+        _handle_removed_product_detail(
+            fetched_detail, listing_candidate, detect_removed=detect_removed, trace=trace,
+        )
+        if detect_removed and fetched_detail is not None and fetched_detail.status_code < 400:
+            _check_item_update_redirect(listing_candidate, fetched_detail, platform)
         if (
             not amazon_detail_request
             and fetched_detail is not None
@@ -1625,12 +1849,6 @@ def _fetch_detail_candidate(
             and on_successful_page_fetch is not None
         ):
             on_successful_page_fetch(fetched_detail.url)
-        _handle_removed_product_detail(
-            fetched_detail,
-            listing_candidate,
-            detect_removed=detect_removed,
-            trace=trace,
-        )
         if fetched_detail is not None and fetched_detail.status_code >= 400:
             last_failure_status_code = fetched_detail.status_code
             last_failure_retry_after_seconds = fetched_detail.retry_after_seconds
@@ -1648,6 +1866,13 @@ def _fetch_detail_candidate(
             fetched_detail = None
         if fetched_detail is not None and _looks_like_site_protection_challenge(fetched_detail.text):
             fetched_detail = None
+        if not detect_removed and fetched_detail is not None:
+            invalid_redirect_target = not _valid_discovery_response(fetched_detail, listing_candidate.source_url, amazon_detail_request=amazon_detail_request)
+            if invalid_redirect_target:
+                fetched_detail = None
+            elif on_resolved_discovery_response is not None and (_has_product_page_evidence(fetched_detail.text) or amazon_detail_request):
+                on_resolved_discovery_response(fetched_detail)
+                resolved_discovery_response = fetched_detail
         if fetched_detail is not None:
             trace.log(
                 "item_update.item.browser_fetch.completed"
@@ -1671,6 +1896,15 @@ def _fetch_detail_candidate(
                 detail_candidate = browser_detail_candidate
                 static_fetch_failed = False
 
+        if initial_fetch is not None and fetched_detail is None:
+            # A redirect was handed off to discovery extraction, but this is
+            # still an update attempt. Preserve browser HTTP failures so the
+            # caller applies its usual retry and per-store cooldown policy.
+            static_fetch_failed = True
+
+    if not detect_removed and invalid_redirect_target and fetched_detail is None:
+        raise ProductDetailRejectedError(f"Redirect target was not a valid product page: {listing_candidate.source_url}")
+
     if static_fetch_failed and fetched_detail is None:
         status_suffix = f" (HTTP {last_failure_status_code})" if last_failure_status_code is not None else ""
         amazon_browser_failure_suffix = (
@@ -1689,6 +1923,7 @@ def _fetch_detail_candidate(
             last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES
             or amazon_detail_validation_failed
             or browser_error_type == "TimeoutError"
+            or (not detect_removed and browser_error_type and browser_error_type != "BrowserFetchUnavailable")
         ):
             raise TransientProductFetchError(
                 (
@@ -1705,10 +1940,14 @@ def _fetch_detail_candidate(
         )
 
     if detail_candidate is None:
+        if not detect_removed and fetched_detail is not None and _is_redirected_product_url(listing_candidate.source_url, fetched_detail.url):
+            raise ProductDetailRejectedError(f"No product details were extracted from redirect target: {fetched_detail.url}")
         listing_candidate.source_listing_url = source_listing_url
         return listing_candidate
 
-    rejection_reason = _detail_rejection_reason(detail_candidate, listing_candidate, platform=platform)
+    rejection_reason = _detail_rejection_reason(
+        detail_candidate, listing_candidate, platform=platform, check_title_overlap=detect_removed
+    )
     if detect_removed and rejection_reason == "title_mismatch":
         trace.log(
             "item_update.item.detail.title_mismatch_accepted",
@@ -1736,7 +1975,12 @@ def _fetch_detail_candidate(
             f"Parsed product detail rejected ({rejection_reason}): {listing_candidate.source_url}"
         )
 
-    return _apply_listing_fallbacks(detail_candidate, listing_candidate)
+    detail_candidate = _apply_listing_fallbacks(detail_candidate, listing_candidate)
+    if not detect_removed and fetched_detail is not None:
+        detail_candidate.source_url_origin, detail_candidate.source_url = discovery_url_pair(listing_candidate.source_url, fetched_detail.url)
+        if on_resolved_discovery_response is not None and fetched_detail is not resolved_discovery_response:
+            on_resolved_discovery_response(fetched_detail)
+    return detail_candidate
 
 
 def _validate_amazon_detail_fetch(
@@ -1777,6 +2021,7 @@ def _fetch_amazon_update_detail_with_browser(
     store_item_id: int | None,
     trace: TraceLogger,
     trace_event: str,
+    on_page_response: Callable[[FetchResult], None] | None = None,
 ) -> tuple[FetchResult | None, dict[str, object] | None]:
     from ludora.amazon_discovery import (
         _amazon_detail_page_diagnostics,
@@ -1791,6 +2036,8 @@ def _fetch_amazon_update_detail_with_browser(
         if before_request is not None:
             before_request(source_url)
         fetched_detail = browser_fetcher(source_url)
+        if fetched_detail is not None and fetched_detail.status_code < 400 and on_page_response is not None:
+            on_page_response(fetched_detail)
         if (
             fetched_detail is not None
             and fetched_detail.status_code < 400
@@ -2050,6 +2297,55 @@ def _handle_removed_product_detail(
     )
 
 
+def _is_redirected_product_url(source_url: str, final_url: str) -> bool:
+    return urldefrag(source_url).url != urldefrag(final_url).url
+
+
+class ExistingDiscoveryPair(Exception):
+    """A validated URL pair has already completed discovery processing."""
+
+    def __init__(self, *, candidate_id: int = 0, target_url: str = ""):
+        self.candidate_id = candidate_id
+        self.target_url = target_url
+
+
+def _observe_resolved_discovery_pair(repository: ItemCandidateRepository, listing_candidate: DiscoveryItemCandidateRecord, final_url: str, trace: TraceLogger) -> None:
+    origin, target = discovery_url_pair(listing_candidate.source_url, final_url)
+    discovered = origin or target
+    if repository.observe_discovery_pair(listing_candidate.store_id, discovered, target):
+        trace.log("inventory.candidate.skipped_existing", source_url=target, source_url_origin=origin, store_id=listing_candidate.store_id, title=listing_candidate.title)
+        raise ExistingDiscoveryPair()
+
+
+def _has_product_page_evidence(html: str) -> bool:
+    # Inspect document identity without running detail/AI extraction. JSON-LD
+    # Product lists remain broad candidates; downstream extraction validates them.
+    from ludora.product_detail_extraction import ProductDetailParser, _extract_json_ld_product
+
+    parser = ProductDetailParser("")
+    parser.feed(html)
+    product = _extract_json_ld_product(parser.json_ld_scripts)
+    if product and str(product.get("name") or "").strip():
+        return True
+    title_present = bool(parser.h1_parts or parser.title_parts or parser.meta.get("og:title", "").strip())
+    if not title_present:
+        return False
+    if parser.meta.get("og:type", "").casefold() in {"product", "og:product"}:
+        return True
+    return bool(re.search(r"(?:product_title|product-title|itemtype\s*=\s*['\"]https?://schema\.org/Product|id\s*=\s*['\"]productTitle|data-product-id|single_add_to_cart_button|productAddToCart)", html, re.IGNORECASE))
+
+
+def _valid_discovery_response(fetched: FetchResult, discovered_url: str, *, amazon_detail_request: bool) -> bool:
+    try:
+        parsed = urlparse(fetched.url)
+        valid_url = parsed.scheme.casefold() in {"http", "https"} and bool(parsed.hostname)
+    except ValueError:
+        valid_url = False
+    if not valid_url:
+        return False
+    return amazon_detail_request or not _is_redirected_product_url(discovered_url, fetched.url) or _has_product_page_evidence(fetched.text)
+
+
 def _looks_like_removed_product_page(html: str) -> bool:
     headings = re.findall(r"<(?:title|h1)\b[^>]*>(.*?)</(?:title|h1)>", html, flags=re.IGNORECASE | re.DOTALL)
     normalized_headings = []
@@ -2108,8 +2404,13 @@ def _should_retry_detail_with_browser(
     listing_candidate: DiscoveryItemCandidateRecord,
     *,
     platform: str = "",
+    check_title_overlap: bool = False,
 ) -> bool:
-    return bool(_detail_rejection_reason(detail_candidate, listing_candidate, platform=platform))
+    return bool(
+        _detail_rejection_reason(
+            detail_candidate, listing_candidate, platform=platform, check_title_overlap=check_title_overlap
+        )
+    )
 
 
 def _detail_rejection_reason(
@@ -2117,6 +2418,7 @@ def _detail_rejection_reason(
     listing_candidate: DiscoveryItemCandidateRecord,
     *,
     platform: str = "",
+    check_title_overlap: bool = False,
 ) -> str:
     if detail_candidate is None:
         return "missing_detail_candidate"
@@ -2146,6 +2448,9 @@ def _detail_rejection_reason(
         and detail_sku
         and identity_sku == detail_sku
     ):
+        return ""
+
+    if not check_title_overlap:
         return ""
 
     listing_tokens = _significant_listing_tokens(listing_candidate)
@@ -2228,6 +2533,7 @@ def _preserve_confirmed_item_state(
 ) -> None:
     refreshed_record.store_id = existing_record.store_id
     refreshed_record.source_url = existing_record.source_url
+    refreshed_record.source_url_origin = existing_record.source_url_origin
     refreshed_record.store_item_id = existing_record.store_item_id
     refreshed_record.item_id = existing_record.item_id
     refreshed_record.listing_status = existing_record.listing_status

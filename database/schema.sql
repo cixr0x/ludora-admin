@@ -135,8 +135,7 @@ create table if not exists store_items (
     update_lease_expires_at timestamptz,
     consecutive_update_failures integer not null default 0,
     last_update_attempt_at timestamptz,
-    last_update_error text not null default '',
-    unique (store_id, source_url)
+    last_update_error text not null default ''
 );
 
 alter table if exists store_items add column if not exists original_title text not null default '';
@@ -177,7 +176,8 @@ where is_boardgame = true
   and item_id is not null
   and source_url <> ''
   and listing_status = 'LISTED'
-  and store_active = true;
+  and store_active = true
+  and availability <> 'unavailable';
 
 create index if not exists store_items_update_lease_expires_at_idx
 on store_items (update_lease_expires_at)
@@ -452,16 +452,7 @@ create index if not exists store_items_listing_status_idx
 on store_items (listing_status);
 alter table if exists store_items drop column if exists status;
 
-delete from store_items stale
-using store_items current
-where stale.store_id is not distinct from current.store_id
-  and stale.source_url = current.source_url
-  and (
-      stale.last_seen_at < current.last_seen_at
-      or (stale.last_seen_at = current.last_seen_at and stale.last_updated < current.last_updated)
-      or (stale.last_seen_at = current.last_seen_at and stale.last_updated = current.last_updated and stale.id < current.id)
-  );
-
+-- Redirect pairs and historical rows are retained; never delete by target URL.
 alter table if exists store_items drop constraint if exists discovery_item_candidates_store_id_source_url_title_key;
 alter table if exists store_items drop constraint if exists discovery_item_candidates_store_id_source_url_key;
 alter table if exists store_items drop constraint if exists store_items_store_id_source_url_key;
@@ -483,19 +474,7 @@ end $$;
 alter table if exists store_items drop constraint if exists store_items_match_item_id_fkey;
 alter table if exists store_items drop column if exists match_item_id;
 
-do $$
-begin
-    if to_regclass('store_items') is not null and not exists (
-        select 1
-        from pg_constraint
-        where conrelid = 'store_items'::regclass
-          and conname = 'store_items_store_id_source_url_key'
-    ) then
-        alter table store_items
-        add constraint store_items_store_id_source_url_key
-        unique (store_id, source_url);
-    end if;
-end $$;
+-- The target-only unique constraint is replaced by the pair indexes below.
 
 do $$
 begin
@@ -1229,3 +1208,27 @@ on bgg_search_queries (normalized_query);
 
 create index if not exists bgg_search_query_results_query_rank_idx
 on bgg_search_query_results (query_id, result_rank);
+
+-- Discovery redirect pairs (reference; execute incremental patches only).
+alter table store_items add column if not exists source_url_origin text;
+
+alter table store_items add constraint store_items_source_url_origin_check
+    check (source_url_origin is null or (source_url_origin <> '' and source_url_origin <> source_url));
+
+alter table store_items drop constraint if exists discovery_item_candidates_store_id_source_url_title_key;
+alter table store_items drop constraint if exists discovery_item_candidates_store_id_source_url_key;
+alter table store_items drop constraint if exists store_items_store_id_source_url_key;
+
+-- Nullable store IDs retain their existing NULL-distinct uniqueness semantics.
+-- Empty token represents direct URLs without indexing the target twice.
+create unique index store_items_discovery_url_pair_uidx
+    on store_items (store_id, coalesce(source_url_origin, ''), source_url);
+create unique index store_items_active_target_uidx
+    on store_items (store_id, source_url)
+    where store_id is not null and store_active = true and listing_status <> 'REJECTED';
+create index store_items_target_url_idx on store_items (store_id, source_url, id);
+create index store_items_discovered_url_idx on store_items (store_id, coalesce(source_url_origin, source_url));
+
+-- store_active controls public visibility; availability remains independent.
+comment on column store_items.store_active is 'Public visibility; false hides this offer without changing product availability';
+comment on column store_items.availability is 'Product availability independent of public visibility; unavailable is terminal until manually recovered';

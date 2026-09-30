@@ -429,7 +429,9 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { key: 'price', label: 'Price' },
   { key: 'price_source', label: 'Price Source' },
   { key: 'currency', label: 'Currency' },
-  { key: 'availability', label: 'Availability' },
+  { key: 'availability', label: 'Product availability' },
+  { fieldType: 'boolean', key: 'store_active', label: 'Public visibility', readOnly: true },
+  { key: 'source_url_origin', label: 'Redirect origin URL', readOnly: true },
   { key: 'availability_source', label: 'Availability Source' },
   { key: 'store_sku', label: 'Store SKU' },
   { fieldType: 'boolean', key: 'is_boardgame', label: 'Is Boardgame' },
@@ -577,10 +579,18 @@ function buildItemCandidateColumns(
   {
     filterValue: (row) => field(row, ['availability']),
     id: 'availability',
-    label: 'Availability',
+    label: 'Product availability',
     minWidth: 150,
     render: (row) => field(row, ['availability']),
     sortValue: (row) => field(row, ['availability'])
+  },
+  {
+    filterValue: (row) => field(row, ['store_active']),
+    id: 'store_active',
+    label: 'Public visibility',
+    minWidth: 160,
+    render: (row) => field(row, ['store_active'], '') === 'false' ? 'Hidden' : 'Visible',
+    sortValue: (row) => field(row, ['store_active'])
   },
   {
     filterValue: (row) => field(row, ['availability_source']),

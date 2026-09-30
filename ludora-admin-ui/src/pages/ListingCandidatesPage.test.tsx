@@ -15,6 +15,7 @@ describe('ListingCandidatesPage', () => {
           data: [
             {
               availability: 'in_stock',
+              store_active: false,
               id: 'item-candidate-1',
               image_url: 'https://store.mx/azul.jpg',
               is_boardgame: true,
@@ -42,7 +43,8 @@ describe('ListingCandidatesPage', () => {
               availability_source: 'json_ld_offer'
             },
             {
-              availability: 'unknown',
+              availability: 'unavailable',
+              store_active: true,
               id: 'item-candidate-2',
               is_boardgame: false,
               is_boardgame_confirmed: false,
@@ -83,6 +85,10 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getAllByText('false').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('899.00')).toBeInTheDocument();
     expect(screen.getByText('in_stock')).toBeInTheDocument();
+    expect(screen.getByText('unavailable')).toBeInTheDocument();
+    expect(screen.getByText('Hidden')).toBeInTheDocument();
+    expect(screen.getByText('Visible')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Public visibility' })).toBeInTheDocument();
     expect(screen.getByText('2026-05-26T09:00:00.000Z')).toBeInTheDocument();
     expect(screen.getAllByText('json_ld_offer').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('es')).toBeInTheDocument();

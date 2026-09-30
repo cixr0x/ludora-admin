@@ -365,6 +365,7 @@ export function StoreItemUpdateMonitorPage() {
             <Typography variant="h6">Store update statistics · last 24h</Typography>
             <Typography color="text.secondary" variant="body2">
               All {monitor?.store_statistics.length ?? 0} active stores, including stores with no attempts or no failures during the period.
+              {' '}Products and stale items reflect current eligible inventory; stale items were last refreshed more than 24h ago.
             </Typography>
           </Box>
           <TableContainer sx={{ maxHeight: 520 }}>
@@ -374,6 +375,7 @@ export function StoreItemUpdateMonitorPage() {
                   <TableCell>Store</TableCell>
                   <TableCell>Platform</TableCell>
                   <TableCell align="right">Products</TableCell>
+                  <TableCell align="right">Stale items</TableCell>
                   <TableCell align="right">Attempts</TableCell>
                   <TableCell align="right">Successes</TableCell>
                   <TableCell align="right">Failures</TableCell>
@@ -389,6 +391,7 @@ export function StoreItemUpdateMonitorPage() {
                     <TableCell>{recordText(row, 'store_name')}</TableCell>
                     <TableCell>{recordText(row, 'platform')}</TableCell>
                     <TableCell align="right">{recordText(row, 'eligible_items', '0')}</TableCell>
+                    <TableCell align="right">{recordText(row, 'stale_items', '0')}</TableCell>
                     <TableCell align="right">{recordText(row, 'attempts', '0')}</TableCell>
                     <TableCell align="right">{recordText(row, 'successes', '0')}</TableCell>
                     <TableCell align="right">{recordText(row, 'failures', '0')}</TableCell>
@@ -408,7 +411,7 @@ export function StoreItemUpdateMonitorPage() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {!monitor?.store_statistics.length ? <EmptyRow columns={10} label="No active stores" /> : null}
+                {!monitor?.store_statistics.length ? <EmptyRow columns={11} label="No active stores" /> : null}
               </TableBody>
             </Table>
           </TableContainer>
@@ -546,7 +549,7 @@ function AttemptRow({ row }: { row: AdminRecord }) {
         <Link href={`#listings?id=${encodeURIComponent(itemId)}`}>{recordText(row, 'store_item_title', `#${itemId}`)}</Link>
       </TableCell>
       <TableCell>{recordText(row, 'store_name')}</TableCell>
-      <TableCell><Chip color={color} label={status} size="small" variant="outlined" /></TableCell>
+      <TableCell><Chip color={color} label={status === 'deactivated' ? 'unavailable' : status} size="small" variant="outlined" /></TableCell>
       <TableCell align="right">{recordText(row, 'duration_ms')}</TableCell>
     </TableRow>
   );
