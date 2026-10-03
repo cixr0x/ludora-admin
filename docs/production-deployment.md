@@ -485,7 +485,7 @@ verify_codexapi_startup() {
   for attempt in $(seq 1 40); do
     sudo systemctl is-active --quiet codexapi.service || return 1
     if curl -fsS http://127.0.0.1:3001/health |
-      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
+      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.149.1" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
       test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
         ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)' || return 1
       return 0
@@ -532,7 +532,7 @@ fi
 ```
 
 The verification function requires `status: "ok"`, capability policy
-`codexapi-capable-isolated-v2`, Codex CLI version `0.147.0`, `checked: true`,
+`codexapi-capable-isolated-v2`, Codex CLI version `0.149.1`, `checked: true`,
 and exactly one `127.0.0.1:3001` listener. The boundary verification requires
 the dedicated `codexapi` user/group, strict filesystem protections, the sole
 persistent writable `/var/lib/codexapi` service path, inaccessible admin, home,
@@ -978,6 +978,7 @@ sudo systemctl stop codexapi.service
 git checkout --detach "$CODEXAPI_PREVIOUS_COMMIT"
 test "$(git rev-parse HEAD)" = "$CODEXAPI_PREVIOUS_COMMIT"
 test -f deploy/codexapi.service
+CODEXAPI_PREVIOUS_CLI_VERSION="$(node -e 'const fs = require("node:fs"); const version = JSON.parse(fs.readFileSync("./package.json", "utf8")).dependencies?.["@openai/codex"]; if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) process.exit(1); process.stdout.write(version);')"
 npm ci
 npm test
 npm run build
@@ -1005,7 +1006,7 @@ verify_codexapi_startup() {
   for attempt in $(seq 1 40); do
     sudo systemctl is-active --quiet codexapi.service || return 1
     if curl -fsS http://127.0.0.1:3001/health |
-      EXPECTED_CODEXAPI_CAPABILITY_POLICY="$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== process.env.EXPECTED_CODEXAPI_CAPABILITY_POLICY || !h.codexCli || h.codexCli.version !== "0.147.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
+      EXPECTED_CODEXAPI_CAPABILITY_POLICY="$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" EXPECTED_CODEXAPI_CLI_VERSION="$CODEXAPI_PREVIOUS_CLI_VERSION" node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== process.env.EXPECTED_CODEXAPI_CAPABILITY_POLICY || !h.codexCli || h.codexCli.version !== process.env.EXPECTED_CODEXAPI_CLI_VERSION || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
       test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
         ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)' || return 1
       return 0
@@ -1053,7 +1054,9 @@ fi
 
 The selected commit always supplies the installed unit and may supply a runtime
 profile. Set `CODEXAPI_PREVIOUS_CAPABILITY_POLICY` to that revision's reviewed
-health policy. A profile-bearing revision must contain the checked-in
+health policy. The recovery command derives the exact CLI version from the
+restored `package.json`; ranges, missing pins, and unexpected health versions
+fail closed. A profile-bearing revision must contain the checked-in
 `ExecStartPre` installation contract and is verified byte-for-byte at mode
 `0400`. For a revision without a profile, recovery rejects a unit that refers
 to one and removes any newer installed profile before startup. Recovery always

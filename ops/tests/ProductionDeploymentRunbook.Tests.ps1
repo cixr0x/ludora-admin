@@ -47,14 +47,16 @@ function Invoke-CodexApiReadinessHarness {
         [Parameter(Mandatory = $true)][string]$Section,
         [Parameter(Mandatory = $true)][string]$Scenario,
         [Parameter(Mandatory = $true)][string]$ExpectedPolicy,
-        [string]$HealthPolicy = $ExpectedPolicy
+        [string]$HealthPolicy = $ExpectedPolicy,
+        [string]$ExpectedVersion = '0.149.1',
+        [string]$HealthVersion = $ExpectedVersion
     )
 
     $gitBash = 'C:\Program Files\Git\bin\bash.exe'
     if (-not (Test-Path -LiteralPath $gitBash)) {
         throw "Git Bash is required for readiness tests: $gitBash"
     }
-    $node = Get-Command node -CommandType Application -ErrorAction Stop
+    $node = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
 
     $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("ludora-codexapi-readiness-{0}" -f [guid]::NewGuid())
     [System.IO.Directory]::CreateDirectory($tempRoot) | Out-Null
@@ -99,7 +101,7 @@ curl() {
   case "$SCENARIO" in
     third-success)
       [ "$count" -lt 3 ] && return 22
-      printf '{"status":"ok","capabilityPolicy":"%s","codexCli":{"version":"0.147.0","checked":true}}' "$HEALTH_POLICY"
+      printf '{"status":"ok","capabilityPolicy":"%s","codexCli":{"version":"%s","checked":true}}' "$HEALTH_POLICY" "$HEALTH_VERSION"
       ;;
     inactive-after-failure|all-fail)
       return 22
@@ -108,7 +110,7 @@ curl() {
       printf '{not-json'
       ;;
     wrong-policy|wrong-policy-then-inactive)
-      printf '{"status":"ok","capabilityPolicy":"wrong-policy","codexCli":{"version":"0.147.0","checked":true}}'
+      printf '{"status":"ok","capabilityPolicy":"wrong-policy","codexCli":{"version":"%s","checked":true}}' "$HEALTH_VERSION"
       ;;
     *)
       printf 'Unknown scenario: %s\n' "$SCENARIO" >&2
@@ -132,7 +134,9 @@ sleep() {
 }
 source "$READINESS_FUNCTION"
 unset EXPECTED_CODEXAPI_CAPABILITY_POLICY
+unset EXPECTED_CODEXAPI_CLI_VERSION
 CODEXAPI_PREVIOUS_CAPABILITY_POLICY="$EXPECTED_POLICY"
+CODEXAPI_PREVIOUS_CLI_VERSION="$EXPECTED_VERSION"
 if ! verify_codexapi_startup; then
   printf 'READINESS_RESULT=nonzero\n'
 else
@@ -151,6 +155,8 @@ printf 'GUARDED_CALLER_REACHED=yes\n'
         'SCENARIO' = $Scenario
         'EXPECTED_POLICY' = $ExpectedPolicy
         'HEALTH_POLICY' = $HealthPolicy
+        'EXPECTED_VERSION' = $ExpectedVersion
+        'HEALTH_VERSION' = $HealthVersion
     }
     $previousEnvironment = @{}
     try {
@@ -353,7 +359,7 @@ Describe 'CodexAPI production runbook contract' {
         $routine | Should Match 'verify_codexapi_startup\(\)'
         $routine | Should Match 'codexapi-capable-isolated-v2'
         $routine | Should Match 'codexCli\.version'
-        $routine | Should Match 'codexCli\.version !== "0\.147\.0"'
+        $routine | Should Match 'codexCli\.version !== "0\.149\.1"'
         $routine | Should Match "ss -H -ltn 'sport = :3001'"
         $routine | Should Match 'systemctl show .*codexapi\.service'
         $routine | Should Match 'User=codexapi'
@@ -473,6 +479,67 @@ Describe 'CodexAPI production runbook contract' {
         $wrong.Output | Should Match 'READINESS_RESULT=nonzero'
         $wrong.Output | Should Match 'GUARDED_CALLER_REACHED=yes'
         ($wrong.ElapsedMilliseconds -lt 15000) | Should Be $true
+    }
+
+    It 'accepts the routine CLI pin and rejects a different CLI version before listener checks' {
+        $matching = Invoke-CodexApiReadinessHarness -Section $routine -Scenario third-success -ExpectedPolicy 'codexapi-capable-isolated-v2'
+        $wrong = Invoke-CodexApiReadinessHarness -Section $routine -Scenario third-success -ExpectedPolicy 'codexapi-capable-isolated-v2' -HealthVersion '0.147.0'
+
+        $matching.Output | Should Match 'READINESS_RESULT=zero'
+        $wrong.Output | Should Match 'READINESS_RESULT=nonzero'
+        @($wrong.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 0
+    }
+
+    It 'accepts either selected recovery CLI pin and rejects mismatches before listener checks' {
+        foreach ($version in @('0.147.0', '0.149.1')) {
+            $matching = Invoke-CodexApiReadinessHarness -Section $recovery -Scenario third-success -ExpectedPolicy 'selected-recovery-policy' -ExpectedVersion $version
+            $wrongVersion = if ($version -eq '0.147.0') { '0.149.1' } else { '0.147.0' }
+            $wrong = Invoke-CodexApiReadinessHarness -Section $recovery -Scenario third-success -ExpectedPolicy 'selected-recovery-policy' -ExpectedVersion $version -HealthVersion $wrongVersion
+
+            $matching.Output | Should Match 'READINESS_RESULT=zero'
+            $wrong.Output | Should Match 'READINESS_RESULT=nonzero'
+            @($wrong.Trace | Where-Object { $_ -like 'ss *' }).Count | Should Be 0
+        }
+    }
+
+    It 'derives the exact recovery CLI pin from the restored package before starting the service' {
+        $checkout = $recovery.IndexOf('git checkout --detach "$CODEXAPI_PREVIOUS_COMMIT"', [StringComparison]::Ordinal)
+        $derive = $recovery.IndexOf('CODEXAPI_PREVIOUS_CLI_VERSION="$(node -e', [StringComparison]::Ordinal)
+        $start = $recovery.IndexOf('sudo systemctl start codexapi.service', [StringComparison]::Ordinal)
+
+        ($derive -gt $checkout -and $start -gt $derive) | Should Be $true
+        $recovery | Should Match 'dependencies\?\.\["@openai/codex"\]'
+        $recovery | Should Match 'EXPECTED_CODEXAPI_CLI_VERSION="\$CODEXAPI_PREVIOUS_CLI_VERSION"'
+        $recovery | Should Match 'codexCli\.version !== process\.env\.EXPECTED_CODEXAPI_CLI_VERSION'
+        $recovery | Should Not Match 'codexCli\.version !== "0\.'
+    }
+
+    It 'executes recovery pin derivation for exact versions and rejects ranges or missing pins' {
+        $match = [regex]::Match($recovery, 'CODEXAPI_PREVIOUS_CLI_VERSION="\$\(node -e ''(?<code>[^'']+)''\)"')
+        $match.Success | Should Be $true
+        if (-not $match.Success) { throw 'Missing recovery CLI pin derivation.' }
+        $node = Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $fixtureRoot = Join-Path $TestDrive 'recovery-pin'
+        [System.IO.Directory]::CreateDirectory($fixtureRoot) | Out-Null
+
+        foreach ($pin in @('0.147.0', '0.149.1', '^0.149.1', 'latest', '', $null)) {
+            $fixture = @{ dependencies = @{ '@openai/codex' = $pin } }
+            [System.IO.File]::WriteAllText((Join-Path $fixtureRoot 'package.json'), ($fixture | ConvertTo-Json -Compress))
+            Push-Location $fixtureRoot
+            try {
+                $output = (& $node.Source -e $match.Groups['code'].Value 2>&1 | Out-String).Trim()
+                $exitCode = $LASTEXITCODE
+            }
+            finally { Pop-Location }
+            if ($pin -in @('0.147.0', '0.149.1')) {
+                $exitCode | Should Be 0
+                $output | Should Be $pin
+            }
+            else {
+                $exitCode | Should Be 1
+                $output | Should Be ''
+            }
+        }
     }
 
     It 'runs the recovery parser with the selected policy environment wiring' {
