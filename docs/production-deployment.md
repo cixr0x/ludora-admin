@@ -1157,13 +1157,24 @@ The checkout is intentionally detached at the recovered commit; the next
 approved forward deployment checks out `main` and fast-forwards it to an exact
 approved `origin/main` revision.
 
-After restoring the exact selected admin revision through **Ludora admin
-rollback**, verify both selected SHAs and then run the live isolation canary
-only when the restored CodexAPI revision owns that script:
+If the admin-service revision changed during the failed release, restore its
+selected approved revision through **Ludora admin rollback**. For a
+CodexAPI-only recovery, keep the existing approved admin revision. Verify both
+selected SHAs, then explicitly restart and check admin-service after successful
+CodexAPI recovery. A restart or active-service failure stops both services.
+Run the live isolation canary only when the restored CodexAPI revision owns
+that script:
 
 ```bash
 set -euo pipefail
 cd /opt/ludora/codexapi
+
+if ! sudo systemctl is-active --quiet codexapi.service ||
+  ! sudo systemctl start ludora-admin-service.service ||
+  ! sudo systemctl is-active --quiet ludora-admin-service.service; then
+  sudo systemctl stop ludora-admin-service.service codexapi.service
+  exit 1
+fi
 
 CODEXAPI_ISOLATION_OWNERSHIP=''
 if ! CODEXAPI_ISOLATION_OWNERSHIP="$(node -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync("./package.json", "utf8")); if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) throw new Error("invalid package.json"); const scripts = pkg.scripts; if (scripts !== undefined && (!scripts || typeof scripts !== "object" || Array.isArray(scripts))) throw new Error("invalid package scripts"); process.stdout.write(Object.hasOwn(scripts ?? {}, "verify:isolation") ? "present" : "absent"); process.exitCode = 0;' 2>/dev/null)"; then
