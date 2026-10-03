@@ -320,6 +320,16 @@ https://admin.ludora.bobbycrimson.com/crawler
 `CODEX_WORKSPACE=/var/lib/codexapi/workspace`, `HOST=127.0.0.1`, and
 `PORT=3001`.
 
+CLI 0.160.0 also requires administrator policy to disable `unified_exec`.
+The unit binds `/opt/ludora/codexapi/deploy/codex-managed` read-only at
+`/etc/codex` only in the service mount namespace. The checked-in
+`requirements.toml` pins `unified_exec=false`; never install it into the host
+Codex policy directory. systemd may create an empty `/etc/codex` mountpoint
+directory when absent, but must not create a host requirements file or alter
+existing host policy. Plain CLI invocations outside the namespace do not share
+this enforcement. Native Windows is not a supported runtime for this POSIX
+profile and fails closed without a separately reviewed administrator boundary.
+
 ## Preflight
 
 Before changing the VM:
@@ -447,9 +457,16 @@ be the fetched `origin/main` revision. Record the current full SHA as the
 previous known commit before making any change.
 
 Before push or deployment, run the full `npm test` gate at the exact reviewed
-CodexAPI SHA. That gate includes the hermetic isolation-canary tests. The VM
-procedure below repeats the candidate test/build gate, but it does not replace
-the pre-push review gate. Never deploy an abbreviated or unreviewed SHA.
+CodexAPI SHA. That gate includes the hermetic isolation-canary tests. For this
+revision, run the Linux suite inside a transient systemd namespace with the
+candidate's `deploy/codex-managed` directory bound read-only to `/etc/codex`
+and `CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1`. This requires actual CLI startup
+attestation and verifies a user `--enable unified_exec` cannot override the
+requirements. Use the namespace test command below with the exact candidate
+checkout path before push. An ordinary Windows test run verifies rejection of
+unenforced execution and does not replace this Linux managed-policy gate.
+The VM procedure repeats the candidate test/build gate. Never deploy an
+abbreviated or unreviewed SHA.
 
 ```bash
 set -euo pipefail
@@ -462,6 +479,10 @@ git fetch origin main
 test "$(git rev-parse origin/main)" = "$CODEXAPI_COMMIT"
 PREVIOUS_CODEXAPI_COMMIT="$(git rev-parse HEAD)"
 printf 'Previous CodexAPI commit: %s\n' "$PREVIOUS_CODEXAPI_COMMIT"
+CODEXAPI_HOST_REQUIREMENTS_BEFORE=''
+if sudo test -f /etc/codex/requirements.toml; then
+  CODEXAPI_HOST_REQUIREMENTS_BEFORE="$(sudo sha256sum /etc/codex/requirements.toml)"
+fi
 
 # Keep the service stopped if checkout, install, test, or build fails.
 sudo systemctl stop codexapi.service
@@ -470,7 +491,12 @@ git merge --ff-only "$CODEXAPI_COMMIT"
 test "$(git rev-parse HEAD)" = "$CODEXAPI_COMMIT"
 test -z "$(git status --porcelain)"
 npm ci
-npm test
+sudo systemd-run --quiet --wait --pipe --collect \
+  --property=User=robertorojas87 \
+  --property=WorkingDirectory=/opt/ludora/codexapi \
+  --property=BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex \
+  /usr/bin/env CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1 /usr/bin/npm test
+npm run typecheck
 npm run build
 test -z "$(git status --porcelain)"
 
@@ -485,7 +511,7 @@ verify_codexapi_startup() {
   for attempt in $(seq 1 40); do
     sudo systemctl is-active --quiet codexapi.service || return 1
     if curl -fsS http://127.0.0.1:3001/health |
-      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.149.1" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
+      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.160.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
       test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
         ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)' || return 1
       return 0
@@ -498,18 +524,32 @@ verify_codexapi_startup() {
 }
 
 verify_codexapi_boundary() {
-  local unit
+  local unit pid
   unit="$(sudo systemctl show codexapi.service \
     --property=User --property=Group --property=ProtectSystem --property=ProtectHome \
-    --property=CapabilityBoundingSet --property=ReadWritePaths --property=InaccessiblePaths)" &&
+    --property=CapabilityBoundingSet --property=ReadWritePaths --property=InaccessiblePaths \
+    --property=BindReadOnlyPaths)" &&
     grep -Fx 'User=codexapi' <<<"$unit" &&
     grep -Fx 'Group=codexapi' <<<"$unit" &&
     grep -Fx 'ProtectSystem=strict' <<<"$unit" &&
     grep -Fx 'ProtectHome=yes' <<<"$unit" &&
     grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" &&
     grep -Fx 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root' <<<"$unit" &&
+    grep -Eq '^BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex(:rbind)?$' <<<"$unit" &&
+    cmp -s deploy/codexapi.service /etc/systemd/system/codexapi.service &&
     sudo cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
-    test "$(sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 'codexapi:codexapi 400'
+    test "$(sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 'codexapi:codexapi 400' || return 1
+  pid="$(sudo systemctl show codexapi.service --property=MainPID --value)" &&
+    test "$pid" -gt 0 &&
+    sudo nsenter --target "$pid" --mount -- \
+      cmp -s deploy/codex-managed/requirements.toml /etc/codex/requirements.toml &&
+    sudo nsenter --target "$pid" --mount -- \
+      findmnt -rn -T /etc/codex/requirements.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
+  if test -n "$CODEXAPI_HOST_REQUIREMENTS_BEFORE"; then
+    test "$(sudo sha256sum /etc/codex/requirements.toml)" = "$CODEXAPI_HOST_REQUIREMENTS_BEFORE"
+  else
+    sudo test ! -e /etc/codex/requirements.toml
+  fi
 }
 
 sudo systemctl start codexapi.service
@@ -532,12 +572,15 @@ fi
 ```
 
 The verification function requires `status: "ok"`, capability policy
-`codexapi-capable-isolated-v2`, Codex CLI version `0.149.1`, `checked: true`,
+`codexapi-capable-isolated-v2`, Codex CLI version `0.160.0`, `checked: true`,
 and exactly one `127.0.0.1:3001` listener. The boundary verification requires
 the dedicated `codexapi` user/group, strict filesystem protections, the sole
 persistent writable `/var/lib/codexapi` service path, inaccessible admin, home,
 and root paths, and an exact mode-`0400` runtime profile matching the checked-in
-`deploy/codexapi-runtime.config.toml`. Any failed post-start check stops the
+`deploy/codexapi-runtime.config.toml`. It also verifies the checked-in unit,
+the service-only managed requirements bind, byte-for-byte policy content and
+read-only mount inside the running service namespace, and unchanged host
+requirements. Any failed post-start check stops the
 service before the shell exits. Use the explicit previous-commit recovery
 procedure under **Rollback**.
 
@@ -548,10 +591,19 @@ and stdout must be exactly one JSON line:
 `{"status":"ok","isolation":"verified"}`. A command failure or output mismatch
 leaves CodexAPI stopped before any admin-service deployment.
 
-After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure. Target its exact full SHA. Once that revision is active, run the database-free regression canary and final live isolation gate:
+Stopping CodexAPI also stops admin-service through its `Requires` dependency.
+For a CodexAPI-only release, start the existing approved admin-service revision
+after CodexAPI verification succeeds. Deploy a new admin-service revision only
+when that deployment was requested, through the existing routine procedure at
+its exact full SHA. Once admin-service is active, run the database-free
+regression canary and final live isolation gate:
 
 ```bash
 if ! cd /opt/ludora/ludora-admin/ludora-admin-service; then
+  sudo systemctl stop ludora-admin-service.service codexapi.service
+  exit 1
+fi
+if ! sudo systemctl start ludora-admin-service.service; then
   sudo systemctl stop ludora-admin-service.service codexapi.service
   exit 1
 fi
@@ -646,7 +698,11 @@ python3 -m venv .venv
 ```bash
 cd /opt/ludora/codexapi
 npm ci
-npm test
+sudo systemd-run --quiet --wait --pipe --collect \
+  --property=User=robertorojas87 \
+  --property=WorkingDirectory=/opt/ludora/codexapi \
+  --property=BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex \
+  /usr/bin/env CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1 /usr/bin/npm test
 npm run build
 
 cd /opt/ludora/ludora-admin/ludora-admin-service
@@ -973,6 +1029,10 @@ test "$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" != '<expected health capability poli
 test -z "$(git status --porcelain)"
 git fetch origin
 git cat-file -e "${CODEXAPI_PREVIOUS_COMMIT}^{commit}"
+CODEXAPI_HOST_REQUIREMENTS_BEFORE=''
+if sudo test -f /etc/codex/requirements.toml; then
+  CODEXAPI_HOST_REQUIREMENTS_BEFORE="$(sudo sha256sum /etc/codex/requirements.toml)"
+fi
 
 sudo systemctl stop codexapi.service
 git checkout --detach "$CODEXAPI_PREVIOUS_COMMIT"
@@ -980,7 +1040,15 @@ test "$(git rev-parse HEAD)" = "$CODEXAPI_PREVIOUS_COMMIT"
 test -f deploy/codexapi.service
 CODEXAPI_PREVIOUS_CLI_VERSION="$(node -e 'const fs = require("node:fs"); const version = JSON.parse(fs.readFileSync("./package.json", "utf8")).dependencies?.["@openai/codex"]; if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) process.exit(1); process.stdout.write(version);')"
 npm ci
-npm test
+if test -f deploy/codex-managed/requirements.toml; then
+  sudo systemd-run --quiet --wait --pipe --collect \
+    --property=User=robertorojas87 \
+    --property=WorkingDirectory=/opt/ludora/codexapi \
+    --property=BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex \
+    /usr/bin/env CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1 /usr/bin/npm test
+else
+  npm test
+fi
 npm run build
 test -z "$(git status --porcelain)"
 
@@ -1019,10 +1087,11 @@ verify_codexapi_startup() {
 }
 
 verify_codexapi_boundary() {
-  local unit
+  local unit pid
   unit="$(sudo systemctl show codexapi.service \
     --property=User --property=Group --property=ProtectSystem --property=ProtectHome \
-    --property=CapabilityBoundingSet --property=ReadOnlyPaths --property=ReadWritePaths --property=InaccessiblePaths)" || return 1
+    --property=CapabilityBoundingSet --property=ReadOnlyPaths --property=ReadWritePaths --property=InaccessiblePaths \
+    --property=BindReadOnlyPaths)" || return 1
   grep -Fx 'User=codexapi' <<<"$unit" || return 1
   grep -Fx 'Group=codexapi' <<<"$unit" || return 1
   grep -Fx 'ProtectSystem=strict' <<<"$unit" || return 1
@@ -1035,9 +1104,25 @@ verify_codexapi_boundary() {
 
   if test "$CODEXAPI_RUNTIME_PROFILE_PRESENT" = true; then
     sudo cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
-      test "$(sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 'codexapi:codexapi 400'
+      test "$(sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 'codexapi:codexapi 400' || return 1
   else
-    test ! -e /var/lib/codexapi/home/codexapi-runtime.config.toml
+    test ! -e /var/lib/codexapi/home/codexapi-runtime.config.toml || return 1
+  fi
+  if test -f deploy/codex-managed/requirements.toml; then
+    grep -Eq '^BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex(:rbind)?$' <<<"$unit" || return 1
+    pid="$(sudo systemctl show codexapi.service --property=MainPID --value)" &&
+      test "$pid" -gt 0 &&
+      sudo nsenter --target "$pid" --mount -- \
+        cmp -s deploy/codex-managed/requirements.toml /etc/codex/requirements.toml &&
+      sudo nsenter --target "$pid" --mount -- \
+        findmnt -rn -T /etc/codex/requirements.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
+  else
+    grep -Fx 'BindReadOnlyPaths=' <<<"$unit" || return 1
+  fi
+  if test -n "$CODEXAPI_HOST_REQUIREMENTS_BEFORE"; then
+    test "$(sudo sha256sum /etc/codex/requirements.toml)" = "$CODEXAPI_HOST_REQUIREMENTS_BEFORE"
+  else
+    sudo test ! -e /etc/codex/requirements.toml
   fi
 }
 
@@ -1063,7 +1148,10 @@ to one and removes any newer installed profile before startup. Recovery always
 verifies the installed unit against the detached revision plus the dedicated
 user/group, loopback listener, strict system/home protection, read-only
 CodexAPI checkout, persistent writable runtime path, and inaccessible
-admin/home paths without assuming newer exact path lists. A failed recovery
+admin/home paths without assuming newer exact path lists. Managed-policy
+revisions are tested with their read-only namespace requirements and verified
+inside the running service; older revisions must have no managed requirements
+bind. The host requirements contents remain unchanged. A failed recovery
 verification also leaves the service stopped.
 The checkout is intentionally detached at the recovered commit; the next
 approved forward deployment checks out `main` and fast-forwards it to an exact
