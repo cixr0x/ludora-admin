@@ -323,9 +323,14 @@ https://admin.ludora.bobbycrimson.com/crawler
 CLI 0.160.0 also requires administrator policy to disable `unified_exec`.
 The unit binds `/opt/ludora/codexapi/deploy/codex-managed` read-only at
 `/etc/codex` only in the service mount namespace. The checked-in
-`requirements.toml` pins `unified_exec=false`; never install it into the host
+`requirements.toml` pins `unified_exec=false`; the adjacent `config.toml`
+supplies the exact runtime permissions catalog despite `--ignore-user-config`.
+Startup rejects an absent or altered managed configuration, and runner/probes
+explicitly select `default_permissions="codexapi-runtime"`. Never install either
+file into the host
 Codex policy directory. systemd may create an empty `/etc/codex` mountpoint
-directory when absent, but must not create a host requirements file or alter
+directory when absent, but must not create a host configuration or requirements
+file or alter
 existing host policy. Plain CLI invocations outside the namespace do not share
 this enforcement. Native Windows is not a supported runtime for this POSIX
 profile and fails closed without a separately reviewed administrator boundary.
@@ -479,6 +484,10 @@ git fetch origin main
 test "$(git rev-parse origin/main)" = "$CODEXAPI_COMMIT"
 PREVIOUS_CODEXAPI_COMMIT="$(git rev-parse HEAD)"
 printf 'Previous CodexAPI commit: %s\n' "$PREVIOUS_CODEXAPI_COMMIT"
+CODEXAPI_HOST_CONFIG_BEFORE=''
+if sudo test -f /etc/codex/config.toml; then
+  CODEXAPI_HOST_CONFIG_BEFORE="$(sudo sha256sum /etc/codex/config.toml)"
+fi
 CODEXAPI_HOST_REQUIREMENTS_BEFORE=''
 if sudo test -f /etc/codex/requirements.toml; then
   CODEXAPI_HOST_REQUIREMENTS_BEFORE="$(sudo sha256sum /etc/codex/requirements.toml)"
@@ -545,6 +554,15 @@ verify_codexapi_boundary() {
       cmp -s deploy/codex-managed/requirements.toml /etc/codex/requirements.toml &&
     sudo nsenter --target "$pid" --mount -- \
       findmnt -rn -T /etc/codex/requirements.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
+  sudo nsenter --target "$pid" --mount -- \
+    cmp -s deploy/codex-managed/config.toml /etc/codex/config.toml &&
+  sudo nsenter --target "$pid" --mount -- \
+    findmnt -rn -T /etc/codex/config.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
+  if test -n "$CODEXAPI_HOST_CONFIG_BEFORE"; then
+    test "$(sudo sha256sum /etc/codex/config.toml)" = "$CODEXAPI_HOST_CONFIG_BEFORE"
+  else
+    sudo test ! -e /etc/codex/config.toml
+  fi || return 1
   if test -n "$CODEXAPI_HOST_REQUIREMENTS_BEFORE"; then
     test "$(sudo sha256sum /etc/codex/requirements.toml)" = "$CODEXAPI_HOST_REQUIREMENTS_BEFORE"
   else
@@ -578,9 +596,9 @@ the dedicated `codexapi` user/group, strict filesystem protections, the sole
 persistent writable `/var/lib/codexapi` service path, inaccessible admin, home,
 and root paths, and an exact mode-`0400` runtime profile matching the checked-in
 `deploy/codexapi-runtime.config.toml`. It also verifies the checked-in unit,
-the service-only managed requirements bind, byte-for-byte policy content and
+the service-only managed configuration/requirements bind, byte-for-byte policy content and
 read-only mount inside the running service namespace, and unchanged host
-requirements. Any failed post-start check stops the
+configuration and requirements. Any failed post-start check stops the
 service before the shell exits. Use the explicit previous-commit recovery
 procedure under **Rollback**.
 
@@ -1029,6 +1047,10 @@ test "$CODEXAPI_PREVIOUS_CAPABILITY_POLICY" != '<expected health capability poli
 test -z "$(git status --porcelain)"
 git fetch origin
 git cat-file -e "${CODEXAPI_PREVIOUS_COMMIT}^{commit}"
+CODEXAPI_HOST_CONFIG_BEFORE=''
+if sudo test -f /etc/codex/config.toml; then
+  CODEXAPI_HOST_CONFIG_BEFORE="$(sudo sha256sum /etc/codex/config.toml)"
+fi
 CODEXAPI_HOST_REQUIREMENTS_BEFORE=''
 if sudo test -f /etc/codex/requirements.toml; then
   CODEXAPI_HOST_REQUIREMENTS_BEFORE="$(sudo sha256sum /etc/codex/requirements.toml)"
@@ -1116,9 +1138,20 @@ verify_codexapi_boundary() {
         cmp -s deploy/codex-managed/requirements.toml /etc/codex/requirements.toml &&
       sudo nsenter --target "$pid" --mount -- \
         findmnt -rn -T /etc/codex/requirements.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
+    if test -f deploy/codex-managed/config.toml; then
+      sudo nsenter --target "$pid" --mount -- \
+        cmp -s deploy/codex-managed/config.toml /etc/codex/config.toml &&
+      sudo nsenter --target "$pid" --mount -- \
+        findmnt -rn -T /etc/codex/config.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
+    fi
   else
     grep -Fx 'BindReadOnlyPaths=' <<<"$unit" || return 1
   fi
+  if test -n "$CODEXAPI_HOST_CONFIG_BEFORE"; then
+    test "$(sudo sha256sum /etc/codex/config.toml)" = "$CODEXAPI_HOST_CONFIG_BEFORE"
+  else
+    sudo test ! -e /etc/codex/config.toml
+  fi || return 1
   if test -n "$CODEXAPI_HOST_REQUIREMENTS_BEFORE"; then
     test "$(sudo sha256sum /etc/codex/requirements.toml)" = "$CODEXAPI_HOST_REQUIREMENTS_BEFORE"
   else
@@ -1151,7 +1184,7 @@ CodexAPI checkout, persistent writable runtime path, and inaccessible
 admin/home paths without assuming newer exact path lists. Managed-policy
 revisions are tested with their read-only namespace requirements and verified
 inside the running service; older revisions must have no managed requirements
-bind. The host requirements contents remain unchanged. A failed recovery
+bind. Both host configuration and requirements contents remain unchanged. A failed recovery
 verification also leaves the service stopped.
 The checkout is intentionally detached at the recovered commit; the next
 approved forward deployment checks out `main` and fast-forwards it to an exact
