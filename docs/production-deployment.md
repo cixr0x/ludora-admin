@@ -325,6 +325,18 @@ Bubblewrap requires `AF_NETLINK` to configure loopback in its private network
 namespace; empty capability sets, `NoNewPrivileges`, and the runtime network
 restrictions remain required.
 
+The unit also binds only the pinned native CLI's public vendor artifacts
+read-only at `/usr/local/lib/codexapi-cli` inside its namespace. Linux executes
+`bin/codex` from that alias so sandbox helper re-execution and adjacent resources
+remain available while `/opt/ludora/codexapi` stays denied. The resolver attests
+the alias directory and binary against the installed package's device/inode
+identities and rejects missing, mismatched, symlinked, or non-executable aliases
+before CLI probes or listening. This installs no global CLI; systemd may leave
+an empty host mountpoint directory. The unit source is Linux x64 for this VM.
+An ARM64 installation must explicitly use the source
+`/opt/ludora/codexapi/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl`
+and verify the same read-only alias identity before startup.
+
 CLI 0.160.0 also requires administrator policy to disable `unified_exec`.
 The unit binds `/opt/ludora/codexapi/deploy/codex-managed` read-only at
 `/etc/codex` only in the service mount namespace. The checked-in
@@ -505,10 +517,12 @@ git merge --ff-only "$CODEXAPI_COMMIT"
 test "$(git rev-parse HEAD)" = "$CODEXAPI_COMMIT"
 test -z "$(git status --porcelain)"
 npm ci
+CODEXAPI_TEST_BINDS="$(sed -n 's/^BindReadOnlyPaths=//p' deploy/codexapi.service)"
+test -n "$CODEXAPI_TEST_BINDS"
 sudo systemd-run --quiet --wait --pipe --collect \
   --property=User=robertorojas87 \
   --property=WorkingDirectory=/opt/ludora/codexapi \
-  --property=BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex \
+  --property="BindReadOnlyPaths=$CODEXAPI_TEST_BINDS" \
   /usr/bin/env CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1 /usr/bin/npm test
 npm run typecheck
 npm run build
@@ -549,7 +563,7 @@ verify_codexapi_boundary() {
     grep -Fx 'ProtectHome=yes' <<<"$unit" &&
     grep -Fx 'ReadWritePaths=/var/lib/codexapi' <<<"$unit" &&
     grep -Fx 'InaccessiblePaths=/opt/ludora/ludora-admin /home /root' <<<"$unit" &&
-    grep -Eq '^BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex(:rbind)?$' <<<"$unit" &&
+    grep -Eq '^BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex(:rbind)? /opt/ludora/codexapi/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl:/usr/local/lib/codexapi-cli(:rbind)?$' <<<"$unit" &&
     cmp -s deploy/codexapi.service /etc/systemd/system/codexapi.service &&
     sudo cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml &&
     test "$(sudo stat -c '%U:%G %a' /var/lib/codexapi/home/codexapi-runtime.config.toml)" = 'codexapi:codexapi 400' || return 1
@@ -563,6 +577,13 @@ verify_codexapi_boundary() {
     cmp -s deploy/codex-managed/config.toml /etc/codex/config.toml &&
   sudo nsenter --target "$pid" --mount -- \
     findmnt -rn -T /etc/codex/config.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
+  sudo nsenter --target "$pid" --mount -- /bin/sh -c '
+    source=/opt/ludora/codexapi/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl
+    test "$(stat -c "%d:%i" "$source")" = "$(stat -c "%d:%i" /usr/local/lib/codexapi-cli)" &&
+    test "$(stat -c "%d:%i" "$source/bin/codex")" = "$(stat -c "%d:%i" /usr/local/lib/codexapi-cli/bin/codex)"
+  ' &&
+  sudo nsenter --target "$pid" --mount -- \
+    findmnt -rn -T /usr/local/lib/codexapi-cli/bin/codex -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
   if test -n "$CODEXAPI_HOST_CONFIG_BEFORE"; then
     test "$(sudo sha256sum /etc/codex/config.toml)" = "$CODEXAPI_HOST_CONFIG_BEFORE"
   else
@@ -603,7 +624,8 @@ and root paths, and an exact mode-`0400` runtime profile matching the checked-in
 `deploy/codexapi-runtime.config.toml`. It also verifies the checked-in unit,
 the service-only managed configuration/requirements bind, byte-for-byte policy content and
 read-only mount inside the running service namespace, and unchanged host
-configuration and requirements. Any failed post-start check stops the
+configuration and requirements. The native artifact alias must be read-only and
+share the pinned source directory and binary identities. Any failed post-start check stops the
 service before the shell exits. Use the explicit previous-commit recovery
 procedure under **Rollback**.
 
@@ -721,10 +743,12 @@ python3 -m venv .venv
 ```bash
 cd /opt/ludora/codexapi
 npm ci
+CODEXAPI_TEST_BINDS="$(sed -n 's/^BindReadOnlyPaths=//p' deploy/codexapi.service)"
+test -n "$CODEXAPI_TEST_BINDS"
 sudo systemd-run --quiet --wait --pipe --collect \
   --property=User=robertorojas87 \
   --property=WorkingDirectory=/opt/ludora/codexapi \
-  --property=BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex \
+  --property="BindReadOnlyPaths=$CODEXAPI_TEST_BINDS" \
   /usr/bin/env CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1 /usr/bin/npm test
 npm run build
 
@@ -1068,10 +1092,12 @@ test -f deploy/codexapi.service
 CODEXAPI_PREVIOUS_CLI_VERSION="$(node -e 'const fs = require("node:fs"); const version = JSON.parse(fs.readFileSync("./package.json", "utf8")).dependencies?.["@openai/codex"]; if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) process.exit(1); process.stdout.write(version);')"
 npm ci
 if test -f deploy/codex-managed/requirements.toml; then
+  CODEXAPI_TEST_BINDS="$(sed -n 's/^BindReadOnlyPaths=//p' deploy/codexapi.service)"
+  test -n "$CODEXAPI_TEST_BINDS"
   sudo systemd-run --quiet --wait --pipe --collect \
     --property=User=robertorojas87 \
     --property=WorkingDirectory=/opt/ludora/codexapi \
-    --property=BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex \
+    --property="BindReadOnlyPaths=$CODEXAPI_TEST_BINDS" \
     /usr/bin/env CODEXAPI_TEST_REQUIRE_MANAGED_POLICY=1 /usr/bin/npm test
 else
   npm test
@@ -1136,7 +1162,7 @@ verify_codexapi_boundary() {
     test ! -e /var/lib/codexapi/home/codexapi-runtime.config.toml || return 1
   fi
   if test -f deploy/codex-managed/requirements.toml; then
-    grep -Eq '^BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex(:rbind)?$' <<<"$unit" || return 1
+    grep -Eq '^BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex(:rbind)?( /opt/ludora/codexapi/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl:/usr/local/lib/codexapi-cli(:rbind)?)?$' <<<"$unit" || return 1
     pid="$(sudo systemctl show codexapi.service --property=MainPID --value)" &&
       test "$pid" -gt 0 &&
       sudo nsenter --target "$pid" --mount -- \
@@ -1148,6 +1174,15 @@ verify_codexapi_boundary() {
         cmp -s deploy/codex-managed/config.toml /etc/codex/config.toml &&
       sudo nsenter --target "$pid" --mount -- \
         findmnt -rn -T /etc/codex/config.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
+    fi
+    if grep -Fq ':/usr/local/lib/codexapi-cli' deploy/codexapi.service; then
+      sudo nsenter --target "$pid" --mount -- /bin/sh -c '
+        source=/opt/ludora/codexapi/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl
+        test "$(stat -c "%d:%i" "$source")" = "$(stat -c "%d:%i" /usr/local/lib/codexapi-cli)" &&
+        test "$(stat -c "%d:%i" "$source/bin/codex")" = "$(stat -c "%d:%i" /usr/local/lib/codexapi-cli/bin/codex)"
+      ' &&
+      sudo nsenter --target "$pid" --mount -- \
+        findmnt -rn -T /usr/local/lib/codexapi-cli/bin/codex -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
     fi
   else
     grep -Fx 'BindReadOnlyPaths=' <<<"$unit" || return 1
