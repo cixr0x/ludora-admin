@@ -320,6 +320,11 @@ https://admin.ludora.bobbycrimson.com/crawler
 `CODEX_WORKSPACE=/var/lib/codexapi/workspace`, `HOST=127.0.0.1`, and
 `PORT=3001`.
 
+The unit permits only `AF_UNIX`, `AF_INET`, `AF_INET6`, and `AF_NETLINK`.
+Bubblewrap requires `AF_NETLINK` to configure loopback in its private network
+namespace; empty capability sets, `NoNewPrivileges`, and the runtime network
+restrictions remain required.
+
 CLI 0.160.0 also requires administrator policy to disable `unified_exec`.
 The unit binds `/opt/ludora/codexapi/deploy/codex-managed` read-only at
 `/etc/codex` only in the service mount namespace. The checked-in
