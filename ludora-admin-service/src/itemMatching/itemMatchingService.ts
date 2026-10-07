@@ -11,10 +11,12 @@ import type { ListingImageQueryHasher, ListingImageQueryVariant } from '../listi
 import { rankLocalCatalogMatches, LOCAL_IMAGE_MATCH_THRESHOLDS, type CatalogItemForMatching } from './localCatalogMatcher.js';
 import { nullTraceLogger, type TraceLogger } from '../trace.js';
 import {
+  LOCAL_AUTO_MATCH_SCORE_THRESHOLD,
   localMatchSearchTokens,
   normalizeTitle,
   normalizeTitleVariants,
   scoreBggThing,
+  scoreLocalItem,
   type BggThingForMatch,
   type DiscoveryCandidateForMatch,
 } from './itemMatcher.js';
@@ -575,27 +577,62 @@ async function loadDiscoveryItemCandidate(database: Database, discoveryItemCandi
 }
 
 async function generateLocalMatches(database: Database, candidate: DiscoveryItemCandidateRow, dependencies: ItemMatchingDependencies, traceLogger: TraceLogger = nullTraceLogger): Promise<GeneratedMatchCandidate[]> {
+  const directItems = await findLocalCatalogNameItems(database, candidate, 'direct');
+  const matchCandidate = discoveryCandidateForMatch(candidate);
+  const hasAcceptedDirect = directItems.some((item) => scoreLocalItem(matchCandidate, item, 'direct').matchScore >= LOCAL_AUTO_MATCH_SCORE_THRESHOLD);
+  const nameItems = hasAcceptedDirect
+    ? directItems
+    : [...directItems, ...await findLocalCatalogNameItems(database, candidate, 'alias')];
+
+  const ranked = await rankLocalCatalogMatches(
+    { ...matchCandidate, imageUrl: candidate.image_url },
+    nameItems,
+    {
+      catalogImageHasher: dependencies.catalogImageHasher,
+      listingImageQueryHasher: dependencies.listingImageQueryHasher,
+      imageSimilarityService: dependencies.imageSimilarityService,
+      findNearestItems: (variants) => findNearestCatalogImageItems(database, variants),
+      trace: (fields) => traceLog(traceLogger, 'item_matcher.local_image.completed', { candidate_id: candidate.id, ...fields })
+    }
+  );
+  return ranked.map(({ item, accepted, matchReasons, matchScore, evidence }) => {
+    return {
+      accepted,
+      bggId: item.bggId ?? null,
+      itemId: item.id,
+      matchReasons,
+      matchScore,
+      matchedName: item.name,
+      rawPayload: { item, local_match: evidence },
+      retainForReview: evidence.query_variant !== null && evidence.mode !== 'name',
+      source: 'LOCAL' as const
+    };
+  });
+}
+
+async function findLocalCatalogNameItems(database: Database, candidate: DiscoveryItemCandidateRow, nameScope: 'direct' | 'alias'): Promise<CatalogItemForMatching[]> {
   const normalizedTitleVariants = normalizeTitleVariants(candidate.title);
   const searchTokens = localMatchSearchTokens(discoveryCandidateForMatch(candidate));
   const result = await database.query(
     `
     with local_names as (
-      select id as item_id, normalized_name as normalized_match_name, true as is_direct_name
+      ${nameScope === 'direct' ? `
+      select id as item_id, normalized_name as normalized_match_name
       from items
       where normalized_name <> ''
       union all
-      select id as item_id, normalized_name_es as normalized_match_name, true as is_direct_name
+      select id as item_id, normalized_name_es as normalized_match_name
       from items
       where normalized_name_es <> ''
-      union all
-      select item_id, normalized_alias as normalized_match_name, false as is_direct_name
+      ` : `
+      select item_id, normalized_alias as normalized_match_name
       from item_aliases
       where normalized_alias <> ''
+      `}
     ),
     ranked_items as (
       select
         item_id,
-        bool_or(is_direct_name and normalized_match_name = any($1::text[])) as exact_direct_name_match,
         bool_or(normalized_match_name = any($1::text[])) as exact_name_match,
         max((
           select count(*)
@@ -606,7 +643,7 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
       where normalized_match_name = any($1::text[])
          or string_to_array(normalized_match_name, ' ') && $2::text[]
       group by item_id
-      order by exact_direct_name_match desc, exact_name_match desc, token_overlap desc, item_id
+      order by exact_name_match desc, token_overlap desc, item_id
       limit ${MAX_LOCAL_MATCH_CANDIDATES}
     )
     select
@@ -639,35 +676,12 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
       ), '[]'::json) as publishers
     from ranked_items ranked
     join items i on i.id = ranked.item_id
-    order by ranked.exact_direct_name_match desc, ranked.exact_name_match desc, ranked.token_overlap desc, i.canonical_name asc
+    order by ranked.exact_name_match desc, ranked.token_overlap desc, i.canonical_name asc
     `,
     [normalizedTitleVariants, searchTokens]
   );
 
-  const ranked = await rankLocalCatalogMatches(
-    { ...discoveryCandidateForMatch(candidate), imageUrl: candidate.image_url },
-    result.rows.map((row) => localItemFromRow(row as Record<string, unknown>)),
-    {
-      catalogImageHasher: dependencies.catalogImageHasher,
-      listingImageQueryHasher: dependencies.listingImageQueryHasher,
-      imageSimilarityService: dependencies.imageSimilarityService,
-      findNearestItems: (variants) => findNearestCatalogImageItems(database, variants),
-      trace: (fields) => traceLog(traceLogger, 'item_matcher.local_image.completed', { candidate_id: candidate.id, ...fields })
-    }
-  );
-  return ranked.map(({ item, accepted, matchReasons, matchScore, evidence }) => {
-    return {
-      accepted,
-      bggId: item.bggId ?? null,
-      itemId: item.id,
-      matchReasons,
-      matchScore,
-      matchedName: item.name,
-      rawPayload: { item, local_match: evidence },
-      retainForReview: evidence.query_variant !== null && evidence.mode !== 'name',
-      source: 'LOCAL' as const
-    };
-  });
+  return result.rows.map((row) => localItemFromRow(row as Record<string, unknown>));
 }
 
 async function findNearestCatalogImageItems(database: Database, variants: ListingImageQueryVariant[]): Promise<CatalogItemForMatching[]> {

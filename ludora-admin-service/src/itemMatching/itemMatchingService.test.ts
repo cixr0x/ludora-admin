@@ -129,23 +129,70 @@ describe('item matching service', () => {
     expect(cache.lookup).not.toHaveBeenCalled();
   });
 
-  it('prioritizes exact direct normalized names ahead of aliases before capping the retrieval shortlist', async () => {
-    const queries: RecordedQuery[] = [];
-    const service = createItemMatchingService(matchingDatabase(
-      storeItemCandidate({ title: 'Guarro Pig (Español)' }), [],
-      { onQuery: (query) => queries.push(query) }
-    ), dependencies());
+  it.each([
+    {
+      title: 'Guarro Pig Original', normalizedAlias: 'guarro pig original', itemId: 1810,
+      direct: { id: 1810, canonical_name: 'Guarro Pig', normalized_name: 'guarro pig', bgg_id: null }
+    },
+    {
+      title: 'Amazon México Devir LA FERIA de las PULGAS de TITIRILQUÉN Original en Español',
+      normalizedAlias: 'amazon mexico devir la feria de las pulgas de titirilquen original en espanol', itemId: 1902,
+      direct: { id: 1902, canonical_name: 'Dedicated Catalog Product', normalized_name: 'dedicated catalog product', normalized_name_es: 'la feria de las pulgas de titirilquen', bgg_id: null }
+    }
+  ])('retrieves and selects the direct normalized name for $title despite more than 100 exact aliases', async ({ title, normalizedAlias, itemId, direct }) => {
+    const updates: RecordedQuery[] = [];
+    const lookups: LocalLookupResult[] = [];
+    const catalog = [
+      ...Array.from({ length: 105 }, (_, index) => localItemRow({
+        id: index + 1, canonical_name: `Competitor ${index + 1}`, normalized_name: `competitor ${index + 1}`,
+        aliases: [title], normalized_aliases: [normalizedAlias]
+      })),
+      localItemRow(direct)
+    ];
+    const cache = matchCache();
+    const ai = aiService();
+    const bggClient = clientWithThing(null);
+    const database = cappedMatchingDatabase(
+      storeItemCandidate({ title, image_url: null, publisher: 'Devir', store_name: 'Amazon México' }),
+      catalog, lookups, updates
+    );
 
-    await service.generateMatchCandidates(42);
+    await createItemMatchingService(database, dependencies({ cache, ai, bggClient }))
+      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
 
-    const localQuery = queries.find((query) => normalizeSql(query.sql).startsWith('with local_names as'));
-    const sql = normalizeSql(localQuery?.sql ?? '');
-    expect(sql).toContain('normalized_name as normalized_match_name, true as is_direct_name');
-    expect(sql).toContain('normalized_name_es as normalized_match_name, true as is_direct_name');
-    expect(sql).toContain('normalized_alias as normalized_match_name, false as is_direct_name');
-    expect(sql).toContain('bool_or(is_direct_name and normalized_match_name = any($1::text[])) as exact_direct_name_match');
-    expect(sql).toContain('order by exact_direct_name_match desc, exact_name_match desc, token_overlap desc, item_id limit 100');
-    expect(localQuery?.params).toEqual([['guarro pig espanol', 'guarro pig'], ['guarro', 'pig']]);
+    expect(linkUpdate(updates)?.params?.[0]).toBe(itemId);
+    expect(linkUpdate(updates)?.params?.[4]).toBe(0.99);
+    expect(lookups.map(({ returnedIds }) => returnedIds)).toEqual([[itemId]]);
+    expect(JSON.parse(String(linkUpdate(updates)?.params?.[6]))).toMatchObject({ local_match: { name_stage: 'direct', verification: { status: 'not_run' } } });
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(bggClient.searchFresh).not.toHaveBeenCalled();
+    expect(bggClient.fetchThing).not.toHaveBeenCalled();
+    expect(ai.findMatch).not.toHaveBeenCalled();
+  });
+
+  it('uses a separately capped alias lookup when 100 retrieved direct names are below acceptance', async () => {
+    const updates: RecordedQuery[] = [];
+    const lookups: LocalLookupResult[] = [];
+    const catalog = [
+      ...Array.from({ length: 105 }, (_, index) => localItemRow({
+        id: index + 1, canonical_name: `Guarro Competitor ${index + 1}`, normalized_name: `guarro competitor ${index + 1}`
+      })),
+      localItemRow({
+        id: 1396, canonical_name: 'Drecksau Total', normalized_name: 'drecksau total',
+        aliases: ['Guarro Pig Original'], normalized_aliases: ['guarro pig original'], bgg_id: 377591
+      })
+    ];
+    const cache = matchCache();
+    const database = cappedMatchingDatabase(storeItemCandidate({ title: 'Guarro Pig Original', image_url: null }), catalog, lookups, updates);
+
+    await createItemMatchingService(database, dependencies({ cache }))
+      .confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([1396, 'LOCAL', 377591, 'Drecksau Total', 0.99]);
+    expect(lookups.map(({ returnedIds }) => returnedIds.length)).toEqual([100, 1]);
+    expect(lookups[1].returnedIds).toEqual([1396]);
+    expect(JSON.parse(String(linkUpdate(updates)?.params?.[6]))).toMatchObject({ local_match: { name_stage: 'alias_fallback' } });
+    expect(cache.lookup).not.toHaveBeenCalled();
   });
 
   it('accepts a local normalized-title F1 score of 0.8571 before BGG or AI matching', async () => {
@@ -1761,7 +1808,7 @@ function matchingDatabase(
       if (normalized.includes('from store_items')) {
         return { rows: candidate.id === undefined ? [] : [candidate] };
       }
-      if (normalized.includes('from items')) {
+      if (normalized.startsWith('with local_names as')) {
         return { rows: localRows };
       }
       if (normalized.startsWith('update store_items')) {
@@ -1800,6 +1847,46 @@ function matchingDatabase(
 
 function normalizeSql(sql: string): string {
   return sql.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+type LocalLookupResult = { sql: string; returnedIds: number[] };
+
+function cappedMatchingDatabase(
+  candidate: Record<string, unknown>,
+  catalog: Record<string, unknown>[],
+  lookups: LocalLookupResult[],
+  updates: RecordedQuery[]
+): Database {
+  const database = matchingDatabase(candidate, [], { onStoreItemUpdate: (query) => updates.push(query) });
+  return { query: async (sql, params) => {
+    const normalized = normalizeSql(sql);
+    if (!normalized.startsWith('with local_names as')) return database.query(sql, params);
+
+    // Model the emitted lookup's searched sources, exact/token ranking, and cap;
+    // do not return a preselected fixture that bypasses retrieval.
+    const sources = normalized.slice(0, normalized.indexOf('), ranked_items as'));
+    const includeDirect = sources.includes('from items');
+    const includeAliases = sources.includes('from item_aliases');
+    const exactTitles = params?.[0] as string[];
+    const searchTokens = params?.[1] as string[];
+    const cap = Number(normalized.match(/limit (\d+)/)?.[1]);
+    if (cap !== 100) throw new Error(`Expected a bounded 100-item lookup, got ${cap}`);
+    const ranked = catalog.map((row) => {
+      const directNames = [row.normalized_name, row.normalized_name_es].filter((value): value is string => typeof value === 'string' && value !== '');
+      const names = [...(includeDirect ? directNames : []), ...(includeAliases ? (row.normalized_aliases as string[] | undefined) ?? [] : [])];
+      return {
+        row,
+        exactDirect: includeDirect && directNames.some((name) => exactTitles.includes(name)),
+        exact: names.some((name) => exactTitles.includes(name)),
+        overlap: Math.max(0, ...names.map((name) => name.split(' ').filter((token) => searchTokens.includes(token)).length))
+      };
+    }).filter(({ exact, overlap }) => exact || overlap > 0).sort((left, right) =>
+      (normalized.includes('as exact_direct_name_match') ? Number(right.exactDirect) - Number(left.exactDirect) : 0)
+      || Number(right.exact) - Number(left.exact) || right.overlap - left.overlap || Number(left.row.id) - Number(right.row.id)
+    ).slice(0, cap);
+    lookups.push({ sql, returnedIds: ranked.map(({ row }) => Number(row.id)) });
+    return { rows: ranked.map(({ row }) => row) };
+  } };
 }
 
 function linkUpdate(updates: RecordedQuery[]): RecordedQuery | undefined {
