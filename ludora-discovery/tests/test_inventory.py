@@ -112,6 +112,9 @@ class FakeRepository:
         self.exists_checks.append((store_id, source_url))
         return (store_id, source_url) in self.existing_urls
 
+    def discovery_url_exists(self, store_id, source_url):
+        return self.item_candidate_exists(store_id, source_url)
+
     def observe_discovery_pair(self, store_id, discovered_url, target_url):
         return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
 
@@ -1749,7 +1752,7 @@ class InventoryTests(unittest.TestCase):
 
         self.assertEqual(processor.processed, [])
 
-    def test_crawl_store_product_details_resolves_existing_product_urls_before_skipping(self):
+    def test_crawl_store_product_details_skips_existing_product_urls_before_fetch(self):
         product_url = "https://example.mx/products/catan"
         repository = FakeRepository(existing_urls={(12, product_url)})
 
@@ -1763,7 +1766,7 @@ class InventoryTests(unittest.TestCase):
                 repository,
             )
 
-        self.assertEqual(fetch_html.call_count, 1)
+        fetch_html.assert_not_called()
         self.assertEqual(records, [])
         self.assertEqual(repository.item_records, [])
         self.assertEqual(repository.exists_checks, [(12, product_url)])

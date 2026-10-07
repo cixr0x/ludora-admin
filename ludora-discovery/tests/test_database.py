@@ -1228,6 +1228,23 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(params, (12, "https://example.mx/products/catan", None))
         self.assertEqual(connection.commits, 0)
 
+    def test_discovery_url_exists_reads_either_url_without_row_state_filters(self):
+        for store_id, returned_row in ((12, (1,)), (None, (1,)), (13, None)):
+            with self.subTest(store_id=store_id, returned_row=returned_row):
+                connection = FakeConnection(fetchone_rows=[returned_row])
+                repository = DiscoveryRepository(connection)
+                lookup = getattr(repository, "discovery_url_exists", None)
+                self.assertTrue(callable(lookup), "Discovery needs a separate read-only URL lookup")
+                exists = lookup(store_id, "https://example.mx/products/catan#details")
+                self.assertEqual(exists, returned_row is not None)
+                sql, params = connection.cursor_instance.executions[0]
+                self.assertEqual(" ".join(sql.casefold().split()),
+                                 "select 1 from store_items where store_id is not distinct from %s "
+                                 "and (source_url = %s or source_url_origin = %s) limit 1")
+                self.assertEqual(params, (store_id, "https://example.mx/products/catan", "https://example.mx/products/catan"))
+                self.assertEqual(connection.commits, 0)
+                self.assertEqual(connection.rollbacks, 0)
+
     def test_lists_confirmed_boardgame_item_candidates_for_updates(self):
         connection = FakeConnection(
             fetchall_rows=[

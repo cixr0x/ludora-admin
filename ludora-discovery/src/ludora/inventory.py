@@ -31,6 +31,9 @@ class ItemCandidateRepository(Protocol):
     def item_candidate_exists(self, store_id: int | None, source_url: str) -> bool:
         ...
 
+    def discovery_url_exists(self, store_id: int | None, source_url: str) -> bool:
+        ...
+
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         ...
 

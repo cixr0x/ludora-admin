@@ -96,6 +96,9 @@ class ItemCandidateRepository(Protocol):
     def item_candidate_exists(self, store_id: int | None, source_url: str) -> bool:
         ...
 
+    def discovery_url_exists(self, store_id: int | None, source_url: str) -> bool:
+        ...
+
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         ...
 
@@ -554,6 +557,15 @@ def crawl_listing_candidates(
     records: list[DiscoveryItemCandidateRecord] = []
     for listing_candidate in listing_candidates:
         raise_if_cancelled(cancellation_token)
+        if repository.discovery_url_exists(listing_candidate.store_id, listing_candidate.source_url):
+            trace.log(
+                "inventory.candidate.skipped_existing",
+                source_url=listing_candidate.source_url,
+                store_id=listing_candidate.store_id,
+                title=listing_candidate.title,
+                stage="before_fetch",
+            )
+            continue
         trace.log(
             "inventory.candidate.detail_fetch.start",
             source_url=listing_candidate.source_url,

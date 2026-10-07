@@ -1563,6 +1563,22 @@ class DiscoveryRepository:
             )
             return cursor.fetchone() is not None
 
+    def discovery_url_exists(self, store_id: int | None, source_url: str) -> bool:
+        """Read whether this store has already recorded the discovered URL."""
+        _, source_url = discovery_url_pair(source_url, source_url)
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select 1
+                from store_items
+                where store_id is not distinct from %s
+                  and (source_url = %s or source_url_origin = %s)
+                limit 1
+                """,
+                (store_id, source_url, source_url),
+            )
+            return cursor.fetchone() is not None
+
     def upsert_tutorial_link(
         self,
         *,

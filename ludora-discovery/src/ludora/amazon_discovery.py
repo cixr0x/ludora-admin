@@ -235,6 +235,15 @@ def _crawl_amazon_search_inventory(
                     if asin in seen_asins:
                         continue
                     seen_asins.add(asin)
+                    if repository.discovery_url_exists(listing_candidate.store_id, listing_candidate.source_url):
+                        trace.log(
+                            "amazon_inventory.candidate.skipped_existing",
+                            source_url=listing_candidate.source_url,
+                            store_id=listing_candidate.store_id,
+                            title=listing_candidate.title,
+                            stage="before_fetch",
+                        )
+                        continue
                     trace.log(
                         "amazon_inventory.candidate.detail_fetch.start",
                         source_url=listing_candidate.source_url,

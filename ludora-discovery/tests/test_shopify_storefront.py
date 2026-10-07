@@ -137,6 +137,9 @@ class DiscoveryRepository:
         self.exists_checks.append((store_id, source_url))
         return (store_id, source_url) in self.existing_urls
 
+    def discovery_url_exists(self, store_id, source_url):
+        return self.item_candidate_exists(store_id, source_url)
+
     def observe_discovery_pair(self, store_id, discovered_url, target_url):
         return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
 
@@ -284,26 +287,44 @@ class ShopifyStorefrontTests(unittest.TestCase):
         browser_fetcher.assert_not_called()
         self.assertEqual(before_product_request.call_args_list, [call(product_url)])
 
-    def test_existing_shopify_sitemap_candidate_is_checked_after_graphql(self):
-        store_url = "https://tienda.example.mx/"
-        product_url = PRODUCT_URL.split("?")[0]
-        repository = DiscoveryRepository(existing_urls={(31, product_url)})
+    def test_existing_mandrake_shopify_candidate_skips_before_graphql_and_all_product_work(self):
+        store_url = "https://mandrakejuegos.com/"
+        product_url = "https://mandrakejuegos.com/products/pequenas-grandes-mazmorras-hazanas"
+        repository = DiscoveryRepository(existing_urls={(61, product_url)})
+        trace = FakeTraceLogger()
+        signer = Mock(return_value={"Signature": "test-signature"})
+        throttle = Mock()
+        browser = Mock()
+        classifier = Mock()
+        processor = Mock()
 
         with patch(
             "ludora.product_crawler.discover_product_urls_from_sitemaps",
             return_value=[product_url],
-        ), patch("ludora.product_crawler.fetch_shopify_storefront_product", return_value=FetchResult(url=GRAPHQL_ENDPOINT, text=json.dumps({"data": {"product": _shopify_product()}}))) as fetch_product:
+        ), patch("ludora.product_crawler.fetch_shopify_storefront_product", return_value=FetchResult(url="https://mandrakejuegos.com/api/2026-07/graphql.json", text=json.dumps({"data": {"product": _shopify_product()}}))) as fetch_product, patch("ludora.product_crawler.fetch_html") as fetch_html:
             records = crawl_store_product_details(
                 store_url,
-                31,
+                61,
                 repository,
                 platform="shopify",
-                request_headers_provider=_signing_provider,
+                request_headers_provider=signer,
+                before_product_request=throttle,
+                browser_fetcher=browser,
+                item_classifier=classifier,
+                item_processor=processor,
+                trace_logger=trace,
             )
 
         self.assertEqual(records, [])
-        self.assertEqual(repository.exists_checks, [(31, product_url)])
-        fetch_product.assert_called_once()
+        self.assertEqual(repository.exists_checks, [(61, product_url)])
+        self.assertEqual(repository.records, [])
+        for dependency in (fetch_product, fetch_html, signer, throttle, browser, classifier, processor.process_candidate):
+            dependency.assert_not_called()
+        skip_fields = [fields for event, fields in trace.events if event == "inventory.candidate.skipped_existing"]
+        self.assertEqual(len(skip_fields), 1)
+        self.assertEqual(skip_fields[0]["source_url"], product_url)
+        self.assertEqual(skip_fields[0]["stage"], "before_fetch")
+        self.assertFalse(any(event == "inventory.candidate.detail_fetch.start" for event, _ in trace.events))
 
     def test_null_shopify_graphql_product_is_omitted_and_the_store_continues(self):
         first_url = PRODUCT_URL.split("?")[0]

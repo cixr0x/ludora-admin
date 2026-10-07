@@ -96,7 +96,9 @@ $env:LUDORA_BROWSER_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\
 
 Product-detail requests are globally start-paced at three seconds across a discovery process. The throttle spans every store in a batch and also applies to retry attempts.
 
-Shopify discovery enumerates product URLs from the sitemap and fetches each product detail through signed Storefront GraphQL only. It has no HTML fallback and does not use GraphQL for product enumeration. A null Shopify product is skipped and logged. A failed store does not stop the remaining stores in the batch, but any store failure causes the parent batch to fail after all stores have run.
+Discovery still enumerates listings, sitemaps, and Amazon search pages to find new URLs. Before requesting a product, it skips any URL already recorded for that store as either `source_url` or `source_url_origin`, including pending, failed, inactive, and unclassified rows. URL identity is exact after fragment removal; HTTP and HTTPS remain distinct. Early skips emit `inventory.candidate.skipped_existing` (or `amazon_inventory.candidate.skipped_existing`) with `stage=before_fetch` and perform no classification, matching, or persistence. New URLs retain post-fetch redirect validation and pair reconciliation. Existing item refreshes remain the updater's responsibility.
+
+Shopify discovery enumerates product URLs from the sitemap and fetches new product details through signed Storefront GraphQL only. It has no HTML fallback and does not use GraphQL for product enumeration. A null Shopify product is skipped and logged. A failed store does not stop the remaining stores in the batch, but any store failure causes the parent batch to fail after all stores have run.
 
 Two stores use domain-specific catalog discovery because their public storefronts do not expose compatible product sitemaps:
 

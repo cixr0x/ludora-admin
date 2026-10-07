@@ -27,6 +27,9 @@ class FakeRepository:
         self.exists_checks.append((store_id, source_url))
         return False
 
+    def discovery_url_exists(self, store_id, source_url):
+        return self.item_candidate_exists(store_id, source_url)
+
     def observe_discovery_pair(self, store_id, discovered_url, target_url):
         return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
 

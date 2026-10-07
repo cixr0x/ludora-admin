@@ -28,6 +28,12 @@ class PairRepository:
     def item_candidate_exists(self, *_args):
         return False
 
+    def discovery_url_exists(self, store_id, source_url):
+        return any(scope == store_id and source_url in (origin, target)
+                   for scope, origin, target in self.recorded) or any(
+                       row.store_id == store_id and source_url in (row.source_url, row.source_url_origin)
+                       for row in self.records)
+
     def observe_discovery_pair(self, store_id, discovered_url, target_url):
         self.observations.append((store_id, discovered_url, target_url))
         return (store_id, discovered_url, target_url) in self.recorded
@@ -48,16 +54,21 @@ class DiscoveryPairFlowTests(unittest.TestCase):
     def test_invalid_redirect_targets_are_not_recorded_or_used_for_pair_skips(self):
         for url, html, status in [("javascript:alert(1)", PRODUCT_HTML, 200), ("https://example.mx/", "<h1>Our store</h1>", 200), (B, "<h1>Producto no encontrado</h1>", 200), (B, PRODUCT_HTML, 404), (B, '<script type="application/ld+json">{"@type":"Product"}</script>', 200)]:
             with self.subTest(url=url, html=html, status=status):
-                repository = PairRepository(recorded={(12, A, B)})
+                repository = PairRepository()
                 with patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url=url, text=html, status_code=status)):
                     records = crawl_listing_candidates([DiscoveryItemCandidateRecord(store_id=12, source_url=A, title="Catan")], repository, source_listing_url="https://example.mx/sitemap.xml", item_classifier=lambda _record: None)
                 self.assertEqual(records, [])
                 self.assertEqual(repository.observations, [])
                 self.assertEqual(repository.records, [])
 
-    def test_insufficient_static_redirect_uses_browser_before_pair_skip(self):
-        repository = PairRepository(recorded={(12, A, B)})
-        browser = Mock(return_value=FetchResult(url=B, text=PRODUCT_HTML))
+    def test_unknown_static_redirect_uses_browser_and_observes_pair_completed_during_fetch(self):
+        repository = PairRepository()
+
+        def browser_fetch(_url):
+            repository.recorded.add((12, A, B))
+            return FetchResult(url=B, text=PRODUCT_HTML)
+
+        browser = Mock(side_effect=browser_fetch)
         extractor = Mock(side_effect=AssertionError("Recorded browser pair must skip extraction"))
         with patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url="https://example.mx/", text="<h1>Loading</h1>")):
             records = crawl_listing_candidates([DiscoveryItemCandidateRecord(store_id=12, source_url=A, title="Catan")], repository, source_listing_url="https://example.mx/sitemap.xml", browser_fetcher=browser, item_detail_extractor=extractor)
@@ -72,24 +83,46 @@ class DiscoveryPairFlowTests(unittest.TestCase):
         self.assertEqual(len(records), 1)
         self.assertEqual(repository.observations, [(12, A, B)])
 
-    def test_redirect_and_direct_target_are_separate_records_in_both_orders(self):
-        for urls in ([A, B], [B, A]):
+    def test_known_target_skips_but_unknown_origin_keeps_separate_redirect_identity(self):
+        for urls, expected_pairs, expected_observations, expected_completions in (
+            ([A, B], [(A, B)], [(12, A, B)], [1]),
+            ([B, A], [(None, B), (A, B)], [(12, B, B), (12, A, B)], [1, 2]),
+        ):
             with self.subTest(urls=urls):
                 repository = PairRepository()
                 listings = [DiscoveryItemCandidateRecord(store_id=12, source_url=url, title="Catan") for url in urls]
                 with patch("ludora.product_crawler.fetch_html", side_effect=lambda url, **_kwargs: FetchResult(url=B, text=PRODUCT_HTML)):
                     records = crawl_listing_candidates(listings, repository, source_listing_url="https://example.mx/sitemap.xml", item_classifier=lambda _record: None)
-                self.assertEqual([(getattr(record, "source_url_origin", None), record.source_url) for record in records], [(A if url == A else None, B) for url in urls])
-                self.assertEqual(repository.observations, [(12, url, B) for url in urls])
-                self.assertEqual(repository.completions, [1, 2])
+                self.assertEqual([(record.source_url_origin, record.source_url) for record in records], expected_pairs)
+                self.assertEqual(repository.observations, expected_observations)
+                self.assertEqual(repository.completions, expected_completions)
 
-    def test_registered_pair_resolves_but_skips_extraction_and_classification(self):
+    def test_registered_origin_skips_without_fetch_observation_or_processing(self):
         repository = PairRepository(recorded={(12, A, B)})
         extractor = Mock(side_effect=AssertionError("Recorded pair must not be extracted"))
         classifier = Mock(side_effect=AssertionError("Recorded pair must not be classified"))
         with patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url=B, text=PRODUCT_HTML)) as fetch:
             records = crawl_listing_candidates([DiscoveryItemCandidateRecord(store_id=12, source_url=A, title="Catan")], repository, source_listing_url="https://example.mx/sitemap.xml", item_detail_extractor=extractor, item_classifier=classifier)
-        self.assertEqual(fetch.call_count, 1)
+        fetch.assert_not_called()
+        self.assertEqual(records, [])
+        self.assertEqual(repository.observations, [])
+        self.assertEqual(repository.records, [])
+
+    def test_unknown_redirect_observes_pair_completed_during_fetch_before_extraction(self):
+        repository = PairRepository()
+        extractor = Mock(side_effect=AssertionError("Completed pair must not be extracted"))
+        classifier = Mock(side_effect=AssertionError("Completed pair must not be classified"))
+
+        def fetch_detail(_url, **_kwargs):
+            repository.recorded.add((12, A, B))
+            return FetchResult(url=B, text=PRODUCT_HTML)
+
+        with patch("ludora.product_crawler.fetch_html", side_effect=fetch_detail) as fetch:
+            records = crawl_listing_candidates(
+                [DiscoveryItemCandidateRecord(store_id=12, source_url=A, title="Catan")], repository,
+                source_listing_url="https://example.mx/sitemap.xml", item_detail_extractor=extractor,
+                item_classifier=classifier)
+        fetch.assert_called_once()
         self.assertEqual(records, [])
         self.assertEqual(repository.observations, [(12, A, B)])
         self.assertEqual(repository.records, [])

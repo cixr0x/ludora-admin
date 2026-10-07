@@ -27,6 +27,9 @@ class FakeRepository:
         self.exists_checks.append((store_id, source_url))
         return (store_id, source_url) in self.existing_urls
 
+    def discovery_url_exists(self, store_id, source_url):
+        return self.item_candidate_exists(store_id, source_url)
+
     def observe_discovery_pair(self, store_id, discovered_url, target_url):
         return self.item_candidate_exists(store_id, target_url) if discovered_url == target_url else False
 
@@ -1085,10 +1088,15 @@ class AmazonDiscoveryTests(unittest.TestCase):
         self.assertEqual(len(repository.item_records), 5)
         self.assertNotIn("page=6", " ".join(fetched_urls))
 
-    def test_resolves_existing_asins_before_skipping_extraction(self):
+    def test_skips_existing_amazon_store_urls_before_fetch_and_product_work(self):
         product_url = "https://www.amazon.com.mx/dp/B0DZL3YFC5"
         repository = FakeRepository(existing_urls={(12, product_url)})
         fetched_urls = []
+        trace = FakeTraceLogger()
+        throttle = Mock()
+        classifier = Mock()
+        processor = Mock()
+        title_extractor = Mock()
 
         def fetcher(url):
             fetched_urls.append(url)
@@ -1105,11 +1113,59 @@ class AmazonDiscoveryTests(unittest.TestCase):
             repository,
             browser_fetcher=fetcher,
             delay_seconds=0,
+            trace_logger=trace,
+            before_product_request=throttle,
+            item_classifier=classifier,
+            item_processor=processor,
+            item_title_extractor=title_extractor,
         )
 
         self.assertEqual(records, [])
         self.assertEqual(repository.exists_checks, [(12, product_url)])
-        self.assertEqual(len(fetched_urls), 2)
+        self.assertEqual(len(fetched_urls), 1)
+        for dependency in (throttle, classifier, processor.process_candidate, title_extractor):
+            dependency.assert_not_called()
+        self.assertEqual(repository.item_records, [])
+        skip_fields = [fields for event, fields in trace.entries if event == "amazon_inventory.candidate.skipped_existing"]
+        self.assertEqual(len(skip_fields), 1)
+        self.assertEqual(skip_fields[0]["stage"], "before_fetch")
+        self.assertFalse(any(event == "amazon_inventory.candidate.detail_fetch.start" for event, _ in trace.entries))
+
+    def test_known_amazon_brand_url_skips_while_new_product_is_validated_and_processed(self):
+        known_url = "https://www.amazon.com.mx/dp/B0HASBRO01"
+        new_url = "https://www.amazon.com.mx/dp/B0HASBRO02"
+        search_url = "https://www.amazon.com.mx/s?rh=p_89%3AHasbro%2BGaming"
+        repository = FakeRepository(existing_urls={(12, known_url)})
+        fetched_urls = []
+        throttle = Mock()
+        classifier = Mock()
+        processor = Mock()
+        trace = FakeTraceLogger()
+
+        def fetcher(url):
+            fetched_urls.append(url)
+            if url == search_url:
+                return FetchResult(url=url, text=f'<a href="{known_url}">Known Clue</a><a href="{new_url}">New Clue</a>')
+            if "/s?" in url:
+                return FetchResult(url=url, text="<html>No more results</html>")
+            return FetchResult(url=url, text='<span id="productTitle">Hasbro Gaming Clue</span>'
+                               '<a id="bylineInfo">Marca: Hasbro Gaming</a>'
+                               '<table><tr><th>Marca</th><td>Hasbro Gaming</td></tr>'
+                               '<tr><th>ASIN</th><td>B0HASBRO02</td></tr></table>')
+
+        records = crawl_amazon_brand_inventory(
+            search_url, 12, repository, brand_name="Hasbro Gaming", browser_fetcher=fetcher,
+            trace_logger=trace, delay_seconds=0, before_product_request=throttle,
+            item_classifier=classifier, item_processor=processor)
+
+        self.assertEqual([url for url in fetched_urls if "/dp/" in url], [new_url])
+        self.assertEqual([call.args[0] for call in throttle.call_args_list], [new_url])
+        self.assertEqual([record.source_url for record in records], [new_url])
+        self.assertEqual([record.source_url for record in repository.item_records], [new_url])
+        classifier.assert_called_once()
+        processor.process_candidate.assert_called_once()
+        self.assertEqual([fields["source_url"] for event, fields in trace.entries
+                          if event == "amazon_inventory.candidate.detail_fetch.start"], [new_url])
 
 
 def _page_number(url):
