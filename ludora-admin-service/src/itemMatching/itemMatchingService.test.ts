@@ -1480,7 +1480,7 @@ function autoListService(): AutoListEvaluationService {
     status: 'ERROR',
     store_item_id: 42,
     verdict: 'NOT PASS',
-    version: 2
+    version: 3
   };
   return { evaluateLinkedStoreItem: vi.fn().mockResolvedValue(result) };
 }

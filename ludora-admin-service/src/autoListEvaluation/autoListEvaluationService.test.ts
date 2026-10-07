@@ -77,7 +77,7 @@ describe('auto-list evaluation service', () => {
       },
       status: 'COMPLETED',
       verdict: 'PASS',
-      version: 2
+      version: 3
     });
     const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
     expect(normalizeSql(update?.sql ?? '')).toContain('set auto_list_result = $1::jsonb');
@@ -88,21 +88,26 @@ describe('auto-list evaluation service', () => {
     expect(update?.params?.slice(1)).toEqual([42, 77, true]);
   });
 
-  it('does not auto-list a score of 94.99 even when all AI checks pass', async () => {
+  it.each([94.99, 20, 0])('auto-lists an AI PASS with informational similarity score %s', async (score) => {
     const queries: RecordedQuery[] = [];
     const result = await createAutoListEvaluationService(
       evaluationDatabase(linkedRow(), queries),
       evaluationClient(decision()),
-      { imageSimilarityService: imageSimilarityService(94.99), model: 'gpt-5.6-terra' }
+      { imageSimilarityService: imageSimilarityService(score), model: 'gpt-5.6-terra' }
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
-      auto_list_eligible: false,
-      image_similarity: { pass: false, score: 94.99, threshold: 95 },
-      verdict: 'PASS'
+      auto_list_eligible: true,
+      image_similarity: { pass: false, score, threshold: 95 },
+      verdict: 'PASS',
+      version: 3
     });
     const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
-    expect(update?.params?.[3]).toBe(false);
+    const stored = JSON.parse(String(update?.params?.[0]));
+    expect(stored.auto_list_eligible).toBe(true);
+    expect(stored.image_similarity).toMatchObject(imageSimilarityResult(score));
+    expect(stored.image_similarity.reasoning).not.toMatch(/required threshold/i);
+    expect(update?.params?.[3]).toBe(true);
   });
 
   it('falls back to the English item image and does not auto-list when the AI language check fails', async () => {
@@ -134,7 +139,7 @@ describe('auto-list evaluation service', () => {
     expect(update?.params?.[3]).toBe(false);
   });
 
-  it('fails closed when image similarity cannot be estimated', async () => {
+  it('auto-lists an AI PASS when informational image similarity cannot be estimated', async () => {
     const similarityError = new Error('comparison unavailable');
     const imageSimilarity: ImageSimilarityService = {
       estimate: vi.fn().mockRejectedValue(similarityError)
@@ -148,7 +153,7 @@ describe('auto-list evaluation service', () => {
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
-      auto_list_eligible: false,
+      auto_list_eligible: true,
       image_similarity: {
         pass: false,
         reasoning: 'comparison unavailable',
@@ -157,10 +162,12 @@ describe('auto-list evaluation service', () => {
         threshold: 95
       },
       status: 'COMPLETED',
-      verdict: 'PASS'
+      verdict: 'PASS',
+      version: 3
     });
     const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
-    expect(update?.params?.[3]).toBe(false);
+    expect(JSON.parse(String(update?.params?.[0])).auto_list_eligible).toBe(true);
+    expect(update?.params?.[3]).toBe(true);
   });
 
   it('stores a fail-closed error result when the CodexAPI call fails', async () => {
@@ -186,13 +193,103 @@ describe('auto-list evaluation service', () => {
       status: 'ERROR',
       store_item_id: 42,
       verdict: 'NOT PASS',
-      version: 2
+      version: 3
     });
-    expect(queries.some(({ sql }) => normalizeSql(sql).includes('auto_list_result = $1::jsonb'))).toBe(true);
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(JSON.parse(String(update?.params?.[0])).auto_list_eligible).toBe(false);
+    expect(update?.params?.[3]).toBe(false);
+  });
+
+  it.each([
+    { check: 'same_game', overrides: { sameGame: false } },
+    { check: 'cover_language', overrides: { storeCoverLanguage: 'es', itemCoverLanguage: 'en' } },
+    { check: 'name_match', overrides: { nameMatches: false } }
+  ])('keeps the listing ineligible when the $check AI check fails', async ({ check, overrides }) => {
+    const queries: RecordedQuery[] = [];
+    const result = await createAutoListEvaluationService(
+      evaluationDatabase(linkedRow(), queries),
+      evaluationClient(decision({ ...overrides, verdict: 'NOT PASS' })),
+      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-5.6-terra' }
+    ).evaluateLinkedStoreItem(42, 77);
+
+    expect(result).toMatchObject({
+      auto_list_eligible: false,
+      checks: { [check]: { pass: false } },
+      image_similarity: { score: 100 },
+      status: 'COMPLETED',
+      verdict: 'NOT PASS',
+      version: 3
+    });
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(JSON.parse(String(update?.params?.[0])).auto_list_eligible).toBe(false);
+    expect(update?.params?.[3]).toBe(false);
+  });
+
+  it.each([
+    { label: 'store', row: { store_item_image_url: '' } },
+    { label: 'catalog', row: { item_image_url_es: '', item_image_url: '' } }
+  ])('fails closed when the $label cover is missing despite an AI PASS', async ({ row }) => {
+    const queries: RecordedQuery[] = [];
+    const result = await createAutoListEvaluationService(
+      evaluationDatabase(linkedRow(row), queries),
+      evaluationClient(decision()),
+      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-5.6-terra' }
+    ).evaluateLinkedStoreItem(42, 77);
+
+    expect(result).toMatchObject({
+      auto_list_eligible: false,
+      image_similarity: { status: 'ERROR', score: null },
+      status: 'ERROR',
+      verdict: 'NOT PASS',
+      version: 3
+    });
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(update?.params?.[3]).toBe(false);
+  });
+
+  it('stores an ineligible error for a malformed AI decision', async () => {
+    const queries: RecordedQuery[] = [];
+    const result = await createAutoListEvaluationService(
+      evaluationDatabase(linkedRow(), queries),
+      evaluationClient(decision({ sameGameReasoning: '' })),
+      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-5.6-terra' }
+    ).evaluateLinkedStoreItem(42, 77);
+
+    expect(result).toMatchObject({
+      auto_list_eligible: false,
+      reasoning: 'Invalid auto-list evaluation decision: sameGameReasoning must be a non-empty string',
+      status: 'ERROR',
+      verdict: 'NOT PASS',
+      version: 3
+    });
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(update?.params?.[3]).toBe(false);
+  });
+
+  it('refuses to store approval if the linked item changes during evaluation', async () => {
+    const queries: RecordedQuery[] = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        return normalizeSql(sql).includes('from store_items si') ? { rows: [linkedRow()] } : { rows: [] };
+      }
+    };
+    const service = createAutoListEvaluationService(database, evaluationClient(decision()), {
+      imageSimilarityService: imageSimilarityService(0),
+      model: 'gpt-5.6-terra'
+    });
+
+    await expect(service.evaluateLinkedStoreItem(42, 77)).rejects.toThrow(
+      'Store item match changed before the auto-list result could be stored'
+    );
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(normalizeSql(update?.sql ?? '')).toContain('where id = $2 and item_id = $3');
+    expect(update?.params?.slice(1)).toEqual([42, 77, true]);
   });
 
   it('rejects an AI verdict that contradicts the individual checks', async () => {
-    const database = evaluationDatabase(linkedRow(), []);
+    const queries: RecordedQuery[] = [];
+    const database = evaluationDatabase(linkedRow(), queries);
     const client = evaluationClient(decision({ nameMatches: false, verdict: 'PASS' }));
 
     const result = await createAutoListEvaluationService(database, client, {
@@ -201,10 +298,14 @@ describe('auto-list evaluation service', () => {
     }).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
+      auto_list_eligible: false,
       reasoning: 'Invalid auto-list evaluation decision: verdict PASS conflicts with the three checks',
       status: 'ERROR',
-      verdict: 'NOT PASS'
+      verdict: 'NOT PASS',
+      version: 3
     });
+    const update = queries.find(({ sql }) => normalizeSql(sql).startsWith('update store_items'));
+    expect(update?.params?.[3]).toBe(false);
   });
 
   it('encodes the exact language asymmetry and conservative unknown handling', () => {

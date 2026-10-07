@@ -1555,7 +1555,8 @@ describe('ListingCandidatesPage', () => {
     expect(within(aiApprovalResult!).getByRole('heading', { name: 'Image similarity' })).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByText('Image similarity score 84.25 is below the required threshold 98.')).toBeInTheDocument();
     expect(within(aiApprovalResult!).getByText('Score used: 84.25 / 100 · Required: ≥ 98.00')).toBeInTheDocument();
-    expect(within(aiApprovalResult!).getByText('Not auto-listed: a generated Spanish translation, AI PASS, and image similarity ≥ 98.00 are all required.')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText('Historical decision: not auto-listed under the policy requiring a generated Spanish translation, AI PASS, and image similarity ≥ 98.00.')).toBeInTheDocument();
+    expect(within(aiApprovalResult!).getByText(/Historical policy \(version 2\)/)).toBeInTheDocument();
     expect(within(aiApprovalResult!).queryByText(/Observation only/)).not.toBeInTheDocument();
     const coverComparison = within(storeItemSection!).getByRole('group', {
       name: 'Store item and linked item cover comparison'
@@ -1728,8 +1729,80 @@ describe('ListingCandidatesPage', () => {
       'Auto-list evaluation is skipped because the linked boardgame does not have a generated Spanish translation.'
     )).toBeInTheDocument();
     expect(within(approvalPanel!).getByText(
-      'Automatic listing requires a generated Spanish translation, AI PASS, and an image similarity score of at least 95.'
+      'Automatic listing requires a generated Spanish translation and passing Same game, Cover language, and Name match checks. Image similarity is informational only.'
     )).toBeInTheDocument();
+  });
+
+  it.each([
+    { label: 'a low score', similarity: { pass: false, score: 20, status: 'COMPLETED', threshold: 95 }, text: 'Score: 20.00 / 100' },
+    { label: 'a zero score', similarity: { pass: false, score: 0, status: 'COMPLETED', threshold: 95 }, text: 'Score: 0.00 / 100' },
+    { label: 'an absent score', similarity: { pass: false, status: 'COMPLETED', threshold: 95 }, text: 'Score unavailable.' },
+    { label: 'a score error', similarity: { pass: false, reasoning: 'comparison unavailable', score: null, status: 'ERROR', threshold: 95 }, text: 'comparison unavailable' },
+    { label: 'no stored similarity', similarity: undefined, text: 'No image similarity result was stored.' }
+  ])('renders three version-3 approval checks and separate informational similarity for $label', async ({ similarity, text }) => {
+    const panel = await renderApprovalPanel(approvalResult({ image_similarity: similarity }));
+
+    const approvalChecks = within(panel).getByRole('group', { name: 'Auto-list approval checks' });
+    expect(within(approvalChecks).getAllByRole('heading', { level: 4 })).toHaveLength(3);
+    for (const name of ['Same game', 'Cover language', 'Name match']) {
+      expect(within(approvalChecks).getByRole('heading', { name })).toBeInTheDocument();
+    }
+    expect(within(approvalChecks).getAllByText('PASS')).toHaveLength(3);
+    const evidence = within(panel).getByRole('region', { name: 'Informational image similarity' });
+    expect(within(evidence).getByText('Informational')).toBeInTheDocument();
+    expect(within(evidence).getByText(text)).toBeInTheDocument();
+    expect(within(evidence).queryByText(/^(PASS|NOT PASS)$/)).not.toBeInTheDocument();
+    expect(within(evidence).queryByTestId('CancelIcon')).not.toBeInTheDocument();
+    if (similarity?.status === 'ERROR') {
+      expect(within(evidence).getByText('Score unavailable.')).toBeInTheDocument();
+      expect(within(evidence).queryByText('Score: 0.00 / 100')).not.toBeInTheDocument();
+    }
+    expect(within(panel).queryByText(/required threshold|Required score|Required: ≥|image similarity ≥/i)).not.toBeInTheDocument();
+    expect(within(panel).getByText('Auto-list requirements passed and the store item is listed.')).toBeInTheDocument();
+    expect(within(panel).getByText(/Image similarity is informational only/)).toBeInTheDocument();
+  });
+
+  it('keeps version-3 AI errors ineligible while showing informational similarity', async () => {
+    const panel = await renderApprovalPanel(approvalResult({
+      auto_list_eligible: false,
+      checks: undefined,
+      image_similarity: { pass: true, score: 100, status: 'COMPLETED', threshold: 95 },
+      reasoning: 'CodexAPI timed out',
+      status: 'ERROR',
+      verdict: 'NOT PASS'
+    }), { listing_status: 'PENDING' });
+
+    expect(within(panel).getByText('NOT PASS (ERROR)')).toBeInTheDocument();
+    expect(within(panel).getByText('CodexAPI timed out')).toBeInTheDocument();
+    expect(within(panel).getByText('Not auto-listed: all three AI approval checks must pass after a generated Spanish translation is available.')).toBeInTheDocument();
+    expect(within(panel).getByText('Individual check results are unavailable because the AI evaluation did not complete.')).toBeInTheDocument();
+    expect(within(within(panel).getByRole('group', { name: 'Auto-list approval checks' })).getAllByText('NOT AVAILABLE')).toHaveLength(3);
+    const evidence = within(panel).getByRole('region', { name: 'Informational image similarity' });
+    expect(within(evidence).getByText('Score: 100.00 / 100')).toBeInTheDocument();
+    expect(within(evidence).queryByText('PASS')).not.toBeInTheDocument();
+  });
+
+  it('explains the current three-check rule before evaluation', async () => {
+    const panel = await renderApprovalPanel(null);
+
+    expect(within(panel).getByText(/Not evaluated yet/)).toBeInTheDocument();
+    expect(within(panel).getByText(
+      'Automatic listing requires a generated Spanish translation and passing Same game, Cover language, and Name match checks. Image similarity is informational only.'
+    )).toBeInTheDocument();
+    expect(within(panel).queryByText(/at least 95/)).not.toBeInTheDocument();
+  });
+
+  it('retains historical AI-only treatment for older approval results', async () => {
+    const panel = await renderApprovalPanel(approvalResult({
+      auto_list_eligible: undefined,
+      image_similarity: undefined,
+      version: 1
+    }));
+
+    expect(within(panel).getByText('Historical AI-only result — no automatic listing decision was made.')).toBeInTheDocument();
+    expect(within(panel).getAllByRole('heading', { level: 4 })).toHaveLength(3);
+    expect(within(panel).queryByRole('heading', { name: 'Image similarity' })).not.toBeInTheDocument();
+    expect(within(panel).queryByText('Auto-list requirements passed and the store item is listed.')).not.toBeInTheDocument();
   });
 
   it.each([
@@ -2013,6 +2086,64 @@ function jsonResponse(data: unknown, status = 200, meta?: unknown) {
     headers: { 'Content-Type': 'application/json' },
     status
   });
+}
+
+function approvalResult(overrides: Record<string, unknown> = {}) {
+  return {
+    auto_list_eligible: true,
+    checks: {
+      same_game: { pass: true, reasoning: 'Both covers show the same game.' },
+      cover_language: { item_language: 'es', pass: true, reasoning: 'Compatible cover languages.', store_language: 'en' },
+      name_match: { pass: true, reasoning: 'The store title matches the catalog title.' }
+    },
+    evaluated_at: '2026-10-07T00:00:00.000Z',
+    model: 'gpt-5.6-terra',
+    reasoning: 'All three checks passed.',
+    status: 'COMPLETED',
+    verdict: 'PASS',
+    version: 3,
+    ...overrides
+  };
+}
+
+async function renderApprovalPanel(result: unknown, candidateOverrides: Record<string, unknown> = {}) {
+  const candidate = {
+    auto_list_result: result,
+    id: '920',
+    image_url: '',
+    item_id: 77,
+    listing_status: 'LISTED',
+    title: 'Game',
+    ...candidateOverrides
+  };
+  vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+    const path = pathOf(String(input));
+    if (path === '/discovery/listings/920') {
+      return jsonResponse(candidate);
+    }
+    if (path === '/items/77') {
+      return jsonResponse({
+        canonical_name: 'Game',
+        description_es: 'Descripción del juego.',
+        id: 77,
+        image_url: '',
+        image_url_es: ''
+      });
+    }
+    if (path === '/items/77/taxonomy') {
+      return jsonResponse({ categories: [], families: [], mechanics: [] });
+    }
+    if (path === '/discovery/listings/920/additional-items' || path === '/items/77/relationships' || path === '/items/77/store-items') {
+      return jsonResponse([]);
+    }
+    throw new Error(`Unexpected request: ${String(input)}`);
+  });
+
+  render(<ListingCandidatesPage detailMode="review" selectedCandidateId="920" />);
+  const panel = (await screen.findByRole('heading', { name: 'AI Approval Result' })).closest('section');
+  expect(panel).not.toBeNull();
+  await waitFor(() => expect(screen.getByRole('heading', { name: 'Linked Item Details' })).toBeInTheDocument());
+  return panel!;
 }
 
 function pathOf(url: string) {

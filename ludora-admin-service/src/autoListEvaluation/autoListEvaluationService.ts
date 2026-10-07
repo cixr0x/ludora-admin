@@ -76,7 +76,7 @@ export type CompletedAutoListEvaluation = {
   reasoning: string;
   status: 'COMPLETED';
   verdict: AutoListVerdict;
-  version: 2;
+  version: 3;
 };
 
 export type ErrorAutoListEvaluation = {
@@ -89,7 +89,7 @@ export type ErrorAutoListEvaluation = {
   status: 'ERROR';
   store_item_id: number;
   verdict: 'NOT PASS';
-  version: 2;
+  version: 3;
 };
 
 export type AutoListEvaluationResult = CompletedAutoListEvaluation | ErrorAutoListEvaluation;
@@ -161,7 +161,7 @@ export function createAutoListEvaluationService(
           status: 'ERROR',
           store_item_id: storeItemId,
           verdict: 'NOT PASS',
-          version: 2
+          version: 3
         };
         await storeResult(database, storeItemId, itemId, result);
         return result;
@@ -189,7 +189,7 @@ export function createAutoListEvaluationService(
           status: 'ERROR',
           store_item_id: storeItemId,
           verdict: 'NOT PASS',
-          version: 2
+          version: 3
         };
       }
       await storeResult(database, storeItemId, itemId, result);
@@ -262,7 +262,7 @@ function completedResult(
   }
 
   return {
-    auto_list_eligible: verdict === 'PASS' && imageSimilarity.pass,
+    auto_list_eligible: verdict === 'PASS',
     checks: {
       cover_language: {
         item_language: decision.itemCoverLanguage,
@@ -290,7 +290,7 @@ function completedResult(
     reasoning: decision.reasoning,
     status: 'COMPLETED',
     verdict,
-    version: 2
+    version: 3
   };
 }
 
@@ -320,8 +320,8 @@ function imageSimilarityCheck(
     ...outcome.value,
     pass: outcome.value.score >= AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD,
     reasoning: outcome.value.score >= AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD
-      ? `Image similarity score ${outcome.value.score} meets the required threshold ${AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD}.`
-      : `Image similarity score ${outcome.value.score} is below the required threshold ${AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD}.`,
+      ? `Image similarity score ${outcome.value.score} meets the informational reference threshold ${AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD}; it does not determine automatic listing.`
+      : `Image similarity score ${outcome.value.score} is below the informational reference threshold ${AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD}; it does not determine automatic listing.`,
     status: 'COMPLETED',
     threshold: AUTO_LIST_IMAGE_SIMILARITY_THRESHOLD
   };

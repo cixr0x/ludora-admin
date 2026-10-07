@@ -274,6 +274,41 @@ function AutoListCheckCard({
   );
 }
 
+const AUTO_LIST_CURRENT_POLICY = 'Automatic listing requires a generated Spanish translation and passing Same game, Cover language, and Name match checks. Image similarity is informational only.';
+
+function AutoListSimilarityEvidence({ similarity }: { similarity: AdminRecord | null }) {
+  const score = similarity && field(similarity, ['score'], '') !== ''
+    ? numericField(similarity, ['score'])
+    : null;
+  const scoreDetails = !similarity
+    ? 'No image similarity result was stored.'
+    : score === null ? 'Score unavailable.' : `Score: ${score.toFixed(2)} / 100`;
+
+  return (
+    <Paper aria-label="Informational image similarity" component="section" variant="outlined" sx={{ p: 1.5 }}>
+      <Stack spacing={0.75}>
+        <Stack alignItems="center" direction="row" justifyContent="space-between" spacing={1}>
+          <Typography component="h4" sx={{ fontWeight: 700 }} variant="body2">
+            Image similarity
+          </Typography>
+          <Chip label="Informational" size="small" variant="outlined" />
+        </Stack>
+        <Typography color="text.secondary" variant="body2">
+          {scoreDetails}
+        </Typography>
+        {similarity && field(similarity, ['reasoning'], '') ? (
+          <Typography color="text.secondary" variant="body2">
+            {field(similarity, ['reasoning'], '')}
+          </Typography>
+        ) : null}
+        <Typography color="text.secondary" variant="caption">
+          Informational only. Image similarity does not determine automatic listing.
+        </Typography>
+      </Stack>
+    </Paper>
+  );
+}
+
 function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; item: AdminRecord | null }) {
   const rawResult = candidate.auto_list_result;
   const result = jsonObjectValue(rawResult);
@@ -296,7 +331,7 @@ function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; 
             </Alert>
           )}
           <Typography color="text.secondary" variant="caption">
-            Automatic listing requires a generated Spanish translation, AI PASS, and an image similarity score of at least 95.
+            {AUTO_LIST_CURRENT_POLICY}
           </Typography>
         </Stack>
       </Paper>
@@ -322,6 +357,8 @@ function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; 
   const passed = completed && verdict === 'PASS';
   const checks = objectValue(result.checks);
   const imageSimilarity = objectValue(result.image_similarity);
+  const currentPolicy = numericField(result, ['version']) === 3;
+  const historicalSimilarity = currentPolicy ? null : imageSimilarity;
   const autoListEligible = booleanValue(result, 'auto_list_eligible');
   const listingStatus = field(candidate, ['listing_status'], '').toUpperCase();
   const languageCheck = objectValue(checks?.cover_language);
@@ -338,6 +375,22 @@ function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; 
       ? `Required score: ≥ ${similarityThreshold.toFixed(2)} / 100`
       : `Score used: ${similarityScore.toFixed(2)} / 100 · Required: ≥ ${similarityThreshold.toFixed(2)}`
     : undefined;
+  let eligibilityMessage: string;
+  if (item && !translationGenerated) {
+    eligibilityMessage = 'The generated Spanish translation prerequisite is currently missing. This stored result is not sufficient for a new automatic approval.';
+  } else if (!autoListEligible) {
+    eligibilityMessage = currentPolicy
+      ? 'Not auto-listed: all three AI approval checks must pass after a generated Spanish translation is available.'
+      : `Historical decision: not auto-listed under the policy requiring a generated Spanish translation, AI PASS, and image similarity ≥ ${similarityThreshold.toFixed(2)}.`;
+  } else if (currentPolicy) {
+    eligibilityMessage = listingStatus === 'LISTED'
+      ? 'Auto-list requirements passed and the store item is listed.'
+      : 'Auto-list requirements passed, but only pending items are changed to listed.';
+  } else {
+    eligibilityMessage = listingStatus === 'LISTED'
+      ? 'Historical auto-list requirements passed and the store item is listed.'
+      : 'Historical auto-list requirements passed, but only pending items were changed to listed.';
+  }
 
   return (
     <Paper aria-labelledby="ai-approval-result-title" component="section" variant="outlined" sx={{ p: 2 }}>
@@ -348,9 +401,11 @@ function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; 
               AI Approval Result
             </Typography>
             <Typography color="text.secondary" variant="caption">
-              {imageSimilarity
-                ? `Automatic listing requires a generated Spanish translation, AI PASS, and image similarity ≥ ${similarityThreshold.toFixed(2)}.`
-                : 'Legacy AI-only result — no automatic listing decision was made.'}
+              {currentPolicy
+                ? AUTO_LIST_CURRENT_POLICY
+                : imageSimilarity
+                  ? `Historical policy (version 2): automatic listing required a generated Spanish translation, AI PASS, and image similarity ≥ ${similarityThreshold.toFixed(2)}.`
+                  : 'Historical AI-only result — no automatic listing decision was made.'}
             </Typography>
           </Box>
           <Chip color={passed ? 'success' : 'error'} label={displayVerdict} />
@@ -358,36 +413,36 @@ function AutoListEvaluationPanel({ candidate, item }: { candidate: AdminRecord; 
 
         <Alert severity={passed ? 'success' : 'error'}>{field(result, ['reasoning'], 'No overall reasoning was returned.')}</Alert>
 
-        {imageSimilarity ? (
+        {currentPolicy || imageSimilarity ? (
           <Alert severity={translationGenerated && autoListEligible ? 'success' : 'warning'}>
-            {item && !translationGenerated
-              ? 'The generated Spanish translation prerequisite is currently missing. This stored result is not sufficient for a new automatic approval.'
-              : autoListEligible
-              ? listingStatus === 'LISTED'
-                ? 'Auto-list requirements passed and the store item is listed.'
-                : 'Auto-list requirements passed, but only pending items are changed to listed.'
-              : `Not auto-listed: a generated Spanish translation, AI PASS, and image similarity ≥ ${similarityThreshold.toFixed(2)} are all required.`}
+            {eligibilityMessage}
           </Alert>
         ) : null}
 
-        {completed && checks ? (
+        {!completed || !checks ? (
+          <Alert severity="warning">Individual check results are unavailable because the AI evaluation did not complete.</Alert>
+        ) : null}
+
+        {currentPolicy || (completed && checks) ? (
           <Box
+            aria-label="Auto-list approval checks"
+            role="group"
             sx={{
               display: 'grid',
               gap: 1.5,
-              gridTemplateColumns: { lg: `repeat(${imageSimilarity ? 4 : 3}, minmax(0, 1fr))`, xs: '1fr' }
+              gridTemplateColumns: { lg: `repeat(${historicalSimilarity ? 4 : 3}, minmax(0, 1fr))`, xs: '1fr' }
             }}
           >
-            <AutoListCheckCard check={objectValue(checks.same_game)} label="Same game" />
+            <AutoListCheckCard check={objectValue(checks?.same_game)} label="Same game" />
             <AutoListCheckCard check={languageCheck} details={languageDetails} label="Cover language" />
-            <AutoListCheckCard check={objectValue(checks.name_match)} label="Name match" />
-            {imageSimilarity ? (
-              <AutoListCheckCard check={imageSimilarity} details={similarityDetails} label="Image similarity" />
+            <AutoListCheckCard check={objectValue(checks?.name_match)} label="Name match" />
+            {historicalSimilarity ? (
+              <AutoListCheckCard check={historicalSimilarity} details={similarityDetails} label="Image similarity" />
             ) : null}
           </Box>
-        ) : (
-          <Alert severity="warning">Individual check results are unavailable because the AI evaluation did not complete.</Alert>
-        )}
+        ) : null}
+
+        {currentPolicy ? <AutoListSimilarityEvidence similarity={imageSimilarity} /> : null}
 
         <Typography color="text.secondary" variant="caption">
           Status: {status} · Model: {model} · Evaluated: {evaluatedAt}
