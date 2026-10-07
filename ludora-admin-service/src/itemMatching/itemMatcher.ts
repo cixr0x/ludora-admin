@@ -37,6 +37,8 @@ export type MatchScore = {
   matchScore: number;
 };
 
+export const LOCAL_AUTO_MATCH_SCORE_THRESHOLD = 0.85;
+
 const MEANINGFUL_EXTRA_TOKENS = new Set([
   '5',
   '6',
@@ -139,18 +141,24 @@ export function scoreBggThing(candidate: DiscoveryCandidateForMatch, thing: BggT
   return { matchReasons: reasons, matchScore: clampScore(score) };
 }
 
-export function scoreLocalItem(candidate: DiscoveryCandidateForMatch, item: LocalItemForMatch): MatchScore {
+export function scoreLocalItem(
+  candidate: DiscoveryCandidateForMatch,
+  item: LocalItemForMatch,
+  nameScope: 'direct' | 'all' = 'all'
+): MatchScore {
   const reasons: string[] = [];
-  const canonicalName = normalizeTitle(item.name || item.normalizedName);
-  const spanishNames = [item.nameEs, item.normalizedNameEs].map((value) => normalizeTitle(value ?? '')).filter(Boolean);
-  const aliases = item.aliases.map(normalizeTitle);
+  const normalizedName = item.normalizedName?.trim();
+  const normalizedNameEs = item.normalizedNameEs?.trim();
   let score = 0;
 
-  const tokenMatch = bestLocalTokenMatch(candidate, item, [
-    { label: 'item name', value: canonicalName },
-    ...spanishNames.map((value) => ({ label: 'Spanish item name', value })),
-    ...aliases.map((value) => ({ label: 'alias', value }))
+  const directMatch = bestLocalTokenMatch(candidate, item, [
+    { label: 'item name', field: normalizedName ? 'normalized_name' : 'canonical_name', value: normalizeTitle(normalizedName || item.name) },
+    { label: 'Spanish item name', field: normalizedNameEs ? 'normalized_name_es' : 'canonical_name_es', value: normalizeTitle(normalizedNameEs || item.nameEs || '') }
   ]);
+  const aliasMatch = nameScope === 'all' && (!directMatch || clampScore(directMatch.score) < LOCAL_AUTO_MATCH_SCORE_THRESHOLD)
+    ? bestLocalTokenMatch(candidate, item, item.aliases.map((value) => ({ label: 'alias', field: 'alias', value: normalizeTitle(value) })))
+    : null;
+  const tokenMatch = directMatch && (!aliasMatch || directMatch.score >= aliasMatch.score) ? directMatch : aliasMatch;
   if (tokenMatch) {
     score = tokenMatch.score;
     reasons.push(...tokenMatch.reasons);
@@ -226,11 +234,11 @@ type LocalNameTokenMatch = {
 function bestLocalTokenMatch(
   candidate: DiscoveryCandidateForMatch,
   item: LocalItemForMatch,
-  names: Array<{ label: string; value: string }>
+  names: Array<{ label: string; field: string; value: string }>
 ): LocalNameTokenMatch | null {
   const matches = names
     .filter(({ value }) => Boolean(value))
-    .map(({ label, value }) => scoreLocalNameTokens(candidate, item, label, value))
+    .map(({ label, field, value }) => scoreLocalNameTokens(candidate, item, label, field, value))
     .filter((match): match is LocalNameTokenMatch => match !== null)
     .sort((left, right) => right.score - left.score);
   return matches[0] ?? null;
@@ -240,6 +248,7 @@ function scoreLocalNameTokens(
   candidate: DiscoveryCandidateForMatch,
   item: LocalItemForMatch,
   label: string,
+  field: string,
   matchedName: string
 ): LocalNameTokenMatch {
   const allCandidateTokens = normalizedTitleTokens(normalizeTitle(candidate.title));
@@ -260,6 +269,7 @@ function scoreLocalNameTokens(
     : (2 * matchedTokens.length) / (candidateTokens.length + catalogTokens.length);
   const reasons = [
     `selected local name source: ${label}`,
+    `selected local name field: ${field}`,
     `normalized local title token F1: ${score.toFixed(4)}`,
     `matched local title tokens: ${formatTokenList(matchedTokens)}`,
     `missing local title tokens: ${formatTokenList(missingCatalogTokens)}`,

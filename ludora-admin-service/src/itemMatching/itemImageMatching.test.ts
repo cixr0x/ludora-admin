@@ -42,6 +42,23 @@ describe('local catalog image matching', () => {
     expect(fixture.cacheLookup).not.toHaveBeenCalled();
   });
 
+  it('keeps image tie-breaking within direct names even when an alias has a stronger name score', async () => {
+    const fixture = setup({ listingTitle: title, nameRows: [
+      item(11, titleWords.slice(0, 19).concat('other1').join(' '), { image_phash: bits(20) }),
+      item(22, titleWords.slice(0, 18).concat(['other1', 'other2']).join(' '), { image_phash: ZERO_HASH }),
+      item(33, 'Unrelated Product', { aliases: [title], image_phash: ZERO_HASH })
+    ] });
+
+    await fixture.service.confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(fixture.linked()?.[0]).toBe(22);
+    expect(fixture.linked()?.[4]).toBe(0.9);
+    expect(JSON.parse(String(fixture.linked()?.[6]))).toMatchObject({ local_match: { name_stage: 'direct', mode: 'image_tiebreak', verification: { status: 'passed', score: 95 } } });
+    expect(fixture.visual.estimate).toHaveBeenCalledWith('https://catalog.test/22.jpg', LISTING_IMAGE);
+    expect(fixture.cacheLookup).not.toHaveBeenCalled();
+    expect(fixture.nearestQueries).toHaveLength(0);
+  });
+
   it('uses the inclusive 0.05 name group and persists the same selected-first ordering', async () => {
     const fixture = closeNames();
     const generated = await fixture.service.generateMatchCandidates(42);

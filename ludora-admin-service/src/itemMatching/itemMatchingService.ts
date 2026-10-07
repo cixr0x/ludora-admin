@@ -580,21 +580,22 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
   const result = await database.query(
     `
     with local_names as (
-      select id as item_id, normalized_name as normalized_match_name
+      select id as item_id, normalized_name as normalized_match_name, true as is_direct_name
       from items
       where normalized_name <> ''
       union all
-      select id as item_id, normalized_name_es as normalized_match_name
+      select id as item_id, normalized_name_es as normalized_match_name, true as is_direct_name
       from items
       where normalized_name_es <> ''
       union all
-      select item_id, normalized_alias as normalized_match_name
+      select item_id, normalized_alias as normalized_match_name, false as is_direct_name
       from item_aliases
       where normalized_alias <> ''
     ),
     ranked_items as (
       select
         item_id,
+        bool_or(is_direct_name and normalized_match_name = any($1::text[])) as exact_direct_name_match,
         bool_or(normalized_match_name = any($1::text[])) as exact_name_match,
         max((
           select count(*)
@@ -605,7 +606,7 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
       where normalized_match_name = any($1::text[])
          or string_to_array(normalized_match_name, ' ') && $2::text[]
       group by item_id
-      order by exact_name_match desc, token_overlap desc, item_id
+      order by exact_direct_name_match desc, exact_name_match desc, token_overlap desc, item_id
       limit ${MAX_LOCAL_MATCH_CANDIDATES}
     )
     select
@@ -638,7 +639,7 @@ async function generateLocalMatches(database: Database, candidate: DiscoveryItem
       ), '[]'::json) as publishers
     from ranked_items ranked
     join items i on i.id = ranked.item_id
-    order by ranked.exact_name_match desc, ranked.token_overlap desc, i.canonical_name asc
+    order by ranked.exact_direct_name_match desc, ranked.exact_name_match desc, ranked.token_overlap desc, i.canonical_name asc
     `,
     [normalizedTitleVariants, searchTokens]
   );

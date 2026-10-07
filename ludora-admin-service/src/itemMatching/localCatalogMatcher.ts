@@ -2,9 +2,9 @@ import { CATALOG_IMAGE_HASH_METHOD, isCatalogImageHash, type CatalogImageHasher 
 import { imageHashDistance } from '../imageHashDistance.js';
 import type { ImageSimilarityResult, ImageSimilarityService } from '../imageSimilarity/imageSimilarityService.js';
 import { parseListingImageQueryHashes, type ListingImageQueryHashes, type ListingImageQueryHasher, type ListingImageQueryVariant } from '../listingImageQueryHash.js';
-import { scoreLocalItem, type DiscoveryCandidateForMatch, type LocalItemForMatch } from './itemMatcher.js';
+import { LOCAL_AUTO_MATCH_SCORE_THRESHOLD, scoreLocalItem, type DiscoveryCandidateForMatch, type LocalItemForMatch } from './itemMatcher.js';
 
-export const LOCAL_AUTO_MATCH_SCORE_THRESHOLD = 0.85;
+export { LOCAL_AUTO_MATCH_SCORE_THRESHOLD } from './itemMatcher.js';
 export const LOCAL_IMAGE_MATCH_THRESHOLDS = {
   max_raw_hash_distance: 12,
   max_normalized_hash_distance: 40,
@@ -39,13 +39,15 @@ export async function rankLocalCatalogMatches(
     trace(fields: Record<string, unknown>): void;
   }
 ): Promise<RankedLocalMatch[]> {
-  const named = scoreItems(candidate, nameItems);
+  const directNames = scoreItems(candidate, nameItems, 'direct');
+  const nameStage = directNames.some((match) => match.matchScore >= LOCAL_AUTO_MATCH_SCORE_THRESHOLD) ? 'direct' : 'alias_fallback';
+  const named = nameStage === 'direct' ? directNames : scoreItems(candidate, nameItems);
   const top = named[0];
   const group = top ? named.filter((match) => top.matchScore - match.matchScore <= LOCAL_IMAGE_MATCH_THRESHOLDS.name_score_gap + 1e-9) : [];
   const listingUrl = candidate.imageUrl?.trim() || null;
   if (top && top.matchScore >= LOCAL_AUTO_MATCH_SCORE_THRESHOLD && group.length === 1) {
     return finish(named.map((match) => ({ match, observed: null, viable: null })), top, {
-      mode: 'name', outcome: 'unique_accepted_name', listing_url: listingUrl,
+      mode: 'name', name_stage: nameStage, outcome: 'unique_accepted_name', listing_url: listingUrl,
       listing_hash: null, query_variants: [], normalization: null, runner_up: null, hash_gap: null,
       thresholds: LOCAL_IMAGE_MATCH_THRESHOLDS, verification: { status: 'not_run', score: null }
     }, options.trace);
@@ -120,7 +122,7 @@ export async function rankLocalCatalogMatches(
     }
   }
   return finish(compared, selected, {
-    mode, outcome, method: CATALOG_IMAGE_HASH_METHOD, listing_url: listingUrl,
+    mode, name_stage: nameStage, outcome, method: CATALOG_IMAGE_HASH_METHOD, listing_url: listingUrl,
     listing_hash: hashes?.variants[0].hash ?? null, query_variants: hashes?.variants ?? [],
     normalization: hashes?.normalization ?? null,
     runner_up: runner ? { item_id: runner.match.item.id, distance: runner.observed!.distance, query_variant: runner.observed!.variant, applicable_radius: runner.observed!.radius } : null,
@@ -130,10 +132,10 @@ export async function rankLocalCatalogMatches(
   }, options.trace);
 }
 
-function scoreItems(candidate: DiscoveryCandidateForMatch, items: CatalogItemForMatching[]): RankedLocalMatch[] {
+function scoreItems(candidate: DiscoveryCandidateForMatch, items: CatalogItemForMatching[], nameScope: 'direct' | 'all' = 'all'): RankedLocalMatch[] {
   const distinct = new Map(items.map((item) => [item.id, item]));
   return [...distinct.values()].map((item) => {
-    const score = scoreLocalItem(candidate, item);
+    const score = scoreLocalItem(candidate, item, nameScope);
     return { item, ...score, accepted: false, evidence: {} };
   }).sort((left, right) => right.matchScore - left.matchScore || left.item.id - right.item.id);
 }

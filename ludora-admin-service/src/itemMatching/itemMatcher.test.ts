@@ -96,6 +96,54 @@ describe('item matcher', () => {
     expect(result.matchReasons).toContain('normalized local title token F1: 1.0000');
   });
 
+  it.each([
+    ['Guarro Pig', { name: 'Display title', normalizedName: 'guarro pig' }, 'normalized_name'],
+    ['La Feria de las Pulgas de Titirilquén', {
+      name: 'Pit', normalizedName: 'pit', nameEs: 'Different Spanish display title',
+      normalizedNameEs: 'la feria de las pulgas de titirilquen'
+    }, 'normalized_name_es']
+  ])('scores the authoritative normalized catalog field for %s', (title, names, field) => {
+    const result = scoreLocalItem({ title }, { id: 1810, aliases: [], ...names });
+
+    expect(result.matchScore).toBe(0.99);
+    expect(result.matchReasons).toContain(`selected local name field: ${field}`);
+  });
+
+  it.each([
+    { name: 'Guarro Pig', normalizedName: 'other normalized title' },
+    { name: 'Other Title', normalizedName: 'other title', nameEs: 'Guarro Pig', normalizedNameEs: 'different normalized title' }
+  ])('does not also score a display label when its normalized field is populated', (names) => {
+    const result = scoreLocalItem({ title: 'Guarro Pig' }, { id: 1810, aliases: [], ...names });
+
+    expect(result.matchScore).toBe(0);
+  });
+
+  it.each([
+    ['', undefined, 'Guarro Pig', undefined, 'canonical_name'],
+    ['   ', undefined, 'Guarro Pig', undefined, 'canonical_name'],
+    ['unrelated', undefined, 'Unrelated', 'Guarro Pig', 'canonical_name_es'],
+    ['unrelated', '   ', 'Unrelated', 'Guarro Pig', 'canonical_name_es']
+  ])('normalizes a display-name fallback for blank stored fields (%s, %s)', (normalizedName, normalizedNameEs, name, nameEs, field) => {
+    const result = scoreLocalItem({ title: 'GUARRO PIG (Español) Original' }, {
+      id: 1810, aliases: [], name, nameEs, normalizedName, normalizedNameEs
+    });
+
+    expect(result.matchScore).toBe(0.99);
+    expect(result.matchReasons).toContain(`selected local name field: ${field}`);
+  });
+
+  it('retains an accepted direct score ahead of a stronger alias on the same item', () => {
+    const title = 'Aurelia Borealis Celestia Draconis Elysium Faron Galaxis';
+    const result = scoreLocalItem({ title }, {
+      id: 1810, name: 'Aurelia Borealis Celestia Draconis Elysium Faron Heliox',
+      normalizedName: 'aurelia borealis celestia draconis elysium faron heliox', aliases: [title]
+    });
+
+    expect(result.matchScore).toBe(0.8571);
+    expect(result.matchReasons).toContain('selected local name field: normalized_name');
+    expect(result.matchReasons).not.toContain('selected local name source: alias');
+  });
+
   it('keeps the Arkham Horror Children of Blood false match below the correct title', () => {
     const candidate = {
       title: 'ASMODEE - Arkham Horror: Under Dark Waves Expansion (Inglés)',

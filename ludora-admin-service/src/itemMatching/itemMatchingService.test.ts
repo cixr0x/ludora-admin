@@ -56,6 +56,98 @@ describe('item matching service', () => {
     expect(autoList.evaluateLinkedStoreItem).toHaveBeenCalledWith(42, 77);
   });
 
+  it.each([
+    {
+      title: 'GUARRO PIG', itemId: 1810, matchedName: 'Guarro Pig', field: 'normalized_name',
+      direct: { id: 1810, bgg_id: null, canonical_name: 'Guarro Pig', normalized_name: 'guarro pig' },
+      alias: { id: 1396, bgg_id: 377591, canonical_name: 'Drecksau Total', normalized_name: 'drecksau total', aliases: ['Guarro Pig'] }
+    },
+    {
+      title: 'LA FERIA de las PULGAS de TITIRILQUÉN', itemId: 1902,
+      matchedName: 'La Feria De Las Pulgas De Titirilquén', field: 'normalized_name',
+      direct: { id: 1902, bgg_id: null, canonical_name: 'La Feria De Las Pulgas De Titirilquén', normalized_name: 'la feria de las pulgas de titirilquen' },
+      alias: { id: 971, bgg_id: 140, canonical_name: 'Pit', normalized_name: 'pit', aliases: ['La Feria de las Pulgas de Titirilquén'] }
+    },
+    {
+      title: 'La Guerra del Anillo (Español) Original', itemId: 1811, matchedName: 'War of the Ring', field: 'normalized_name_es',
+      direct: { id: 1811, bgg_id: null, canonical_name: 'War of the Ring', normalized_name: 'war of the ring', canonical_name_es: 'Different Spanish display label', normalized_name_es: 'la guerra del anillo' },
+      alias: { id: 1812, bgg_id: 115746, canonical_name: 'Other Edition', normalized_name: 'other edition', aliases: ['La Guerra del Anillo'] }
+    }
+  ])('selects the dedicated normalized-name item before the competing alias for $title', async ({ title, itemId, matchedName, field, direct, alias }) => {
+    const updates: RecordedQuery[] = [];
+    const cache = matchCache();
+    const ai = aiService();
+    const bggClient = clientWithThing(null);
+    const service = createItemMatchingService(matchingDatabase(
+      storeItemCandidate({ title, image_url: null }),
+      [localItemRow(alias), localItemRow(direct)],
+      { onStoreItemUpdate: (query) => updates.push(query) }
+    ), dependencies({ cache, ai, bggClient }));
+
+    await service.confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(linkUpdate(updates)?.params?.slice(0, 5)).toEqual([itemId, 'LOCAL', null, matchedName, 0.99]);
+    expect(JSON.parse(String(linkUpdate(updates)?.params?.[5]))).toContain(`selected local name field: ${field}`);
+    expect(JSON.parse(String(linkUpdate(updates)?.params?.[6]))).toMatchObject({ local_match: { name_stage: 'direct', verification: { status: 'not_run' } } });
+    expect(cache.lookup).not.toHaveBeenCalled();
+    expect(bggClient.searchFresh).not.toHaveBeenCalled();
+    expect(bggClient.fetchThing).not.toHaveBeenCalled();
+    expect(ai.findMatch).not.toHaveBeenCalled();
+  });
+
+  it('selects an accepted direct name ahead of an exact alias on another item', async () => {
+    const updates: RecordedQuery[] = [];
+    const title = 'Aurelia Borealis Celestia Draconis Elysium Faron Galaxis';
+    const cache = matchCache();
+    const service = createItemMatchingService(matchingDatabase(
+      storeItemCandidate({ title, image_url: null }),
+      [localItemRow({ id: 11, canonical_name: 'Other Product', normalized_name: 'other product', aliases: [title] }),
+        localItemRow({ id: 22, canonical_name: 'Aurelia Borealis Celestia Draconis Elysium Faron Heliox', normalized_name: 'aurelia borealis celestia draconis elysium faron heliox' })],
+      { onStoreItemUpdate: (query) => updates.push(query) }
+    ), dependencies({ cache }));
+
+    await service.confirmBoardgameAndMatch?.(42, { confirmationSource: 'automated' });
+
+    expect(linkUpdate(updates)?.params?.[0]).toBe(22);
+    expect(linkUpdate(updates)?.params?.[4]).toBe(0.8571);
+    expect(cache.lookup).not.toHaveBeenCalled();
+  });
+
+  it('falls back to an alias when no direct normalized name is accepted', async () => {
+    const stored = new Map<number, unknown[]>();
+    const cache = matchCache();
+    const service = createItemMatchingService(matchingDatabase(
+      storeItemCandidate({ title: 'Guarro Pig', image_url: null }),
+      [localItemRow({ id: 1396, canonical_name: 'Drecksau Total', normalized_name: 'drecksau total', aliases: ['Guarro Pig'] })],
+      { storedCandidates: stored }
+    ), dependencies({ cache }));
+
+    const generated = await service.generateMatchCandidates(42);
+
+    expect(generated[0]).toMatchObject({ item_id: 1396, match_score: 0.99, raw_payload: { local_match: { selected: true, name_stage: 'alias_fallback' } } });
+    expect(generated[0].match_reasons).toContain('selected local name source: alias');
+    expect(cache.lookup).not.toHaveBeenCalled();
+  });
+
+  it('prioritizes exact direct normalized names ahead of aliases before capping the retrieval shortlist', async () => {
+    const queries: RecordedQuery[] = [];
+    const service = createItemMatchingService(matchingDatabase(
+      storeItemCandidate({ title: 'Guarro Pig (Español)' }), [],
+      { onQuery: (query) => queries.push(query) }
+    ), dependencies());
+
+    await service.generateMatchCandidates(42);
+
+    const localQuery = queries.find((query) => normalizeSql(query.sql).startsWith('with local_names as'));
+    const sql = normalizeSql(localQuery?.sql ?? '');
+    expect(sql).toContain('normalized_name as normalized_match_name, true as is_direct_name');
+    expect(sql).toContain('normalized_name_es as normalized_match_name, true as is_direct_name');
+    expect(sql).toContain('normalized_alias as normalized_match_name, false as is_direct_name');
+    expect(sql).toContain('bool_or(is_direct_name and normalized_match_name = any($1::text[])) as exact_direct_name_match');
+    expect(sql).toContain('order by exact_direct_name_match desc, exact_name_match desc, token_overlap desc, item_id limit 100');
+    expect(localQuery?.params).toEqual([['guarro pig espanol', 'guarro pig'], ['guarro', 'pig']]);
+  });
+
   it('accepts a local normalized-title F1 score of 0.8571 before BGG or AI matching', async () => {
     const updates: RecordedQuery[] = [];
     const database = matchingDatabase(
