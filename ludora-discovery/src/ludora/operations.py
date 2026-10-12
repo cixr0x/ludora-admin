@@ -34,6 +34,7 @@ from ludora.embeddings import OpenAIEmbeddingClient, build_item_embedding_text, 
 from ludora.inventory import collect_store_inventory, update_confirmed_store_items
 from ludora.item_classification import apply_item_classification
 from ludora.models import DiscoveryItemCandidateRecord
+from ludora.moonlight_discovery import is_moonlight_store_url, resolve_moonlight_user_agent
 from ludora.product_discovery_throttle import ProductDiscoveryRequestThrottle
 from ludora.trace import create_item_discovery_trace_logger, create_item_update_trace_logger
 
@@ -348,6 +349,10 @@ def _run_item_discovery_for_store(
             collect_kwargs = {}
             if cancellation_token is not None:
                 collect_kwargs["cancellation_token"] = cancellation_token
+            if normalized_platform != "shopify" and is_moonlight_store_url(website_url):
+                collect_kwargs["moonlight_user_agent"] = resolve_moonlight_user_agent(
+                    env=current_env, dotenv_path=env_file,
+                )
             raise_if_cancelled(cancellation_token)
             with discovery_browser_scope(resolved_run_id, store_id, website_url):
                 records = collect_store_inventory(

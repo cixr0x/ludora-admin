@@ -80,6 +80,7 @@ def collect_store_inventory(
     store_name: str = "",
     request_headers_provider: RequestHeadersProvider | None = None,
     before_product_request: BeforeProductRequest | None = None,
+    moonlight_user_agent: str | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     normalized_platform = platform.strip().casefold()
     if normalized_platform == "shopify" and request_headers_provider is None:
@@ -174,6 +175,7 @@ def collect_store_inventory(
         trace_logger=trace_logger,
         cancellation_token=cancellation_token,
         before_product_request=before_product_request,
+        **({"moonlight_user_agent": moonlight_user_agent} if moonlight_user_agent is not None else {}),
     )
 
 

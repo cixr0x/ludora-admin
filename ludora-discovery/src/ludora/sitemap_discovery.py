@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 from ludora.cancellation import CancellationToken
 from ludora.filtering import canonical_domain
 from ludora.listing_extraction import _looks_like_product_url
+from ludora.moonlight_discovery import MoonlightDiscoveryProfile, is_moonlight_store_url
 from ludora.trace import TraceLogger
 from ludora.webfetch import FetchResult, fetch_with_transient_retries, retry_after_seconds_from_headers
 
@@ -33,7 +34,11 @@ def discover_product_urls_from_sitemaps(
     limit: int | None = None,
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
+    access_profile: MoonlightDiscoveryProfile | None = None,
 ) -> list[str]:
+    if access_profile is None and request_headers_provider is None and is_moonlight_store_url(store_url):
+        access_profile = MoonlightDiscoveryProfile(trace_logger=trace_logger)
+        request_headers_provider = access_profile.headers_for
     fetch = fetcher or (
         lambda url: fetch_sitemap_text(
             url,
@@ -61,6 +66,7 @@ def discover_product_urls_from_sitemaps(
         trace_logger=trace_logger,
         cancellation_token=cancellation_token,
         optional=False,
+        access_profile=access_profile,
     )
     if fetched_root is not None:
         product_urls.extend(_product_urls_from_text(fetched_root.text, fetched_root.url, store_url))
@@ -81,6 +87,7 @@ def discover_product_urls_from_sitemaps(
             trace_logger=trace_logger,
             cancellation_token=cancellation_token,
             optional=sitemap_url in _direct_product_sitemap_urls(store_url),
+            access_profile=access_profile,
         )
         if fetched_sitemap is None:
             continue
@@ -134,7 +141,9 @@ def fetch_sitemap_text(
                 retry_after_seconds=retry_after_seconds_from_headers(exc.headers),
             )
         return None
-    except (HTTPException, URLError, TimeoutError, ValueError):
+    except (HTTPException, URLError, TimeoutError, ValueError) as exc:
+        if include_http_error_status:
+            return FetchResult(url=url, text="", status_code=0, error=str(exc), error_type=type(exc).__name__)
         return None
 
 
@@ -148,10 +157,11 @@ def _fetch_sitemap(
     trace_logger: TraceLogger | None,
     cancellation_token: CancellationToken | None,
     optional: bool,
+    access_profile: MoonlightDiscoveryProfile | None = None,
 ) -> FetchResult | None:
     fetched = fetch_with_transient_retries(
         url,
-        fetch,
+        (lambda target: access_profile.fetch(target, fetch, fetch_method="static")) if access_profile else fetch,
         trace_event="inventory.sitemap_fetch.http_error",
         trace_logger=trace_logger,
         trace_fields={"fetch_method": "static", "optional": optional},
@@ -169,7 +179,8 @@ def _fetch_sitemap(
 
     browser_fetched = fetch_with_transient_retries(
         url,
-        browser_fetcher,
+        (lambda target: access_profile.fetch(target, browser_fetcher, fetch_method="browser"))
+        if access_profile else browser_fetcher,
         trace_event="inventory.sitemap_fetch.http_error",
         trace_logger=trace_logger,
         trace_fields={"fetch_method": "browser", "optional": optional},

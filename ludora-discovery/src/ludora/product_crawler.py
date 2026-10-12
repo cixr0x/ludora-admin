@@ -19,6 +19,7 @@ from ludora.hidralistico_discovery import (
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import extract_listing_candidates
 from ludora.models import DiscoveryItemCandidateRecord
+from ludora.moonlight_discovery import MoonlightDiscoveryProfile, is_moonlight_store_url
 from ludora.discovery_pairs import discovery_url_pair
 from ludora.product_detail_extraction import extract_product_detail_candidate
 from ludora.product_discovery_throttle import wait_for_discovery_delay
@@ -370,6 +371,7 @@ def crawl_store_product_details(
     cancellation_token: CancellationToken | None = None,
     before_product_request: BeforeProductRequest | None = None,
     platform: str = "",
+    moonlight_user_agent: str | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     raise_if_cancelled(cancellation_token)
     normalized_platform = platform.strip().casefold()
@@ -378,6 +380,10 @@ def crawl_store_product_details(
     use_browser_fetch = browser_sitemap_fetch_enabled if browser_fetch_enabled is None else browser_fetch_enabled
     browser_sitemap_fallback_enabled = use_browser_fetch and normalized_platform != "shopify"
     trace = trace_logger or NullTraceLogger()
+    access_profile = None
+    if normalized_platform != "shopify" and is_moonlight_store_url(store_url):
+        access_profile = MoonlightDiscoveryProfile(user_agent=moonlight_user_agent, trace_logger=trace)
+        request_headers_provider = access_profile.headers_for
     trace.log(
         "inventory.crawl.start",
         browser_fetch_enabled=use_browser_fetch,
@@ -449,6 +455,7 @@ def crawl_store_product_details(
             request_headers_provider=request_headers_provider,
             trace_logger=trace,
             cancellation_token=cancellation_token,
+            **({"access_profile": access_profile} if access_profile is not None else {}),
         )
         trace.log(
             "inventory.sitemap_discovery.completed",
@@ -471,13 +478,17 @@ def crawl_store_product_details(
             ]
         else:
             trace.log("inventory.listing_fetch.start", source_url=store_url, store_id=store_id)
-            fetched_listing = fetch_with_transient_retries(
-                store_url,
-                lambda url: fetch_html(
+            def fetch_listing(url: str) -> FetchResult | None:
+                return fetch_html(
                     url,
                     headers=request_headers_provider(url) if request_headers_provider is not None else None,
                     include_http_error_status=True,
-                ),
+                )
+
+            fetched_listing = fetch_with_transient_retries(
+                store_url,
+                (lambda url: access_profile.fetch(url, fetch_listing, fetch_method="static"))
+                if access_profile else fetch_listing,
                 trace_event="inventory.listing_fetch.http_error",
                 trace_logger=trace,
                 trace_fields={"fetch_method": "static", "store_id": store_id},
@@ -529,6 +540,7 @@ def crawl_store_product_details(
             trace_logger=trace,
             cancellation_token=cancellation_token,
             before_product_request=before_product_request,
+            access_profile=access_profile,
         )
         trace.log("inventory.crawl.completed", record_count=len(records), store_id=store_id, store_url=store_url)
         return records
@@ -552,6 +564,7 @@ def crawl_listing_candidates(
     cancellation_token: CancellationToken | None = None,
     before_product_request: BeforeProductRequest | None = None,
     platform: str = "",
+    access_profile: MoonlightDiscoveryProfile | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     trace = trace_logger or NullTraceLogger()
     records: list[DiscoveryItemCandidateRecord] = []
@@ -597,6 +610,7 @@ def crawl_listing_candidates(
                     cancellation_token=cancellation_token,
                     before_request=before_product_request,
                     on_resolved_discovery_response=lambda fetched: _observe_resolved_discovery_pair(repository, listing_candidate, fetched.url, trace),
+                    access_profile=access_profile,
                 )
         except ExistingDiscoveryPair:
             continue
@@ -1711,6 +1725,7 @@ def _fetch_detail_candidate(
     amazon_browser_fetch_max_attempts: int = 1,
     on_resolved_discovery_response: Callable[[FetchResult], None] | None = None,
     initial_fetch: FetchResult | None = None,
+    access_profile: MoonlightDiscoveryProfile | None = None,
 ) -> DiscoveryItemCandidateRecord:
     trace = trace_logger or NullTraceLogger()
     amazon_detail_request = platform.strip().casefold() in AMAZON_STORE_PLATFORMS
@@ -1737,7 +1752,9 @@ def _fetch_detail_candidate(
         immediate_return_status_codes={429} if store_item_update_request else (),
         request_headers_provider=request_headers_provider,
         max_attempts=static_fetch_max_attempts,
+        access_profile=access_profile,
     )
+    static_connection_refused = access_profile is not None and access_profile.last_fetch_refused
     _handle_removed_product_detail(
         fetched_detail, listing_candidate, detect_removed=detect_removed, trace=trace,
     )
@@ -1838,11 +1855,16 @@ def _fetch_detail_candidate(
                     before_request(listing_candidate.source_url)
                 fetched_detail = browser_fetcher(listing_candidate.source_url)
             else:
-                fetched_detail = fetch_product_detail_with_browser(
-                    browser_fetcher,
-                    listing_candidate.source_url,
-                    before_navigation=before_request,
-                    cancellation_token=cancellation_token,
+                def fetch_browser_detail(url: str) -> FetchResult | None:
+                    return fetch_product_detail_with_browser(
+                        browser_fetcher, url, before_navigation=before_request,
+                        cancellation_token=cancellation_token,
+                    )
+
+                fetched_detail = (
+                    access_profile.fetch(listing_candidate.source_url, fetch_browser_detail,
+                                         fetch_method="browser", failure_fetcher=browser_fetcher)
+                    if access_profile else fetch_browser_detail(listing_candidate.source_url)
                 )
                 if fetched_detail is None:
                     fetcher_owner = getattr(browser_fetcher, "__self__", None)
@@ -1933,6 +1955,8 @@ def _fetch_detail_candidate(
         )
         if (
             last_failure_status_code in TRANSIENT_FETCH_STATUS_CODES
+            or static_connection_refused
+            or (access_profile is not None and access_profile.last_fetch_refused)
             or amazon_detail_validation_failed
             or browser_error_type == "TimeoutError"
             or (not detect_removed and browser_error_type and browser_error_type != "BrowserFetchUnavailable")
@@ -2204,6 +2228,7 @@ def _fetch_static_product_detail(
     immediate_return_status_codes: Collection[int] = (),
     request_headers_provider: RequestHeadersProvider | None = None,
     max_attempts: int = DEFAULT_FETCH_MAX_ATTEMPTS,
+    access_profile: MoonlightDiscoveryProfile | None = None,
 ) -> FetchResult | None:
     resolved_trace_fields = {"fetch_method": "static", **dict(trace_fields or {})}
     resolved_headers_provider = request_headers_provider
@@ -2216,11 +2241,14 @@ def _fetch_static_product_detail(
     def fetch_detail(url: str) -> FetchResult | None:
         if before_request is not None:
             before_request(url)
-        return fetch_html(
-            url,
-            headers=resolved_headers_provider(url) if resolved_headers_provider is not None else None,
-            include_http_error_status=True,
-        )
+        def fetch_static(target: str) -> FetchResult | None:
+            return fetch_html(
+                target,
+                headers=resolved_headers_provider(target) if resolved_headers_provider is not None else None,
+                include_http_error_status=True,
+            )
+
+        return access_profile.fetch(url, fetch_static, fetch_method="static") if access_profile else fetch_static(url)
 
     return fetch_with_transient_retries(
         source_url,

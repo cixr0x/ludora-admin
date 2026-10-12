@@ -86,6 +86,22 @@ Some stores block plain HTTP crawlers but allow a real browser session to read t
 $env:LUDORA_BROWSER_FETCH_ENABLED='true'
 ```
 
+Moonlight discovery (`moonlightgamestore.com` and its `www` alias) uses a separate
+plain HTTP request profile for sitemaps, homepage fallback, and product details.
+Its default User-Agent is the deployed Chromium identity validated on 2026-10-11:
+`Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.7827.55 Safari/537.36`.
+After validating a newer identity, set `LUDORA_MOONLIGHT_USER_AGENT` in the worker
+environment or the discovery operation's `.env`/`env_file`; the environment takes
+precedence. Do not append the collector identifier, which the site rejected.
+This profile does not change other stores or Shopify Web Bot Auth.
+
+Moonlight's crawl fails on HTTP 403 before attempting browser fallback or another
+URL. It also fails on three consecutive observed connection refusals across
+static and browser fetches; successful access resets the counter. The existing
+failed-job path retains saved progress and marks coverage as interrupted. Product
+request pacing remains at least three seconds, and browser rendering fallback
+remains available for otherwise accessible pages.
+
 Browser fallback uses the installed Chrome executable when available. You can override it with:
 
 ```powershell
