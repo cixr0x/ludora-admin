@@ -1585,6 +1585,8 @@ function ItemCandidateForm({
   updatingListingStatusCandidateId: string;
 }) {
   const title = field(candidate, ['title'], 'Item candidate');
+  const storeName = field(candidate, ['store_name'], '').trim();
+  const subtitle = detailMode === 'review' && storeName ? `${title} — ${storeName}` : title;
   const candidateIdValue = field(candidate, ['id'], '');
   const imageUrl = field(candidate, ['image_url'], '');
   const itemId = field(candidate, ['item_id'], '');
@@ -1718,12 +1720,12 @@ function ItemCandidateForm({
       <Paper component="section" variant="outlined" sx={{ p: 2 }}>
         <Stack component="form" key={formKey} spacing={2} onSubmit={handleSubmit}>
         <Stack alignItems="flex-start" direction={{ sm: 'row', xs: 'column' }} justifyContent="space-between" spacing={1.5}>
-          <Box>
+          <Box sx={{ maxWidth: '100%', minWidth: 0 }}>
             <Typography variant="h6" sx={{ fontWeight: 700 }}>
               {detailMode === 'review' ? 'Store Item Review Details' : 'Store Item Details'}
             </Typography>
-            <Typography color="text.secondary" variant="body2">
-              {title}
+            <Typography color="text.secondary" variant="body2" sx={{ overflowWrap: 'anywhere' }}>
+              {subtitle}
             </Typography>
           </Box>
           <Stack direction={{ sm: 'row', xs: 'column' }} spacing={1} sx={{ width: { sm: 'auto', xs: '100%' } }}>

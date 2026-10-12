@@ -165,7 +165,8 @@ const itemCandidateSelect = `
   classification_reasons, match_source,
   matched_bgg_id, matched_name, match_score, match_reasons, match_payload,
   auto_list_result, matched_at, processed_at, processing_error, last_seen_at, last_updated, refreshed_date,
-  source_url_origin, store_active
+  source_url_origin, store_active,
+  (select s.name from stores s where s.id = store_id) as store_name
 `;
 
 const itemSelect = `
