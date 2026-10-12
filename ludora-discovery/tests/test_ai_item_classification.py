@@ -4,7 +4,7 @@ import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -14,6 +14,28 @@ from ludora.models import DiscoveryItemCandidateRecord
 
 
 class AIItemClassificationTests(unittest.TestCase):
+    def test_single_request_allows_the_wrapper_to_finish_its_shared_deadline(self):
+        record = DiscoveryItemCandidateRecord(store_id=66, source_url="https://example.test/game", title="Game")
+        with patch("ludora.ai_item_classification.urlopen") as transport:
+            transport.return_value.__enter__.return_value.read.return_value = b'{"output_text":"{}"}'
+            CodexApiItemClassifier(model="model")._request_classification(record)
+        self.assertEqual(transport.call_count, 1)
+        self.assertEqual(transport.call_args.kwargs["timeout"], 150)
+
+    def test_http_errors_include_only_a_valid_server_correlation_id_without_retry(self):
+        record = DiscoveryItemCandidateRecord(store_id=66, source_url="https://example.test/game", title="Game")
+        safe_id = "call_0123456789abcdef0123456789abcdef"
+        for header, expected in [(safe_id, True), ("call_bad", False), (safe_id + "\nsecret", False), ("https://secret.test", False), (None, False)]:
+            with self.subTest(header=header):
+                headers = {} if header is None else {"X-Request-ID": header}
+                error = HTTPError("http://localhost/responses", 500, "failed", headers, io.BytesIO(b'{"error":{"code":"codex_cli_error"}}'))
+                with patch("ludora.ai_item_classification.urlopen", side_effect=error) as transport:
+                    with self.assertRaises(RuntimeError) as caught:
+                        CodexApiItemClassifier(model="model")._request_classification(record)
+                self.assertEqual(transport.call_count, 1)
+                self.assertEqual(f"request_id={safe_id}" in str(caught.exception), expected)
+                self.assertNotIn("secret", str(caught.exception))
+
     def test_classifier_uses_local_compatibility_authorization(self):
         classifier = CodexApiItemClassifier(model="gpt-5.6-terra")
         request = classifier._build_request(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -35,7 +36,7 @@ class CodexApiItemClassifier:
         *,
         model: str,
         base_url: str = DEFAULT_CODEX_API_BASE_URL,
-        timeout_seconds: float = 60,
+        timeout_seconds: float = 150,
     ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
@@ -81,7 +82,9 @@ class CodexApiItemClassifier:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             message = _read_http_error_message(exc)
-            raise RuntimeError(f"AI item classifier request failed with HTTP {exc.code}: {message}") from exc
+            request_id = exc.headers.get("X-Request-ID") if exc.headers is not None else None
+            correlation = f" (request_id={request_id})" if isinstance(request_id, str) and re.fullmatch(r"call_[0-9a-f]{32}", request_id) else ""
+            raise RuntimeError(f"AI item classifier request failed with HTTP {exc.code}: {message}{correlation}") from exc
         except URLError as exc:
             raise RuntimeError(f"AI item classifier request failed: {exc.reason}") from exc
         except OSError as exc:

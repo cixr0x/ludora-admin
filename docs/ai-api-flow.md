@@ -44,6 +44,8 @@ Discovery-to-admin calls are protected by the same admin auth middleware as brow
 
 The item classifier is an existing Python operation internal that uses `CODEX_API_BASE_URL` and `CODEX_CLASSIFIER_MODEL` to call CodexAPI directly. It is an intentional exception to the admin-service route boundary, not an exception to the private-CodexAPI-only provider rule. `OPENAI_BASE_URL` and `OPENAI_CLASSIFIER_MODEL` are loopback compatibility aliases only.
 
+The direct classifier waits up to 150 seconds per socket operation so CodexAPI's default 120-second shared generation/retry budget has time to finish with termination and transport margin. It sends one request and leaves transient retries to CodexAPI; shared Node generative clients likewise retain `maxRetries: 0`. Classification still fails closed on exhausted infrastructure failures or invalid responses. HTTP failures append a server `X-Request-ID` only when it matches the exact `call_` plus 32 lowercase hexadecimal characters grammar, for correlation with CodexAPI's sanitized production diagnostics.
+
 Item embeddings are intentionally different. CodexAPI does not support embeddings, so embedding runs use the official OpenAI embeddings endpoint only, with `OPENAI_API_KEY` and `OPENAI_EMBEDDING_MODEL`. `CODEX_API_BASE_URL` and its legacy aliases do not apply to embeddings.
 
 ## AI BGG matcher and BGG cache/import flow
