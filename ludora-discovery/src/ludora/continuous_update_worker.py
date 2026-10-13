@@ -31,6 +31,7 @@ from ludora.product_crawler import (
 )
 from ludora.trace import TraceLogger, create_item_update_trace_logger
 from ludora.webfetch import PerHostRequestThrottle
+from ludora.woocommerce_batch_refresh import ChocitaBatchRefresher
 
 
 WORKER_NAME = "continuous"
@@ -131,6 +132,7 @@ def _run_worker_session(
 
     connection = connect_database(database_url)
     repository = DiscoveryRepository(connection)
+    batch_refresher = ChocitaBatchRefresher(repository)
     from ludora.operations import create_item_update_redirect_handler
 
     redirect_handler = create_item_update_redirect_handler(repository, current_env=current_env, env_file=env_file)
@@ -202,6 +204,7 @@ def _run_worker_session(
                     trace_logger=attempt_trace_logger,
                     worker_id=worker_id,
                     redirect_handler=redirect_handler,
+                    batch_refresher=batch_refresher,
                 )
             finally:
                 if browser_session is not None:
@@ -244,6 +247,7 @@ def _process_claim(
     trace_logger: TraceLogger | None = None,
     worker_id: str,
     redirect_handler=None,
+    batch_refresher: ChocitaBatchRefresher | None = None,
 ) -> None:
     store_item_id = claim.record.store_item_id
     _log(
@@ -256,15 +260,18 @@ def _process_claim(
 
     try:
         try:
-            refreshed_record = refresh_confirmed_store_item_candidate(
-                claim.record,
-                platform=claim.platform,
-                browser_fetcher=browser_fetcher,
-                item_title_extractor=item_title_extractor,
-                before_request=lambda url: throttle.wait_before_request(url),
-                request_headers_provider=request_headers_provider if claim.platform == "shopify" else None,
-                trace_logger=trace_logger,
-            )
+            if batch_refresher is not None and batch_refresher.supports(claim):
+                refreshed_record = batch_refresher.refresh(claim, trace_logger=trace_logger)
+            else:
+                refreshed_record = refresh_confirmed_store_item_candidate(
+                    claim.record,
+                    platform=claim.platform,
+                    browser_fetcher=browser_fetcher,
+                    item_title_extractor=item_title_extractor,
+                    before_request=lambda url: throttle.wait_before_request(url),
+                    request_headers_provider=request_headers_provider if claim.platform == "shopify" else None,
+                    trace_logger=trace_logger,
+                )
         except ProductDetailRedirect as redirect:
             if redirect_handler is None:
                 from ludora.operations import create_item_update_redirect_handler

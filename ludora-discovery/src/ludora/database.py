@@ -107,6 +107,7 @@ class ClaimedStoreItemUpdate:
     record: DiscoveryItemCandidateRecord
     store_consecutive_429s: int
     store_name: str
+    canonical_domain: str = ""
 
 
 STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS = (
@@ -709,7 +710,8 @@ class DiscoveryRepository:
                     coalesce(stores.name, ''),
                     coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown'),
                     store_items.consecutive_update_failures,
-                    coalesce(cooldown.consecutive_429s, 0)
+                    coalesce(cooldown.consecutive_429s, 0),
+                    coalesce(stores.canonical_domain, '')
                 from store_items
                 join stores on stores.id = store_items.store_id
                 left join store_item_update_store_cooldown cooldown
@@ -761,7 +763,61 @@ class DiscoveryRepository:
             record=record,
             store_consecutive_429s=int(store_row[3]) if store_row else 0,
             store_name=store_name or f"Store {record.store_id}",
+            canonical_domain=_text(store_row[4]) if store_row else "",
         )
+
+    def list_store_item_update_batch_targets(
+        self,
+        *,
+        store_id: int,
+        claimed_store_item_id: int,
+        limit: int = 100,
+    ) -> list[tuple[int, str]]:
+        """Read uniquely identified eligible targets without leasing or refreshing them.
+
+        Match the continuous worker's oldest-item selection, including its failed
+        item backoff. Each target still needs its own normal claim and completion.
+        """
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select store_items.id, store_items.source_url
+                from store_items
+                join stores on stores.id = store_items.store_id
+                where store_items.store_id = %s
+                  and stores.active = true
+                  and store_items.is_boardgame = true
+                  and store_items.is_boardgame_confirmed = true
+                  and store_items.item_id is not null
+                  and store_items.source_url <> ''
+                  and store_items.listing_status = 'LISTED'
+                  and store_items.store_active = true
+                  and store_items.availability <> 'unavailable'
+                  and (
+                    store_items.consecutive_update_failures = 0
+                    or store_items.next_update_at is null
+                    or store_items.next_update_at <= now()
+                  )
+                  and (
+                    store_items.id = %s
+                    or store_items.update_lease_token is null
+                    or store_items.update_lease_expires_at <= now()
+                  )
+                  and not exists (
+                    select 1 from store_items duplicate
+                    where duplicate.store_id = store_items.store_id
+                      and duplicate.source_url = store_items.source_url
+                      and duplicate.id <> store_items.id
+                  )
+                order by case when store_items.id = %s then 0 else 1 end,
+                         store_items.refreshed_date asc, store_items.id asc
+                limit %s
+                """,
+                (store_id, claimed_store_item_id, claimed_store_item_id, min(100, max(1, limit))),
+            )
+            rows = cursor.fetchall()
+        self.connection.commit()
+        return [(int(row[0]), _text(row[1])) for row in rows]
 
     def complete_claimed_store_item_update(
         self,

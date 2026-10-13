@@ -108,6 +108,53 @@ Browser fallback uses the installed Chrome executable when available. You can ov
 $env:LUDORA_BROWSER_EXECUTABLE_PATH='C:\Program Files\Google\Chrome\Application\chrome.exe'
 ```
 
+## Chocita continuous item updates
+
+The continuous updater uses Chocita's public WooCommerce Store API for stores
+whose database `canonical_domain` is exactly `chocitajuegos.com`, platform is
+`woocommerce`, and product source URL has the exact HTTPS Chocita origin. Other
+stores keep their existing refresh flow. The adapter is not tied to a particular
+numeric store ID.
+
+A claimed item starts one targeted request to `/wp-json/wc/store/v1/products`
+with up to 100 product slugs, `per_page=100`, and only the price/stock/identity
+fields. The targets are the claimed product plus the oldest eligible existing
+store items, excluding ambiguous duplicate source URLs and items still in failure
+backoff or leased elsewhere. Slugs select API results; only an exact returned
+`permalink` matching a unique requested source URL establishes product identity.
+The encoded request URL is limited to 8,000 bytes, so unusually long slugs can
+reduce the batch size. There is no catalog page scan or inline HTTP retry.
+
+Each response is cached within that worker session for at most ten minutes,
+with a maximum of 100 targets. Entries are scoped by store ID, store item ID, and
+exact source URL, consumed once, and discarded on a new batch or worker restart.
+Missing or invalid targets also have bounded negative entries. Each subsequent
+item still obtains its own normal lease and completes through the existing
+timestamp, scheduling, failure-counter and change-log paths. The adapter changes
+only price, currency, stock, and their source fields; titles, images, SKU, catalog
+associations, confirmation and listing visibility are preserved.
+
+Supported products are purchasable simple products with an explicit null price
+range, a positive current `prices.price`, MXN currency, integer minor unit 0–2,
+and explicit boolean stock state. The current price, including sale pricing, is
+normalized using that minor unit. Missing, duplicate, malformed, ranged, variable,
+or unsupported results fail the affected attempt without overwriting product
+values or deactivating it. API failures never fall back to HTML, browser, or AI.
+HTTP 429 retains its status and `Retry-After` and follows the existing store
+cooldown and item retry policy; cached results are invalidated.
+
+Actual API request starts are spaced at least 15 seconds apart. Cache hits do
+not wait. An early cache miss can hold the shared worker for at most the remaining
+15-second pacing interval plus one HTTP request (the normal 20-second timeout),
+then other stores continue. Trace events under `item_update.item.woocommerce_batch`
+include the batch ID, request URL, cache hit and snapshot age, together with the
+current item/attempt context.
+
+This pacing is local to the continuous worker session. Discovery is a separate
+process and retains its current behavior; its requests do not share this throttle.
+The existing cooldown is respected and is not reset by enabling the adapter. No
+database migration or immediate catalog refresh is required to deploy this code.
+
 ## Product-detail pacing and Shopify discovery
 
 Product-detail requests are globally start-paced at three seconds across a discovery process. The throttle spans every store in a batch and also applies to retry attempts.

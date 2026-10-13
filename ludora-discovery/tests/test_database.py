@@ -127,12 +127,46 @@ def confirmed_store_item_row(*, store_item_id: int = 501, store_id: int = 12) ->
 
 
 class DatabaseRepositoryTests(unittest.TestCase):
+    def test_update_batch_target_read_is_bounded_eligible_and_excludes_duplicate_source_urls(self):
+        connection = FakeConnection(fetchall_rows=[[(501, "https://chocitajuegos.com/juego/catan/")]])
+        repository = DiscoveryRepository(connection)
+
+        targets = repository.list_store_item_update_batch_targets(store_id=17, claimed_store_item_id=501, limit=100)
+
+        self.assertEqual(targets, [(501, "https://chocitajuegos.com/juego/catan/")])
+        sql, params = connection.cursor_instance.executions[0]
+        normalized = " ".join(sql.casefold().split())
+        self.assertTrue(normalized.startswith("select "))
+        self.assertNotIn("update store_items", normalized)
+        self.assertNotIn("for update", normalized)
+        self.assertIn("store_items.store_id = %s", normalized)
+        self.assertIn("stores.active = true", normalized)
+        self.assertIn("store_items.is_boardgame_confirmed = true", normalized)
+        self.assertIn("store_items.item_id is not null", normalized)
+        self.assertIn("store_items.listing_status = 'listed'", normalized)
+        self.assertIn("store_items.availability <> 'unavailable'", normalized)
+        self.assertIn("store_items.consecutive_update_failures = 0", normalized)
+        self.assertIn("store_items.next_update_at <= now()", normalized)
+        self.assertIn("store_items.update_lease_expires_at <= now()", normalized)
+        self.assertIn("duplicate.source_url = store_items.source_url", normalized)
+        self.assertIn("duplicate.store_id = store_items.store_id", normalized)
+        self.assertIn("duplicate.id <> store_items.id", normalized)
+        self.assertIn("store_items.refreshed_date asc, store_items.id asc", normalized)
+        self.assertEqual(params, (17, 501, 501, 100))
+        self.assertEqual(connection.commits, 1)
+
+    def test_claim_metadata_includes_current_database_canonical_domain(self):
+        connection = FakeConnection(fetchone_rows=[(501,), confirmed_store_item_row(), ("Chocita", "woocommerce", 0, 2, "chocitajuegos.com"), (91,)])
+        repository = DiscoveryRepository(connection)
+        claim = repository.claim_due_store_item_update(worker_name="continuous", worker_id="worker-1", lease_token="token", lease_seconds=300)
+        self.assertEqual(claim.canonical_domain, "chocitajuegos.com")
+
     def test_claim_due_store_item_update_skips_only_the_blocked_store_and_reads_its_count(self):
         connection = FakeConnection(
             fetchone_rows=[
                 (501,),
                 confirmed_store_item_row(),
-                ("Example", "woocommerce", 0, 2),
+                ("Example", "woocommerce", 0, 2, "example.mx"),
                 (91,),
             ]
         )
@@ -172,7 +206,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             fetchone_rows=[
                 (777,),
                 confirmed_store_item_row(store_item_id=777),
-                ("Example", "woocommerce", 0, 2),
+                ("Example", "woocommerce", 0, 2, "example.mx"),
                 (91,),
             ]
         )
@@ -237,7 +271,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             fetchone_rows=[
                 (777,),
                 confirmed_store_item_row(store_item_id=777),
-                ("Example", "woocommerce", 0, 2),
+                ("Example", "woocommerce", 0, 2, "example.mx"),
                 (91,),
             ]
         )
@@ -266,7 +300,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
             fetchone_rows=[
                 (501,),
                 confirmed_store_item_row(),
-                ("Example", "woocommerce", 0, 2),
+                ("Example", "woocommerce", 0, 2, "example.mx"),
                 (91,),
             ]
         )
