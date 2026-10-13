@@ -19,6 +19,7 @@ from ludora.hidralistico_discovery import (
 from ludora.item_classification import apply_item_classification
 from ludora.listing_extraction import extract_listing_candidates
 from ludora.models import DiscoveryItemCandidateRecord
+from ludora.nalua_discovery import discover_nalua_product_urls, is_nalua_store_url
 from ludora.moonlight_discovery import MoonlightDiscoveryProfile, is_moonlight_store_url
 from ludora.discovery_pairs import discovery_url_pair
 from ludora.product_detail_extraction import extract_product_detail_candidate
@@ -463,10 +464,21 @@ def crawl_store_product_details(
             store_id=store_id,
             store_url=store_url,
         )
+        if is_nalua_store_url(store_url) and normalized_platform != "shopify":
+            product_urls = discover_nalua_product_urls(
+                store_url, sitemap_urls=product_urls,
+                fetcher=lambda url: fetch_html(
+                    url, headers=request_headers_provider(url) if request_headers_provider is not None else None,
+                    include_http_error_status=True,
+                ),
+                browser_fetcher=browser_fetcher if browser_sitemap_fallback_enabled else None,
+                browser_fallback_enabled=browser_sitemap_fallback_enabled,
+                limit=limit, trace_logger=trace, cancellation_token=cancellation_token,
+            )
         if normalized_platform == "shopify" and not product_urls:
             raise RuntimeError(f"Shopify sitemap discovery returned no product URLs: {store_url}")
-        if product_urls:
-            source_listing_url = urljoin(store_url, "/sitemap.xml")
+        if product_urls or (is_nalua_store_url(store_url) and normalized_platform != "shopify"):
+            source_listing_url = urljoin(store_url, "/2-inicio" if is_nalua_store_url(store_url) and normalized_platform != "shopify" else "/sitemap.xml")
             listing_candidates = [
                 DiscoveryItemCandidateRecord(
                     store_id=store_id,

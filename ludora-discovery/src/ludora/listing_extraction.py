@@ -24,6 +24,32 @@ PRICE_RE = re.compile(
     r"(?:\$\s*([0-9][0-9,.]*)|([0-9][0-9,.]*)\s*mxn|mxn\s*([0-9][0-9,.]*))",
     re.IGNORECASE,
 )
+NALUA_STORE_HOSTS = {"naluajuegos.com", "www.naluajuegos.com"}
+PRESTASHOP_PRODUCT_PATH_RE = re.compile(r"(?:^|/)([1-9][0-9]*)-[^/]+\.html$", re.IGNORECASE)
+NON_PRODUCT_PATH_SEGMENTS = {"content", "blog", "account", "my-account", "authentication", "order", "cart", "search", "module"}
+
+
+def is_nalua_store_url(url: str) -> bool:
+    try:
+        return (urlparse(url).hostname or "").casefold() in NALUA_STORE_HOSTS
+    except ValueError:
+        return False
+
+
+def nalua_product_id(url: str) -> str | None:
+    if not is_nalua_store_url(url):
+        return None
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password or parsed.port not in {None, 80, 443}:
+            return None
+    except ValueError:
+        return None
+    path = parsed.path.casefold()
+    if any(segment in NON_PRODUCT_PATH_SEGMENTS for segment in path.split("/")[:-1]):
+        return None
+    match = PRESTASHOP_PRODUCT_PATH_RE.search(path)
+    return match.group(1) if match else None
 
 
 class ListingLinkParser(HTMLParser):
@@ -125,6 +151,8 @@ def _nearby_text(events: list[tuple[str, str, str]], link_index: int) -> str:
 
 
 def _looks_like_product_url(url: str) -> bool:
+    if is_nalua_store_url(url):
+        return nalua_product_id(url) is not None
     path = urlparse(url).path.casefold()
     for marker in PRODUCT_PATH_MARKERS:
         _prefix, separator, remainder = path.partition(marker)
