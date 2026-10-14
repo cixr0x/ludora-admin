@@ -750,6 +750,16 @@ export const adminApi = {
     sendJson<DescriptionGenerationResult>('/admin/description-generations', 'POST', input),
   getOfferReviews: () => fetchRows('/admin/discovery/offer-reviews'),
   getOfferReviewsPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/admin/discovery/offer-reviews', query), query),
+  getNextOfferReview: (excludedCandidateIds: string[]) => {
+    const searchParams = new URLSearchParams();
+    if (excludedCandidateIds.length) {
+      searchParams.set('exclude_ids', excludedCandidateIds.join(','));
+    }
+    const queryString = searchParams.toString();
+    return fetchData<{ candidate_id: string | null }>(
+      `/admin/discovery/offer-reviews/next${queryString ? `?${queryString}` : ''}`
+    );
+  },
   getReviewTasks: () => fetchRows('/admin/review-tasks'),
   getReviewTasksPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/admin/review-tasks', query), query),
   getStoreItemDiscoveryJobsPage: (query: TableQuery) =>

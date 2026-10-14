@@ -2963,6 +2963,81 @@ describe('ludora admin service', () => {
     expect(normalizeSql(queries[0].sql)).toContain('(source_url_origin is null and store_active = true) or (store_id is not distinct from $1 and source_url = $2)');
   });
 
+  it('selects the next pending review with server exclusions and one minimal query', async () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ sql, params });
+        return { rows: [{ id: '9223372036854775807' }] };
+      }
+    };
+
+    const response = await request(createApp({ database })).get(
+      '/admin/discovery/offer-reviews/next?exclude_ids=920%2C921%2C9007199254740993'
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: { candidate_id: '9223372036854775807' } });
+    expect(queries).toHaveLength(1);
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toMatch(/^select id from store_items where /);
+    expect(sql).toContain('is_boardgame = true');
+    expect(sql).toContain('is_boardgame_confirmed = true');
+    expect(sql).toContain("listing_status = 'pending'");
+    expect(sql).toContain('not (id = any($1::bigint[]))');
+    expect(sql).toContain('order by title asc, id asc limit 1');
+    expect(sql).not.toMatch(/join|count\(|description|ilike|store_active|availability|visibility/);
+    expect(queries[0].params).toEqual([['920', '921', '9007199254740993']]);
+  });
+
+  it('returns a null next pending review when eligible candidates are exhausted', async () => {
+    const query = vi.fn(async (_sql: string, _params?: unknown[]) => ({ rows: [] }));
+    const response = await request(createApp({ database: { query } })).get('/admin/discovery/offer-reviews/next');
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: { candidate_id: null } });
+    expect(query).toHaveBeenCalledTimes(1);
+    expect(query.mock.calls[0]).toHaveLength(2);
+    expect(query.mock.calls[0]?.[1]).toEqual([[]]);
+  });
+
+  it('keeps every next pending review exclusion beyond the generic page size limit', async () => {
+    const exclusions = Array.from({ length: 251 }, (_, index) => String(index + 1));
+    const queries: Array<unknown[] | undefined> = [];
+    const database: Database = { query: async (_sql, params) => { queries.push(params); return { rows: [] }; } };
+    const response = await request(createApp({ database })).get(
+      `/admin/discovery/offer-reviews/next?exclude_ids=${exclusions.join('%2C')}`
+    );
+    expect(response.status).toBe(200);
+    expect(queries).toEqual([[exclusions]]);
+  });
+
+  it.each([
+    'exclude_ids=', 'exclude_ids=0', 'exclude_ids=-1', 'exclude_ids=1.5', 'exclude_ids=1e3',
+    'exclude_ids=920%2C', 'exclude_ids=920%2Cbad', 'exclude_ids=9223372036854775808',
+    'exclude_ids=920%20', 'exclude_ids=920&exclude_ids=921', 'exclude_ids%5B%5D=920',
+    'exclude_ids=1%29%3Bdrop%20table%20store_items'
+  ])('rejects invalid next pending review exclusions before SQL: %s', async (queryString) => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const response = await request(createApp({ database: { query } })).get(
+      `/admin/discovery/offer-reviews/next?${queryString}`
+    );
+    expect(response.status).toBe(400);
+    expect(response.body.error.message).toContain('exclude_ids');
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('requires authentication for next pending review selection', async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const app = createApp({ database: { query }, adminAuth: authOptions });
+    const response = await request(app).get('/admin/discovery/offer-reviews/next');
+    expect(response.status).toBe(401);
+    expect(query).not.toHaveBeenCalled();
+    const login = await request(app).post('/admin/auth/login').send({ username: 'admin', password: 'secret-password' });
+    const authenticated = await request(app).get('/admin/discovery/offer-reviews/next').set('Cookie', login.headers['set-cookie']);
+    expect(authenticated.status).toBe(200);
+    expect(authenticated.body).toEqual({ data: { candidate_id: null } });
+  });
+
   it('queries confirmed boardgame store items with optional item comparison data', async () => {
     const rows = [
       {

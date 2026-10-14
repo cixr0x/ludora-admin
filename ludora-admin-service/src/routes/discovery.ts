@@ -2467,6 +2467,27 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.get('/admin/discovery/offer-reviews/next', async (request, response, next) => {
+    try {
+      const excludedIds = parseReviewExclusions(request.query);
+      const result = await database.query(
+        `select id
+         from store_items
+         where is_boardgame = true
+           and is_boardgame_confirmed = true
+           and listing_status = 'PENDING'
+           and not (id = any($1::bigint[]))
+         order by title asc, id asc
+         limit 1`,
+        [excludedIds]
+      );
+      const candidate = result.rows[0] as { id: string | number } | undefined;
+      response.json({ data: { candidate_id: candidate ? String(candidate.id) : null } });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/admin/discovery/offer-reviews', async (request, response, next) => {
     try {
       if (hasTableQuery(request.query)) {
@@ -2547,6 +2568,23 @@ export function createDiscoveryRouter(
   });
 
   return router;
+}
+
+function parseReviewExclusions(query: Record<string, unknown>): string[] {
+  if (Object.keys(query).some((key) => key !== 'exclude_ids')) {
+    throw httpError(400, 'Only exclude_ids is supported for next review selection');
+  }
+  if (query.exclude_ids === undefined) {
+    return [];
+  }
+  if (typeof query.exclude_ids !== 'string') {
+    throw httpError(400, 'exclude_ids must be a comma-separated list of positive bigint IDs');
+  }
+  const ids = query.exclude_ids.split(',');
+  if (ids.some((id) => !/^[1-9]\d*$/.test(id) || id.length > 19 || BigInt(id) > 9223372036854775807n)) {
+    throw httpError(400, 'exclude_ids must contain only positive bigint IDs');
+  }
+  return [...new Set(ids)];
 }
 
 async function queryTable(database: Database, config: TableQueryConfig, query: Record<string, unknown>) {

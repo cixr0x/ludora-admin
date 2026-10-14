@@ -220,15 +220,9 @@ describe('ListingCandidatesPage review reload', () => {
           202
         );
       }
-      if (path === '/admin/discovery/offer-reviews') {
-        return jsonResponse(
-          [
-            { candidate_id: '920', candidate_name: 'Cafe Barista' },
-            { candidate_id: '921', candidate_name: 'Cafe Barista Deluxe' },
-            { candidate_id: '922', candidate_name: 'Coffee Break' }
-          ],
-          { page: 0, page_size: 4, total: 3 }
-        );
+      if (path === '/admin/discovery/offer-reviews/next') {
+        const excluded = new URL(String(input)).searchParams.get('exclude_ids')?.split(',') ?? [];
+        return jsonResponse({ candidate_id: ['920', '921', '922'].find((id) => !excluded.includes(id)) ?? null });
       }
       const itemMatch = path.match(/^\/items\/(77|78)$/);
       if (itemMatch) {
@@ -261,6 +255,7 @@ describe('ListingCandidatesPage review reload', () => {
     expect(await screen.findByRole('button', { name: 'Approve listing' })).toBeDisabled();
     const translateAndApprove = await screen.findByRole('button', { name: 'Translate and approve' });
     expect(translateAndApprove).toBeEnabled();
+    expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/discovery/listings')).toHaveLength(0);
     fireEvent.click(translateAndApprove);
 
     await waitFor(() => expect(onOpenCandidate).toHaveBeenCalledWith('921'));
@@ -284,11 +279,12 @@ describe('ListingCandidatesPage review reload', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Translate and approve' }));
 
     await waitFor(() => expect(onOpenCandidate).toHaveBeenCalledWith('922'));
-    const offerReviewPageSizes = fetchMock.mock.calls
+    const offerReviewExclusions = fetchMock.mock.calls
       .map(([input]) => new URL(String(input)))
-      .filter((url) => url.pathname === '/admin/discovery/offer-reviews')
-      .map((url) => url.searchParams.get('page_size'));
-    expect(offerReviewPageSizes).toEqual(['3', '4']);
+      .filter((url) => url.pathname === '/admin/discovery/offer-reviews/next')
+      .map((url) => url.searchParams.get('exclude_ids')?.split(','));
+    expect(offerReviewExclusions).toEqual([['920'], ['921', '920']]);
+    expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/discovery/listings')).toHaveLength(0);
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>

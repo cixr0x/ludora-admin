@@ -26,6 +26,22 @@ describe('fetchRows', () => {
     vi.unstubAllEnvs();
   });
 
+  it.each(['9223372036854775807', null])('fetches the minimal next review envelope (%s) with encoded exclusions', async (candidateId) => {
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: { candidate_id: candidateId } }), { status: 200 })
+    );
+    await expect(adminApi.getNextOfferReview(['920', '9007199254740993'])).resolves.toEqual({ candidate_id: candidateId });
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/discovery/offer-reviews/next?exclude_ids=920%2C9007199254740993');
+  });
+
+  it('omits empty next review exclusions', async () => {
+    const { adminApi } = await importClient();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({ data: { candidate_id: null } }), { status: 200 }));
+    await expect(adminApi.getNextOfferReview([])).resolves.toEqual({ candidate_id: null });
+    expectFetch(fetchMock, 'http://127.0.0.1:4001/admin/discovery/offer-reviews/next');
+  });
+
   it('returns records from the backend data array', async () => {
     const records = [{ id: 'store-1', name: 'Downtown Games' }];
     const { fetchRows } = await importClient();

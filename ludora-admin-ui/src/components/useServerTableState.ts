@@ -52,7 +52,8 @@ type ServerTableControls = ReturnType<typeof useServerTableState>;
 
 export function useInfiniteServerRows<Row extends AdminRecord>(
   table: ServerTableControls,
-  fetchPage: (query: TableQuery) => Promise<PagedRows<Row>>
+  fetchPage: (query: TableQuery) => Promise<PagedRows<Row>>,
+  { enabled = true }: { enabled?: boolean } = {}
 ) {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [rows, setRows] = useState<Row[]>([]);
@@ -61,6 +62,12 @@ export function useInfiniteServerRows<Row extends AdminRecord>(
   const loadMoreRequestedRef = useRef(false);
 
   useEffect(() => {
+    if (!enabled) {
+      loadMoreRequestedRef.current = false;
+      setIsLoadingMore(false);
+      return;
+    }
+
     let ignore = false;
     const isLoadingNextPage = table.page > 0;
 
@@ -94,17 +101,17 @@ export function useInfiniteServerRows<Row extends AdminRecord>(
     return () => {
       ignore = true;
     };
-  }, [fetchPage, table.page, table.query, table.refreshToken]);
+  }, [enabled, fetchPage, table.page, table.query, table.refreshToken]);
 
   const hasMore = rows.length < totalRows;
   const loadMore = useCallback(() => {
-    if (loadMoreRequestedRef.current || isLoadingMore || state !== 'ready' || !hasMore) {
+    if (!enabled || loadMoreRequestedRef.current || isLoadingMore || state !== 'ready' || !hasMore) {
       return;
     }
 
     loadMoreRequestedRef.current = true;
     table.handleLoadNextPage();
-  }, [hasMore, isLoadingMore, state, table]);
+  }, [enabled, hasMore, isLoadingMore, state, table]);
 
   return {
     hasMore,

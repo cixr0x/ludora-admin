@@ -786,7 +786,8 @@ export function ListingCandidatesPage({
   const table = useServerTableState('last_updated', 'desc');
   const { hasMore, isLoadingMore, loadMore, rows, setRows, state, totalRows } = useInfiniteServerRows(
     table,
-    adminApi.getItemCandidatesPage
+    adminApi.getItemCandidatesPage,
+    { enabled: detailMode !== 'review' }
   );
   const selectableBatchCandidateIds = useMemo(
     () => rows.filter((row) => !isBoardgameConfirmed(row)).map(candidateId).filter(Boolean),
@@ -1120,21 +1121,9 @@ export function ListingCandidatesPage({
       return;
     }
 
-    const nextReviews = await adminApi.getOfferReviewsPage({
-      filters: { store_item_listing_status: 'PENDING' },
-      page: 0,
-      pageSize: translateAndApproveCandidateIds.current.size + 2,
-      sortColumnId: 'candidate_name',
-      sortDirection: 'asc'
-    });
-    const nextCandidateId = nextReviews.rows
-      .map((review) => field(review, ['candidate_id', 'store_item_id'], ''))
-      .find(
-        (candidateId) =>
-          candidateId &&
-          candidateId !== currentCandidateId &&
-          !translateAndApproveCandidateIds.current.has(candidateId)
-      );
+    const { candidate_id: nextCandidateId } = await adminApi.getNextOfferReview([
+      ...new Set([currentCandidateId, ...translateAndApproveCandidateIds.current])
+    ]);
 
     if (nextCandidateId) {
       onOpenCandidate(nextCandidateId);

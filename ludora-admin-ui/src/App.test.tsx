@@ -198,8 +198,8 @@ describe('App', () => {
       ) {
         return jsonResponse([]);
       }
-      if (url.pathname === '/admin/discovery/offer-reviews') {
-        return jsonResponse([{ candidate_id: 921, candidate_name: 'Alpaca Trails' }]);
+      if (url.pathname === '/admin/discovery/offer-reviews/next') {
+        return jsonResponse({ candidate_id: '921' });
       }
       if (url.pathname === '/admin/image-similarity' && init?.method === 'POST') {
         return jsonResponse({
@@ -267,6 +267,7 @@ describe('App', () => {
     expect(screen.getByLabelText('Title')).toHaveValue('Cafe Barista');
     expect(screen.queryByLabelText('Publisher')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Back to Review' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/discovery/listings')).toHaveLength(0);
 
     fireEvent.click(screen.getByRole('button', { name: buttonName }));
 
@@ -288,10 +289,9 @@ describe('App', () => {
     );
     const nextReviewRequest = fetchMock.mock.calls
       .map(([input]) => new URL(String(input)))
-      .find((url) => url.pathname === '/admin/discovery/offer-reviews');
-    expect(nextReviewRequest?.searchParams.get('filter_store_item_listing_status')).toBe('PENDING');
-    expect(nextReviewRequest?.searchParams.get('sort')).toBe('candidate_name');
-    expect(nextReviewRequest?.searchParams.get('sort_direction')).toBe('asc');
+      .find((url) => url.pathname === '/admin/discovery/offer-reviews/next');
+    expect(nextReviewRequest?.searchParams.get('exclude_ids')).toBe('920');
+    expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/discovery/listings')).toHaveLength(0);
   });
 
   it('opens the newly created item after creating from a store item candidate', async () => {
