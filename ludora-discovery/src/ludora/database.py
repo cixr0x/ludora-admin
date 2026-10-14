@@ -808,6 +808,8 @@ class DiscoveryRepository:
                     where duplicate.store_id = store_items.store_id
                       and duplicate.source_url = store_items.source_url
                       and duplicate.id <> store_items.id
+                      and duplicate.store_active = true
+                      and duplicate.listing_status <> 'REJECTED'
                   )
                 order by case when store_items.id = %s then 0 else 1 end,
                          store_items.refreshed_date asc, store_items.id asc

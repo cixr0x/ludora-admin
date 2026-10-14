@@ -119,8 +119,10 @@ numeric store ID.
 A claimed item starts one targeted request to `/wp-json/wc/store/v1/products`
 with up to 100 product slugs, `per_page=100`, and only the price/stock/identity
 fields. The targets are the claimed product plus the oldest eligible existing
-store items, excluding ambiguous duplicate source URLs and items still in failure
-backoff or leased elsewhere. Slugs select API results; only an exact returned
+store items, excluding competing active non-rejected representatives of the same
+source URL and items still in failure backoff or leased elsewhere. Inactive
+direct or completed redirect history sharing a target URL does not compete with
+its active representative. Slugs select API results; only an exact returned
 `permalink` matching a unique requested source URL establishes product identity.
 The encoded request URL is limited to 8,000 bytes, so unusually long slugs can
 reduce the batch size. There is no catalog page scan or inline HTTP retry.

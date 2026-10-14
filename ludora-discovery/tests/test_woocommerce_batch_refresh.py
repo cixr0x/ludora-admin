@@ -16,6 +16,7 @@ from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import TransientProductFetchError
 from ludora.webfetch import FetchResult
 from test_database import FakeConnection
+from batch_target_query_fixture import BatchTargetSelectConnection, batch_target_row
 
 
 ORIGIN = "https://chocitajuegos.com"
@@ -424,6 +425,77 @@ class WooCommerceBatchRefreshTests(unittest.TestCase):
             self.process_claim(other, repository)
         self.assertEqual(len(self.transport.urls), 0)
         self.assertEqual(repository.complete_claimed_store_item_update.call_args.args[1].price, "800")
+
+    def adapter_with_actual_target_select(self, current, historical, **historical_changes):
+        connection = BatchTargetSelectConnection([
+            batch_target_row(current.record, update_lease_token=current.lease_token, update_lease_expires_at="2026-10-13T19:00:00+00:00"),
+            batch_target_row(historical, **historical_changes),
+        ])
+        self.addCleanup(connection.close)
+        return self.adapter_type(
+            DiscoveryRepository(connection),
+            fetcher=self.transport,
+            clock=self.clock,
+            waiter=self.clock.wait,
+        )
+
+    def refresh_unambiguous_target(self, adapter, current):
+        try:
+            return adapter.refresh(current)
+        except RuntimeError as exc:
+            self.fail(f"An unambiguous active product must remain refreshable: {exc}")
+
+    def test_active_direct_product_refreshes_with_inactive_completed_redirect_history(self):
+        historical = replace(
+            self.first.record,
+            store_item_id=502,
+            source_url_origin=ORIGIN + "/juego/old-long-shot/",
+            store_active=False,
+            processed_at="2026-10-01T00:00:00+00:00",
+        )
+        adapter = self.adapter_with_actual_target_select(self.first, historical)
+
+        refreshed = self.refresh_unambiguous_target(adapter, self.first)
+
+        self.assertEqual(refreshed.price, "770")
+        self.assertEqual(refreshed.availability, "available")
+        self.assertEqual(refreshed.store_item_id, 501)
+        self.assertIsNone(refreshed.source_url_origin)
+        self.assertTrue(refreshed.store_active)
+        self.assertEqual(len(self.transport.urls), 1)
+
+    def test_active_redirect_product_refreshes_with_inactive_direct_history(self):
+        current = replace(self.first, record=replace(self.first.record, source_url_origin=ORIGIN + "/juego/old-long-shot/"))
+        historical = replace(self.first.record, store_item_id=502, store_active=False, processed_at="2026-10-01T00:00:00+00:00")
+        adapter = self.adapter_with_actual_target_select(current, historical)
+
+        refreshed = self.refresh_unambiguous_target(adapter, current)
+
+        self.assertEqual(refreshed.price, "770")
+        self.assertEqual(refreshed.availability, "available")
+        self.assertEqual(refreshed.source_url_origin, ORIGIN + "/juego/old-long-shot/")
+        self.assertEqual(refreshed.item_id, 77)
+        self.assertTrue(refreshed.store_active)
+        self.assertEqual(len(self.transport.urls), 1)
+
+    def test_competing_active_representative_is_rejected_before_api_request(self):
+        # An active UNLISTED representative still competes under the target
+        # invariant, even though it cannot itself be selected for this refresh.
+        competing = replace(self.first.record, store_item_id=502, source_url_origin=ORIGIN + "/juego/other-long-shot/", listing_status="UNLISTED")
+        adapter = self.adapter_with_actual_target_select(self.first, competing)
+
+        with self.assertRaisesRegex(RuntimeError, "no unique eligible batch source URL"):
+            adapter.refresh(self.first)
+
+        self.assertEqual(self.first.record.price, "720")
+        self.assertEqual(len(self.transport.urls), 0)
+
+    def test_rejected_history_is_not_a_competing_active_representative(self):
+        rejected = replace(self.first.record, store_item_id=502, source_url_origin=ORIGIN + "/juego/rejected-long-shot/", listing_status="REJECTED")
+        adapter = self.adapter_with_actual_target_select(self.first, rejected)
+
+        self.assertEqual(self.refresh_unambiguous_target(adapter, self.first).price, "770")
+        self.assertEqual(len(self.transport.urls), 1)
 
 
 if __name__ == "__main__":

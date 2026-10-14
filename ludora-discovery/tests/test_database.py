@@ -19,6 +19,7 @@ from ludora.database import (
     connect_database,
 )
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
+from batch_target_query_fixture import BatchTargetSelectConnection, batch_target_row
 
 
 class FakeCursor:
@@ -127,6 +128,24 @@ def confirmed_store_item_row(*, store_item_id: int = 501, store_id: int = 12) ->
 
 
 class DatabaseRepositoryTests(unittest.TestCase):
+    def test_batch_target_uniqueness_counts_only_active_non_rejected_representatives(self):
+        current = replace(confirmed_store_item_record(), store_id=17)
+        cases = (
+            (False, "LISTED", [(501, current.source_url)]),
+            (True, "REJECTED", [(501, current.source_url)]),
+            (True, "UNLISTED", []),
+            (True, "LISTED", []),
+        )
+        for active, listing_status, expected in cases:
+            with self.subTest(active=active, listing_status=listing_status):
+                historical = replace(current, store_item_id=502, source_url_origin="https://example.mx/products/old-catan", store_active=active, listing_status=listing_status)
+                connection = BatchTargetSelectConnection([batch_target_row(current), batch_target_row(historical)])
+                self.addCleanup(connection.close)
+
+                targets = DiscoveryRepository(connection).list_store_item_update_batch_targets(store_id=17, claimed_store_item_id=501, limit=100)
+
+                self.assertEqual(targets, expected)
+
     def test_update_batch_target_read_is_bounded_eligible_and_excludes_duplicate_source_urls(self):
         connection = FakeConnection(fetchall_rows=[[(501, "https://chocitajuegos.com/juego/catan/")]])
         repository = DiscoveryRepository(connection)
