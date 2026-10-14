@@ -170,6 +170,24 @@ Two stores use domain-specific catalog discovery because their public storefront
 - `demonjuegosdemesa.com` walks the storefront's `scpp`/`spage` catalog pages with browser request headers, recognizes root-level product URLs, and reads product identity, price, SKU, and availability from schema.org microdata. Blank source product cards are traced and left unpersisted.
 - `diadejuegos.mx` reads category IDs from the public sitemap page, walks the theme's paginated `diadjuegoscms` catalog endpoint, deduplicates category overlap by PrestaShop product ID, and treats the endpoint's explicit price and stock as authoritative over unrelated product-page text.
 
+Nalua (`naluajuegos.com` and `www.naluajuegos.com`) combines sitemap URLs with
+every page of its complete `/2-inicio` catalog, following same-catalog
+`rel="next"` links while preserving `?page=`. When standard sitemap paths yield
+no products, discovery reads same-store `Sitemap:` directives from optional
+`robots.txt`, including nested indexes with duplicate/cycle guards. Nalua's
+numeric-ID `.html` product routes are recognized at the root and under arbitrary
+categories; this recognition is restricted to its exact hosts.
+
+Catalog URLs take precedence over sitemap aliases of the same PrestaShop product
+ID, and sitemap-only IDs still enter the normal detail pipeline. Catalog traces
+record each page's count, advertised total, enumerated total, and merged sitemap
+count. Missing pages, invalid pagination, repeated products, and coverage
+mismatches fail the run; a requested limit emits an explicit partial-coverage
+trace. Traversal is bounded at 500 pages. Enumeration performs no product-detail,
+AI, or repository work. A read-only URL probe can call
+`ludora.nalua_discovery.discover_nalua_product_urls("https://naluajuegos.com/")`
+with an in-memory trace logger.
+
 Item discovery uses the AI classifier by default. It calls the private loopback CodexAPI `/responses` endpoint, stores the returned reasoning in `classification_reasons`, and fails the discovery run if the classifier request or response contract fails. The OpenAI-compatible request format is transport-only; do not add an official OpenAI Responses or Chat Completions fallback. The classifier itself runs inside the Python discovery operation as the intentional existing direct CodexAPI caller:
 
 ```text
