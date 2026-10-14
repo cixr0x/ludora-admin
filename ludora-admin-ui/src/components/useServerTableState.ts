@@ -60,12 +60,23 @@ export function useInfiniteServerRows<Row extends AdminRecord>(
   const [state, setState] = useState<ServerRowsLoadState>('loading');
   const [totalRows, setTotalRows] = useState(0);
   const loadMoreRequestedRef = useRef(false);
+  const wasEnabledRef = useRef(enabled);
 
   useEffect(() => {
+    const wasEnabled = wasEnabledRef.current;
+    wasEnabledRef.current = enabled;
     if (!enabled) {
       loadMoreRequestedRef.current = false;
       setIsLoadingMore(false);
       return;
+    }
+
+    if (!wasEnabled) {
+      setState('loading');
+      if (table.page > 0) {
+        table.refresh();
+        return;
+      }
     }
 
     let ignore = false;
