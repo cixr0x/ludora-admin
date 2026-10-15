@@ -63,6 +63,28 @@ const emptyFormState: StoreFormState = {
   website_url: ''
 };
 
+const emptyStoreItemStatistics: StoreItemStatistics = {
+  total_items: 0,
+  boardgame_true_confirmed_true: 0,
+  boardgame_true_confirmed_false: 0,
+  boardgame_false_confirmed_true: 0,
+  boardgame_false_confirmed_false: 0,
+  confirmed_boardgame_listed: 0,
+  confirmed_boardgame_pending: 0,
+  confirmed_boardgame_rejected: 0
+};
+
+const statisticsColumns: Array<{ id: keyof StoreItemStatistics; label: string; minWidth: number }> = [
+  { id: 'total_items', label: 'Total items', minWidth: 160 },
+  { id: 'boardgame_true_confirmed_true', label: 'Boardgame: True / Confirmed: True', minWidth: 340 },
+  { id: 'boardgame_true_confirmed_false', label: 'Boardgame: True / Confirmed: False', minWidth: 340 },
+  { id: 'boardgame_false_confirmed_true', label: 'Boardgame: False / Confirmed: True', minWidth: 340 },
+  { id: 'boardgame_false_confirmed_false', label: 'Boardgame: False / Confirmed: False', minWidth: 340 },
+  { id: 'confirmed_boardgame_listed', label: 'Confirmed boardgames: Listed', minWidth: 300 },
+  { id: 'confirmed_boardgame_pending', label: 'Confirmed boardgames: Pending', minWidth: 300 },
+  { id: 'confirmed_boardgame_rejected', label: 'Confirmed boardgames: Rejected', minWidth: 300 }
+];
+
 function valueFor(record: AdminRecord, keys: string[], fallback = '-') {
   const value = keys.map((key) => record[key]).find((candidate) => candidate !== undefined && candidate !== null && candidate !== '');
   return value === undefined ? fallback : String(value);
@@ -145,6 +167,7 @@ function storeColumns(): DataTableColumn<AdminRecord>[] {
       filterValue: (row) => String(booleanValueFor(row, 'active')),
       id: 'active',
       label: 'Active',
+      mobilePreview: true,
       minWidth: 100,
       render: (row) => {
         const active = booleanValueFor(row, 'active');
@@ -158,6 +181,7 @@ function storeColumns(): DataTableColumn<AdminRecord>[] {
       filterValue: (row) => valueFor(row, ['name']),
       id: 'name',
       label: 'Name',
+      mobilePreview: true,
       minWidth: 180,
       render: (row) => valueFor(row, ['name']),
       sortValue: (row) => valueFor(row, ['name'])
@@ -166,14 +190,25 @@ function storeColumns(): DataTableColumn<AdminRecord>[] {
       filterValue: (row) => valueFor(row, ['canonical_domain']),
       id: 'canonical_domain',
       label: 'Domain',
+      mobilePreview: true,
       minWidth: 150,
       render: (row) => valueFor(row, ['canonical_domain']),
       sortValue: (row) => valueFor(row, ['canonical_domain'])
     },
+    ...statisticsColumns.map<DataTableColumn<AdminRecord>>(({ id, label, minWidth }) => ({
+      align: 'right',
+      filterValue: (row) => valueFor(row, [id], ''),
+      id,
+      label,
+      minWidth,
+      render: (row) => valueFor(row, [id]),
+      sortValue: (row) => typeof row[id] === 'number' ? row[id] : undefined
+    })),
     {
       filterValue: (row) => valueFor(row, ['website_url']),
       id: 'website_url',
       label: 'Website',
+      mobilePreview: true,
       minWidth: 150,
       render: (row) => {
         const href = websiteHref(row);
@@ -445,8 +480,8 @@ export function StoresPage() {
         formMode === 'create' ? await storeCreationApi.createStore(input) : await adminApi.updateStore(editingId, input);
       setRows((currentRows) =>
         formMode === 'create'
-          ? [saved, ...currentRows]
-          : currentRows.map((row, index) => (valueFor(row, ['id'], String(index)) === editingId ? saved : row))
+          ? [{ ...emptyStoreItemStatistics, ...saved }, ...currentRows]
+          : currentRows.map((row, index) => (valueFor(row, ['id'], String(index)) === editingId ? { ...row, ...saved } : row))
       );
       setFormMode('table');
     } catch {
@@ -717,7 +752,7 @@ export function StoresPage() {
           defaultSortColumnId="canonical_domain"
           getRowKey={(row, index) => valueFor(row, ['id'], String(index))}
           mobileActionLabel={(row) => `Edit ${valueFor(row, ['name'], 'store')}`}
-          minWidth={1680}
+          minWidth={3200}
           onRowDoubleClick={handleEditStore}
           serverSide
           tableState={table.tableState}

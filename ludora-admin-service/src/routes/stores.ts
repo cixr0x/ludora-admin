@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
+import { storeItemStatisticsAggregateSql } from '../storeItemStatistics.js';
 import type { StoreProfileDetectionService } from '../storeProfileDetection/storeProfileDetectionService.js';
 
 type StoreInput = {
@@ -38,28 +39,7 @@ export function createStoresRouter(
       const result = await database.query(
         `
         select
-          count(si.id)::integer as total_items,
-          count(si.id) filter (
-            where si.is_boardgame = true and si.is_boardgame_confirmed = true
-          )::integer as boardgame_true_confirmed_true,
-          count(si.id) filter (
-            where si.is_boardgame = true and si.is_boardgame_confirmed = false
-          )::integer as boardgame_true_confirmed_false,
-          count(si.id) filter (
-            where si.is_boardgame = false and si.is_boardgame_confirmed = true
-          )::integer as boardgame_false_confirmed_true,
-          count(si.id) filter (
-            where si.is_boardgame = false and si.is_boardgame_confirmed = false
-          )::integer as boardgame_false_confirmed_false,
-          count(si.id) filter (
-            where si.is_boardgame = true and si.is_boardgame_confirmed = true and si.listing_status = 'LISTED'
-          )::integer as confirmed_boardgame_listed,
-          count(si.id) filter (
-            where si.is_boardgame = true and si.is_boardgame_confirmed = true and si.listing_status = 'PENDING'
-          )::integer as confirmed_boardgame_pending,
-          count(si.id) filter (
-            where si.is_boardgame = true and si.is_boardgame_confirmed = true and si.listing_status = 'REJECTED'
-          )::integer as confirmed_boardgame_rejected
+          ${storeItemStatisticsAggregateSql}
         from stores s
         left join store_items si on si.store_id = s.id
         where s.id = $1

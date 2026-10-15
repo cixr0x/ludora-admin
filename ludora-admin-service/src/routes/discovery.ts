@@ -13,6 +13,7 @@ import {
   type ProductDetailsExtractionResult
 } from '../productDetailsExtraction/productDetailsExtractionService.js';
 import { createTraceLoggerFromHeaders } from '../trace.js';
+import { storeItemStatisticsAggregateSql, storeItemStatisticsFields } from '../storeItemStatistics.js';
 
 const BGG_THING_REQUEST_TYPE = BGG_REQUEST_TYPE;
 
@@ -573,13 +574,23 @@ const cleanStoresTableConfig: TableQueryConfig = {
     platform: columnSql('platform'),
     state: columnSql('state'),
     status: columnSql('status'),
+    ...Object.fromEntries(storeItemStatisticsFields.map((field) => [field, {
+      ...columnSql(`store_item_statistics.${field}`),
+      // Store IDs make OFFSET pages deterministic when item counts are tied.
+      sortSql: `(store_item_statistics.${field}, stores.id)`
+    }])),
     updated_at: columnSql('updated_at'),
     website_url: columnSql('website_url')
   },
   defaultSortColumnId: 'canonical_domain',
   defaultSortDirection: 'asc',
-  fromSql: 'from stores',
-  selectSql: storeSelect
+  fromSql: `from stores
+    left join lateral (
+      select ${storeItemStatisticsAggregateSql}
+      from store_items si
+      where si.store_id = stores.id
+    ) store_item_statistics on true`,
+  selectSql: `${storeSelect}, ${storeItemStatisticsFields.map((field) => `store_item_statistics.${field}`).join(', ')}`
 };
 
 const frontPageCategoriesTableConfig: TableQueryConfig = {
