@@ -448,12 +448,24 @@ def crawl_store_product_details(
                 )
                 return records
 
+        catalog_path = None
+        catalog_discoverer = None
+        if normalized_platform != "shopify":
+            if is_nalua_store_url(store_url):
+                catalog_path, catalog_discoverer = NALUA_CATALOG_PATH, discover_nalua_product_urls
+            elif is_revilo_store_url(store_url):
+                catalog_path, catalog_discoverer = REVILO_CATALOG_PATH, discover_revilo_product_urls
+        # Sitemap aliases must reach the numeric-ID merge before a result limit
+        # is applied. Preserve zero-limit reads and unrelated store behavior.
+        sitemap_limit = limit
+        if catalog_discoverer is not None and limit is not None and limit > 0:
+            sitemap_limit = None
         trace.log("inventory.sitemap_discovery.start", store_id=store_id, store_url=store_url)
         product_urls = discover_product_urls_from_sitemaps(
             store_url,
             browser_fetcher=browser_fetcher if browser_sitemap_fallback_enabled else None,
             browser_fallback_enabled=browser_sitemap_fallback_enabled,
-            limit=limit,
+            limit=sitemap_limit,
             request_headers_provider=request_headers_provider,
             trace_logger=trace,
             cancellation_token=cancellation_token,
@@ -465,13 +477,6 @@ def crawl_store_product_details(
             store_id=store_id,
             store_url=store_url,
         )
-        catalog_path = None
-        catalog_discoverer = None
-        if normalized_platform != "shopify":
-            if is_nalua_store_url(store_url):
-                catalog_path, catalog_discoverer = NALUA_CATALOG_PATH, discover_nalua_product_urls
-            elif is_revilo_store_url(store_url):
-                catalog_path, catalog_discoverer = REVILO_CATALOG_PATH, discover_revilo_product_urls
         if catalog_discoverer is not None:
             product_urls = catalog_discoverer(
                 store_url, sitemap_urls=product_urls,

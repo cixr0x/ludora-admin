@@ -9,6 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from ludora.cancellation import CancellationToken, OperationCancelled
 from ludora.inventory import collect_store_inventory
 from ludora.listing_extraction import extract_listing_candidates
+from ludora.nalua_discovery import discover_nalua_product_urls
 from ludora.product_crawler import crawl_store_product_details
 from ludora.revilo_discovery import discover_revilo_product_urls
 from ludora.sitemap_discovery import discover_product_urls_from_sitemaps
@@ -282,6 +283,73 @@ class ReviloDiscoveryTests(unittest.TestCase):
                 collect_store_inventory(store, 1, repository, platform=platform,
                                         request_headers_provider=(lambda _: {"Signature": "signed"}) if platform == "shopify" else None)
             self.assertEqual(repository.checked_urls, [product])
+
+    def test_inventory_limit_merges_sitemap_aliases_before_truncating_unique_ids(self):
+        cases = [(STORE, CATALOG, "artículo(s)", "revilo"),
+                 ("https://naluajuegos.com/", "https://naluajuegos.com/2-inicio", "productos", "nalua")]
+        for store, catalog, units, trace_name in cases:
+            current = store + "inicio/3-current.html"
+            sitemap_only = store + "inicio/999-sitemap-only.html"
+            sitemap = urlset(store + "inicio/3-old-a.html", store + "inicio/3-old-b.html", sitemap_only)
+            markup = f'<p>Mostrando 1-1 de 1 {units}</p><a href="{current}">Current game</a>'
+            repository, trace, catalog_requests = ExistingRepository(), Trace(), []
+
+            def sitemap_fetch(url, **_kwargs):
+                return FetchResult(url=url, text=sitemap if url == store + "sitemap.xml" else urlset())
+
+            def fetch_catalog(url, **_kwargs):
+                self.assertEqual(url, catalog, "Unexpected homepage or detail fetch")
+                catalog_requests.append(url)
+                return FetchResult(url=url, text=markup)
+
+            with self.subTest(store=store), patch("ludora.sitemap_discovery.fetch_sitemap_text", side_effect=sitemap_fetch), patch(
+                "ludora.product_crawler.fetch_html", side_effect=fetch_catalog
+            ):
+                records = collect_store_inventory(store, 71, repository, platform="prestashop", limit=2,
+                                                  trace_logger=trace,
+                                                  item_classifier=lambda _: self.fail("Enumeration called classifier"))
+                self.assertEqual(repository.checked_urls, [current, sitemap_only])
+                self.assertEqual((records, catalog_requests), ([], [catalog]))
+                summary = dict(trace.events)[f"inventory.{trace_name}_catalog.completed"]
+                self.assertEqual((summary["product_url_count"], summary["sitemap_only_count"]), (2, 1))
+                self.assertTrue(summary["coverage_complete"])
+
+    def test_default_catalog_helpers_merge_all_sitemap_aliases_before_result_limit(self):
+        cases = [(STORE, CATALOG, "artículo(s)", discover_revilo_product_urls),
+                 ("https://naluajuegos.com/", "https://naluajuegos.com/2-inicio", "productos", discover_nalua_product_urls)]
+        for store, catalog, units, discover in cases:
+            current = store + "inicio/3-current.html"
+            sitemap_only = store + "inicio/999-sitemap-only.html"
+            sitemap = urlset(store + "inicio/3-old-a.html", store + "inicio/3-old-b.html", sitemap_only)
+            markup = f'<p>Mostrando 1-1 de 1 {units}</p><a href="{current}">Current game</a>'
+
+            def sitemap_fetch(url, **_kwargs):
+                return FetchResult(url=url, text=sitemap if url == store + "sitemap.xml" else urlset())
+
+            def fetch_catalog(url, **_kwargs):
+                self.assertEqual(url, catalog, "Unexpected homepage or detail fetch")
+                return FetchResult(url=url, text=markup)
+
+            with self.subTest(store=store), patch("ludora.sitemap_discovery.fetch_sitemap_text", side_effect=sitemap_fetch), patch(
+                "ludora.prestashop_catalog.fetch_html", side_effect=fetch_catalog
+            ):
+                self.assertEqual(discover(store, limit=2), [current, sitemap_only])
+
+    def test_unrelated_store_and_shopify_keep_sitemap_url_limits(self):
+        cases = [("https://other.example/", "prestashop", ["products/a", "products/b", "products/c"]),
+                 (STORE, "shopify", ["todos/3-a.html", "todos/4-b.html", "todos/5-c.html"])]
+        for store, platform, paths in cases:
+            repository = ExistingRepository()
+
+            def sitemap_fetch(url, **_kwargs):
+                return FetchResult(url=url, text=urlset(*(store + path for path in paths)) if url == store + "sitemap.xml" else urlset())
+
+            with self.subTest(store=store, platform=platform), patch("ludora.sitemap_discovery.fetch_sitemap_text", side_effect=sitemap_fetch), patch(
+                "ludora.product_crawler.fetch_html", side_effect=lambda *args, **kwargs: self.fail("Unexpected catalog or detail fetch")
+            ):
+                collect_store_inventory(store, 71, repository, platform=platform, limit=2,
+                                        request_headers_provider=(lambda _: {"Signature": "signed"}) if platform == "shopify" else None)
+                self.assertEqual(repository.checked_urls, [store + paths[0], store + paths[1]])
 
     def test_new_catalog_product_uses_existing_redirect_classification_and_persistence_pipeline(self):
         class Repository(ExistingRepository):
