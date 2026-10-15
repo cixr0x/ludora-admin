@@ -15,12 +15,18 @@ import {
   Link,
   Paper,
   Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   TextField,
   Typography
 } from '@mui/material';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 import { adminApi, type AdminRecord, type StoreInput } from '../api/client';
-import { storeCreationApi } from '../api/stores';
+import { storeCreationApi, storeStatisticsApi, type StoreItemStatistics } from '../api/stores';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
@@ -56,6 +62,28 @@ const emptyFormState: StoreFormState = {
   status: 'active',
   website_url: ''
 };
+
+const emptyStoreItemStatistics: StoreItemStatistics = {
+  total_items: 0,
+  boardgame_true_confirmed_true: 0,
+  boardgame_true_confirmed_false: 0,
+  boardgame_false_confirmed_true: 0,
+  boardgame_false_confirmed_false: 0,
+  confirmed_boardgame_listed: 0,
+  confirmed_boardgame_pending: 0,
+  confirmed_boardgame_rejected: 0
+};
+
+const statisticsColumns: Array<{ id: keyof StoreItemStatistics; label: string; minWidth: number }> = [
+  { id: 'total_items', label: 'Total items', minWidth: 160 },
+  { id: 'boardgame_true_confirmed_true', label: 'Boardgame: True / Confirmed: True', minWidth: 340 },
+  { id: 'boardgame_true_confirmed_false', label: 'Boardgame: True / Confirmed: False', minWidth: 340 },
+  { id: 'boardgame_false_confirmed_true', label: 'Boardgame: False / Confirmed: True', minWidth: 340 },
+  { id: 'boardgame_false_confirmed_false', label: 'Boardgame: False / Confirmed: False', minWidth: 340 },
+  { id: 'confirmed_boardgame_listed', label: 'Confirmed boardgames: Listed', minWidth: 300 },
+  { id: 'confirmed_boardgame_pending', label: 'Confirmed boardgames: Pending', minWidth: 300 },
+  { id: 'confirmed_boardgame_rejected', label: 'Confirmed boardgames: Rejected', minWidth: 300 }
+];
 
 function valueFor(record: AdminRecord, keys: string[], fallback = '-') {
   const value = keys.map((key) => record[key]).find((candidate) => candidate !== undefined && candidate !== null && candidate !== '');
@@ -139,6 +167,7 @@ function storeColumns(): DataTableColumn<AdminRecord>[] {
       filterValue: (row) => String(booleanValueFor(row, 'active')),
       id: 'active',
       label: 'Active',
+      mobilePreview: true,
       minWidth: 100,
       render: (row) => {
         const active = booleanValueFor(row, 'active');
@@ -152,6 +181,7 @@ function storeColumns(): DataTableColumn<AdminRecord>[] {
       filterValue: (row) => valueFor(row, ['name']),
       id: 'name',
       label: 'Name',
+      mobilePreview: true,
       minWidth: 180,
       render: (row) => valueFor(row, ['name']),
       sortValue: (row) => valueFor(row, ['name'])
@@ -160,14 +190,25 @@ function storeColumns(): DataTableColumn<AdminRecord>[] {
       filterValue: (row) => valueFor(row, ['canonical_domain']),
       id: 'canonical_domain',
       label: 'Domain',
+      mobilePreview: true,
       minWidth: 150,
       render: (row) => valueFor(row, ['canonical_domain']),
       sortValue: (row) => valueFor(row, ['canonical_domain'])
     },
+    ...statisticsColumns.map<DataTableColumn<AdminRecord>>(({ id, label, minWidth }) => ({
+      align: 'right',
+      filterValue: (row) => valueFor(row, [id], ''),
+      id,
+      label,
+      minWidth,
+      render: (row) => valueFor(row, [id]),
+      sortValue: (row) => typeof row[id] === 'number' ? row[id] : undefined
+    })),
     {
       filterValue: (row) => valueFor(row, ['website_url']),
       id: 'website_url',
       label: 'Website',
+      mobilePreview: true,
       minWidth: 150,
       render: (row) => {
         const href = websiteHref(row);
@@ -295,6 +336,95 @@ function storeColumns(): DataTableColumn<AdminRecord>[] {
   ];
 }
 
+function StoreItemStatisticsSection({ storeId }: { storeId: string }) {
+  const [result, setResult] = useState<
+    { state: 'loading' | 'error' } | { state: 'ready'; data: StoreItemStatistics }
+  >({ state: 'loading' });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let active = true;
+    storeStatisticsApi.getItemStatistics(storeId, controller.signal).then(
+      (data) => { if (active) setResult({ state: 'ready', data }); },
+      () => { if (active) setResult({ state: 'error' }); }
+    );
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [storeId]);
+
+  return (
+    <Stack aria-label="Store item statistics" component="section" spacing={2} sx={{ borderTop: 1, borderColor: 'divider', pt: 2 }}>
+      <Box>
+        <Typography component="h2" variant="h6">Store item statistics</Typography>
+        <Typography color="text.secondary" variant="body2">All store items, including inactive items.</Typography>
+      </Box>
+      {result.state === 'loading' ? (
+        <Stack alignItems="center" direction="row" role="status" spacing={1.5}>
+          <CircularProgress size={18} />
+          <Typography variant="body2">Loading store item statistics</Typography>
+        </Stack>
+      ) : null}
+      {result.state === 'error' ? <Alert severity="error">Store item statistics could not be loaded.</Alert> : null}
+      {result.state === 'ready' ? (
+        <>
+          <Box component="dl" sx={{ m: 0 }}>
+            <Typography color="text.secondary" component="dt" variant="body2">Total store items</Typography>
+            <Typography component="dd" variant="h5" sx={{ m: 0, fontWeight: 700 }}>{result.data.total_items}</Typography>
+          </Box>
+          <TableContainer>
+            <Table aria-label="Store items by boardgame classification" size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Is boardgame</TableCell>
+                  <TableCell>Is boardgame confirmed</TableCell>
+                  <TableCell align="right">Items</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {[
+                  ['True', 'True', result.data.boardgame_true_confirmed_true],
+                  ['True', 'False', result.data.boardgame_true_confirmed_false],
+                  ['False', 'True', result.data.boardgame_false_confirmed_true],
+                  ['False', 'False', result.data.boardgame_false_confirmed_false]
+                ].map(([boardgame, confirmed, count]) => (
+                  <TableRow key={`${boardgame}-${confirmed}`}>
+                    <TableCell>{boardgame}</TableCell>
+                    <TableCell>{confirmed}</TableCell>
+                    <TableCell align="right">{count}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <Box>
+            <Typography variant="subtitle2">Confirmed boardgame items</Typography>
+            <Typography color="text.secondary" variant="body2">Is boardgame: True · Is boardgame confirmed: True</Typography>
+            <Box
+              aria-label="Confirmed boardgame listing status"
+              component="dl"
+              role="group"
+              sx={{ display: 'grid', gap: 1, gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, minmax(0, 1fr))' }, mb: 0 }}
+            >
+              {[
+                ['LISTED', result.data.confirmed_boardgame_listed],
+                ['PENDING', result.data.confirmed_boardgame_pending],
+                ['REJECTED', result.data.confirmed_boardgame_rejected]
+              ].map(([status, count]) => (
+                <Paper key={status} variant="outlined" sx={{ p: 1.5 }}>
+                  <Typography color="text.secondary" component="dt" variant="body2">{status}</Typography>
+                  <Typography component="dd" variant="h6" sx={{ m: 0 }}>{count}</Typography>
+                </Paper>
+              ))}
+            </Box>
+          </Box>
+        </>
+      ) : null}
+    </Stack>
+  );
+}
+
 export function StoresPage() {
   const [formMode, setFormMode] = useState<FormMode>('table');
   const [editingId, setEditingId] = useState('');
@@ -350,8 +480,8 @@ export function StoresPage() {
         formMode === 'create' ? await storeCreationApi.createStore(input) : await adminApi.updateStore(editingId, input);
       setRows((currentRows) =>
         formMode === 'create'
-          ? [saved, ...currentRows]
-          : currentRows.map((row, index) => (valueFor(row, ['id'], String(index)) === editingId ? saved : row))
+          ? [{ ...emptyStoreItemStatistics, ...saved }, ...currentRows]
+          : currentRows.map((row, index) => (valueFor(row, ['id'], String(index)) === editingId ? { ...row, ...saved } : row))
       );
       setFormMode('table');
     } catch {
@@ -555,6 +685,8 @@ export function StoresPage() {
                 />
               </Box>
 
+              {formMode === 'edit' ? <StoreItemStatisticsSection key={editingId} storeId={editingId} /> : null}
+
               <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
                 {formMode === 'create' ? (
                   <Button
@@ -620,7 +752,7 @@ export function StoresPage() {
           defaultSortColumnId="canonical_domain"
           getRowKey={(row, index) => valueFor(row, ['id'], String(index))}
           mobileActionLabel={(row) => `Edit ${valueFor(row, ['name'], 'store')}`}
-          minWidth={1680}
+          minWidth={3200}
           onRowDoubleClick={handleEditStore}
           serverSide
           tableState={table.tableState}

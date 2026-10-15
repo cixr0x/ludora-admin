@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { storeCreationApi } from './stores';
+import { storeCreationApi, storeStatisticsApi } from './stores';
 
 describe('store creation API', () => {
   afterEach(() => {
@@ -23,5 +23,43 @@ describe('store creation API', () => {
       headers: { 'Content-Type': 'application/json' },
       method: 'POST'
     });
+  });
+
+  it('loads item statistics for the selected store with admin credentials and cancellation', async () => {
+    const statistics = {
+      total_items: 31,
+      boardgame_true_confirmed_true: 17,
+      boardgame_true_confirmed_false: 7,
+      boardgame_false_confirmed_true: 2,
+      boardgame_false_confirmed_false: 5,
+      confirmed_boardgame_listed: 11,
+      confirmed_boardgame_pending: 3,
+      confirmed_boardgame_rejected: 2
+    };
+    const signal = new AbortController().signal;
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ data: statistics }), { status: 200 })
+    );
+
+    await expect(storeStatisticsApi.getItemStatistics('42', signal)).resolves.toEqual(statistics);
+    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/stores/42/item-statistics', {
+      credentials: 'include',
+      method: 'GET',
+      signal
+    });
+  });
+
+  it('preserves statistics API failures', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: { message: 'Store not found' } }), { status: 404 })
+    );
+
+    await expect(storeStatisticsApi.getItemStatistics('42')).rejects.toThrow('Store not found');
+  });
+
+  it('rejects a missing statistics payload instead of treating it as an empty store', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', { status: 200 }));
+
+    await expect(storeStatisticsApi.getItemStatistics('42')).rejects.toThrow('Invalid API response: data is required');
   });
 });

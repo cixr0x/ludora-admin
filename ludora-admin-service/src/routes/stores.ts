@@ -1,6 +1,7 @@
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
+import { storeItemStatisticsAggregateSql } from '../storeItemStatistics.js';
 import type { StoreProfileDetectionService } from '../storeProfileDetection/storeProfileDetectionService.js';
 
 type StoreInput = {
@@ -28,6 +29,32 @@ export function createStoresRouter(
   storeProfileDetectionService?: StoreProfileDetectionService
 ): Router {
   const router = Router();
+
+  router.get('/stores/:id/item-statistics', async (request, response, next) => {
+    try {
+      const id = request.params.id;
+      if (!/^[1-9]\d*$/.test(id) || id.length > 19 || BigInt(id) > 9223372036854775807n) {
+        throw httpError(400, 'id must be a positive integer');
+      }
+      const result = await database.query(
+        `
+        select
+          ${storeItemStatisticsAggregateSql}
+        from stores s
+        left join store_items si on si.store_id = s.id
+        where s.id = $1
+        group by s.id
+        `,
+        [id]
+      );
+      if (!result.rows[0]) {
+        throw httpError(404, 'Store not found');
+      }
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   router.post('/admin/store-profile-detections', async (request, response, next) => {
     try {
