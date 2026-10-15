@@ -169,6 +169,16 @@ on store_items (item_id);
 create index if not exists store_items_refreshed_date_idx
 on store_items (refreshed_date, id);
 
+create index if not exists store_items_update_store_refreshed_date_idx
+on store_items (store_id, refreshed_date asc, id asc)
+where is_boardgame = true
+  and is_boardgame_confirmed = true
+  and item_id is not null
+  and source_url <> ''
+  and listing_status = 'LISTED'
+  and store_active = true
+  and availability <> 'unavailable';
+
 create index if not exists store_items_next_update_at_idx
 on store_items (next_update_at, id)
 where is_boardgame = true
