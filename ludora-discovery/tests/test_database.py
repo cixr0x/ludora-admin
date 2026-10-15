@@ -259,7 +259,15 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("cooldown.store_id = store_items.store_id", due_sql)
         self.assertIn("order by store_items.next_update_at, store_items.id limit 256", due_sql)
         self.assertIn("order by random() for update of store_items skip locked limit 1", scheduled_sql)
-        self.assertIn("join scheduled on scheduled.store_id = store_items.store_id", target_sql)
+        outer_target_sql, lateral_join, candidate_sql = target_sql.partition("cross join lateral (")
+        self.assertEqual(lateral_join, "cross join lateral (", "Select the oldest item inside its scheduled store")
+        self.assertEqual(outer_target_sql.strip(), "select candidate.id, candidate.next_update_at from scheduled")
+        target_sql, candidate_alias, outer_remainder = candidate_sql.rpartition(") candidate")
+        self.assertEqual(candidate_alias, ") candidate")
+        self.assertEqual(outer_remainder.strip(), "")
+        self.assertIn("select store_items.id, store_items.next_update_at from store_items", target_sql)
+        self.assertIn("join stores on stores.id = store_items.store_id", target_sql)
+        self.assertIn("where store_items.store_id = scheduled.store_id", target_sql)
         self.assertIn("stores.active = true", target_sql)
         self.assertIn("store_items.is_boardgame = true", target_sql)
         self.assertIn("store_items.is_boardgame_confirmed = true", target_sql)
@@ -268,9 +276,16 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("store_items.listing_status = 'listed'", target_sql)
         self.assertIn("store_items.store_active = true", target_sql)
         self.assertIn("store_items.availability <> 'unavailable'", target_sql)
+        self.assertIn("store_items.update_lease_token is null", target_sql)
         self.assertIn("store_items.update_lease_expires_at <= now()", target_sql)
         self.assertNotIn("and store_items.next_update_at <= now()", target_sql)
         self.assertIn("order by store_items.refreshed_date asc, store_items.id asc", target_sql)
+        self.assertTrue(
+            target_sql.strip().endswith(
+                "order by store_items.refreshed_date asc, store_items.id asc "
+                "for update of store_items skip locked limit 1"
+            )
+        )
         self.assertIn("when store_items.id = target.id then scheduled.next_update_at", normalized_sql)
         self.assertIn("else target.next_update_at", normalized_sql)
         self.assertIn(
@@ -306,6 +321,10 @@ class DatabaseRepositoryTests(unittest.TestCase):
         claim_sql = " ".join(connection.cursor_instance.executions[0][0].casefold().split())
         _before_target, remainder = claim_sql.split("), target as (", 1)
         target_sql, _updated_sql = remainder.split("), updated as (", 1)
+        _outer_target_sql, lateral_join, candidate_sql = target_sql.partition("cross join lateral (")
+        self.assertEqual(lateral_join, "cross join lateral (")
+        target_sql, candidate_alias, _outer_remainder = candidate_sql.rpartition(") candidate")
+        self.assertEqual(candidate_alias, ") candidate")
         self.assertIn(
             "and ( store_items.consecutive_update_failures = 0 "
             "or store_items.next_update_at is null "

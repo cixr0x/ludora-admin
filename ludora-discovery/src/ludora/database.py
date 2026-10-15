@@ -631,31 +631,37 @@ class DiscoveryRepository:
                     limit 1
                 ), target as (
                     select
-                        store_items.id,
-                        store_items.next_update_at
-                    from store_items
-                    join scheduled on scheduled.store_id = store_items.store_id
-                    join stores on stores.id = store_items.store_id
-                    where stores.active = true
-                      and store_items.is_boardgame = true
-                      and store_items.is_boardgame_confirmed = true
-                      and store_items.item_id is not null
-                      and store_items.source_url <> ''
-                      and store_items.listing_status = 'LISTED'
-                      and store_items.store_active = true
-              and store_items.availability <> 'unavailable'
-                      and (
-                        store_items.consecutive_update_failures = 0
-                        or store_items.next_update_at is null
-                        or store_items.next_update_at <= now()
-                      )
-                      and (
-                        store_items.update_lease_token is null
-                        or store_items.update_lease_expires_at <= now()
-                      )
-                    order by store_items.refreshed_date asc, store_items.id asc
-                    for update of store_items skip locked
-                    limit 1
+                        candidate.id,
+                        candidate.next_update_at
+                    from scheduled
+                    cross join lateral (
+                        select
+                            store_items.id,
+                            store_items.next_update_at
+                        from store_items
+                        join stores on stores.id = store_items.store_id
+                        where store_items.store_id = scheduled.store_id
+                          and stores.active = true
+                          and store_items.is_boardgame = true
+                          and store_items.is_boardgame_confirmed = true
+                          and store_items.item_id is not null
+                          and store_items.source_url <> ''
+                          and store_items.listing_status = 'LISTED'
+                          and store_items.store_active = true
+                          and store_items.availability <> 'unavailable'
+                          and (
+                            store_items.consecutive_update_failures = 0
+                            or store_items.next_update_at is null
+                            or store_items.next_update_at <= now()
+                          )
+                          and (
+                            store_items.update_lease_token is null
+                            or store_items.update_lease_expires_at <= now()
+                          )
+                        order by store_items.refreshed_date asc, store_items.id asc
+                        for update of store_items skip locked
+                        limit 1
+                    ) candidate
                 ), updated as (
                     update store_items
                     set next_update_at = case
