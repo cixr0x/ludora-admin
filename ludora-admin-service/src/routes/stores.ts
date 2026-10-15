@@ -29,6 +29,53 @@ export function createStoresRouter(
 ): Router {
   const router = Router();
 
+  router.get('/stores/:id/item-statistics', async (request, response, next) => {
+    try {
+      const id = request.params.id;
+      if (!/^[1-9]\d*$/.test(id) || id.length > 19 || BigInt(id) > 9223372036854775807n) {
+        throw httpError(400, 'id must be a positive integer');
+      }
+      const result = await database.query(
+        `
+        select
+          count(si.id)::integer as total_items,
+          count(si.id) filter (
+            where si.is_boardgame = true and si.is_boardgame_confirmed = true
+          )::integer as boardgame_true_confirmed_true,
+          count(si.id) filter (
+            where si.is_boardgame = true and si.is_boardgame_confirmed = false
+          )::integer as boardgame_true_confirmed_false,
+          count(si.id) filter (
+            where si.is_boardgame = false and si.is_boardgame_confirmed = true
+          )::integer as boardgame_false_confirmed_true,
+          count(si.id) filter (
+            where si.is_boardgame = false and si.is_boardgame_confirmed = false
+          )::integer as boardgame_false_confirmed_false,
+          count(si.id) filter (
+            where si.is_boardgame = true and si.is_boardgame_confirmed = true and si.listing_status = 'LISTED'
+          )::integer as confirmed_boardgame_listed,
+          count(si.id) filter (
+            where si.is_boardgame = true and si.is_boardgame_confirmed = true and si.listing_status = 'PENDING'
+          )::integer as confirmed_boardgame_pending,
+          count(si.id) filter (
+            where si.is_boardgame = true and si.is_boardgame_confirmed = true and si.listing_status = 'REJECTED'
+          )::integer as confirmed_boardgame_rejected
+        from stores s
+        left join store_items si on si.store_id = s.id
+        where s.id = $1
+        group by s.id
+        `,
+        [id]
+      );
+      if (!result.rows[0]) {
+        throw httpError(404, 'Store not found');
+      }
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.post('/admin/store-profile-detections', async (request, response, next) => {
     try {
       if (!storeProfileDetectionService) {

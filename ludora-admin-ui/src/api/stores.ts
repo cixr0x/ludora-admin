@@ -8,6 +8,28 @@ export type StoreProfileDetection = {
   unresolved_fields: string[];
 };
 
+export type StoreItemStatistics = {
+  total_items: number;
+  boardgame_true_confirmed_true: number;
+  boardgame_true_confirmed_false: number;
+  boardgame_false_confirmed_true: number;
+  boardgame_false_confirmed_false: number;
+  confirmed_boardgame_listed: number;
+  confirmed_boardgame_pending: number;
+  confirmed_boardgame_rejected: number;
+};
+
+export const storeStatisticsApi = {
+  getItemStatistics: async (storeId: string, signal?: AbortSignal): Promise<StoreItemStatistics> => {
+    const response = await fetch(`${API_URL}/stores/${encodeURIComponent(storeId)}/item-statistics`, {
+      credentials: 'include',
+      method: 'GET',
+      signal
+    });
+    return readResponse<StoreItemStatistics>(response);
+  }
+};
+
 export const storeCreationApi = {
   createStore: (input: StoreInput) => sendJson<AdminRecord>('/stores', input),
   detectStoreProfile: (websiteUrl: string) =>
@@ -21,6 +43,10 @@ async function sendJson<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     method: 'POST'
   });
+  return readResponse<T>(response);
+}
+
+async function readResponse<T>(response: Response): Promise<T> {
   const payload = (await response.json().catch(() => ({}))) as {
     data?: T;
     error?: { message?: string };

@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { StoresPage } from './StoresPage';
@@ -6,6 +6,101 @@ import { StoresPage } from './StoresPage';
 describe('StoresPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it('loads all item counts in store details while preserving the store fields', async () => {
+    const user = userEvent.setup();
+    const pending = deferredResponse();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (pathOf(String(input)) === '/stores') return jsonResponse([exampleStore]);
+      if (pathOf(String(input)) === '/stores/12/item-statistics') return pending.response;
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    render(<StoresPage />);
+    expect(screen.queryByRole('region', { name: 'Store item statistics' })).not.toBeInTheDocument();
+
+    await user.dblClick(await screen.findByText('Example Juegos'));
+
+    const statistics = screen.getByRole('region', { name: 'Store item statistics' });
+    expect(within(statistics).getByRole('status')).toHaveTextContent('Loading store item statistics');
+    expect(within(statistics).queryByText('31')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Example Juegos');
+    await act(async () => { pending.resolve(jsonResponse(exampleStatistics)); });
+
+    expect(await within(statistics).findByText('31')).toBeInTheDocument();
+    expect(within(statistics).getByText('Total store items')).toBeInTheDocument();
+    const classification = within(statistics).getByRole('table', { name: 'Store items by boardgame classification' });
+    expect(within(classification).getAllByRole('row').map((row) =>
+      within(row).queryAllByRole('cell').map((cell) => cell.textContent)
+    )).toEqual([[], ['True', 'True', '17'], ['True', 'False', '7'], ['False', 'True', '2'], ['False', 'False', '5']]);
+    const statuses = within(statistics).getByRole('group', { name: 'Confirmed boardgame listing status' });
+    expect(within(statuses).getByText('LISTED').nextElementSibling).toHaveTextContent('11');
+    expect(within(statuses).getByText('PENDING').nextElementSibling).toHaveTextContent('3');
+    expect(within(statuses).getByText('REJECTED').nextElementSibling).toHaveTextContent('2');
+    expect(within(statistics).queryByText('UNLISTED')).not.toBeInTheDocument();
+  });
+
+  it('displays zero counts when the existing store has no items', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (pathOf(String(input)) === '/stores') return jsonResponse([exampleStore]);
+      if (pathOf(String(input)) === '/stores/12/item-statistics') return jsonResponse(emptyStatistics);
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    render(<StoresPage />);
+
+    await user.dblClick(await screen.findByText('Example Juegos'));
+
+    const statistics = screen.getByRole('region', { name: 'Store item statistics' });
+    expect(await within(statistics).findAllByText('0')).toHaveLength(8);
+    expect(within(statistics).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('shows a statistics error without replacing a failed request with zero counts', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (pathOf(String(input)) === '/stores') return jsonResponse([exampleStore]);
+      if (pathOf(String(input)) === '/stores/12/item-statistics') {
+        return new Response(JSON.stringify({ error: { message: 'Unavailable' } }), { status: 500 });
+      }
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    render(<StoresPage />);
+
+    await user.dblClick(await screen.findByText('Example Juegos'));
+
+    const statistics = screen.getByRole('region', { name: 'Store item statistics' });
+    expect(await within(statistics).findByRole('alert')).toHaveTextContent('Store item statistics could not be loaded.');
+    expect(within(statistics).queryByText('0')).not.toBeInTheDocument();
+    expect(within(statistics).queryByRole('table')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save Store' })).toBeEnabled();
+  });
+
+  it('discards another store’s late statistics after changing stores', async () => {
+    const user = userEvent.setup();
+    const firstStore = deferredResponse();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      if (pathOf(String(input)) === '/stores') {
+        return jsonResponse([exampleStore, { ...exampleStore, id: 13, name: 'Other Store', canonical_domain: 'other.mx' }]);
+      }
+      if (pathOf(String(input)) === '/stores/12/item-statistics') return firstStore.response;
+      if (pathOf(String(input)) === '/stores/13/item-statistics') return jsonResponse({ ...emptyStatistics, total_items: 99 });
+      throw new Error(`Unexpected request: ${input}`);
+    });
+    render(<StoresPage />);
+    await user.dblClick(await screen.findByText('Example Juegos'));
+    const firstSignal = fetchMock.mock.calls.find(([input]) => pathOf(String(input)) === '/stores/12/item-statistics')?.[1]?.signal;
+
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(firstSignal?.aborted).toBe(true);
+    await user.dblClick(await screen.findByText('Other Store'));
+    const statistics = screen.getByRole('region', { name: 'Store item statistics' });
+    expect(await within(statistics).findByText('99')).toBeInTheDocument();
+    await act(async () => { firstStore.resolve(jsonResponse(exampleStatistics)); });
+
+    expect(within(statistics).getByText('99')).toBeInTheDocument();
+    expect(within(statistics).queryByText('31')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Name')).toHaveValue('Other Store');
   });
 
   it('renders clean store table columns and website links', async () => {
@@ -73,6 +168,7 @@ describe('StoresPage', () => {
           }
         ]);
       }
+      if (url.endsWith('/stores/12/item-statistics')) return jsonResponse(emptyStatistics);
       if (url.endsWith('/stores/12') && init?.method === 'PATCH') {
         return jsonResponse({
           active: false,
@@ -151,6 +247,7 @@ describe('StoresPage', () => {
     render(<StoresPage />);
 
     await user.click(await screen.findByRole('button', { name: 'Create from Website' }));
+    expect(screen.queryByRole('region', { name: 'Store item statistics' })).not.toBeInTheDocument();
     await user.type(screen.getByLabelText('Website URL'), 'newstore.mx');
     await user.click(screen.getByRole('button', { name: 'Detect Store Details' }));
 
@@ -201,6 +298,7 @@ describe('StoresPage', () => {
           type: 'item_discovery'
         }, 202);
       }
+      if (url.endsWith('/stores/12/item-statistics')) return jsonResponse(emptyStatistics);
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -243,6 +341,7 @@ describe('StoresPage', () => {
           type: 'item_update'
         }, 202);
       }
+      if (url.endsWith('/stores/12/item-statistics')) return jsonResponse(emptyStatistics);
       throw new Error(`Unexpected request: ${url}`);
     });
 
@@ -258,6 +357,44 @@ describe('StoresPage', () => {
     });
   });
 });
+
+const exampleStore = {
+  active: true,
+  canonical_domain: 'example.mx',
+  country: 'Mexico',
+  id: 12,
+  name: 'Example Juegos',
+  status: 'active',
+  website_url: 'https://example.mx/'
+};
+
+const exampleStatistics = {
+  total_items: 31,
+  boardgame_true_confirmed_true: 17,
+  boardgame_true_confirmed_false: 7,
+  boardgame_false_confirmed_true: 2,
+  boardgame_false_confirmed_false: 5,
+  confirmed_boardgame_listed: 11,
+  confirmed_boardgame_pending: 3,
+  confirmed_boardgame_rejected: 2
+};
+
+const emptyStatistics = {
+  total_items: 0,
+  boardgame_true_confirmed_true: 0,
+  boardgame_true_confirmed_false: 0,
+  boardgame_false_confirmed_true: 0,
+  boardgame_false_confirmed_false: 0,
+  confirmed_boardgame_listed: 0,
+  confirmed_boardgame_pending: 0,
+  confirmed_boardgame_rejected: 0
+};
+
+function deferredResponse() {
+  let resolve!: (response: Response) => void;
+  const response = new Promise<Response>((resolveResponse) => { resolve = resolveResponse; });
+  return { resolve, response };
+}
 
 function jsonResponse(data: unknown, status = 200) {
   return new Response(JSON.stringify({ data }), {
