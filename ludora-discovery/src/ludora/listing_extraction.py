@@ -25,6 +25,7 @@ PRICE_RE = re.compile(
     re.IGNORECASE,
 )
 NALUA_STORE_HOSTS = {"naluajuegos.com", "www.naluajuegos.com"}
+REVILO_STORE_HOSTS = {"revilogames.com.mx", "www.revilogames.com.mx"}
 PRESTASHOP_PRODUCT_PATH_RE = re.compile(r"(?:^|/)([1-9][0-9]*)-[^/]+\.html$", re.IGNORECASE)
 NON_PRODUCT_PATH_SEGMENTS = {"content", "blog", "account", "my-account", "authentication", "order", "cart", "search", "module"}
 
@@ -39,6 +40,23 @@ def is_nalua_store_url(url: str) -> bool:
 def nalua_product_id(url: str) -> str | None:
     if not is_nalua_store_url(url):
         return None
+    return _prestashop_product_id(url, NON_PRODUCT_PATH_SEGMENTS)
+
+
+def is_revilo_store_url(url: str) -> bool:
+    try:
+        return (urlparse(url).hostname or "").casefold() in REVILO_STORE_HOSTS
+    except ValueError:
+        return False
+
+
+def revilo_product_id(url: str) -> str | None:
+    if not is_revilo_store_url(url):
+        return None
+    return _prestashop_product_id(url, NON_PRODUCT_PATH_SEGMENTS | {"category", "categories"})
+
+
+def _prestashop_product_id(url: str, excluded_segments: set[str]) -> str | None:
     try:
         parsed = urlparse(url)
         if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password or parsed.port not in {None, 80, 443}:
@@ -46,7 +64,7 @@ def nalua_product_id(url: str) -> str | None:
     except ValueError:
         return None
     path = parsed.path.casefold()
-    if any(segment in NON_PRODUCT_PATH_SEGMENTS for segment in path.split("/")[:-1]):
+    if any(segment in excluded_segments for segment in path.split("/")[:-1]):
         return None
     match = PRESTASHOP_PRODUCT_PATH_RE.search(path)
     return match.group(1) if match else None
@@ -153,6 +171,8 @@ def _nearby_text(events: list[tuple[str, str, str]], link_index: int) -> str:
 def _looks_like_product_url(url: str) -> bool:
     if is_nalua_store_url(url):
         return nalua_product_id(url) is not None
+    if is_revilo_store_url(url):
+        return revilo_product_id(url) is not None
     path = urlparse(url).path.casefold()
     for marker in PRODUCT_PATH_MARKERS:
         _prefix, separator, remainder = path.partition(marker)
