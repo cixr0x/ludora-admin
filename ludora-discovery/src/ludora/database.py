@@ -1630,18 +1630,30 @@ class DiscoveryRepository:
     def discovery_url_exists(self, store_id: int | None, source_url: str) -> bool:
         """Read whether this store has already recorded the discovered URL."""
         _, source_url = discovery_url_pair(source_url, source_url)
+        if store_id is None:
+            store_predicate = "store_id is null"
+            params = (source_url, source_url)
+        else:
+            store_predicate = "store_id = %s"
+            params = (store_id, source_url, store_id, source_url)
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
-                select 1
-                from store_items
-                where store_id is not distinct from %s
-                  and (source_url = %s or source_url_origin = %s)
-                limit 1
+                f"""
+                select exists (
+                    select 1
+                    from store_items
+                    where {store_predicate}
+                      and source_url = %s
+                    union all
+                    select 1
+                    from store_items
+                    where {store_predicate}
+                      and coalesce(source_url_origin, source_url) = %s
+                )
                 """,
-                (store_id, source_url, source_url),
+                params,
             )
-            return cursor.fetchone() is not None
+            return bool(cursor.fetchone()[0])
 
     def upsert_tutorial_link(
         self,

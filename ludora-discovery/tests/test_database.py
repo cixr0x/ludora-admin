@@ -20,6 +20,7 @@ from ludora.database import (
 )
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
 from batch_target_query_fixture import BatchTargetSelectConnection, batch_target_row
+from discovery_url_query_fixture import DiscoveryUrlSelectConnection
 
 
 class FakeCursor:
@@ -1300,22 +1301,141 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(params, (12, "https://example.mx/products/catan", None))
         self.assertEqual(connection.commits, 0)
 
-    def test_discovery_url_exists_reads_either_url_without_row_state_filters(self):
-        for store_id, returned_row in ((12, (1,)), (None, (1,)), (13, None)):
-            with self.subTest(store_id=store_id, returned_row=returned_row):
-                connection = FakeConnection(fetchone_rows=[returned_row])
+    def test_discovery_url_exists_returns_the_selected_boolean(self):
+        for store_id in (12, None):
+            for returned_value in (True, False):
+                with self.subTest(store_id=store_id, returned_value=returned_value):
+                    connection = FakeConnection(fetchone_rows=[(returned_value,)])
+
+                    exists = DiscoveryRepository(connection).discovery_url_exists(
+                        store_id, "https://example.mx/products/catan"
+                    )
+
+                    self.assertIs(exists, returned_value)
+                    self.assertEqual(connection.commits, 0)
+                    self.assertEqual(connection.rollbacks, 0)
+
+    def test_discovery_url_exists_finds_a_current_url_with_null_origin(self):
+        row = batch_target_row(confirmed_store_item_record())
+        connection = DiscoveryUrlSelectConnection([row])
+        self.addCleanup(connection.close)
+        repository = DiscoveryRepository(connection)
+
+        self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/catan"), True)
+        self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/missing"), False)
+
+    def test_discovery_url_exists_returns_false_for_empty_history(self):
+        connection = DiscoveryUrlSelectConnection([])
+        self.addCleanup(connection.close)
+        repository = DiscoveryRepository(connection)
+
+        self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/catan"), False)
+        self.assertIs(repository.discovery_url_exists(None, "https://example.mx/products/catan"), False)
+
+    def test_discovery_url_exists_keeps_original_and_current_redirect_urls(self):
+        redirected = replace(
+            confirmed_store_item_record(),
+            source_url="https://example.mx/products/current",
+            source_url_origin="https://example.mx/products/original",
+        )
+        connection = DiscoveryUrlSelectConnection([batch_target_row(redirected)])
+        self.addCleanup(connection.close)
+        repository = DiscoveryRepository(connection)
+
+        self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/original"), True)
+        self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/current"), True)
+        self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/other"), False)
+
+    def test_discovery_url_exists_tolerates_multiple_histories_for_one_current_url(self):
+        current = replace(confirmed_store_item_record(), source_url="https://example.mx/products/current")
+        rows = [
+            batch_target_row(current),
+            batch_target_row(replace(current, store_item_id=502, source_url_origin="https://example.mx/products/first")),
+            batch_target_row(replace(current, store_item_id=503, source_url_origin="https://example.mx/products/second")),
+        ]
+        connection = DiscoveryUrlSelectConnection(rows)
+        self.addCleanup(connection.close)
+        repository = DiscoveryRepository(connection)
+
+        for url in (
+            "https://example.mx/products/current",
+            "https://example.mx/products/first",
+            "https://example.mx/products/second",
+        ):
+            with self.subTest(url=url):
+                self.assertIs(repository.discovery_url_exists(12, url), True)
+        self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/missing"), False)
+
+    def test_discovery_url_exists_isolates_current_and_original_urls_by_store_including_null(self):
+        current = confirmed_store_item_record()
+        rows = [
+            batch_target_row(replace(current, source_url="https://example.mx/12-current", source_url_origin="https://example.mx/12-original")),
+            batch_target_row(replace(current, store_item_id=502, store_id=13, source_url="https://example.mx/13-current", source_url_origin="https://example.mx/13-original")),
+            batch_target_row(replace(current, store_item_id=503, store_id=None, source_url="https://example.mx/null-current", source_url_origin="https://example.mx/null-original")),
+        ]
+        connection = DiscoveryUrlSelectConnection(rows)
+        self.addCleanup(connection.close)
+        repository = DiscoveryRepository(connection)
+        cases = (
+            (12, "12-current", True), (12, "12-original", True),
+            (12, "13-current", False), (12, "13-original", False),
+            (12, "null-current", False), (12, "null-original", False),
+            (13, "13-current", True), (13, "13-original", True),
+            (13, "12-current", False), (13, "12-original", False),
+            (13, "null-current", False), (13, "null-original", False),
+            (None, "null-current", True), (None, "null-original", True),
+            (None, "12-current", False), (None, "12-original", False),
+            (None, "13-current", False), (None, "13-original", False),
+            (99, "12-current", False), (99, "12-original", False),
+        )
+        for store_id, path, expected in cases:
+            with self.subTest(store_id=store_id, path=path):
+                self.assertIs(repository.discovery_url_exists(store_id, f"https://example.mx/{path}"), expected)
+
+    def test_discovery_url_exists_removes_fragments_but_preserves_other_url_identity(self):
+        current = replace(
+            confirmed_store_item_record(),
+            source_url="https://example.mx/products/Catan?edition=es&stock=1",
+            source_url_origin="https://example.mx/products/old-catan?edition=es",
+        )
+        connection = DiscoveryUrlSelectConnection([batch_target_row(current)])
+        self.addCleanup(connection.close)
+        repository = DiscoveryRepository(connection)
+        cases = (
+            ("https://example.mx/products/Catan?edition=es&stock=1#details", True),
+            ("https://example.mx/products/old-catan?edition=es#details", True),
+            ("http://example.mx/products/Catan?edition=es&stock=1", False),
+            ("https://example.mx/products/catan?edition=es&stock=1", False),
+            ("https://example.mx/products/Catan/?edition=es&stock=1", False),
+            ("https://example.mx/products/Catan?edition=en&stock=1", False),
+            ("https://example.mx/products/Catan?stock=1&edition=es", False),
+            ("https://example.mx/products/Catan", False),
+        )
+        for url, expected in cases:
+            with self.subTest(url=url):
+                self.assertIs(repository.discovery_url_exists(12, url), expected)
+
+    def test_discovery_url_exists_includes_inactive_rejected_and_unconfirmed_rows(self):
+        current = confirmed_store_item_record()
+        states = (
+            {"store_active": False},
+            {"listing_status": "PENDING"},
+            {"listing_status": "REJECTED"},
+            {"listing_status": "UNLISTED"},
+            {"is_boardgame_confirmed": False},
+            {"item_id": None},
+            {"is_boardgame": False, "is_boardgame_confirmed": False, "item_id": None},
+            {"availability": "unavailable"},
+        )
+        for changes in states:
+            with self.subTest(changes=changes):
+                record = replace(current, source_url_origin="https://example.mx/products/original", **changes)
+                connection = DiscoveryUrlSelectConnection([batch_target_row(record)])
+                self.addCleanup(connection.close)
                 repository = DiscoveryRepository(connection)
-                lookup = getattr(repository, "discovery_url_exists", None)
-                self.assertTrue(callable(lookup), "Discovery needs a separate read-only URL lookup")
-                exists = lookup(store_id, "https://example.mx/products/catan#details")
-                self.assertEqual(exists, returned_row is not None)
-                sql, params = connection.cursor_instance.executions[0]
-                self.assertEqual(" ".join(sql.casefold().split()),
-                                 "select 1 from store_items where store_id is not distinct from %s "
-                                 "and (source_url = %s or source_url_origin = %s) limit 1")
-                self.assertEqual(params, (store_id, "https://example.mx/products/catan", "https://example.mx/products/catan"))
-                self.assertEqual(connection.commits, 0)
-                self.assertEqual(connection.rollbacks, 0)
+
+                self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/catan"), True)
+                self.assertIs(repository.discovery_url_exists(12, "https://example.mx/products/original"), True)
 
     def test_lists_confirmed_boardgame_item_candidates_for_updates(self):
         connection = FakeConnection(
