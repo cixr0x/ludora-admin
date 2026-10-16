@@ -303,6 +303,13 @@ class JumpsellerDiscoveryTests(unittest.TestCase):
         self.assertEqual([(record.source_url, record.title, record.store_id) for record in records],
                          [(COFFEE, COFFEE_TITLE, 74)])
 
+    def test_product_cards_ignore_discount_badge_text_inside_image_link(self):
+        for badge in ("Oferta -25%", "Oferta -34%"):
+            with self.subTest(badge=badge):
+                card = PRODUCT_CARD.replace("<img ", f'<span class="status-tag sale">{badge}</span><img ')
+                records = extract_listing_candidates(card, STORE, 74, platform="jumpseller")
+                self.assertEqual([(record.source_url, record.title) for record in records], [(COFFEE, COFFEE_TITLE)])
+
     def test_product_cards_accept_text_or_image_titles_and_deduplicate_clean_urls(self):
         cards = f"""<div class="product-block"><h3><a href="{CATAN}?variant=1"> Catan <span>3D</span> </a></h3></div>
           <div class="product-block"><a class="product-image" href="{CUBIRDS}"><img alt="CuBirds" /></a></div>

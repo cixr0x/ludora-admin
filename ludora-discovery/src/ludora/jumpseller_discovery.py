@@ -89,6 +89,7 @@ def _product_url(value: str, base_url: str, store_url: str) -> str | None:
 class _CardLink:
     url: str
     product_link: bool
+    title_link: bool
     text: list[str] = field(default_factory=list)
     image_titles: list[str] = field(default_factory=list)
 
@@ -128,7 +129,8 @@ class _ProductCardParser(HTMLParser):
         if url is None:
             return
         heading = any(tag in {"h1", "h2", "h3", "h4", "h5", "h6"} for tag in self.stack[self.card_depth + 1:])
-        self.current_link = _CardLink(url, heading or bool(classes & PRODUCT_LINK_CLASSES))
+        title_link = heading or bool(classes & {"product-name", "product-title"})
+        self.current_link = _CardLink(url, heading or bool(classes & PRODUCT_LINK_CLASSES), title_link)
         self.links.append(self.current_link)
 
     def handle_endtag(self, tag: str) -> None:
@@ -172,7 +174,9 @@ def extract_jumpseller_listing_candidates(
                 return records
             if url in seen:
                 continue
-            titles = [" ".join(" ".join(link.text).split()) for link in links]
+            # Image links can contain promotion badges; only name/heading links
+            # supply text titles. Image alt remains the full-name fallback.
+            titles = [" ".join(" ".join(link.text).split()) for link in links if link.title_link]
             titles = [title for title in titles if title and title.casefold() not in ACTION_TITLES]
             image_titles = [" ".join(title.split()) for link in links for title in link.image_titles if title.strip()]
             image_titles = [title for title in image_titles if title.casefold() not in ACTION_TITLES]
