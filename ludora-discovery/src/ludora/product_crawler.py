@@ -470,6 +470,7 @@ def crawl_store_product_details(
             trace_logger=trace,
             cancellation_token=cancellation_token,
             **({"access_profile": access_profile} if access_profile is not None else {}),
+            platform=platform,
         )
         trace.log(
             "inventory.sitemap_discovery.completed",
@@ -490,7 +491,7 @@ def crawl_store_product_details(
             )
         if normalized_platform == "shopify" and not product_urls:
             raise RuntimeError(f"Shopify sitemap discovery returned no product URLs: {store_url}")
-        if product_urls or catalog_path is not None or (normalized_platform == "prestashop" and limit is not None and limit < 1):
+        if product_urls or catalog_path is not None or (normalized_platform in {"prestashop", "jumpseller"} and limit is not None and limit < 1):
             source_listing_url = urljoin(store_url, catalog_path or "/sitemap.xml")
             listing_candidates = [
                 DiscoveryItemCandidateRecord(
@@ -539,6 +540,8 @@ def crawl_store_product_details(
                 page_url=fetched_listing.url,
                 store_id=store_id,
                 limit=limit,
+                platform=platform,
+                store_url=store_url,
             )
             trace.log(
                 "inventory.listing_extract.completed",
@@ -554,6 +557,8 @@ def crawl_store_product_details(
                 raise RuntimeError(f"Odoo discovery returned no product candidates: {store_url}")
             if normalized_platform == "prestashop" and not listing_candidates:
                 raise RuntimeError(f"PrestaShop discovery returned no product candidates: {store_url}")
+            if normalized_platform == "jumpseller" and not listing_candidates:
+                raise RuntimeError(f"Jumpseller discovery returned no product candidates: {store_url}")
 
         records = crawl_listing_candidates(
             listing_candidates,

@@ -165,6 +165,21 @@ Discovery still enumerates listings, sitemaps, and Amazon search pages to find n
 
 Shopify discovery enumerates product URLs from the sitemap and fetches new product details through signed Storefront GraphQL only. It has no HTML fallback and does not use GraphQL for product enumeration. A null Shopify product is skipped and logged. A failed store does not stop the remaining stores in the batch, but any store failure causes the parent batch to fail after all stores have run.
 
+For stores marked `jumpseller`, discovery recognizes product entries by their
+Jumpseller sitemap priority `0.8`, including root-level product slugs. Homepage,
+category, and content entries have different priorities and remain excluded.
+The existing sitemap/index traversal and optional `robots.txt` sources support
+split sitemaps. If these yield no products, homepage fallback reads same-store
+product links from `product-block` cards, using image alt text when a heading
+is truncated. URLs are validated, cleaned, and deduplicated before entering
+the existing detail, classification, and matching pipeline. This behavior is
+platform-specific; other platforms retain their existing URL recognition.
+Themes with different sitemap metadata or card markup need separate support;
+homepage fallback does not walk category pagination or guarantee full catalog
+coverage. An unlimited or positive-limit crawl with no candidates fails
+explicitly. A zero limit or a crawl whose candidates all already exist can
+complete successfully with zero saved records.
+
 Two stores use domain-specific catalog discovery because their public storefronts do not expose compatible product sitemaps:
 
 - `demonjuegosdemesa.com` walks the storefront's `scpp`/`spage` catalog pages with browser request headers, recognizes root-level product URLs, and reads product identity, price, SKU, and availability from schema.org microdata. Blank source product cards are traced and left unpersisted.

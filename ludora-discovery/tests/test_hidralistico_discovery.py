@@ -453,6 +453,7 @@ class HidralisticoDiscoveryTests(unittest.TestCase):
             request_headers_provider=None,
             trace_logger=ANY,
             cancellation_token=None,
+            platform="woocommerce",
         )
         self.assertEqual(crawl_candidates.call_args.args[0][0].source_url, fallback_url)
         fallback_events = [fields for event, fields in trace.events if event == "inventory.hidralistico_store_api.fallback"]

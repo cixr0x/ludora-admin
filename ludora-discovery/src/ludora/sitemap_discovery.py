@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 
 from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
 from ludora.filtering import canonical_domain
+from ludora.jumpseller_discovery import jumpseller_sitemap_product_urls
 from ludora.listing_extraction import _looks_like_product_url
 from ludora.moonlight_discovery import MoonlightDiscoveryProfile, StoreDiscoveryAccessStopped, is_moonlight_store_url
 from ludora.trace import TraceLogger
@@ -35,6 +36,7 @@ def discover_product_urls_from_sitemaps(
     trace_logger: TraceLogger | None = None,
     cancellation_token: CancellationToken | None = None,
     access_profile: MoonlightDiscoveryProfile | None = None,
+    platform: str = "",
 ) -> list[str]:
     if access_profile is None and request_headers_provider is None and is_moonlight_store_url(store_url):
         access_profile = MoonlightDiscoveryProfile(trace_logger=trace_logger)
@@ -71,7 +73,7 @@ def discover_product_urls_from_sitemaps(
     )
     if fetched_root is not None:
         visited_sitemaps.add(fetched_root.url)
-        product_urls.extend(_product_urls_from_text(fetched_root.text, fetched_root.url, store_url))
+        product_urls.extend(_product_urls_from_text(fetched_root.text, fetched_root.url, store_url, platform=platform))
         sitemap_urls.extend(_product_sitemap_urls_from_text(fetched_root.text, fetched_root.url, store_url))
         if not sitemap_urls:
             sitemap_urls.extend(_sitemap_urls_from_text(fetched_root.text, fetched_root.url, store_url))
@@ -96,7 +98,7 @@ def discover_product_urls_from_sitemaps(
             if _validated_sitemap_reference(fetched_sitemap.url, sitemap_url, store_url) is None:
                 continue
             visited_sitemaps.add(fetched_sitemap.url)
-            product_urls.extend(_product_urls_from_text(fetched_sitemap.text, fetched_sitemap.url, store_url))
+            product_urls.extend(_product_urls_from_text(fetched_sitemap.text, fetched_sitemap.url, store_url, platform=platform))
             for nested_url in _sitemap_urls_from_text(fetched_sitemap.text, fetched_sitemap.url, store_url):
                 if nested_url not in visited_sitemaps and nested_url not in urls:
                     urls.append(nested_url)
@@ -291,7 +293,9 @@ def _direct_product_sitemap_urls(store_url: str) -> list[str]:
     return [urljoin(store_url, path) for path in DIRECT_PRODUCT_SITEMAP_PATHS]
 
 
-def _product_urls_from_text(text: str, sitemap_url: str, store_url: str) -> list[str]:
+def _product_urls_from_text(text: str, sitemap_url: str, store_url: str, *, platform: str = "") -> list[str]:
+    if platform.strip().casefold() == "jumpseller":
+        return jumpseller_sitemap_product_urls(text, sitemap_url, store_url)
     store_domain = canonical_domain(store_url)
     urls: list[str] = []
     for loc in _loc_values(text):

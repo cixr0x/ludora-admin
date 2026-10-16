@@ -363,6 +363,7 @@ class InventoryTests(unittest.TestCase):
             request_headers_provider=None,
             trace_logger=ANY,
             cancellation_token=None,
+            platform="",
         )
         fetch_html.assert_called_once_with(
             "https://example.mx/products/catan",
@@ -958,6 +959,7 @@ class InventoryTests(unittest.TestCase):
             request_headers_provider=None,
             trace_logger=ANY,
             cancellation_token=None,
+            platform="",
         )
         self.assertEqual(browser_fetched_urls, ["https://example.mx/producto/exploding-kittens/"])
         self.assertEqual(len(records), 1)

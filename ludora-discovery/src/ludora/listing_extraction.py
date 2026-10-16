@@ -5,6 +5,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, urlunparse
 
 from ludora.filtering import canonical_domain
+from ludora.jumpseller_discovery import extract_jumpseller_listing_candidates
 from ludora.models import DiscoveryItemCandidateRecord
 
 
@@ -111,7 +112,12 @@ def extract_listing_candidates(
     page_url: str,
     store_id: int | None,
     limit: int | None = None,
+    *,
+    platform: str = "",
+    store_url: str | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
+    if platform.strip().casefold() == "jumpseller":
+        return extract_jumpseller_listing_candidates(html, page_url, store_id, limit, store_url=store_url)
     parser = ListingLinkParser(page_url)
     parser.feed(html)
 
