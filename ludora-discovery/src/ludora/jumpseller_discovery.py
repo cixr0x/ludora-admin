@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import html
+import re
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from urllib.parse import parse_qs, unquote, urljoin, urlparse, urlunparse
+from ipaddress import ip_address
+from urllib.parse import ParseResult, parse_qs, unquote, urljoin, urlparse, urlunparse
 from xml.etree import ElementTree
 
 from ludora.filtering import canonical_domain
@@ -21,7 +23,11 @@ NON_PRODUCT_SUFFIXES = (".xml", ".xml.gz", ".txt", ".json", ".js", ".css", ".jpg
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 PRODUCT_LINK_CLASSES = {"product-image", "product-name", "product-title"}
 NON_PRODUCT_LINK_CLASSES = {"category", "product-category", "brand", "btn", "button", "add-to-cart", "quick-view"}
+NON_PRODUCT_CONTEXT_CLASSES = NON_PRODUCT_LINK_CLASSES | {
+    "navigation", "nav", "menu", "action", "actions", "product-action", "product-actions", "product-brand",
+}
 ACTION_TITLES = {"comprar", "comprar ahora", "agregar al carrito", "añadir al carrito", "add to cart", "quick view", "ver más"}
+HOST_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", re.IGNORECASE)
 
 
 def jumpseller_sitemap_product_urls(text: str, sitemap_url: str, store_url: str) -> list[str]:
@@ -49,27 +55,53 @@ def jumpseller_sitemap_product_urls(text: str, sitemap_url: str, store_url: str)
             continue
         if not product_priority:
             continue
-        url = _product_url(locations[0].text or "", sitemap_url, store_url)
+        url = _product_url(locations[0].text or "", sitemap_url, store_url, require_absolute=True)
         if url is not None:
             urls.append(url)
     return list(dict.fromkeys(urls))
 
 
-def _product_url(value: str, base_url: str, store_url: str) -> str | None:
+def _valid_http_authority(parsed: ParseResult) -> bool:
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.netloc.endswith(":")):
+        return False
+    if parsed.port not in {None, 80, 443}:
+        return False
+    hostname = parsed.hostname
+    if ":" in hostname:
+        try:
+            ip_address(hostname)
+        except ValueError:
+            return False
+        return True
+    try:
+        # One terminal DNS root dot is valid; empty labels elsewhere are not.
+        hostname = hostname.encode("idna").decode("ascii").removesuffix(".")
+    except UnicodeError:
+        return False
+    return len(hostname) <= 253 and all(HOST_LABEL_RE.fullmatch(label) for label in hostname.split("."))
+
+
+def _product_url(value: str, base_url: str, store_url: str, *, require_absolute: bool = False) -> str | None:
     value = html.unescape(value).strip()
     if not value or value.startswith(("#", "?")) or "\\" in value:
         return None
     if any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in value):
         return None
     try:
+        reference = urlparse(value)
+        if reference.scheme:
+            if not _valid_http_authority(reference):
+                return None
+        elif require_absolute:
+            return None
+        elif value.startswith("//") and not _valid_http_authority(reference._replace(scheme=urlparse(base_url).scheme)):
+            return None
         parsed = urlparse(urljoin(base_url, value))
         store = urlparse(store_url)
-        for candidate in (parsed, store):
-            if (candidate.scheme not in {"http", "https"} or not candidate.hostname
-                    or candidate.username is not None or candidate.password is not None):
-                return None
-            if candidate.port not in {None, 80, 443}:
-                return None
+        if not _valid_http_authority(parsed) or not _valid_http_authority(store):
+            return None
         if canonical_domain(parsed.geturl()) != canonical_domain(store_url):
             return None
         path = unquote(parsed.path).casefold()
@@ -100,7 +132,7 @@ class _ProductCardParser(HTMLParser):
         self.page_url = page_url
         self.store_url = store_url
         self.cards: list[list[_CardLink]] = []
-        self.stack: list[str] = []
+        self.stack: list[tuple[str, bool]] = []
         self.card_depth: int | None = None
         self.links: list[_CardLink] = []
         self.current_link: _CardLink | None = None
@@ -114,7 +146,13 @@ class _ProductCardParser(HTMLParser):
             self.current_link.image_titles.append(attr.get("alt", ""))
         if tag in VOID_TAGS:
             return
-        self.stack.append(tag)
+        excluded_context = bool(
+            classes & NON_PRODUCT_CONTEXT_CLASSES
+            or tag in {"nav", "header", "footer", "form", "button"}
+            or attr.get("role", "").casefold() in {"navigation", "button"}
+            or (self.stack and self.stack[-1][1])
+        )
+        self.stack.append((tag, excluded_context))
         depth = len(self.stack) - 1
         if self.card_depth is None and "product-block" in classes:
             self.card_depth = depth
@@ -123,20 +161,22 @@ class _ProductCardParser(HTMLParser):
             return
         self.current_link = None
         self.link_depth = depth
-        if classes & NON_PRODUCT_LINK_CLASSES or any(tag in {"nav", "header", "footer"} for tag in self.stack):
+        if excluded_context:
             return
         url = _product_url(attr.get("href", ""), self.page_url, self.store_url)
         if url is None:
             return
-        heading = any(tag in {"h1", "h2", "h3", "h4", "h5", "h6"} for tag in self.stack[self.card_depth + 1:])
+        heading = any(tag in {"h1", "h2", "h3", "h4", "h5", "h6"} for tag, _ in self.stack[self.card_depth + 1:])
         title_link = heading or bool(classes & {"product-name", "product-title"})
         self.current_link = _CardLink(url, heading or bool(classes & PRODUCT_LINK_CLASSES), title_link)
         self.links.append(self.current_link)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag not in self.stack:
+        for depth in range(len(self.stack) - 1, -1, -1):
+            if self.stack[depth][0] == tag:
+                break
+        else:
             return
-        depth = len(self.stack) - 1 - self.stack[::-1].index(tag)
         if self.link_depth is not None and depth <= self.link_depth:
             self.current_link = None
             self.link_depth = None

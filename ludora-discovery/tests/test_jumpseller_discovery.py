@@ -231,6 +231,20 @@ class JumpsellerDiscoveryTests(unittest.TestCase):
         text = urlset(*[(url, "0.8") for url in rejected if "\x00" not in url], (CATAN, "0.8"))
         self.assertEqual(self.discover(text), [CATAN])
 
+    def test_sitemap_requires_absolute_http_locs_with_well_formed_hosts(self):
+        rejected = [
+            "https:///catan", "https:sigad.mx/catan", "http:/catan", "https:////sigad.mx/catan",
+            "https://.sigad.mx/catan", "https://sigad..mx/catan", "https://sigad.mx../catan",
+            "https://www..sigad.mx/catan", "https://sigad.mx:/catan", "/catan", "catan", "//sigad.mx/catan",
+        ]
+        for invalid in rejected:
+            with self.subTest(invalid=invalid):
+                self.assertEqual(self.discover(urlset((invalid, "0.8"), (CATAN, "0.8")), limit=1), [CATAN])
+
+    def test_sitemap_preserves_www_alias_and_single_terminal_dns_dot(self):
+        urls = ["https://www.sigad.mx/catan", "https://sigad.mx./cubirds"]
+        self.assertEqual(self.discover(urlset(*[(url, "0.8") for url in urls])), urls)
+
     def test_jumpseller_does_not_fall_back_to_global_product_path_markers(self):
         self.assertEqual(self.discover(urlset((STORE + "products/category", "0.6"))), [])
 
@@ -329,6 +343,65 @@ class JumpsellerDiscoveryTests(unittest.TestCase):
           <div class="product-block"><a href="/juegos-de-mesa-1" class="category">Juegos de mesa</a>
             <a href="/catan-3d-edition-juego-de-mesa?add-to-cart=1">Comprar</a></div>""" + PRODUCT_CARD
         self.assertEqual([record.source_url for record in extract_listing_candidates(cards, STORE, 74, platform="jumpseller")], [COFFEE])
+
+    def test_product_cards_exclude_inherited_non_product_context_before_positive_limit(self):
+        contexts = [
+            ('<h3 class="product-category">', '</h3>'),
+            ('<div class="category"><h3>', '</h3></div>'),
+            ('<div class="brand"><h4>', '</h4></div>'),
+            ('<div class="product-brand"><h4>', '</h4></div>'),
+            ('<div class="navigation"><h4>', '</h4></div>'),
+            ('<div class="action"><h4>', '</h4></div>'),
+            ('<div class="actions"><h4>', '</h4></div>'),
+            ('<div class="product-action"><h4>', '</h4></div>'),
+            ('<div class="product-actions"><h4>', '</h4></div>'),
+            ('<div role="navigation"><h4>', '</h4></div>'),
+            ('<div role="button"><h4>', '</h4></div>'),
+            ('<form><h4>', '</h4></form>'),
+        ]
+        for opening, closing in contexts:
+            with self.subTest(context=opening):
+                card = (f'<div class="product-block">{opening}'
+                        '<a href="/juegos-de-mesa-1">Juegos de mesa</a>'
+                        f'{closing}<h4><a href="{CATAN}">Catan</a></h4></div>')
+                records = extract_listing_candidates(card, STORE, 74, limit=1, platform="jumpseller")
+                self.assertEqual([(record.source_url, record.title) for record in records], [(CATAN, "Catan")])
+
+    def test_product_cards_inherit_outer_context_without_leaking_after_nested_or_void_elements(self):
+        cards = (f'<div class="brand"><div class="product-block"><h4><a href="{CATAN}">Brand</a></h4></div></div>'
+                 '<div class="product-block"><div class="product-category"><div>'
+                 '<a class="product-image" href="/juegos-de-mesa-1"><img alt="Juegos de mesa" /></a><br />'
+                 f'</div></div><input class="actions" /><div class="brand-name"><h4><a href="{CATAN}">Catan</a></h4></div>'
+                 f'<div class="product-block"><a class="product-image" href="{CUBIRDS}"><img alt="CuBirds" /></a></div></div>')
+        records = extract_listing_candidates(cards, STORE, 74, platform="jumpseller")
+        self.assertEqual([(record.source_url, record.title) for record in records], [(CATAN, "Catan"), (CUBIRDS, "CuBirds")])
+
+    def test_product_cards_reject_malformed_explicit_authorities_before_relative_resolution(self):
+        rejected = [
+            "https:///catan", "https:sigad.mx/catan", "http:/catan", "https:////sigad.mx/catan",
+            "https://.sigad.mx/catan", "https://sigad..mx/catan", "https://sigad.mx../catan",
+            "https://www..sigad.mx/catan", "//.sigad.mx/catan", "//sigad.mx../catan", "///catan",
+            "https://sigad.mx:/catan",
+        ]
+        for invalid in rejected:
+            with self.subTest(invalid=invalid):
+                cards = (f'<div class="product-block"><h4><a href="{html.escape(invalid)}">Invalid</a></h4>'
+                         f'<h4><a href="{CATAN}">Catan</a></h4></div>')
+                records = extract_listing_candidates(cards, STORE, 74, limit=1, platform="jumpseller")
+                self.assertEqual([(record.source_url, record.title) for record in records], [(CATAN, "Catan")])
+
+    def test_product_cards_preserve_relative_network_and_www_links(self):
+        accepted = [
+            ("/catan", STORE + "catan"), ("catan", STORE + "catan"), ("./catan", STORE + "catan"),
+            ("//sigad.mx/catan", STORE + "catan"),
+            ("https://www.sigad.mx/catan", "https://www.sigad.mx/catan"),
+            ("https://sigad.mx./catan", "https://sigad.mx./catan"),
+        ]
+        for href, expected in accepted:
+            with self.subTest(href=href):
+                cards = f'<div class="product-block"><h4><a href="{href}">Catan</a></h4></div>'
+                records = extract_listing_candidates(cards, STORE, 74, platform="jumpseller")
+                self.assertEqual([(record.source_url, record.title) for record in records], [(expected, "Catan")])
 
     def test_other_platform_listing_keeps_generic_extraction(self):
         cards = PRODUCT_CARD + '<a href="/products/catan">Catan</a>'
