@@ -1,53 +1,73 @@
-import { Box, CircularProgress, Stack, Typography } from '@mui/material';
-import { useEffect, useState } from 'react';
+import { Box, Button, CircularProgress, Stack, Typography } from '@mui/material';
+import { useEffect, useRef, useState } from 'react';
 import { adminApi, type HashSimilarityResult, type ImageSimilarityResult } from '../api/client';
 
-type State = { requestKey: string; status: 'idle' | 'loading' }
-  | { requestKey: string; result: ImageSimilarityResult; status: 'ready' }
-  | { requestKey: string; message: string; status: 'error' };
+type State = { status: 'idle' | 'loading' }
+  | { result: ImageSimilarityResult; status: 'ready' }
+  | { message: string; status: 'error' };
 
-export function ReviewImageSimilarity({ itemImageLabel, itemImageUrl, linkedItemLoaded, linkedItemPresent, storeItemImageUrl }: {
+type Props = {
   itemImageLabel: string; itemImageUrl: string; linkedItemLoaded: boolean; linkedItemPresent: boolean; storeItemImageUrl: string;
-}) {
-  const requestKey = `${itemImageUrl}\u001f${storeItemImageUrl}`;
-  const [state, setState] = useState<State>({ requestKey: '', status: 'idle' });
-  useEffect(() => {
-    if (!itemImageUrl || !storeItemImageUrl) { setState({ requestKey, status: 'idle' }); return; }
-    let ignore = false;
-    setState({ requestKey, status: 'loading' });
-    adminApi.estimateImageSimilarity(itemImageUrl, storeItemImageUrl, { includeHashSimilarity: true })
-      .then((result) => { if (!ignore) setState({ requestKey, result, status: 'ready' }); })
-      .catch((error: unknown) => { if (!ignore) setState({ requestKey, status: 'error', message: error instanceof Error ? error.message : 'Unknown error' }); });
-    return () => { ignore = true; };
-  }, [itemImageUrl, requestKey, storeItemImageUrl]);
+  reviewId: string;
+};
 
-  const current = state.requestKey === requestKey ? state : { requestKey, status: 'loading' as const };
+export function ReviewImageSimilarity(props: Props) {
+  // A fresh instance also discards pending responses when returning to an earlier image pair.
+  const comparisonKey = JSON.stringify([props.reviewId, props.itemImageUrl, props.storeItemImageUrl, props.linkedItemLoaded, props.linkedItemPresent]);
+  return <SimilarityCalculation key={comparisonKey} {...props} />;
+}
+
+function SimilarityCalculation({ itemImageLabel, itemImageUrl, linkedItemLoaded, linkedItemPresent, storeItemImageUrl }: Props) {
+  const [state, setState] = useState<State>({ status: 'idle' });
+  const activeRequest = useRef<symbol | null>(null);
+  useEffect(() => () => { activeRequest.current = null; }, []);
   const imagesPresent = Boolean(itemImageUrl && storeItemImageUrl);
-  const loading = imagesPresent && (current.status === 'idle' || current.status === 'loading');
-  const hash = imagesPresent && current.status === 'ready' ? current.result.hash_similarity : undefined;
+  const canCalculate = imagesPresent && linkedItemLoaded;
+  const loading = state.status === 'loading';
+  const hash = canCalculate && state.status === 'ready' ? state.result.hash_similarity : undefined;
+
+  async function calculateSimilarities() {
+    if (!canCalculate || activeRequest.current) return;
+    const request = Symbol();
+    activeRequest.current = request;
+    setState({ status: 'loading' });
+    try {
+      const result = await adminApi.estimateImageSimilarity(itemImageUrl, storeItemImageUrl, { includeHashSimilarity: true });
+      if (activeRequest.current === request) setState({ result, status: 'ready' });
+    } catch (error: unknown) {
+      if (activeRequest.current === request) setState({ status: 'error', message: error instanceof Error ? error.message : 'Unknown error' });
+    } finally {
+      if (activeRequest.current === request) activeRequest.current = null;
+    }
+  }
+
   let visual;
   if (!storeItemImageUrl) {
     visual = <Typography variant="body2">Similarity unavailable: the store item has no image.</Typography>;
+  } else if (linkedItemPresent && !linkedItemLoaded) {
+    visual = <Typography variant="body2">Waiting for the linked item image...</Typography>;
   } else if (!itemImageUrl) {
-    visual = <Typography variant="body2">{linkedItemPresent && !linkedItemLoaded ? 'Waiting for the linked item image...' : 'Similarity unavailable: the linked item has no image.'}</Typography>;
-  } else if (current.status === 'ready') {
+    visual = <Typography variant="body2">Similarity unavailable: the linked item has no image.</Typography>;
+  } else if (state.status === 'ready') {
     visual = <>
-      <Typography sx={{ fontWeight: 700 }} variant="body2">Image similarity: {current.result.score.toFixed(2)} / 100</Typography>
-      <Typography color="text.secondary" variant="caption">Compared with {itemImageLabel} · {current.result.diagnostics.inliers} geometric inliers</Typography>
+      <Typography sx={{ fontWeight: 700 }} variant="body2">Image similarity: {state.result.score.toFixed(2)} / 100</Typography>
+      <Typography color="text.secondary" variant="caption">Compared with {itemImageLabel} · {state.result.diagnostics.inliers} geometric inliers</Typography>
     </>;
-  } else if (current.status === 'error') {
+  } else if (state.status === 'error') {
     visual = <>
       <Typography color="warning.main" sx={{ fontWeight: 600 }} variant="body2">Image similarity could not be estimated.</Typography>
-      <Typography color="text.secondary" variant="caption">{current.message}</Typography>
+      <Typography color="text.secondary" variant="caption">{state.message}</Typography>
     </>;
-  } else {
+  } else if (loading) {
     visual = <Stack alignItems="center" direction="row" spacing={1}><CircularProgress size={16} /><Typography variant="body2">Estimating image similarity...</Typography></Stack>;
+  } else {
+    visual = <Typography variant="body2">Image similarity: Not calculated</Typography>;
   }
 
   return <Stack alignItems="center" spacing={1} sx={{ bgcolor: 'grey.50', border: 1, borderColor: 'divider', borderRadius: 1, gridColumn: '1 / -1', px: 1.5, py: 1, textAlign: 'center', overflowWrap: 'anywhere' }}>
     <Stack alignItems="center" aria-label="Image similarity" aria-live="polite" role="status" spacing={0.25}>{visual}</Stack>
     <Stack alignItems="center" aria-label="Hash similarity" aria-live="polite" role="status" spacing={0.25}>
-      {loading ? <Typography variant="body2">Hash similarity: Calculating...</Typography> : validHash(hash) ? <>
+      {loading ? <Typography variant="body2">Hash similarity: Calculating...</Typography> : canCalculate && state.status === 'idle' ? <Typography variant="body2">Hash similarity: Not calculated</Typography> : validHash(hash) ? <>
         <Typography sx={{ fontWeight: 700 }} variant="body2">Hash similarity: {hash.score.toFixed(2)} / 100</Typography>
         <Typography color="text.secondary" variant="caption">{hash.distance} of 256 bits differ · {hash.origin === 'raw' ? 'Raw photo' : 'Flattened cover'}</Typography>
         <Box component="details" sx={{ maxWidth: '100%' }}>
@@ -58,6 +78,7 @@ export function ReviewImageSimilarity({ itemImageLabel, itemImageUrl, linkedItem
         </Box>
       </> : <Typography variant="body2">Hash similarity: Unavailable</Typography>}
     </Stack>
+    <Button disabled={!canCalculate || loading} size="small" type="button" variant="outlined" onClick={() => void calculateSimilarities()}>Calculate similarities</Button>
   </Stack>;
 }
 

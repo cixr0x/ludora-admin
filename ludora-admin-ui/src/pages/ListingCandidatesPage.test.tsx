@@ -1574,10 +1574,15 @@ describe('ListingCandidatesPage', () => {
     expect(linkedItemCover).toHaveStyle({ aspectRatio: '1 / 1' });
     expect(within(coverComparison).getByLabelText('Store item name')).toHaveTextContent('Cafe Barista');
     expect(within(coverComparison).getByLabelText('Item name')).toHaveTextContent('Coffee Rush (Cafe Barista)');
-    const similarityStatus = await within(coverComparison).findByRole('status', { name: 'Image similarity' });
-    expect(similarityStatus).toHaveTextContent('Image similarity: 84.25 / 100');
+    const similarityStatus = within(coverComparison).getByRole('status', { name: 'Image similarity' });
+    expect(similarityStatus).toHaveTextContent('Image similarity: Not calculated');
+    expect(within(coverComparison).getByRole('status', { name: 'Hash similarity' })).toHaveTextContent('Hash similarity: Not calculated');
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(String(input)) === '/admin/image-similarity')).toHaveLength(0);
+    await user.click(within(coverComparison).getByRole('button', { name: 'Calculate similarities' }));
+    await waitFor(() => expect(similarityStatus).toHaveTextContent('Image similarity: 84.25 / 100'));
     expect(similarityStatus).toHaveTextContent('Compared with Spanish item image · 42 geometric inliers');
     expect(within(coverComparison).getByRole('status', { name: 'Hash similarity' })).toHaveTextContent('Hash similarity: Unavailable');
+    expect(fetchMock.mock.calls.filter(([input]) => pathOf(String(input)) === '/admin/image-similarity')).toHaveLength(1);
     const similarityRequest = fetchMock.mock.calls.find(
       ([requestInput, requestInit]) =>
         pathOf(String(requestInput)) === '/admin/image-similarity' && requestInit?.method === 'POST'

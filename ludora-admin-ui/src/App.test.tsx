@@ -268,11 +268,19 @@ describe('App', () => {
     expect(screen.queryByLabelText('Publisher')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Back to Review' })).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/discovery/listings')).toHaveLength(0);
+    expect(await screen.findByRole('img', { name: 'Coffee Rush (Cafe Barista) item cover' })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/admin/image-similarity')).toHaveLength(0);
+    fireEvent.click(screen.getByRole('button', { name: 'Calculate similarities' }));
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Image similarity' })).toHaveTextContent('82.50 / 100'));
 
     fireEvent.click(screen.getByRole('button', { name: buttonName }));
 
     await waitFor(() => expect(window.location.hash).toBe('#offer-reviews?id=921'));
     await waitFor(() => expect(screen.getByLabelText('Title')).toHaveValue('Alpaca Trails'));
+    expect(await screen.findByRole('img', { name: 'Alpaca Trails item cover' })).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Image similarity' })).toHaveTextContent('Not calculated');
+    expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/admin/image-similarity')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Calculate similarities' }));
     await waitFor(() => {
       const fallbackRequest = fetchMock.mock.calls.find(([input, requestInit]) => {
         const requestUrl = new URL(String(input));
@@ -284,9 +292,8 @@ describe('App', () => {
       });
       expect(fallbackRequest).toBeDefined();
     });
-    expect(screen.getByRole('status', { name: 'Image similarity' })).toHaveTextContent(
-      'Compared with fallback item image'
-    );
+    await waitFor(() => expect(screen.getByRole('status', { name: 'Image similarity' })).toHaveTextContent('Compared with fallback item image'));
+    expect(fetchMock.mock.calls.filter(([input]) => new URL(String(input)).pathname === '/admin/image-similarity')).toHaveLength(2);
     const nextReviewRequest = fetchMock.mock.calls
       .map(([input]) => new URL(String(input)))
       .find((url) => url.pathname === '/admin/discovery/offer-reviews/next');

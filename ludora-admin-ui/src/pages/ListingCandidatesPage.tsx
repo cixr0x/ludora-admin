@@ -1898,6 +1898,7 @@ function ItemCandidateForm({
               isGeneratingTranslation={isGeneratingTranslation}
               item={linkedItemPreview}
               itemId={itemId}
+              reviewId={candidateIdValue}
               translationError={translationError}
               storeItemImageUrl={imageUrl}
               storeItemTitle={title}
@@ -2145,6 +2146,7 @@ function ReviewCoverComparison({
   item,
   itemId,
   onGenerateTranslation,
+  reviewId,
   storeItemImageUrl,
   storeItemTitle,
   translationError
@@ -2154,6 +2156,7 @@ function ReviewCoverComparison({
   item: AdminRecord | null;
   itemId: string;
   onGenerateTranslation: () => void;
+  reviewId: string;
   storeItemImageUrl: string;
   storeItemTitle: string;
   translationError: string;
@@ -2229,10 +2232,12 @@ function ReviewCoverComparison({
         </Stack>
       ))}
       <ReviewImageSimilarity
+        key={itemId}
         itemImageLabel={itemImage.label}
         itemImageUrl={itemImageUrl}
         linkedItemLoaded={Boolean(item)}
         linkedItemPresent={Boolean(itemId)}
+        reviewId={reviewId}
         storeItemImageUrl={storeItemImageUrl}
       />
       <Stack alignItems="center" spacing={1} sx={{ gridColumn: '1 / -1' }}>
