@@ -46,7 +46,7 @@ it.each([
 ])('converts a no-match decision paired with %s to null', async (_label, overrides) => {
   const service = createAiBggMatchingService({
     findMatch: async () => decisionFixture(overrides)
-  }, { model: 'gpt-5.6-terra' });
+  }, { model: 'gpt-6.1-terra' });
 
   await expect(service.findMatch({ itemName: 'Unknown game', imageUrl: null }))
     .resolves.toBeNull();
@@ -71,7 +71,7 @@ it.each([
       coverAssessment: 'MATCH',
       ...overrides
     })
-  }, { model: 'gpt-5.6-terra' });
+  }, { model: 'gpt-6.1-terra' });
 
   await expect(service.findMatch({ itemName: 'Catan', imageUrl: null }))
     .resolves.toBeNull();
@@ -83,7 +83,7 @@ Change the client cross-field test so it proves structurally valid no-match payl
 ```ts
 await expect(client.findMatch(
   { itemName: 'Unknown game', imageUrl: null },
-  { model: 'gpt-5.6-terra' }
+  { model: 'gpt-6.1-terra' }
 )).resolves.toEqual({
   ...decisionFixture(),
   ...overrides

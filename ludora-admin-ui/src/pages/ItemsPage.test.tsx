@@ -411,7 +411,7 @@ describe('ItemsPage', () => {
         return jsonResponse({
           description_es: generatedDescription,
           metadata: {},
-          model: 'gpt-5.6-terra',
+          model: 'gpt-6.1-terra',
           prompt_version: 'description-generator-v1'
         });
       }

@@ -31,11 +31,11 @@ describe('Codex auto-list evaluation client', () => {
       itemNameEs: 'Juego',
       storeItemImageUrl: 'https://store.mx/game.jpg',
       storeItemName: 'Game'
-    }, { model: 'gpt-5.6-terra' })).resolves.toEqual(validDecision());
+    }, { model: 'gpt-6.1-terra' })).resolves.toEqual(validDecision());
 
     expect(createCodexResponsesClient).toHaveBeenCalledWith({ baseURL: 'http://127.0.0.1:3001/v1' });
     expect(responsesCreate).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-terra',
       text: {
         format: expect.objectContaining({
           name: 'auto_list_evaluation',
@@ -70,7 +70,7 @@ describe('Codex auto-list evaluation client', () => {
       itemNameEs: 'Juego',
       storeItemImageUrl: '',
       storeItemName: 'Game'
-    }, { model: 'gpt-5.6-terra' });
+    }, { model: 'gpt-6.1-terra' });
 
     const request = responsesCreate.mock.calls[0]?.[0];
     expect(request.input[0].content).toContainEqual({ type: 'input_text', text: 'Store item cover is missing.' });

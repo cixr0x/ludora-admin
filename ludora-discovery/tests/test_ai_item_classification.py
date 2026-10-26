@@ -37,7 +37,7 @@ class AIItemClassificationTests(unittest.TestCase):
                 self.assertNotIn("secret", str(caught.exception))
 
     def test_classifier_uses_local_compatibility_authorization(self):
-        classifier = CodexApiItemClassifier(model="gpt-5.6-terra")
+        classifier = CodexApiItemClassifier(model="gpt-6.1-terra")
         request = classifier._build_request(
             DiscoveryItemCandidateRecord(store_id=12, source_url="https://example.mx/products/catan", title="Catan")
         )

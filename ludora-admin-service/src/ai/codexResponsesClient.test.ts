@@ -29,7 +29,7 @@ describe('Codex Responses client', () => {
     const address = server.address() as AddressInfo;
     const client = createCodexResponsesClient({ baseURL: `http://127.0.0.1:${address.port}/v1` });
 
-    await expect(client.create({ model: 'gpt-5.6-terra', input: 'Find Catan.' })).rejects.toThrow();
+    await expect(client.create({ model: 'gpt-6.1-terra', input: 'Find Catan.' })).rejects.toThrow();
 
     expect(attempts).toBe(1);
   });

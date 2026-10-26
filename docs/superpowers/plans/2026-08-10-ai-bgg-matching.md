@@ -81,7 +81,7 @@ it('defaults generative AI to the loopback CodexAPI', () => {
   vi.stubEnv('OPENAI_TRANSLATION_MODEL', undefined);
   expect(loadConfig()).toMatchObject({
     codexApiBaseUrl: 'http://127.0.0.1:3001/v1',
-    codexAiModel: 'gpt-5.6-terra'
+    codexAiModel: 'gpt-6.1-terra'
   });
 });
 
@@ -120,7 +120,7 @@ function readCodexApiBaseUrl(): string {
 }
 ```
 
-Add `codexApiBaseUrl` and `codexAiModel` to `Config`. Resolve the model from `CODEX_AI_MODEL`, then legacy `OPENAI_TRANSLATION_MODEL`, then `gpt-5.6-terra`. Remove `openAiApiKey`, `openAiBaseUrl`, and `openAiTranslationModel` from admin configuration.
+Add `codexApiBaseUrl` and `codexAiModel` to `Config`. Resolve the model from `CODEX_AI_MODEL`, then legacy `OPENAI_TRANSLATION_MODEL`, then `gpt-6.1-terra`. Remove `openAiApiKey`, `openAiBaseUrl`, and `openAiTranslationModel` from admin configuration.
 
 - [ ] **Step 4: Write the failing Codex transport test**
 
@@ -236,14 +236,14 @@ it('accepts a Spanish name match when the image is unavailable', async () => {
     nameAssessment: 'MATCH',
     coverAssessment: 'UNAVAILABLE'
   });
-  const service = createAiBggMatchingService({ findMatch: async () => decision }, { model: 'gpt-5.6-terra' });
+  const service = createAiBggMatchingService({ findMatch: async () => decision }, { model: 'gpt-6.1-terra' });
   await expect(service.findMatch({ itemName: 'La Guerra del Anillo', imageUrl: null })).resolves.toEqual(decision);
 });
 
 it('rejects a positive decision with a conflicting cover', async () => {
   const service = createAiBggMatchingService({
     findMatch: async () => decisionFixture({ matchFound: true, coverAssessment: 'CONFLICT' })
-  }, { model: 'gpt-5.6-terra' });
+  }, { model: 'gpt-6.1-terra' });
   await expect(service.findMatch({ itemName: 'Catan', imageUrl: 'https://store.mx/catan.jpg' }))
     .rejects.toThrow('AI BGG match cannot accept a cover conflict');
 });
@@ -735,7 +735,7 @@ def test_codex_api_base_url_rejects_official_openai(self):
         resolve_codex_api_base_url(env={'CODEX_API_BASE_URL': 'https://api.openai.com/v1'})
 
 def test_classifier_uses_local_compatibility_authorization(self):
-    classifier = CodexApiItemClassifier(model='gpt-5.6-terra')
+    classifier = CodexApiItemClassifier(model='gpt-6.1-terra')
     request = classifier._build_request(sample_record())
     self.assertEqual(request.headers['Authorization'], 'Bearer codexapi-local')
 ```
@@ -781,7 +781,7 @@ def resolve_codex_api_base_url(env=None, dotenv_path='.env') -> str:
     return value.rstrip('/')
 ```
 
-Read `CODEX_CLASSIFIER_MODEL` before legacy `OPENAI_CLASSIFIER_MODEL`; retain `gpt-5.6-terra` as the default.
+Read `CODEX_CLASSIFIER_MODEL` before legacy `OPENAI_CLASSIFIER_MODEL`; retain `gpt-6.1-terra` as the default.
 
 - [ ] **Step 5: Rename and simplify the classifier transport**
 
@@ -859,8 +859,8 @@ Document this configuration:
 
 ```text
 CODEX_API_BASE_URL=http://127.0.0.1:3001/v1
-CODEX_AI_MODEL=gpt-5.6-terra
-CODEX_CLASSIFIER_MODEL=gpt-5.6-terra
+CODEX_AI_MODEL=gpt-6.1-terra
+CODEX_CLASSIFIER_MODEL=gpt-6.1-terra
 OPENAI_API_KEY=<embeddings only>
 OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ```

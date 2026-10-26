@@ -204,7 +204,7 @@ describe('loadConfig', () => {
 
     expect(loadConfig()).toMatchObject({
       codexApiBaseUrl: 'http://127.0.0.1:3001/v1',
-      codexAiModel: 'gpt-5.6-terra'
+      codexAiModel: 'gpt-6.1-terra'
     });
   });
 

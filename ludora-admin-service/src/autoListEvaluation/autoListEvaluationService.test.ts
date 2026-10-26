@@ -21,7 +21,7 @@ describe('auto-list evaluation service', () => {
     const result = await createAutoListEvaluationService(
       evaluationDatabase(linkedRow({ item_description_es: '   ' }), queries),
       client,
-      { imageSimilarityService: imageSimilarity, model: 'gpt-5.6-terra' }
+      { imageSimilarityService: imageSimilarity, model: 'gpt-6.1-terra' }
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toEqual({
@@ -44,7 +44,7 @@ describe('auto-list evaluation service', () => {
     const imageSimilarity = imageSimilarityService(95);
     const service = createAutoListEvaluationService(database, client, {
       imageSimilarityService: imageSimilarity,
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-terra',
       now: () => new Date('2026-08-25T18:00:00.000Z')
     });
 
@@ -57,7 +57,7 @@ describe('auto-list evaluation service', () => {
       itemNameEs: 'Café Barista',
       storeItemImageUrl: 'https://store.mx/cafe-barista-en.jpg',
       storeItemName: 'Coffee Rush Board Game'
-    }, { model: 'gpt-5.6-terra' });
+    }, { model: 'gpt-6.1-terra' });
     expect(imageSimilarity.estimate).toHaveBeenCalledWith(
       'https://catalog.mx/cafe-barista-es.jpg',
       'https://store.mx/cafe-barista-en.jpg'
@@ -93,7 +93,7 @@ describe('auto-list evaluation service', () => {
     const result = await createAutoListEvaluationService(
       evaluationDatabase(linkedRow(), queries),
       evaluationClient(decision()),
-      { imageSimilarityService: imageSimilarityService(score), model: 'gpt-5.6-terra' }
+      { imageSimilarityService: imageSimilarityService(score), model: 'gpt-6.1-terra' }
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
@@ -121,7 +121,7 @@ describe('auto-list evaluation service', () => {
 
     const result = await createAutoListEvaluationService(database, client, {
       imageSimilarityService: imageSimilarityService(100),
-      model: 'gpt-5.6-terra'
+      model: 'gpt-6.1-terra'
     }).evaluateLinkedStoreItem(42, 77);
 
     expect(client.evaluate).toHaveBeenCalledWith(expect.objectContaining({
@@ -149,7 +149,7 @@ describe('auto-list evaluation service', () => {
     const result = await createAutoListEvaluationService(
       evaluationDatabase(linkedRow(), queries),
       evaluationClient(decision()),
-      { imageSimilarityService: imageSimilarity, model: 'gpt-5.6-terra' }
+      { imageSimilarityService: imageSimilarity, model: 'gpt-6.1-terra' }
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
@@ -179,7 +179,7 @@ describe('auto-list evaluation service', () => {
 
     const result = await createAutoListEvaluationService(database, client, {
       imageSimilarityService: imageSimilarityService(100),
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-terra',
       now: () => new Date('2026-08-25T18:00:00.000Z')
     }).evaluateLinkedStoreItem(42, 77);
 
@@ -188,7 +188,7 @@ describe('auto-list evaluation service', () => {
       evaluated_at: '2026-08-25T18:00:00.000Z',
       image_similarity: { pass: true, score: 100, status: 'COMPLETED', threshold: 95 },
       item_id: 77,
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-terra',
       reasoning: 'CodexAPI timed out',
       status: 'ERROR',
       store_item_id: 42,
@@ -209,7 +209,7 @@ describe('auto-list evaluation service', () => {
     const result = await createAutoListEvaluationService(
       evaluationDatabase(linkedRow(), queries),
       evaluationClient(decision({ ...overrides, verdict: 'NOT PASS' })),
-      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-5.6-terra' }
+      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-6.1-terra' }
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
@@ -233,7 +233,7 @@ describe('auto-list evaluation service', () => {
     const result = await createAutoListEvaluationService(
       evaluationDatabase(linkedRow(row), queries),
       evaluationClient(decision()),
-      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-5.6-terra' }
+      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-6.1-terra' }
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
@@ -252,7 +252,7 @@ describe('auto-list evaluation service', () => {
     const result = await createAutoListEvaluationService(
       evaluationDatabase(linkedRow(), queries),
       evaluationClient(decision({ sameGameReasoning: '' })),
-      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-5.6-terra' }
+      { imageSimilarityService: imageSimilarityService(100), model: 'gpt-6.1-terra' }
     ).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({
@@ -276,7 +276,7 @@ describe('auto-list evaluation service', () => {
     };
     const service = createAutoListEvaluationService(database, evaluationClient(decision()), {
       imageSimilarityService: imageSimilarityService(0),
-      model: 'gpt-5.6-terra'
+      model: 'gpt-6.1-terra'
     });
 
     await expect(service.evaluateLinkedStoreItem(42, 77)).rejects.toThrow(
@@ -294,7 +294,7 @@ describe('auto-list evaluation service', () => {
 
     const result = await createAutoListEvaluationService(database, client, {
       imageSimilarityService: imageSimilarityService(100),
-      model: 'gpt-5.6-terra'
+      model: 'gpt-6.1-terra'
     }).evaluateLinkedStoreItem(42, 77);
 
     expect(result).toMatchObject({

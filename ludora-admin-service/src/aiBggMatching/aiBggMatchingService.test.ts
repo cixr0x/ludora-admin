@@ -70,7 +70,7 @@ describe('AI BGG matching service', () => {
       nameAssessment: 'MATCH',
       coverAssessment: 'UNAVAILABLE'
     });
-    const service = createAiBggMatchingService({ findMatch: async () => decision }, { model: 'gpt-5.6-terra' });
+    const service = createAiBggMatchingService({ findMatch: async () => decision }, { model: 'gpt-6.1-terra' });
 
     await expect(service.findMatch({ itemName: 'La Guerra del Anillo', imageUrl: null })).resolves.toEqual(decision);
   });
@@ -95,7 +95,7 @@ describe('AI BGG matching service', () => {
         ...overrides
       }))
     };
-    const service = createAiBggMatchingService(client, { model: 'gpt-5.6-terra' });
+    const service = createAiBggMatchingService(client, { model: 'gpt-6.1-terra' });
 
     await expect(service.findMatch({ itemName: 'Catan', imageUrl: 'https://store.mx/catan.jpg' }))
       .resolves.toBeNull();
@@ -105,7 +105,7 @@ describe('AI BGG matching service', () => {
   it('converts a valid no-match decision to null', async () => {
     const service = createAiBggMatchingService({
       findMatch: async () => decisionFixture()
-    }, { model: 'gpt-5.6-terra' });
+    }, { model: 'gpt-6.1-terra' });
 
     await expect(service.findMatch({ itemName: 'Unknown game', imageUrl: null })).resolves.toBeNull();
   });
@@ -120,7 +120,7 @@ describe('AI BGG matching service', () => {
     ['a conflicting cover assessment', { coverAssessment: 'CONFLICT' as const }]
   ])('converts a no-match decision paired with %s to null', async (_label, overrides) => {
     const client = { findMatch: vi.fn().mockResolvedValue(decisionFixture(overrides)) };
-    const service = createAiBggMatchingService(client, { model: 'gpt-5.6-terra' });
+    const service = createAiBggMatchingService(client, { model: 'gpt-6.1-terra' });
 
     await expect(service.findMatch({ itemName: 'Unknown game', imageUrl: null }))
       .resolves.toBeNull();
@@ -130,7 +130,7 @@ describe('AI BGG matching service', () => {
   it('rejects confidence outside the zero-to-one range', async () => {
     const service = createAiBggMatchingService({
       findMatch: async () => decisionFixture({ confidence: 1.1 })
-    }, { model: 'gpt-5.6-terra' });
+    }, { model: 'gpt-6.1-terra' });
 
     await expect(service.findMatch({ itemName: 'Catan', imageUrl: null }))
       .rejects.toThrow('AI BGG match confidence must be between 0 and 1');
@@ -139,7 +139,7 @@ describe('AI BGG matching service', () => {
   it('rejects a non-finite confidence value', async () => {
     const service = createAiBggMatchingService({
       findMatch: async () => decisionFixture({ confidence: Number.NaN })
-    }, { model: 'gpt-5.6-terra' });
+    }, { model: 'gpt-6.1-terra' });
 
     await expect(service.findMatch({ itemName: 'Catan', imageUrl: null }))
       .rejects.toThrow('AI BGG match confidence must be between 0 and 1');
@@ -163,11 +163,11 @@ describe('Codex AI BGG matching client', () => {
     responsesCreate.mockResolvedValueOnce({ output_text: JSON.stringify(decision) });
     const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1' });
 
-    await expect(client.findMatch({ itemName: 'Catan', imageUrl: 'https://store.mx/catan.jpg' }, { model: 'gpt-5.6-terra' }))
+    await expect(client.findMatch({ itemName: 'Catan', imageUrl: 'https://store.mx/catan.jpg' }, { model: 'gpt-6.1-terra' }))
       .resolves.toEqual(decision);
 
     expect(responsesCreate).toHaveBeenCalledWith(expect.objectContaining({
-      model: 'gpt-5.6-terra',
+      model: 'gpt-6.1-terra',
       input: [{
         role: 'user',
         content: [{
@@ -199,7 +199,7 @@ describe('Codex AI BGG matching client', () => {
     responsesCreate.mockResolvedValueOnce({ output_text: JSON.stringify(decisionFixture()) });
     const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1' });
 
-    await expect(client.findMatch({ itemName: 'Unknown game', imageUrl }, { model: 'gpt-5.6-terra' }))
+    await expect(client.findMatch({ itemName: 'Unknown game', imageUrl }, { model: 'gpt-6.1-terra' }))
       .resolves.toEqual(decisionFixture());
 
     const request = responsesCreate.mock.calls[0]?.[0];
@@ -235,7 +235,7 @@ describe('Codex AI BGG matching client', () => {
       })
     });
 
-    await expect(client.findMatch({ itemName: 'Catan', imageUrl: null }, { model: 'gpt-5.6-terra' }))
+    await expect(client.findMatch({ itemName: 'Catan', imageUrl: null }, { model: 'gpt-6.1-terra' }))
       .rejects.toThrow(`Invalid AI BGG match decision: ${expectedMessage}`);
   });
 
@@ -256,7 +256,7 @@ describe('Codex AI BGG matching client', () => {
       })
     });
 
-    await expect(client.findMatch({ itemName: 'Unknown game', imageUrl: null }, { model: 'gpt-5.6-terra' }))
+    await expect(client.findMatch({ itemName: 'Unknown game', imageUrl: null }, { model: 'gpt-6.1-terra' }))
       .resolves.toEqual({
         ...decisionFixture(),
         ...overrides

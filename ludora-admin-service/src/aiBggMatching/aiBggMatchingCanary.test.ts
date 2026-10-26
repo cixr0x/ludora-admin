@@ -22,12 +22,12 @@ describe('AI BGG matching canary', () => {
   it('accepts the exact Bomberos production regression without a diagnostic image URL', async () => {
     const findMatch = vi.fn().mockResolvedValue(matchingDecision());
 
-    await expect(verifyAiBggMatchingCanary({ findMatch }, 'gpt-5.6-terra'))
+    await expect(verifyAiBggMatchingCanary({ findMatch }, 'gpt-6.1-terra'))
       .resolves.toMatchObject({ bggId: 296354, matchFound: true });
     expect(findMatch).toHaveBeenCalledWith({
       itemName: 'Bomberos En Accion | Haba',
       imageUrl: 'https://cdn.shopify.com/s/files/1/0556/0493/6985/files/bomberos-en-accion-haba-152327.jpg?v=1726573771'
-    }, { model: 'gpt-5.6-terra' });
+    }, { model: 'gpt-6.1-terra' });
   });
 
   it.each([
@@ -56,7 +56,7 @@ describe('AI BGG matching canary', () => {
     ['an unavailable cover assessment', matchingDecision({ coverAssessment: 'UNAVAILABLE' })],
     ['a conflicting cover assessment', matchingDecision({ coverAssessment: 'CONFLICT' })]
   ])('fails closed for %s', async (_label, decision) => {
-    await expect(verifyAiBggMatchingCanary({ findMatch: async () => decision }, 'gpt-5.6-terra'))
+    await expect(verifyAiBggMatchingCanary({ findMatch: async () => decision }, 'gpt-6.1-terra'))
       .rejects.toThrow('AI BGG canary expected BGG ID 296354.');
   });
 });
