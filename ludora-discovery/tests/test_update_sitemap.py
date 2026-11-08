@@ -125,6 +125,33 @@ class UpdateSitemapTests(unittest.TestCase):
         self.responses[ROOT] = FetchResult(ROOT, urlset(PRESENT, PRESENT))
         self.assertFalse(self.is_missing())
 
+    def test_shopify_product_handle_aliases_count_once_toward_the_floor(self):
+        config = CONFIG.replace('"min_urls":1', '"min_urls":2')
+        for alias in (
+            "/collections/board-games/products/ALPHA",
+            "/collections/board-games/%70roducts/alpha",
+        ):
+            with self.subTest(alias=alias):
+                self.checker = self.make_checker(config)
+                self.responses[ROOT] = FetchResult(ROOT, urlset(PRESENT, ORIGIN + alias))
+                self.assertFalse(self.is_missing(platform="shopify"))
+                self.assertTrue(self.is_missing())
+
+    def test_shopify_floor_also_counts_distinct_nonproduct_paths(self):
+        config = CONFIG.replace('"min_urls":1', '"min_urls":3')
+        locations = (PRESENT, ORIGIN + "/collections/games/products/alpha", ORIGIN + "/pages/contact")
+        self.checker = self.make_checker(config)
+        self.responses[ROOT] = FetchResult(ROOT, urlset(*locations, ORIGIN + "/pages/contact/"))
+        self.assertFalse(self.is_missing(platform="shopify"))
+        self.checker = self.make_checker(config)
+        self.responses[ROOT] = FetchResult(ROOT, urlset(*locations, ORIGIN + "/pages/about"))
+        self.assertTrue(self.is_missing(platform="shopify"))
+
+    def test_shopify_nonproduct_paths_alone_are_not_evidence_of_product_coverage(self):
+        self.checker = self.make_checker(CONFIG.replace('"min_urls":1', '"min_urls":2'))
+        self.responses[ROOT] = FetchResult(ROOT, urlset(ORIGIN + "/pages/contact", ORIGIN + "/pages/about"))
+        self.assertFalse(self.is_missing(platform="shopify"))
+
     def test_partial_indexes_remain_unknown_despite_a_valid_nonempty_child(self):
         for bad_child in (
             FetchResult(OTHER_CHILD, "<urlset>"),
@@ -179,6 +206,34 @@ class UpdateSitemapTests(unittest.TestCase):
         first = CHILD + "?page=1"
         second = CHILD + "?page=2"
         third = CHILD.replace("products.xml", "Products.xml") + "?page=2"
+        self.responses = {
+            ROOT: FetchResult(ROOT, index(first, second, third)),
+            first: FetchResult(first, urlset(PRESENT)),
+            second: FetchResult(second, urlset(ORIGIN + "/products/beta")),
+            third: FetchResult(third, urlset(ORIGIN + "/products/gamma")),
+        }
+        self.assertTrue(self.is_missing())
+        self.assertEqual(self.requests, [ROOT, first, second, third])
+
+    def test_escaped_child_redirect_aliases_cannot_hide_a_duplicate_document(self):
+        for first, redirected in (
+            (CHILD, ORIGIN + "/%70roducts.xml"),
+            (CHILD + "?page=alpha~", CHILD + "?page=%61lpha%7e"),
+            (CHILD + "?page=a%2Fb", CHILD + "?page=a%2fb"),
+        ):
+            with self.subTest(redirected=redirected):
+                self.checker = self.make_checker()
+                self.responses = {
+                    ROOT: FetchResult(ROOT, index(first, OTHER_CHILD)),
+                    first: FetchResult(first, urlset(PRESENT)),
+                    OTHER_CHILD: FetchResult(redirected, urlset(PRESENT)),
+                }
+                self.assertFalse(self.is_missing())
+
+    def test_document_identity_distinguishes_reserved_escapes_from_literal_separators(self):
+        first = ORIGIN + "/sitemaps%2Fproducts.xml?page=alpha%2Fbeta"
+        second = ORIGIN + "/sitemaps/products.xml?page=alpha%2Fbeta"
+        third = ORIGIN + "/sitemaps%2Fproducts.xml?page=alpha/beta"
         self.responses = {
             ROOT: FetchResult(ROOT, index(first, second, third)),
             first: FetchResult(first, urlset(PRESENT)),

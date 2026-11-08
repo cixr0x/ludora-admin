@@ -12,7 +12,7 @@ from pathlib import Path
 from queue import Empty, Queue
 from threading import BoundedSemaphore, Thread
 from urllib.error import HTTPError
-from urllib.parse import SplitResult, unquote, urljoin, urlsplit
+from urllib.parse import SplitResult, quote_from_bytes, unquote, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from xml.etree import ElementTree
 
@@ -40,6 +40,7 @@ CANCELLATION_POLL_SECONDS = 0.05
 SITEMAP_NAMESPACE = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
 HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 BAD_ESCAPE = re.compile(r"%(?![a-fA-F0-9]{2})")
+PERCENT_ESCAPE = re.compile(r"%([a-fA-F0-9]{2})")
 _LOAD_SLOT = BoundedSemaphore()
 
 
@@ -227,6 +228,7 @@ class UpdateSitemapChecker:
         complete: dict[_DocumentIdentity, str] = {}
         final_urls: set[_DocumentIdentity] = set()
         pages = _PageMembership(set(), set())
+        shopify_nonproduct_paths: set[str] = set()
         documents = total_bytes = page_entries = 0
 
         def visit(url: str, depth: int) -> None:
@@ -278,19 +280,29 @@ class UpdateSitemapChecker:
                     page = _http_url(location)
                     if page is None or _store_host(page) != store_host:
                         raise ValueError("Untrusted sitemap page")
-                    pages.paths.add(_page_path(page))
-                    if shopify and (handle := _shopify_handle(location)):
-                        pages.shopify_handles.add(handle)
+                    path = _page_path(page)
+                    pages.paths.add(path)
+                    if shopify:
+                        handle = _shopify_handle(location)
+                        if handle:
+                            pages.shopify_handles.add(handle)
+                        elif not _shopify_handle(path):
+                            # A plausible product alias cannot count as another page.
+                            shopify_nonproduct_paths.add(path)
             active.difference_update(aliases)
             complete[requested_identity] = url
             final_urls.add(final_identity)
 
         visit(config.url, depth=0)
         check_budget()
-        if len(pages.paths) < config.min_urls:
+        if shopify:
+            if not pages.shopify_handles:
+                raise ValueError("Sitemap has no recognizable Shopify products")
+            coverage = len(pages.shopify_handles) + len(shopify_nonproduct_paths)
+        else:
+            coverage = len(pages.paths)
+        if coverage < config.min_urls:
             raise ValueError("Sitemap is below the verified coverage floor")
-        if shopify and not pages.shopify_handles:
-            raise ValueError("Sitemap has no recognizable Shopify products")
         return pages
 
     def _fetch(self, url: str, check_budget: Callable[[], float]) -> FetchResult | None:
@@ -380,7 +392,21 @@ def _ascii_hostname(parts: SplitResult) -> str:
 def _document_identity(parts: SplitResult) -> _DocumentIdentity:
     # Validation permits only the default port for the scheme. Omit it here
     # while preserving path case and query parameters that can select pages.
-    return parts.scheme, _ascii_hostname(parts), parts.path or "/", parts.query
+    return (
+        parts.scheme,
+        _ascii_hostname(parts),
+        _normalize_uri_escapes(parts.path or "/"),
+        _normalize_uri_escapes(parts.query),
+    )
+
+
+def _normalize_uri_escapes(component: str) -> str:
+    # quote_from_bytes leaves RFC 3986 unreserved bytes literal and emits
+    # uppercase escapes for the rest, including encoded separators.
+    return PERCENT_ESCAPE.sub(
+        lambda match: quote_from_bytes(bytes.fromhex(match[1]), safe=""),
+        component,
+    )
 
 
 def _shopify_handle(url: str) -> str:

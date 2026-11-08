@@ -171,12 +171,16 @@ environment or the discovery operation's env file.
 LUDORA_VERIFIED_UPDATE_SITEMAPS='{"123":{"url":"https://store.example/sitemap.xml","min_urls":100}}'
 ```
 
-`min_urls` is a lower bound on unique same-store page URLs, including nonproduct
-pages. Harmless aliases count as one URL. A usable snapshot requires a complete
-tree of same-store HTTP(S) XML responses on standard ports. Missing children,
-malformed or empty XML, unsafe redirects, coverage below the floor, and request
-or traversal limits all leave the usual product update path available. A
-well-formed sitemap above the floor can still omit live products. Recheck
+`min_urls` is a lower bound on distinct same-store page paths after URL alias
+normalization. For Shopify, it counts each normalized product handle once plus
+distinct normalized nonproduct paths. A Shopify sitemap with no recognizable
+product handles leaves the usual product update path available.
+
+A usable snapshot requires a complete tree of same-store HTTP(S) XML responses
+on standard ports. Missing children, malformed or empty XML, unsafe redirects,
+coverage below the floor, and request or traversal limits all leave the usual
+product update path available. A well-formed sitemap above the floor can
+still omit live products. Recheck
 coverage against the independent catalog whenever the store changes how it
 publishes product URLs. Shopify URL variants use the same product handle as
 the refresh request.
