@@ -157,6 +157,37 @@ process and retains its current behavior; its requests do not share this throttl
 The existing cooldown is respected and is not reset by enabling the adapter. No
 database migration or immediate catalog refresh is required to deploy this code.
 
+## Verified sitemap checks before item updates
+
+Both continuous and manual item updates can check a store's product coverage
+before requesting a product. The default empty configuration disables the check.
+To enroll a store, compare the sitemap's full URL tree against an independent
+catalog source and verify that it includes current products, including
+out-of-stock products and the source URL forms stored in Ludora. Set the store ID,
+the verified sitemap root, and a conservative coverage floor in the worker
+environment or the discovery operation's env file.
+
+```dotenv
+LUDORA_VERIFIED_UPDATE_SITEMAPS='{"123":{"url":"https://store.example/sitemap.xml","min_urls":100}}'
+```
+
+`min_urls` is a lower bound on unique same-store page URLs, including nonproduct
+pages. Harmless aliases count as one URL. A usable snapshot requires a complete
+tree of same-store HTTP(S) XML responses on standard ports. Missing children,
+malformed or empty XML, unsafe redirects, coverage below the floor, and request
+or traversal limits all leave the usual product update path available. The
+worker caches a fresh snapshot for up to ten minutes and a failed load for 30
+seconds. Reload failures discard expired snapshots. Configuration is read at
+manual run or continuous worker session start.
+
+A confirmed miss skips the product request and marks the offer unavailable and
+hidden with `availability_source=sitemap_missing`. The updater records the reason
+and changed fields in the existing logs. Chocita's continuous lookahead excludes
+confirmed misses from requests and waits for each item's own lease to record the
+outcome. If a store's coverage changes, remove its enrollment and restart the
+continuous worker. Recheck affected products and restore availability and
+visibility through the existing admin workflow after verifying each offer.
+
 ## Product-detail pacing and Shopify discovery
 
 Product-detail requests are globally start-paced at three seconds across a discovery process. The throttle spans every store in a batch and also applies to retry attempts.

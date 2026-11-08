@@ -30,6 +30,7 @@ from ludora.product_crawler import (
     refresh_confirmed_store_item_candidate,
 )
 from ludora.trace import TraceLogger, create_item_update_trace_logger
+from ludora.update_sitemap import LOAD_BUDGET_SECONDS, SITEMAP_MISSING, UpdateSitemapChecker
 from ludora.webfetch import PerHostRequestThrottle
 from ludora.woocommerce_batch_refresh import ChocitaBatchRefresher
 
@@ -129,6 +130,9 @@ def _run_worker_session(
         jitter_seconds=1.0,
         fallback_cooldown_seconds=30.0,
     )
+    sitemap_checker = UpdateSitemapChecker.from_environment(
+        current_env, env_file, load_budget_seconds=min(LOAD_BUDGET_SECONDS, lease_seconds / 4),
+    )
 
     connection = connect_database(database_url)
     repository = DiscoveryRepository(connection)
@@ -205,6 +209,7 @@ def _run_worker_session(
                     worker_id=worker_id,
                     redirect_handler=redirect_handler,
                     batch_refresher=batch_refresher,
+                    sitemap_checker=sitemap_checker,
                 )
             finally:
                 if browser_session is not None:
@@ -248,6 +253,7 @@ def _process_claim(
     worker_id: str,
     redirect_handler=None,
     batch_refresher: ChocitaBatchRefresher | None = None,
+    sitemap_checker: UpdateSitemapChecker | None = None,
 ) -> None:
     store_item_id = claim.record.store_item_id
     _log(
@@ -258,10 +264,35 @@ def _process_claim(
         store_name=claim.store_name,
     )
 
+    def is_sitemap_missing(source_url: str) -> bool:
+        return sitemap_checker is not None and sitemap_checker.is_missing(
+            claim.record.store_id, source_url, store_url=f"https://{claim.canonical_domain}",
+        )
+
     try:
+        if is_sitemap_missing(claim.record.source_url):
+            changed = repository.mark_item_candidate_sitemap_missing(
+                claim.record, job_id=job_id, run_id=run_id, claim=claim,
+                worker_id=worker_id, worker_name=WORKER_NAME,
+            )
+            if trace_logger is not None:
+                trace_logger.log(
+                    "item_update.item.sitemap_missing", source_url=claim.record.source_url,
+                    reason=SITEMAP_MISSING, applied=changed is not None, changed=bool(changed),
+                )
+            _log(
+                "worker.item.deactivated" if changed is not None else "worker.item.failed",
+                attempt_id=claim.attempt_id,
+                reason=SITEMAP_MISSING if changed is not None else "sitemap_ownership_lost",
+                changed=bool(changed),
+                store_item_id=store_item_id,
+            )
+            return
         try:
             if batch_refresher is not None and batch_refresher.supports(claim):
-                refreshed_record = batch_refresher.refresh(claim, trace_logger=trace_logger)
+                refreshed_record = batch_refresher.refresh(
+                    claim, trace_logger=trace_logger, is_sitemap_missing=is_sitemap_missing,
+                )
             else:
                 refreshed_record = refresh_confirmed_store_item_candidate(
                     claim.record,

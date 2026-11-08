@@ -10,6 +10,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
 from ludora.discovery_pairs import DiscoveryPairState, discovery_url_pair, reconcile_discovery_pairs
+from ludora.update_sitemap import SITEMAP_MISSING
 
 
 def connect_database(database_url: str):
@@ -1531,6 +1532,171 @@ class DiscoveryRepository:
             should_process=False,
             created=False,
             changed=bool(changes),
+        )
+
+    def mark_item_candidate_sitemap_missing(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        *,
+        job_id: int | None = None,
+        run_id: str | None = None,
+        claim: ClaimedStoreItemUpdate | None = None,
+        worker_id: str | None = None,
+        worker_name: str | None = None,
+    ) -> bool | None:
+        """Return whether fields changed, or None if identity or ownership changed."""
+        store_item_id = existing_record.store_item_id
+        if store_item_id is None or existing_record.store_id is None:
+            raise ValueError("store and store item ids are required to record a sitemap miss")
+        if run_id is not None and job_id is None:
+            raise ValueError("job id is required to log update changes")
+        if claim is not None and (
+            claim.record is not existing_record or job_id is None or not run_id or not worker_id or not worker_name
+        ):
+            raise ValueError("claimed sitemap miss requires matching item, job, and worker context")
+
+        params = (
+            store_item_id, existing_record.store_id, existing_record.source_url, existing_record.source_url_origin,
+        )
+        ownership = "(si.update_lease_token is null or si.update_lease_expires_at <= clock_timestamp())"
+        if claim is not None:
+            ownership = """
+                si.update_lease_token = %s::uuid
+                and si.update_lease_expires_at > clock_timestamp()
+                and exists (
+                    select 1
+                    from store_item_update_attempt_log
+                    where id = %s
+                      and store_item_id = si.id
+                      and worker_id = %s
+                      and lease_token = si.update_lease_token
+                      and status = 'running'
+                    for update
+                )
+            """
+            params += (claim.lease_token, claim.attempt_id, worker_id)
+
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    with previous as materialized (
+                        select id, availability, availability_source, store_active
+                        from store_items
+                        where id = %s
+                        for update
+                    )
+                    update store_items si
+                    set availability = 'unavailable',
+                        availability_source = 'sitemap_missing',
+                        store_active = false,
+                        next_update_at = null,
+                        last_update_attempt_at = clock_timestamp(),
+                        update_lease_token = null,
+                        update_lease_expires_at = null,
+                        consecutive_update_failures = 0,
+                        last_update_error = ''
+                    from previous
+                    where si.id = previous.id
+                      and si.store_id = %s
+                      and si.source_url = %s
+                      and si.source_url_origin is not distinct from %s
+                      and {ownership}
+                    returning previous.availability, previous.availability_source, previous.store_active
+                    """,
+                    params,
+                )
+                previous = cursor.fetchone()
+                if previous is None:
+                    if claim is not None:
+                        self._record_sitemap_claim_loss(cursor, claim, worker_id, worker_name)
+                    self.connection.commit()
+                    return None
+
+                changes = [
+                    (field_name, old_value, new_value)
+                    for (field_name, new_value), old_value in zip(
+                        (("availability", "unavailable"), ("availability_source", SITEMAP_MISSING),
+                         ("store_active", False)),
+                        previous,
+                        strict=True,
+                    )
+                    if old_value != new_value
+                ]
+                if job_id is not None and run_id is not None:
+                    for field_name, old_value, new_value in changes:
+                        cursor.execute(
+                            """
+                            insert into store_item_update_change_log (
+                                job_id, run_id, store_item_id, field_name, old_value, new_value
+                            ) values (%s, %s, %s, %s, %s::jsonb, %s::jsonb)
+                            """,
+                            (job_id, run_id, store_item_id, field_name,
+                             _jsonb_log_value(old_value), _jsonb_log_value(new_value)),
+                        )
+                if claim is not None:
+                    cursor.execute(
+                        """
+                        update store_item_update_attempt_log
+                        set status = 'deactivated', changed = %s, error = %s, completed_at = now(),
+                            duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
+                        where id = %s and worker_id = %s and lease_token = %s::uuid and status = 'running'
+                        returning id
+                        """,
+                        (bool(changes), SITEMAP_MISSING, claim.attempt_id, worker_id, claim.lease_token),
+                    )
+                    if cursor.fetchone() is None:
+                        raise RuntimeError(f"Store item {store_item_id} update attempt changed before completion")
+                    cursor.execute(
+                        """
+                        update store_item_update_worker_state
+                        set status = 'idle', heartbeat_at = now(), current_store_item_id = null,
+                            last_success_at = now(), last_error = '', updated_at = now()
+                        where worker_name = %s and worker_id = %s and current_store_item_id = %s
+                        """,
+                        (worker_name, worker_id, store_item_id),
+                    )
+                    cursor.execute(
+                        """
+                        update job_store_item_update_log
+                        set scanned_items = scanned_items + 1, updated_items = updated_items + %s, updated_at = now()
+                        where id = %s
+                        """,
+                        (int(bool(changes)), job_id),
+                    )
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+        existing_record.availability = "unavailable"
+        existing_record.availability_source = SITEMAP_MISSING
+        existing_record.store_active = False
+        return bool(changes)
+
+    def _record_sitemap_claim_loss(
+        self,
+        cursor: Any,
+        claim: ClaimedStoreItemUpdate,
+        worker_id: str,
+        worker_name: str,
+    ) -> None:
+        error = "Update lease or item identity changed before sitemap persistence"
+        cursor.execute(
+            """
+            with lost_attempt as (
+                update store_item_update_attempt_log
+                set status = 'lease_lost', changed = false, error = %s, completed_at = now(),
+                    duration_ms = greatest(0, round(extract(epoch from (now() - started_at)) * 1000)::int)
+                where id = %s and worker_id = %s and lease_token = %s::uuid and status = 'running'
+                returning store_item_id
+            )
+            update store_item_update_worker_state
+            set status = 'idle', heartbeat_at = now(), current_store_item_id = null,
+                last_failure_at = now(), last_error = %s, updated_at = now()
+            from lost_attempt
+            where worker_name = %s and worker_id = %s and current_store_item_id = lost_attempt.store_item_id
+            """,
+            (error, claim.attempt_id, worker_id, claim.lease_token, error, worker_name, worker_id),
         )
 
     def mark_item_candidate_inactive(

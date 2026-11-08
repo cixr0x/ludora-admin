@@ -74,6 +74,7 @@ class ChocitaBatchRefresher:
         claim: ClaimedStoreItemUpdate,
         *,
         trace_logger: TraceLogger | None = None,
+        is_sitemap_missing: Callable[[str], bool] | None = None,
     ) -> DiscoveryItemCandidateRecord:
         if not self.supports(claim):
             raise ValueError("Chocita batch refresh requires the confirmed WooCommerce store and HTTPS origin")
@@ -85,7 +86,7 @@ class ChocitaBatchRefresher:
         try:
             if not cache_hit:
                 self._cache.clear()
-                self._fetch_batch(claim, trace)
+                self._fetch_batch(claim, trace, is_sitemap_missing)
             entry = self._cache.pop(key, None)
             if entry is None:
                 raise RuntimeError("Chocita claimed product has no unique eligible batch source URL")
@@ -122,7 +123,12 @@ class ChocitaBatchRefresher:
             if now - entry.fetched_at < CACHE_TTL_SECONDS
         }
 
-    def _fetch_batch(self, claim: ClaimedStoreItemUpdate, trace: TraceLogger) -> None:
+    def _fetch_batch(
+        self,
+        claim: ClaimedStoreItemUpdate,
+        trace: TraceLogger,
+        is_sitemap_missing: Callable[[str], bool] | None,
+    ) -> None:
         record = claim.record
         targets = self.repository.list_store_item_update_batch_targets(
             store_id=record.store_id,
@@ -140,6 +146,11 @@ class ChocitaBatchRefresher:
         seen_urls: set[str] = set()
         request_url = ""
         for target_id, source_url in ordered[:BATCH_SIZE]:
+            # The worker already checked the current claim. Future targets
+            # only affect this request and are checked again when claimed.
+            if (target_id, source_url) != current_target and is_sitemap_missing is not None:
+                if is_sitemap_missing(source_url):
+                    continue
             try:
                 slug = _product_slug(source_url)
             except ValueError:

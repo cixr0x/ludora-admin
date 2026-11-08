@@ -37,6 +37,7 @@ from ludora.models import DiscoveryItemCandidateRecord
 from ludora.moonlight_discovery import is_moonlight_store_url, resolve_moonlight_user_agent
 from ludora.product_discovery_throttle import ProductDiscoveryRequestThrottle
 from ludora.trace import create_item_discovery_trace_logger, create_item_update_trace_logger
+from ludora.update_sitemap import UpdateSitemapChecker
 
 
 RunStatus = Literal["running", "cancelling", "cancelled", "completed", "failed"]
@@ -831,6 +832,7 @@ def run_item_update(
                 trace_logger=trace_logger,
                 redirect_handler=create_item_update_redirect_handler(
                     repository, current_env=current_env, env_file=env_file),
+                sitemap_checker=UpdateSitemapChecker.from_environment(current_env, env_file),
                 **update_kwargs,
             )
         except OperationCancelled as exc:

@@ -20,6 +20,7 @@ from ludora.product_crawler import (
 )
 from ludora.item_classification import apply_item_classification
 from ludora.trace import TraceLogger
+from ludora.update_sitemap import UpdateSitemapChecker
 
 
 BROWSER_FETCH_REQUIRED_PLATFORMS = {
@@ -191,6 +192,7 @@ def update_confirmed_store_items(
     trace_logger: TraceLogger | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
     redirect_handler: Callable | None = None,
+    sitemap_checker: UpdateSitemapChecker | None = None,
 ) -> list[DiscoveryItemCandidateRecord]:
     return update_confirmed_store_item_details(
         repository,
@@ -204,4 +206,5 @@ def update_confirmed_store_items(
         request_headers_provider=request_headers_provider,
         trace_logger=trace_logger,
         redirect_handler=redirect_handler,
+        sitemap_checker=sitemap_checker,
     )

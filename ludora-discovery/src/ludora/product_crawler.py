@@ -40,6 +40,7 @@ from ludora.shopify_storefront import (
 from ludora.sitemap_discovery import _looks_like_site_protection_challenge, discover_product_urls_from_sitemaps
 from ludora.supervised_browser import BrowserFetchFailed
 from ludora.trace import NullTraceLogger, TraceLogger
+from ludora.update_sitemap import SITEMAP_MISSING, UpdateSitemapChecker
 from ludora.webfetch import (
     DEFAULT_FETCH_MAX_ATTEMPTS,
     TRANSIENT_FETCH_STATUS_CODES,
@@ -93,6 +94,7 @@ GENERIC_TITLE_MATCH_TOKENS = {
 class StoreItemSource(Protocol):
     store_id: int
     platform: str
+    website_url: str
 
 
 class ItemCandidateRepository(Protocol):
@@ -164,6 +166,15 @@ class ItemCandidateRepository(Protocol):
         job_id: int | None = None,
         run_id: str | None = None,
     ) -> object | None:
+        ...
+
+    def mark_item_candidate_sitemap_missing(
+        self,
+        existing_record: DiscoveryItemCandidateRecord,
+        *,
+        job_id: int | None = None,
+        run_id: str | None = None,
+    ) -> bool | None:
         ...
 
     def update_store_item_update_progress(
@@ -769,6 +780,7 @@ def update_confirmed_store_item_details(
     request_throttle: PerHostRequestThrottle | None = None,
     request_headers_provider: RequestHeadersProvider | None = None,
     redirect_handler: Callable[..., PreparedItemUpdateRedirect] | None = None,
+    sitemap_checker: UpdateSitemapChecker | None = None,
 ) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
@@ -781,6 +793,10 @@ def update_confirmed_store_item_details(
         source.store_id: str(getattr(source, "store_name", "")).strip() or f"Store {source.store_id}"
         for source in store_sources
     }
+    store_urls = {
+        source.store_id: getattr(source, "website_url", "")
+        for source in store_sources
+    } if sitemap_checker is not None else {}
     resolved_request_throttle = request_throttle or PerHostRequestThrottle(
         minimum_interval_seconds=STORE_UPDATE_MIN_INTERVAL_SECONDS,
         jitter_seconds=STORE_UPDATE_JITTER_SECONDS,
@@ -865,6 +881,25 @@ def update_confirmed_store_item_details(
                             ),
                         )
                         continue
+                if sitemap_checker is not None and sitemap_checker.is_missing(
+                    existing_record.store_id,
+                    existing_record.source_url,
+                    store_url=store_urls.get(existing_record.store_id, ""),
+                    cancellation_token=cancellation_token,
+                ):
+                    raise_if_cancelled(cancellation_token)
+                    changed = repository.mark_item_candidate_sitemap_missing(
+                        existing_record, job_id=job_id, run_id=run_id,
+                    )
+                    records.updated_items += int(bool(changed))
+                    records.append(existing_record)
+                    _persist_store_item_update_progress(repository, job_id, records)
+                    trace.log(
+                        "item_update.item.sitemap_missing", **item_trace_fields,
+                        reason=SITEMAP_MISSING, applied=changed is not None, changed=bool(changed),
+                        scanned_items=len(records), updated_items=records.updated_items,
+                    )
+                    continue
                 request_waiter = lambda url: _wait_for_store_update_request(
                     resolved_request_throttle,
                     url,
