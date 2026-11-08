@@ -175,18 +175,27 @@ LUDORA_VERIFIED_UPDATE_SITEMAPS='{"123":{"url":"https://store.example/sitemap.xm
 pages. Harmless aliases count as one URL. A usable snapshot requires a complete
 tree of same-store HTTP(S) XML responses on standard ports. Missing children,
 malformed or empty XML, unsafe redirects, coverage below the floor, and request
-or traversal limits all leave the usual product update path available. The
-worker caches a fresh snapshot for up to ten minutes and a failed load for 30
-seconds. Reload failures discard expired snapshots. Configuration is read at
-manual run or continuous worker session start.
+or traversal limits all leave the usual product update path available. A
+well-formed sitemap above the floor can still omit live products. Recheck
+coverage against the independent catalog whenever the store changes how it
+publishes product URLs. Shopify URL variants use the same product handle as
+the refresh request.
+
+The worker caches a fresh snapshot for up to ten minutes and a failed load for
+30 seconds. Reload failures discard expired snapshots. If the collection
+deadline expires while a request is still running, the updater falls back and
+ignores the late result. Each process allows one sitemap load at a time.
+Configuration is read at manual run or continuous worker session start.
 
 A confirmed miss skips the product request and marks the offer unavailable and
 hidden with `availability_source=sitemap_missing`. The updater records the reason
 and changed fields in the existing logs. Chocita's continuous lookahead excludes
 confirmed misses from requests and waits for each item's own lease to record the
 outcome. If a store's coverage changes, remove its enrollment and restart the
-continuous worker. Recheck affected products and restore availability and
-visibility through the existing admin workflow after verifying each offer.
+continuous worker. Previously hidden rows stay hidden after disabling the check.
+Identify affected offers from the update logs and verify their current state.
+Public visibility is read-only in the admin UI. Restoring availability and
+visibility requires a separately approved data repair.
 
 ## Product-detail pacing and Shopify discovery
 

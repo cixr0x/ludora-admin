@@ -9,6 +9,8 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from queue import Empty, Queue
+from threading import BoundedSemaphore, Thread
 from urllib.error import HTTPError
 from urllib.parse import SplitResult, unquote, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -16,6 +18,7 @@ from xml.etree import ElementTree
 
 from ludora.cancellation import CancellationToken, OperationCancelled, raise_if_cancelled
 from ludora.config import load_dotenv_values
+from ludora.shopify_storefront import shopify_product_handle
 from ludora.webfetch import FetchResult
 
 
@@ -33,9 +36,11 @@ MAX_DOCUMENT_ENTRIES = 50_000
 MAX_PAGE_ENTRIES = 150_000
 LOAD_BUDGET_SECONDS = 12.0
 SOCKET_TIMEOUT_SECONDS = 3.0
+CANCELLATION_POLL_SECONDS = 0.05
 SITEMAP_NAMESPACE = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
 HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 BAD_ESCAPE = re.compile(r"%(?![a-fA-F0-9]{2})")
+_LOAD_SLOT = BoundedSemaphore()
 
 
 @dataclass(frozen=True)
@@ -45,9 +50,18 @@ class _VerifiedSitemap:
 
 
 @dataclass(frozen=True)
+class _PageMembership:
+    paths: set[str]
+    shopify_handles: set[str]
+
+
+@dataclass(frozen=True)
 class _CachedSnapshot:
     expires_at: float
-    pages: set[str] | None
+    pages: _PageMembership | None
+
+
+_DocumentIdentity = tuple[str, str, str, str]
 
 
 class UpdateSitemapChecker:
@@ -64,8 +78,8 @@ class UpdateSitemapChecker:
         self._configuration = configuration
         self._clock = clock
         self._load_budget_seconds = load_budget_seconds
-        self._fetcher = fetcher or self._fetch
-        self._cache: OrderedDict[int, _CachedSnapshot] = OrderedDict()
+        self._fetcher = fetcher
+        self._cache: OrderedDict[tuple[int, bool], _CachedSnapshot] = OrderedDict()
 
     @classmethod
     def from_environment(
@@ -106,9 +120,12 @@ class UpdateSitemapChecker:
         source_url: str,
         *,
         store_url: str,
+        platform: str = "",
         cancellation_token: CancellationToken | None = None,
     ) -> bool:
         raise_if_cancelled(cancellation_token)
+        if store_id is None:
+            return False
         config = self._configuration.get(store_id)
         if config is None:
             return False
@@ -120,12 +137,17 @@ class UpdateSitemapChecker:
         store_host = _store_host(store)
         if _store_host(source) != store_host or _store_host(root) != store_host:
             return False
+        shopify = platform == "shopify"
+        handle = _shopify_handle(source_url) if shopify else ""
+        if shopify and not handle:
+            return False
 
-        cached = self._cache.get(store_id)
+        cache_key = (store_id, shopify)
+        cached = self._cache.get(cache_key)
         now = self._clock()
         if cached is None or cached.expires_at <= now:
             try:
-                pages = self._load(config, store_host, now + self._load_budget_seconds, cancellation_token)
+                pages = self._load_within_budget(config, store_host, shopify, cancellation_token)
             except OperationCancelled:
                 raise
             except Exception:
@@ -133,54 +155,105 @@ class UpdateSitemapChecker:
                 pages = None
             ttl = SNAPSHOT_TTL_SECONDS if pages is not None else FAILURE_TTL_SECONDS
             expires_at = (now if pages is not None else self._clock()) + ttl
-            cached = self._cache[store_id] = _CachedSnapshot(expires_at, pages)
-        self._cache.move_to_end(store_id)
+            cached = self._cache[cache_key] = _CachedSnapshot(expires_at, pages)
+        self._cache.move_to_end(cache_key)
         if len(self._cache) > MAX_CACHED_STORES:
             self._cache.popitem(last=False)
         raise_if_cancelled(cancellation_token)
-        return cached.pages is not None and _page_path(source) not in cached.pages
+        return (
+            cached.pages is not None
+            and _page_path(source) not in cached.pages.paths
+            and handle not in cached.pages.shopify_handles
+        )
+
+    def _load_within_budget(
+        self,
+        config: _VerifiedSitemap,
+        store_host: str,
+        shopify: bool,
+        cancellation_token: CancellationToken | None,
+    ) -> _PageMembership | None:
+        # urllib timeouts bound socket inactivity, so response headers can
+        # outlive the deadline. Allow one in-flight load per process, without
+        # queuing behind a blocked transport or consuming a late result.
+        deadline = self._clock() + self._load_budget_seconds
+        wall_deadline = time.monotonic() + self._load_budget_seconds
+        completed: Queue[_PageMembership | Exception] = Queue(maxsize=1)
+
+        def check_budget() -> float:
+            raise_if_cancelled(cancellation_token)
+            remaining = min(deadline - self._clock(), wall_deadline - time.monotonic())
+            if remaining <= 0:
+                raise TimeoutError("Sitemap time budget exceeded")
+            return remaining
+
+        def load() -> None:
+            try:
+                result = self._load(config, store_host, shopify, check_budget)
+            except Exception as exc:
+                result = exc
+            finally:
+                _LOAD_SLOT.release()
+            completed.put_nowait(result)
+
+        if not _LOAD_SLOT.acquire(blocking=False):
+            return None
+        try:
+            Thread(target=load, name="update-sitemap", daemon=True).start()
+        except Exception:
+            _LOAD_SLOT.release()
+            raise
+        while True:
+            wait_seconds = check_budget()
+            if cancellation_token is not None:
+                wait_seconds = min(wait_seconds, CANCELLATION_POLL_SECONDS)
+            try:
+                result = completed.get(timeout=wait_seconds)
+            except Empty:
+                continue
+            check_budget()
+            if isinstance(result, Exception):
+                raise result
+            return result
 
     def _load(
         self,
         config: _VerifiedSitemap,
         store_host: str,
-        deadline: float,
-        cancellation_token: CancellationToken | None,
-    ) -> set[str]:
-        active: set[str] = set()
-        complete: set[str] = set()
-        final_urls: set[str] = set()
-        pages: set[str] = set()
+        shopify: bool,
+        check_budget: Callable[[], float],
+    ) -> _PageMembership:
+        active: set[_DocumentIdentity] = set()
+        complete: dict[_DocumentIdentity, str] = {}
+        final_urls: set[_DocumentIdentity] = set()
+        pages = _PageMembership(set(), set())
         documents = total_bytes = page_entries = 0
-
-        def check_budget() -> float:
-            raise_if_cancelled(cancellation_token)
-            remaining = deadline - self._clock()
-            if remaining <= 0:
-                raise ValueError("Sitemap time budget exceeded")
-            return remaining
 
         def visit(url: str, depth: int) -> None:
             nonlocal documents, total_bytes, page_entries
             check_budget()
-            if url in active:
+            requested_identity = _document_identity(urlsplit(url))
+            if requested_identity in active:
                 raise ValueError("Cyclic sitemap index")
-            if url in complete:
+            if complete.get(requested_identity) == url:
                 return
-            if url in final_urls:
+            if requested_identity in complete or requested_identity in final_urls:
                 raise ValueError("Distinct sitemap references resolved to the same document")
             if documents >= MAX_DOCUMENTS or depth > MAX_DEPTH:
                 raise ValueError("Sitemap traversal limit exceeded")
             documents += 1
 
-            fetched = self._fetcher(url, check_budget())
+            fetched = self._fetch(url, check_budget) if self._fetcher is None else self._fetcher(url, check_budget())
             check_budget()
             if fetched is None or fetched.status_code != 200 or fetched.error:
                 raise ValueError("Sitemap request failed")
             final = _document_url(fetched.url)
-            if final is None or _store_host(final) != store_host or fetched.url in active:
-                raise ValueError("Untrusted or cyclic sitemap redirect")
-            if fetched.url in final_urls:
+            if final is None or _store_host(final) != store_host:
+                raise ValueError("Untrusted sitemap redirect")
+            final_identity = _document_identity(final)
+            if final_identity in active:
+                raise ValueError("Cyclic sitemap redirect")
+            if final_identity in complete or final_identity in final_urls:
                 raise ValueError("Distinct sitemap references resolved to the same document")
             document_bytes = len(fetched.text.encode("utf-8"))
             total_bytes += document_bytes
@@ -188,7 +261,7 @@ class UpdateSitemapChecker:
                 raise ValueError("Sitemap size limit exceeded")
 
             is_index, locations = _locations(fetched.text)
-            aliases = {url, fetched.url}
+            aliases = {requested_identity, final_identity}
             active.update(aliases)
             if is_index:
                 for location in locations:
@@ -205,25 +278,26 @@ class UpdateSitemapChecker:
                     page = _http_url(location)
                     if page is None or _store_host(page) != store_host:
                         raise ValueError("Untrusted sitemap page")
-                    pages.add(_page_path(page))
+                    pages.paths.add(_page_path(page))
+                    if shopify and (handle := _shopify_handle(location)):
+                        pages.shopify_handles.add(handle)
             active.difference_update(aliases)
-            complete.add(url)
-            final_urls.add(fetched.url)
+            complete[requested_identity] = url
+            final_urls.add(final_identity)
 
         visit(config.url, depth=0)
         check_budget()
-        if len(pages) < config.min_urls:
+        if len(pages.paths) < config.min_urls:
             raise ValueError("Sitemap is below the verified coverage floor")
+        if shopify and not pages.shopify_handles:
+            raise ValueError("Sitemap has no recognizable Shopify products")
         return pages
 
-    def _fetch(self, url: str, timeout: float) -> FetchResult | None:
-        deadline = self._clock() + timeout
+    def _fetch(self, url: str, check_budget: Callable[[], float]) -> FetchResult | None:
         store_host = _store_host(urlsplit(url))
         opener = build_opener(_NoRedirectHandler())
         for _ in range(MAX_REDIRECTS + 1):
-            remaining = deadline - self._clock()
-            if remaining <= 0:
-                return None
+            remaining = check_budget()
             request = Request(url, headers={
                 "Accept": "application/xml, text/xml, */*;q=0.1",
                 "User-Agent": "LudoraBot/1.0",
@@ -237,7 +311,8 @@ class UpdateSitemapChecker:
                     ):
                         return None
                     body = bytearray()
-                    while len(body) <= MAX_DOCUMENT_BYTES and self._clock() < deadline:
+                    while len(body) <= MAX_DOCUMENT_BYTES:
+                        check_budget()
                         chunk = response.read1(min(65536, MAX_DOCUMENT_BYTES + 1 - len(body)))
                         if not chunk:
                             # read1 can report EOF without raising IncompleteRead.
@@ -281,7 +356,7 @@ def _http_url(value: str) -> SplitResult | None:
         port = 443 if parts.scheme == "https" else 80
         if parts.netloc.endswith(":") or parts.port not in (None, port):
             return None
-        host = parts.hostname.encode("idna").decode("ascii").removesuffix(".")
+        host = _ascii_hostname(parts)
         if not all(HOST_LABEL.fullmatch(label) for label in host.split(".")):
             return None
         unquote(parts.path, errors="strict")
@@ -295,7 +370,24 @@ def _document_url(value: str) -> SplitResult | None:
 
 
 def _store_host(parts: SplitResult) -> str:
-    return parts.hostname.encode("idna").decode("ascii").removesuffix(".").removeprefix("www.")
+    return _ascii_hostname(parts).removeprefix("www.")
+
+
+def _ascii_hostname(parts: SplitResult) -> str:
+    return parts.hostname.encode("idna").decode("ascii").lower().removesuffix(".")
+
+
+def _document_identity(parts: SplitResult) -> _DocumentIdentity:
+    # Validation permits only the default port for the scheme. Omit it here
+    # while preserving path case and query parameters that can select pages.
+    return parts.scheme, _ascii_hostname(parts), parts.path or "/", parts.query
+
+
+def _shopify_handle(url: str) -> str:
+    try:
+        return unicodedata.normalize("NFC", shopify_product_handle(url)).casefold()
+    except ValueError:
+        return ""
 
 
 def _page_path(parts: SplitResult) -> str:

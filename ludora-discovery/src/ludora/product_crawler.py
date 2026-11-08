@@ -885,6 +885,7 @@ def update_confirmed_store_item_details(
                     existing_record.store_id,
                     existing_record.source_url,
                     store_url=store_urls.get(existing_record.store_id, ""),
+                    platform=platform,
                     cancellation_token=cancellation_token,
                 ):
                     raise_if_cancelled(cancellation_token)

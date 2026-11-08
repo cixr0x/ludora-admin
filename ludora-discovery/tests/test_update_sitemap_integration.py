@@ -46,12 +46,17 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
         )
 
     def test_continuous_sitemap_miss_skips_transport_before_platform_dispatch(self):
+        self.snapshot = FetchResult(
+            self.sitemap_url, urlset(self.present.record.source_url, ORIGIN + "/products/long-shot"),
+        )
         for platform in ("custom", "shopify", "woocommerce"):
             with self.subTest(platform=platform):
                 repository = Mock()
                 repository.mark_item_candidate_sitemap_missing.return_value = True
                 trace = Mock()
                 target = replace(self.absent, platform=platform)
+                if platform == "shopify":
+                    target = replace(target, record=replace(target.record, source_url=ORIGIN + "/products/catan"))
                 batch = Mock()
                 with patch("ludora.continuous_update_worker.refresh_confirmed_store_item_candidate") as refresh:
                     self.process(target, repository, trace, batch=batch)
@@ -85,6 +90,18 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
         repository.list_store_item_update_batch_targets.assert_not_called()
         refresh.assert_not_called()
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["status"], "completed")
+
+    def test_continuous_shopify_alias_and_unresolvable_identity_reach_refresh(self):
+        self.snapshot = FetchResult(self.sitemap_url, urlset(ORIGIN + "/products/catan"))
+        for path in ("/collections/board-games/products/catan", "/collections/board-games"):
+            with self.subTest(path=path):
+                target = replace(self.absent, platform="shopify", record=replace(
+                    self.absent.record, source_url=ORIGIN + path))
+                repository = Mock()
+                with patch("ludora.continuous_update_worker.refresh_confirmed_store_item_candidate") as refresh:
+                    self.process(target, repository, Mock())
+                refresh.assert_called_once()
+                repository.mark_item_candidate_sitemap_missing.assert_not_called()
 
     def test_woocommerce_requests_only_present_lookahead_and_writes_only_claimed_rows(self):
         repository = Mock()
@@ -127,10 +144,10 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
         self.assertEqual(event.args[0], "worker.item.failed")
         self.assertEqual(event.kwargs["reason"], "sitemap_ownership_lost")
 
-    def run_manual(self, repository, trace, env=None):
+    def run_manual(self, repository, trace, env=None, *, platform="woocommerce"):
         repository.start_store_item_update_log.return_value = 17
         repository.list_store_item_discovery_sources.return_value = [
-            StoreItemDiscoverySource(17, "Chocita Juegos", ORIGIN, "woocommerce")
+            StoreItemDiscoverySource(17, "Chocita Juegos", ORIGIN, platform)
         ]
         with (
             patch("ludora.operations.connect_database"),
@@ -141,6 +158,20 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
         ):
             result = run_item_update(env=env or self.env, store_ids=[17], run_id="manual:test")
         return result, fetch
+
+    def test_manual_shopify_alias_and_unresolvable_identity_reach_refresh(self):
+        self.snapshot = FetchResult(self.sitemap_url, urlset(ORIGIN + "/products/catan"))
+        repository = Mock()
+        paths = ("/collections/board-games/products/catan", "/collections/board-games")
+        repository.list_confirmed_boardgame_item_candidates.return_value = [
+            replace(self.absent.record, source_url=ORIGIN + path) for path in paths
+        ]
+        _, fetch = self.run_manual(repository, Mock(), platform="shopify")
+        self.assertEqual(
+            [call.kwargs["listing_candidate"].source_url for call in fetch.call_args_list],
+            [ORIGIN + path for path in paths],
+        )
+        repository.mark_item_candidate_sitemap_missing.assert_not_called()
 
     def test_manual_update_checks_each_candidate_before_fetch_and_counts_terminal_progress(self):
         repository = Mock()

@@ -267,6 +267,7 @@ def _process_claim(
     def is_sitemap_missing(source_url: str) -> bool:
         return sitemap_checker is not None and sitemap_checker.is_missing(
             claim.record.store_id, source_url, store_url=f"https://{claim.canonical_domain}",
+            platform=claim.platform,
         )
 
     try:

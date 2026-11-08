@@ -1,6 +1,8 @@
 import io
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from email.message import Message
 from http.client import HTTPResponse
@@ -158,6 +160,34 @@ class UpdateSitemapTests(unittest.TestCase):
         }
         self.assertFalse(self.is_missing())
 
+    def test_child_redirect_aliases_cannot_hide_a_duplicate_document(self):
+        origin = "https://xn--bcher-kva.example"
+        root, first, second = (origin + "/" + path for path in ("index.xml", "first.xml", "second.xml"))
+        present = origin + "/products/alpha"
+        for final in ("https://XN--BCHER-KVA.example:443/first.xml", "https://bücher.example/first.xml"):
+            with self.subTest(final=final):
+                config = CONFIG.replace(ROOT, root)
+                checker = self.make_checker(config)
+                self.responses = {
+                    root: FetchResult(root, index(first, second)),
+                    first: FetchResult(first, urlset(present)),
+                    second: FetchResult(final, urlset(present)),
+                }
+                self.assertFalse(checker.is_missing(7, origin + "/products/missing", store_url=origin))
+
+    def test_document_identity_keeps_distinct_query_strings_and_path_case(self):
+        first = CHILD + "?page=1"
+        second = CHILD + "?page=2"
+        third = CHILD.replace("products.xml", "Products.xml") + "?page=2"
+        self.responses = {
+            ROOT: FetchResult(ROOT, index(first, second, third)),
+            first: FetchResult(first, urlset(PRESENT)),
+            second: FetchResult(second, urlset(ORIGIN + "/products/beta")),
+            third: FetchResult(third, urlset(ORIGIN + "/products/gamma")),
+        }
+        self.assertTrue(self.is_missing())
+        self.assertEqual(self.requests, [ROOT, first, second, third])
+
     def test_expired_success_is_discarded_and_failure_is_cached_briefly(self):
         self.assertTrue(self.is_missing())
         self.now += 3600
@@ -196,14 +226,19 @@ class UpdateSitemapTests(unittest.TestCase):
 
     def test_cancellation_during_fetch_propagates_without_caching_a_snapshot(self):
         token = CancellationToken()
+        request_threads = []
 
         def cancelled_fetch(url, timeout):
+            request_threads.append(threading.current_thread())
             token.cancel()
             return FetchResult(url, urlset(PRESENT))
 
         with patch.object(self.checker, "_fetcher", cancelled_fetch):
             with self.assertRaises(OperationCancelled):
                 self.is_missing(cancellation_token=token)
+        for thread in request_threads:
+            if thread is not threading.current_thread():
+                thread.join(1)
         self.assertTrue(self.is_missing())
 
     def test_default_http_transport_never_follows_off_store_redirect(self):
@@ -219,13 +254,20 @@ class UpdateSitemapTests(unittest.TestCase):
                 opener.return_value.open.assert_called_once()
                 self.assertEqual(opener.return_value.open.call_args.args[0].full_url, ROOT)
 
-    def http_response(self, url, *, missing_bytes=0):
+    def http_response(self, url, *, missing_bytes=0, before_headers=None):
         body = urlset(PRESENT).encode()
+        status_line = b"HTTP/1.1 200 OK\r\n"
+
+        class ResponseBytes(io.BytesIO):
+            def readline(self, size=-1):
+                if self.tell() == len(status_line) and before_headers is not None:
+                    before_headers()
+                return super().readline(size)
 
         class Socket:
             def makefile(self, mode):
                 length = len(body) + missing_bytes
-                return io.BytesIO(f"HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n".encode() + body)
+                return ResponseBytes(status_line + f"Content-Length: {length}\r\n\r\n".encode() + body)
 
         response = HTTPResponse(Socket())
         response.begin()
@@ -248,3 +290,59 @@ class UpdateSitemapTests(unittest.TestCase):
         with patch("ludora.update_sitemap.build_opener") as opener:
             opener.return_value.open.return_value = self.http_response(ROOT, missing_bytes=100)
             self.assertFalse(checker.is_missing(7, MISSING, store_url=ORIGIN))
+
+    def test_slow_response_headers_fall_back_by_deadline_and_do_not_accumulate(self):
+        release = threading.Event()
+        blocked = threading.Event()
+        request_threads = []
+
+        def wait_for_headers():
+            request_threads.append(threading.current_thread())
+            blocked.set()
+            release.wait(0.8)
+
+        checker = UpdateSitemapChecker.from_environment({ENV_KEY: CONFIG}, ".env", load_budget_seconds=0.15)
+        other_checker = UpdateSitemapChecker.from_environment({ENV_KEY: CONFIG}, ".env", load_budget_seconds=0.15)
+        try:
+            with patch("ludora.update_sitemap.build_opener") as opener:
+                opener.return_value.open.side_effect = lambda *args, **kwargs: self.http_response(
+                    ROOT, before_headers=wait_for_headers)
+                start = time.monotonic()
+                self.assertFalse(checker.is_missing(7, MISSING, store_url=ORIGIN))
+                self.assertTrue(blocked.is_set())
+                self.assertLess(time.monotonic() - start, 0.5)
+                self.assertFalse(other_checker.is_missing(7, MISSING, store_url=ORIGIN))
+                opener.return_value.open.assert_called_once()
+        finally:
+            release.set()
+            for thread in request_threads:
+                if thread is not threading.current_thread():
+                    thread.join(1)
+        self.assertFalse(checker.is_missing(7, MISSING, store_url=ORIGIN))
+
+    def test_cancellation_during_blocked_http_headers_is_prompt(self):
+        token = CancellationToken()
+        release = threading.Event()
+        request_threads = []
+
+        def wait_for_headers():
+            request_threads.append(threading.current_thread())
+            timer = threading.Timer(0.05, token.cancel)
+            timer.start()
+            release.wait(0.8)
+            timer.join()
+
+        checker = UpdateSitemapChecker.from_environment({ENV_KEY: CONFIG}, ".env", load_budget_seconds=2)
+        try:
+            with patch("ludora.update_sitemap.build_opener") as opener:
+                opener.return_value.open.side_effect = lambda *args, **kwargs: self.http_response(
+                    ROOT, before_headers=wait_for_headers)
+                start = time.monotonic()
+                with self.assertRaises(OperationCancelled):
+                    checker.is_missing(7, MISSING, store_url=ORIGIN, cancellation_token=token)
+                self.assertLess(time.monotonic() - start, 0.5)
+        finally:
+            release.set()
+            for thread in request_threads:
+                if thread is not threading.current_thread():
+                    thread.join(1)
