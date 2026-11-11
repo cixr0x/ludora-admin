@@ -269,6 +269,7 @@ def _run_item_discovery_for_store(
     run_id: str | None = None,
     started_at: datetime | None = None,
     product_request_throttle: ProductDiscoveryRequestThrottle | None = None,
+    on_discovery_url_checked: Callable[[], None] | None = None,
 ) -> ItemDiscoveryRunResult:
     connection = connect_database(database_url)
     resolved_run_id = run_id or str(uuid.uuid4())
@@ -333,7 +334,9 @@ def _run_item_discovery_for_store(
                 store_id=store_id,
                 web_bot_auth_enabled=web_bot_auth_enabled,
             )
-            tracking_repository = _StoreItemDiscoveryTrackingRepository(repository, resolved_run_id)
+            tracking_repository = _StoreItemDiscoveryTrackingRepository(
+                repository, resolved_run_id, on_discovery_url_checked=on_discovery_url_checked,
+            )
             admin_item_matcher = AdminItemMatcher(
                 admin_api_url,
                 repository,
@@ -439,15 +442,28 @@ class _StoreItemDiscoveryTrackingRepository:
         "unconfirmed_non_boardgames",
     )
 
-    def __init__(self, repository: DiscoveryRepository, run_id: str) -> None:
+    def __init__(
+        self,
+        repository: DiscoveryRepository,
+        run_id: str,
+        *,
+        on_discovery_url_checked: Callable[[], None] | None = None,
+    ) -> None:
         self.repository = repository
         self.run_id = run_id
+        self.on_discovery_url_checked = on_discovery_url_checked
         self.new_items = 0
         self.items_discovered = 0
         self.confirmed_boardgames = 0
         self.confirmed_non_boardgames = 0
         self.unconfirmed_boardgames = 0
         self.unconfirmed_non_boardgames = 0
+
+    def discovery_url_exists(self, store_id: int | None, source_url: str) -> bool:
+        exists = self.repository.discovery_url_exists(store_id, source_url)
+        if self.on_discovery_url_checked is not None:
+            self.on_discovery_url_checked()
+        return exists
 
     def upsert_item_candidate(self, record: DiscoveryItemCandidateRecord) -> object | None:
         result = self.repository.upsert_item_candidate(record)

@@ -46,15 +46,26 @@ def run_store_in_child(*, database_url: str, current_env: Mapping[str, str], sto
     assert process.stdin is not None and process.stdout is not None and process.stderr is not None
     events: queue.Queue[dict] = queue.Queue()
     active_browser: dict[str, dict] = {}
-    last_activity = [time.monotonic()]
+    last_activity = time.monotonic()
+    activity_lock = threading.Lock()
+
+    def note_activity() -> None:
+        nonlocal last_activity
+        with activity_lock:
+            last_activity = time.monotonic()
 
     def read_output() -> None:
         try:
             for line in process.stdout:
                 try:
-                    events.put(json.loads(line))
+                    message = json.loads(line)
                 except ValueError:
                     events.put({"kind": "error", "error": "Malformed store child response"})
+                    continue
+                if isinstance(message, dict) and message.get("kind") == "progress":
+                    note_activity()
+                else:
+                    events.put(message)
         finally:
             events.put({"kind": "eof"})
 
@@ -67,10 +78,10 @@ def run_store_in_child(*, database_url: str, current_env: Mapping[str, str], sto
                     frame = {}
                 if frame.get("event") == "item_discovery.browser.started":
                     active_browser[str(frame.get("fetch_id"))] = frame
-                    last_activity[0] = time.monotonic()
+                    note_activity()
                 elif frame.get("event") == "item_discovery.browser.completed":
                     active_browser.pop(str(frame.get("fetch_id")), None)
-                    last_activity[0] = time.monotonic()
+                    note_activity()
             sys.stderr.write(line)
             sys.stderr.flush()
 
@@ -90,7 +101,9 @@ def run_store_in_child(*, database_url: str, current_env: Mapping[str, str], sto
         process.stdin.flush()
         while True:
             raise_if_cancelled(cancellation_token)
-            if time.monotonic() - last_activity[0] >= store_stall_seconds:
+            with activity_lock:
+                stalled = time.monotonic() - last_activity >= store_stall_seconds
+            if stalled:
                 raise StoreChildFailed(f"Store {store_id} made no progress for {store_stall_seconds:g} seconds")
             try:
                 message = events.get(timeout=0.1)
@@ -101,7 +114,7 @@ def run_store_in_child(*, database_url: str, current_env: Mapping[str, str], sto
                 wait = product_request_throttle.wait_before_request(cancellation_token)
                 process.stdin.write(json.dumps({"command": "permit", "delay_seconds": wait.delay_seconds}) + "\n")
                 process.stdin.flush()
-                last_activity[0] = time.monotonic()
+                note_activity()
             elif kind == "result":
                 terminal_seen = True
                 try:

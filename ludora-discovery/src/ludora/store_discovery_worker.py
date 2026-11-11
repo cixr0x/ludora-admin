@@ -25,6 +25,10 @@ class _RemoteProductThrottle:
         return wait
 
 
+def _report_progress() -> None:
+    print(json.dumps({"kind": "progress"}), flush=True)
+
+
 def main() -> int:
     token = CancellationToken()
     signal.signal(signal.SIGINT, lambda *_: token.cancel())
@@ -35,6 +39,7 @@ def main() -> int:
         result = _run_item_discovery_for_store(
             **configuration, cancellation_token=token,
             product_request_throttle=_RemoteProductThrottle(),
+            on_discovery_url_checked=_report_progress,
         )
         print(json.dumps({"kind": "result", "value": result.to_dict()}), flush=True)
         return 0
