@@ -46,6 +46,7 @@ import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../component
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { CATALOG_ITEM_SEARCH_LIMIT } from '../components/catalogItemSearch';
+import { storeItemVisibilityLabel } from '../components/storeItemVisibility';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 import { ItemsPage } from './ItemsPage';
 import { ReviewImageSimilarity } from '../components/ReviewImageSimilarity';
@@ -485,7 +486,6 @@ const itemCandidateDetailFields: ItemCandidateDetailField[] = [
   { key: 'price_source', label: 'Price Source' },
   { key: 'currency', label: 'Currency' },
   { key: 'availability', label: 'Product availability' },
-  { fieldType: 'boolean', key: 'store_active', label: 'Public visibility', readOnly: true },
   { key: 'source_url_origin', label: 'Redirect origin URL', readOnly: true },
   { key: 'availability_source', label: 'Availability Source' },
   { key: 'store_sku', label: 'Store SKU' },
@@ -523,6 +523,7 @@ function buildItemCandidateColumns(
     filterable: false,
     id: 'image_url',
     label: 'Image',
+    mobilePreview: true,
     minWidth: 72,
     render: (row) => candidateProductImage(row),
     sortable: false
@@ -531,14 +532,25 @@ function buildItemCandidateColumns(
     filterValue: (row) => field(row, ['title', 'name']),
     id: 'title',
     label: 'Title',
+    mobilePreview: true,
     minWidth: 220,
     render: (row) => field(row, ['title', 'name']),
     sortValue: (row) => field(row, ['title', 'name'])
   },
   {
+    filterValue: (row) => field(row, ['store_active']),
+    id: 'store_active',
+    label: 'Public visibility',
+    mobilePreview: true,
+    minWidth: 160,
+    render: (row) => storeItemVisibilityLabel(row.store_active),
+    sortValue: (row) => field(row, ['store_active'])
+  },
+  {
     filterValue: (row) => field(row, ['original_title']),
     id: 'original_title',
     label: 'Original Title',
+    mobilePreview: true,
     minWidth: 220,
     render: (row) => field(row, ['original_title']),
     sortValue: (row) => field(row, ['original_title'])
@@ -547,6 +559,7 @@ function buildItemCandidateColumns(
     filterable: false,
     id: 'boardgame_actions',
     label: 'BG',
+    mobilePreview: true,
     minWidth: 112,
     render: (row) => boardgameConfirmationActions(row, onSetBoardgameState, updatingBoardgameCandidateId),
     sortable: false
@@ -640,14 +653,6 @@ function buildItemCandidateColumns(
     sortValue: (row) => field(row, ['availability'])
   },
   {
-    filterValue: (row) => field(row, ['store_active']),
-    id: 'store_active',
-    label: 'Public visibility',
-    minWidth: 160,
-    render: (row) => field(row, ['store_active'], '') === 'false' ? 'Hidden' : 'Visible',
-    sortValue: (row) => field(row, ['store_active'])
-  },
-  {
     filterValue: (row) => field(row, ['availability_source']),
     id: 'availability_source',
     label: 'Availability Source',
@@ -720,6 +725,7 @@ function batchSelectionColumn(options: BatchSelectionOptions): DataTableColumn<A
     filterable: false,
     id: 'batch_selection',
     label: 'Select',
+    mobilePreview: true,
     minWidth: 72,
     render: (row) => {
       const id = candidateId(row);
@@ -1716,6 +1722,12 @@ function ItemCandidateForm({
             <Typography color="text.secondary" variant="body2" sx={{ overflowWrap: 'anywhere' }}>
               {subtitle}
             </Typography>
+            <Chip
+              label={`Public visibility: ${storeItemVisibilityLabel(candidate.store_active)}`}
+              size="small"
+              sx={{ mt: 1 }}
+              variant="outlined"
+            />
           </Box>
           <Stack direction={{ sm: 'row', xs: 'column' }} spacing={1} sx={{ width: { sm: 'auto', xs: '100%' } }}>
             <Tooltip title={canStartCoverWorkflow ? 'Start cover workflow' : 'Requires a linked item and image'}>

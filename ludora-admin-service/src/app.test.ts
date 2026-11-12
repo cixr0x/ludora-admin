@@ -2060,6 +2060,24 @@ describe('ludora admin service', () => {
     expect(rowQuery?.params).toEqual(['%kitchen%', 25, 0]);
   });
 
+  it.each([
+    ['vIsIbLe', 'true'],
+    ['HIDDEN', 'false'],
+    ['true', 'true'],
+    ['false', 'false']
+  ])('filters discovery item candidates by public visibility %s', async (filter, expected) => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const response = await request(createApp({ database: { query } })).get(
+      `/discovery/listings?page=0&page_size=25&sort=store_active&filter_store_active=${filter}`
+    );
+
+    expect(response.status).toBe(200);
+    expect(query).toHaveBeenCalledWith(
+      expect.stringContaining("where coalesce((store_active)::text, '') ilike $1"),
+      [`%${expected}%`, 25, 0]
+    );
+  });
+
   it('returns a discovery item candidate by id', async () => {
     const row = { id: '920', listing_status: 'PENDING', title: 'Cafe Barista' };
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
@@ -3052,6 +3070,7 @@ describe('ludora admin service', () => {
         item_image_url_es: 'https://bgg.example/cafe-barista.jpg',
         item_name: 'Coffee Rush',
         item_name_es: 'Cafe Barista',
+        store_active: false,
         store_item_id: 920
       }
     ];
@@ -3082,6 +3101,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('i.description_es as item_description_es');
     expect(sql).toContain('i.canonical_name_es as item_name_es');
     expect(sql).toContain('i.image_url_es as item_image_url_es');
+    expect(sql).toContain('dic.store_active');
     expect(sql).toContain('dic.listing_status as store_item_listing_status');
     expect(sql).toContain('order by dic.last_updated desc');
   });
@@ -3100,7 +3120,7 @@ describe('ludora admin service', () => {
     };
 
     const response = await request(createApp({ database })).get(
-      '/admin/discovery/offer-reviews?page=0&page_size=25&sort=item_name&sort_direction=asc&filter_item_name=kitchen'
+      '/admin/discovery/offer-reviews?page=0&page_size=25&sort=item_name&sort_direction=asc&filter_item_name=kitchen&filter_store_active=hidden'
     );
 
     expect(response.status).toBe(200);
@@ -3120,8 +3140,9 @@ describe('ludora admin service', () => {
     expect(sql).not.toContain("dic.status = 'listed'");
     expect(sql).not.toContain('dic.item_id is not null');
     expect(sql).toContain("coalesce((concat_ws(' ', i.canonical_name, i.canonical_name_es))::text, '') ilike $1 escape '\\'");
+    expect(sql).toContain("case dic.store_active when true then 'visible' when false then 'hidden' else 'unknown' end ilike $2");
     expect(sql).toContain('order by i.canonical_name asc');
-    expect(rowQuery?.params).toEqual(['%kitchen%', 25, 0]);
+    expect(rowQuery?.params).toEqual(['%kitchen%', '%hidden%', 25, 0]);
   });
 
   it('filters and sorts store item reviews by listing status', async () => {

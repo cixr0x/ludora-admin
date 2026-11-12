@@ -6,6 +6,7 @@ import { ListingCandidatesPage } from './ListingCandidatesPage';
 describe('ListingCandidatesPage', () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it('renders discovery item candidate fields', async () => {
@@ -72,6 +73,7 @@ describe('ListingCandidatesPage', () => {
 
     const headers = await screen.findAllByRole('columnheader');
     expect(headers[0]).toHaveTextContent('Image');
+    expect(headers[2]).toHaveTextContent('Public visibility');
     expect(screen.getByRole('columnheader', { name: 'Original Title' })).toBeInTheDocument();
     expect(await screen.findByText('Azul MX')).toBeInTheDocument();
     expect(screen.getByText('Azul MX Original')).toBeInTheDocument();
@@ -239,8 +241,15 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByRole('button', { name: 'Mark as not boardgame' })).not.toBeDisabled();
   });
 
-  it('batch confirms selected store items sequentially', async () => {
+  it('batch confirms store items selected from the default mobile cards sequentially', async () => {
     const user = userEvent.setup();
+    vi.stubGlobal('matchMedia', vi.fn().mockImplementation((query: string) => ({
+      addEventListener: vi.fn(),
+      addListener: vi.fn(),
+      matches: query.includes('max-width'),
+      removeEventListener: vi.fn(),
+      removeListener: vi.fn()
+    })));
     const originalCandidates = [
       {
         availability: 'available',
@@ -295,8 +304,11 @@ describe('ListingCandidatesPage', () => {
 
     expect(await screen.findByText('First Game')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Batch confirmation' }));
-    await user.click(screen.getByRole('checkbox', { name: 'Select First Game' }));
-    await user.click(screen.getByRole('checkbox', { name: 'Select Second Game' }));
+    const cards = screen.getByRole('list', { name: 'Store items cards' });
+    const firstSelection = within(cards).getByRole('checkbox', { name: 'Select First Game' });
+    expect(firstSelection.closest('.MuiCheckbox-root')).toBeVisible();
+    await user.click(firstSelection);
+    await user.click(within(cards).getByRole('checkbox', { name: 'Select Second Game' }));
     await user.click(screen.getByRole('button', { name: 'Confirm selected boardgames' }));
 
     await waitFor(() => expect(confirmationCalls).toEqual(['101']));
@@ -604,6 +616,7 @@ describe('ListingCandidatesPage', () => {
               source_listing_url: 'https://store.mx/collections/boardgames',
               source_url: 'https://store.mx/products/kitchen-rush',
               listing_status: 'LISTED',
+              store_active: false,
               store_id: 42,
               store_sku: 'KR-EN',
               title: 'Kitchen Rush'
@@ -624,6 +637,8 @@ describe('ListingCandidatesPage', () => {
     await user.dblClick(titleCells[0]);
 
     expect(screen.getByRole('heading', { name: 'Store Item Details' })).toBeInTheDocument();
+    expect(screen.getByText('Public visibility: Hidden')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Public visibility' })).not.toBeInTheDocument();
     expect(screen.getByDisplayValue('3365')).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://store.mx/products/kitchen-rush')).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://store.mx/collections/boardgames')).toBeInTheDocument();
@@ -1451,6 +1466,7 @@ describe('ListingCandidatesPage', () => {
       original_title: 'Coffee Rush',
       publisher: 'Korea Boardgames',
       source_url: 'https://store.mx/products/cafe-barista',
+      store_active: true,
       title: 'Cafe Barista'
     };
     let item: Record<string, unknown> = {
@@ -1537,6 +1553,7 @@ describe('ListingCandidatesPage', () => {
     expect(await screen.findByRole('heading', { name: 'Store Item Review Details' })).toBeInTheDocument();
     const storeItemSection = screen.getByRole('heading', { name: 'Store Item Review Details' }).closest('section');
     expect(storeItemSection).not.toBeNull();
+    expect(within(storeItemSection!).getByText('Public visibility: Visible')).toBeInTheDocument();
     expect(within(storeItemSection!).getByLabelText('Title')).toHaveValue('Cafe Barista');
     expect(within(storeItemSection!).getByLabelText('Description')).toHaveValue(
       'Run a coffee shop before the customers lose patience.'
@@ -1660,6 +1677,7 @@ describe('ListingCandidatesPage', () => {
       expect(body.title).toBe('Cafe Barista Deluxe');
       expect(body.publisher).toBe('Korea Boardgames');
       expect(body.listing_status).toBe('PENDING');
+      expect(body).not.toHaveProperty('store_active');
     });
 
     fireEvent.change(within(linkedItemSection!).getByLabelText('Canonical Name ES'), {

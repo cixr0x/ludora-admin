@@ -31,6 +31,7 @@ describe('OfferReviewPage', () => {
               item_type: 'base_game',
               match_score: '0.9400',
               match_source: 'BGG',
+              store_active: false,
               store_domain: 'store.mx',
               store_item_listing_status: 'PENDING',
               store_name: 'Store MX'
@@ -49,6 +50,8 @@ describe('OfferReviewPage', () => {
     expect(await screen.findByRole('link', { name: 'Cafe Barista' })).toHaveAttribute('href', '#offer-reviews?id=920');
     expect(screen.getByRole('link', { name: 'Coffee Rush (Cafe Barista)' })).toHaveAttribute('href', '#items?id=77');
     expect(screen.getByText('Store MX')).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Public visibility' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'Hidden' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Listing status' })).toBeInTheDocument();
     expect(screen.getByText('PENDING')).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Admin links' })).not.toBeInTheDocument();
@@ -212,6 +215,7 @@ describe('OfferReviewPage', () => {
               item_id: 77,
               item_image_url_es: 'https://bgg.example/cafe-barista.jpg',
               item_name: 'Coffee Rush',
+              store_active: true,
               store_item_listing_status: 'PENDING'
             }
           ]
@@ -224,6 +228,8 @@ describe('OfferReviewPage', () => {
       render(<OfferReviewPage />);
 
       const cards = await screen.findByRole('list', { name: 'Store item review cards' });
+      expect(within(cards).getByText('Public visibility')).toBeVisible();
+      expect(within(cards).getByText('Visible')).toBeVisible();
       const imageComparison = within(cards).getByRole('group', {
         name: 'Image comparison for Cafe Barista and Coffee Rush'
       });

@@ -542,6 +542,7 @@ const offerReviewSelect = `
   dic.match_score,
   dic.matched_name,
   dic.last_updated as candidate_last_updated,
+  dic.store_active,
   dic.id as store_item_id,
   dic.price as store_item_price,
   dic.availability as store_item_availability,
@@ -641,7 +642,19 @@ const itemCandidatesTableConfig: TableQueryConfig = {
       sortSql: "coalesce(auto_list_result ->> 'verdict', auto_list_result ->> 'status', '')"
     },
     availability: columnSql('availability'),
-    store_active: columnSql('store_active'),
+    store_active: {
+      ...columnSql('store_active'),
+      normalizeFilterValue(value) {
+        switch (value.toLowerCase()) {
+          case 'visible':
+            return 'true';
+          case 'hidden':
+            return 'false';
+          default:
+            return value;
+        }
+      }
+    },
     availability_source: columnSql('availability_source'),
     category_confidence: columnSql('category_confidence'),
     classification_reasons: columnSql('classification_reasons'),
@@ -795,6 +808,10 @@ const offerReviewsTableConfig: TableQueryConfig = {
     store: {
       filterSql: textSql("concat_ws(' ', s.name, s.canonical_domain)"),
       sortSql: 's.name'
+    },
+    store_active: {
+      filterSql: "case dic.store_active when true then 'visible' when false then 'hidden' else 'unknown' end",
+      sortSql: '(dic.store_active, dic.id)'
     },
     store_item_listing_status: {
       filterSql: textSql('dic.listing_status'),

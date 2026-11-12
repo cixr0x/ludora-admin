@@ -28,6 +28,7 @@ import { adminApi, type AdminRecord, type StoreItemListingStatus } from '../api/
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
 import { CATALOG_ITEM_SEARCH_LIMIT } from '../components/catalogItemSearch';
+import { storeItemVisibilityLabel } from '../components/storeItemVisibility';
 import { useInfiniteServerRows, useServerTableState } from '../components/useServerTableState';
 
 function field(record: AdminRecord, keys: string[], fallback = '-') {
@@ -335,6 +336,15 @@ function buildOfferReviewColumns(
     minWidth: 220,
     render: (row) => candidateNameLink(row, onOpenItemSearch),
     sortValue: (row) => field(row, ['candidate_name'])
+  },
+  {
+    filterValue: (row) => storeItemVisibilityLabel(row.store_active),
+    id: 'store_active',
+    label: 'Public visibility',
+    mobilePreview: true,
+    minWidth: 160,
+    render: (row) => storeItemVisibilityLabel(row.store_active),
+    sortValue: (row) => field(row, ['store_active'])
   },
   {
     filterable: false,
@@ -714,7 +724,7 @@ export function OfferReviewPage() {
           columns={columns}
           defaultSortColumnId="candidate_name"
           getRowKey={(row, index) => field(row, ['candidate_id'], String(index))}
-          minWidth={2824}
+          minWidth={2984}
           serverSide
           tableState={table.tableState}
           onTableStateChange={table.handleTableStateChange}
