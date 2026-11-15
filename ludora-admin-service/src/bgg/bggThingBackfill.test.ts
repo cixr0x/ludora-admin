@@ -34,8 +34,11 @@ describe('BGG thing cache backfill', () => {
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('not exists');
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('from bgg_thing_cache btc');
     expect(queries[0]?.params).toEqual([
-      'boardgame,boardgameexpansion,boardgameaccessory',
-      'boardgame,boardgameexpansion'
+      [
+        'boardgame,boardgameexpansion,boardgameaccessory,rpgitem',
+        'boardgame,boardgameexpansion,boardgameaccessory',
+        'boardgame,boardgameexpansion'
+      ]
     ]);
   });
 
@@ -58,7 +61,8 @@ describe('BGG thing cache backfill', () => {
 
     await expect(backfillBggThingCache(database, client)).resolves.toMatchObject({ fetched: 1, total: 1 });
     expect(fetchedBggIds).toEqual([337190]);
-    expect(normalizeSql(queries[0]?.sql ?? '')).toContain("btc.request_type = $2 and btc.raw_xml ~ '<item[[:space:]>]'");
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain('btc.request_type = ($1::text[])[1]');
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain("or btc.raw_xml ~ '<item[[:space:]>]'");
   });
 
   it('fetches thing payloads sequentially', async () => {

@@ -2,9 +2,34 @@ import { describe, expect, it } from 'vitest';
 
 import type { BggClient } from './bggClient.js';
 import { createBggItemImporter } from './bggItemImporter.js';
+import { parseBggThingResponse } from './bggParser.js';
 import type { Database } from '../db.js';
 
 describe('BGG item importer', () => {
+  it('imports an RPG item as an unknown item with an RPGGeek source URL', async () => {
+    const bggId = 123456;
+    const rawXml = '<items><item type="rpgitem" id="123456"><name type="primary" value="Player Handbook" /></item></items>';
+    const details = parseBggThingResponse(rawXml)!;
+    const itemWrites: unknown[][] = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        if (normalizeSql(sql).startsWith('insert into items')) {
+          itemWrites.push(params ?? []);
+          return { rows: [{ id: 77 }] };
+        }
+        return { rows: [] };
+      }
+    };
+    const bggClient: BggClient = {
+      fetchThing: async () => ({ details, rawXml }),
+      search: async () => []
+    };
+
+    await expect(createBggItemImporter(database, bggClient).importBggId(bggId)).resolves.toBe(77);
+
+    expect(itemWrites[0]?.slice(2, 7)).toEqual(['unknown', false, null, bggId, 'https://rpggeek.com/rpgitem/123456']);
+  });
+
   it('uses a recently synced local item before fetching BGG item metadata', async () => {
     const fetchedBggIds: number[] = [];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];

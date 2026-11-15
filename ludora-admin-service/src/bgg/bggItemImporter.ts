@@ -392,6 +392,9 @@ async function upsertPublisher(database: Database, link: BggNamedLink): Promise<
 }
 
 function bggUrl(thing: BggThingDetails) {
+  if (thing.type === 'rpgitem') {
+    return `https://rpggeek.com/rpgitem/${thing.bggId}`;
+  }
   const path = thing.type === 'boardgameaccessory' ? 'boardgameaccessory' : thing.type === 'boardgameexpansion' ? 'boardgameexpansion' : 'boardgame';
   return `https://boardgamegeek.com/${path}/${thing.bggId}`;
 }

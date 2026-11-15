@@ -3,11 +3,13 @@ import { createHash } from 'node:crypto';
 import type { Database, SessionDatabase } from '../db.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggSearchItem } from './bggParser.js';
-import { BGG_LEGACY_REQUEST_TYPE, BGG_REQUEST_TYPE, BGG_SUPPORTED_TYPES } from './bggTypes.js';
+import { BGG_BOARD_GAME_REQUEST_TYPE, BGG_CACHE_REQUEST_TYPES, BGG_REQUEST_TYPE, BGG_SUPPORTED_TYPES } from './bggTypes.js';
 
 export const BGG_SEARCH_TYPE = BGG_REQUEST_TYPE;
-export const BGG_AI_MATCH_SEARCH_TYPE = `ai_match:${BGG_SEARCH_TYPE}`;
+// AI associations depend on the title and cover context, independently of the XML search filter.
+export const BGG_AI_MATCH_SEARCH_TYPE = `ai_match:${BGG_BOARD_GAME_REQUEST_TYPE}`;
 const BGG_SUPPORTED_TYPES_SQL = BGG_SUPPORTED_TYPES.map((type) => `'${type}'`).join(', ');
+const LEGACY_BGG_SEARCH_TYPES = BGG_CACHE_REQUEST_TYPES.slice(1);
 
 export type BggCachedMatch = {
   item: BggSearchItem;
@@ -59,6 +61,9 @@ export function createBggMatchCache(database: Database): BggMatchCache {
         false
       );
       const ordinaryQuery = await queryAssociations(database, normalizedQuery, BGG_SEARCH_TYPE, false);
+      const legacyOrdinaryMatches = ordinaryQuery.cacheHit
+        ? []
+        : await queryLegacyOrdinaryAssociations(database, normalizedQuery);
       const directCache = await searchCacheNames(database, query);
       const thingCache = await searchThingCache(database, query);
 
@@ -75,6 +80,7 @@ export function createBggMatchCache(database: Database): BggMatchCache {
           ...contextualAiCandidates.matches,
           ...legacyAiQuery.matches,
           ...ordinaryQuery.matches,
+          ...legacyOrdinaryMatches,
           ...directCache,
           ...thingCache
         ])
@@ -190,6 +196,25 @@ async function queryAssociations(
   };
 }
 
+async function queryLegacyOrdinaryAssociations(
+  database: Database,
+  normalizedQuery: string
+): Promise<BggCachedMatch[]> {
+  const cachedResults = await database.query(
+    `
+    select c.bgg_id, c.name, c.item_type, c.year_published
+    from bgg_search_queries q
+    join bgg_search_query_results qr on qr.query_id = q.id
+    join bgg_search_cache c on c.id = qr.cache_id
+    where q.normalized_query = $1
+      and q.search_type = any($2::text[])
+    order by array_position($2::text[], q.search_type), qr.result_rank asc
+    `,
+    [normalizedQuery, LEGACY_BGG_SEARCH_TYPES]
+  );
+  return bggSearchItems(cachedResults.rows).map((item) => ({ item, verifiedByAi: false }));
+}
+
 async function searchCacheNames(database: Database, query: string): Promise<BggCachedMatch[]> {
   const results = await database.query(
     `
@@ -222,20 +247,20 @@ async function searchThingCache(database: Database, query: string): Promise<BggC
       item_type,
       year_published
       from bgg_thing_cache
-      where request_type in ($1, $2)
+      where request_type = any($1::text[])
         and item_type in (${BGG_SUPPORTED_TYPES_SQL})
-        and name ilike $3 escape '\\'
-      order by bgg_id, case when request_type = $1 then 0 else 1 end
+        and name ilike $2 escape '\\'
+      order by bgg_id, array_position($1::text[], request_type)
     )
     select bgg_id, name, item_type, year_published
     from matching_rows
     order by
-      case when lower(name) = lower($4) then 0 else 1 end,
+      case when lower(name) = lower($3) then 0 else 1 end,
       year_published desc nulls last,
       bgg_id desc
     limit 20
     `,
-    [BGG_SEARCH_TYPE, BGG_LEGACY_REQUEST_TYPE, searchPattern(query), query.trim()]
+    [BGG_CACHE_REQUEST_TYPES, searchPattern(query), query.trim()]
   );
   return bggSearchItems(results.rows).map((item) => ({ item, verifiedByAi: false }));
 }

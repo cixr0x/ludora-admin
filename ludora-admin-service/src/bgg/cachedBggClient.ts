@@ -3,9 +3,7 @@ import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import { parseBggThingResponse } from './bggParser.js';
 import type { BggClient, BggThingResult, BggThingXmlClient } from './bggClient.js';
 import { createBggMatchCache, type BggMatchCache } from './bggMatchCache.js';
-import { BGG_LEGACY_REQUEST_TYPE, BGG_REQUEST_TYPE } from './bggTypes.js';
-
-const BGG_THING_REQUEST_TYPE = BGG_REQUEST_TYPE;
+import { BGG_CACHE_REQUEST_TYPES, BGG_REQUEST_TYPE } from './bggTypes.js';
 
 type CachedThingRow = {
   raw_xml?: unknown;
@@ -20,8 +18,8 @@ export function createCachedBggClient(
   return {
     async fetchThing(bggId: number): Promise<BggThingResult | null> {
       const cached = await cachedThingResult(database, bggId);
-      if (cached.found && cached.usable) {
-        return cached.result;
+      if (cached !== undefined) {
+        return cached;
       }
 
       const rawXml = await upstreamClient.fetchThingXml(bggId);
@@ -61,33 +59,34 @@ async function cachedSearch(matchCache: BggMatchCache, upstreamClient: BggThingX
 async function cachedThingResult(
   database: Database,
   bggId: number
-): Promise<{ found: false; usable: false } | { found: true; result: BggThingResult | null; usable: boolean }> {
+): Promise<BggThingResult | null | undefined> {
   const cached = await database.query(
     `
     select raw_xml, request_type
     from bgg_thing_cache
     where bgg_id = $1
-      and request_type in ($2, $3)
-    order by case when request_type = $2 then 0 else 1 end
-    limit 1
+      and request_type = any($2::text[])
+    order by array_position($2::text[], request_type)
     `,
-    [bggId, BGG_THING_REQUEST_TYPE, BGG_LEGACY_REQUEST_TYPE]
+    [bggId, BGG_CACHE_REQUEST_TYPES]
   );
-  const row = cached.rows[0] as CachedThingRow | undefined;
-  const rawXml = typeof row?.raw_xml === 'string' ? row.raw_xml : '';
-  if (!rawXml) {
-    return { found: false, usable: false };
-  }
-
-  try {
-    const details = parseBggThingResponse(rawXml);
-    if (!details && row?.request_type === BGG_LEGACY_REQUEST_TYPE) {
-      return { found: false, usable: false };
+  for (const { raw_xml: rawXml, request_type: requestType } of cached.rows as CachedThingRow[]) {
+    if (typeof rawXml !== 'string' || !rawXml) {
+      continue;
     }
-    return { found: true, result: details ? { details, rawXml } : null, usable: true };
-  } catch {
-    return { found: true, result: null, usable: false };
+    try {
+      const details = parseBggThingResponse(rawXml);
+      if (details) {
+        return { details, rawXml };
+      }
+      if (requestType === BGG_REQUEST_TYPE) {
+        return null;
+      }
+    } catch {
+      // Try another compatible cache row before fetching from BGG.
+    }
   }
+  return undefined;
 }
 
 async function writeThingCache(database: Database, bggId: number, rawXml: string): Promise<void> {
@@ -117,7 +116,7 @@ async function writeThingCache(database: Database, bggId: number, rawXml: string
     `,
     [
       bggId,
-      BGG_THING_REQUEST_TYPE,
+      BGG_REQUEST_TYPE,
       rawXml,
       summary.name,
       summary.itemType,

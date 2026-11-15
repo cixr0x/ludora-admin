@@ -6,6 +6,9 @@ from urllib.request import Request, urlopen
 from xml.etree import ElementTree
 
 
+BGG_REQUEST_TYPE = "boardgame,boardgameexpansion,rpgitem"
+
+
 @dataclass(frozen=True)
 class BggSearchResult:
     bgg_id: int
@@ -54,11 +57,11 @@ class BggClient:
         self.base_url = base_url.rstrip("/")
 
     def search(self, query: str) -> list[BggSearchResult]:
-        xml = self._get_xml("search", {"query": query, "type": "boardgame,boardgameexpansion"})
+        xml = self._get_xml("search", {"query": query, "type": BGG_REQUEST_TYPE})
         return parse_bgg_search_response(xml)
 
     def fetch_thing(self, bgg_id: int) -> tuple[BggThing | None, str]:
-        xml = self._get_xml("thing", {"id": str(bgg_id), "type": "boardgame,boardgameexpansion"})
+        xml = self._get_xml("thing", {"id": str(bgg_id), "type": BGG_REQUEST_TYPE})
         return parse_bgg_thing_response(xml), xml
 
     def _get_xml(self, path: str, params: dict[str, str]) -> str:

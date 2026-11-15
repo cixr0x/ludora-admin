@@ -334,8 +334,8 @@ class BggItemImporter:
 def _bgg_type_to_item_type(value: str) -> str:
     if value == "boardgameexpansion":
         return "expansion"
-    if value == "boardgame":
-        return "base_game"
+    if value == "rpgitem":
+        return "unknown"
     return "base_game"
 
 
@@ -344,6 +344,8 @@ def _bgg_relationship_item_ids(current_item_id: int, linked_item_id: int, link: 
 
 
 def _bgg_url(thing: BggThing) -> str:
+    if thing.item_type == "rpgitem":
+        return f"https://rpggeek.com/rpgitem/{thing.bgg_id}"
     path = "boardgameexpansion" if thing.item_type == "boardgameexpansion" else "boardgame"
     return f"https://boardgamegeek.com/{path}/{thing.bgg_id}"
 

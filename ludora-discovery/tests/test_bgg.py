@@ -1,11 +1,35 @@
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from ludora.bgg import parse_bgg_search_response, parse_bgg_thing_response
+from ludora.bgg import BggClient, parse_bgg_search_response, parse_bgg_thing_response
+
+
+class BggClientTests(unittest.TestCase):
+    def test_search_and_thing_requests_include_rpg_items(self):
+        client = BggClient("test-token")
+        xml = b'<items><item type="rpgitem" id="123456"><name type="primary" value="Player Handbook" /></item></items>'
+        with patch("ludora.bgg.urlopen") as urlopen:
+            response = urlopen.return_value.__enter__.return_value
+            response.read.return_value = xml
+            response.headers.get_content_charset.return_value = None
+
+            results = client.search("Player Handbook")
+            thing, _ = client.fetch_thing(123456)
+
+        self.assertEqual(results[0].item_type, "rpgitem")
+        self.assertIsNotNone(thing)
+        self.assertEqual(thing.item_type, "rpgitem")
+        urls = [urlsplit(call.args[0].full_url) for call in urlopen.call_args_list]
+        self.assertEqual([url.path for url in urls], ["/xmlapi2/search", "/xmlapi2/thing"])
+        for url in urls:
+            with self.subTest(path=url.path):
+                self.assertEqual(parse_qs(url.query)["type"], ["boardgame,boardgameexpansion,rpgitem"])
 
 
 class BggParserTests(unittest.TestCase):

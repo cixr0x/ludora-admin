@@ -33,20 +33,22 @@ describe('BGG client', () => {
     const requestedUrl = new URL(requestedUrls[0]);
     expect(requestedUrl.pathname).toBe('/xmlapi2/thing');
     expect(requestedUrl.searchParams.get('id')).toBe('377061');
-    expect(requestedUrl.searchParams.get('type')).toBe('boardgame,boardgameexpansion,boardgameaccessory');
+    expect(requestedUrl.searchParams.get('type')).toBe('boardgame,boardgameexpansion,boardgameaccessory,rpgitem');
     expect(requestedUrl.searchParams.get('stats')).toBe('1');
   });
 
-  it('requests accessories in live BGG searches', async () => {
+  it('requests RPG items and accessories in live BGG searches', async () => {
     let requestedUrl = '';
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL) => {
       requestedUrl = String(url);
       return xmlResponse('<items />');
     }));
 
-    await createBggClient({ apiToken: 'test-token', baseUrl: 'https://bgg.example/xmlapi2' }).search('Catan accessory');
+    await createBggClient({ apiToken: 'test-token', baseUrl: 'https://bgg.example/xmlapi2' }).search('Player Handbook');
 
-    expect(new URL(requestedUrl).searchParams.get('type')).toBe('boardgame,boardgameexpansion,boardgameaccessory');
+    const url = new URL(requestedUrl);
+    expect(url.pathname).toBe('/xmlapi2/search');
+    expect(url.searchParams.get('type')).toBe('boardgame,boardgameexpansion,boardgameaccessory,rpgitem');
   });
 
   it('serializes requests and waits one second between BGG request starts', async () => {

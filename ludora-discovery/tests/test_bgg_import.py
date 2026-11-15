@@ -117,6 +117,15 @@ class FakeConnection:
 
 
 class BggImportTests(unittest.TestCase):
+    def test_imports_rpg_item_with_unknown_type_and_rpggeek_source(self):
+        connection = FakeConnection()
+        importer = BggItemImporter(connection)
+
+        importer.import_thing(BggThing(bgg_id=123456, item_type="rpgitem", name="Player Handbook"))
+
+        params, = [params for sql, params in connection.cursor_instance.executions if "insert into items" in sql]
+        self.assertEqual(params[2:6], ("unknown", None, 123456, "https://rpggeek.com/rpgitem/123456"))
+
     def test_image_and_hash_are_written_together_on_insert_update_and_removal(self):
         connection = FakeConnection()
         importer = BggItemImporter(connection)

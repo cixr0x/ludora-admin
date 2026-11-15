@@ -963,7 +963,9 @@ describe('ludora admin service', () => {
     expect(sql).toContain('image_url_es');
     expect(sql).toContain('is_accessory');
     expect(sql).toContain('where id = $1');
-    expect(sql).toContain('left join bgg_thing_cache thing_cache');
+    expect(sql).toContain('left join lateral ( select raw_xml, parsed_json from bgg_thing_cache');
+    expect(sql).toContain("array_position(array['boardgame,boardgameexpansion,boardgameaccessory,rpgitem', 'boardgame,boardgameexpansion,boardgameaccessory', 'boardgame,boardgameexpansion'], request_type)");
+    expect(sql).toContain('limit 1 ) thing_cache on true');
     expect(sql).toContain('thing_cache.raw_xml as bgg_thing_raw_xml');
     expect(sql).toContain('thing_cache.parsed_json as bgg_thing_parsed_json');
     expect(query.params).toEqual(['77']);
@@ -1664,7 +1666,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('image_url_es = $21');
     expect(sql).toContain('where id = $23');
     expect(sql).toContain('returning id, canonical_name, normalized_name, canonical_name_es, normalized_name_es');
-    expect(sql).toContain('left join bgg_thing_cache thing_cache');
+    expect(sql).toContain('left join lateral ( select raw_xml, parsed_json from bgg_thing_cache');
     expect(query.params).toEqual([
       'Coffee Rush Updated',
       'coffee rush updated',

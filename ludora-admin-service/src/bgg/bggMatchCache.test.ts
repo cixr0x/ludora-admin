@@ -13,6 +13,7 @@ const warOfTheRing = {
   type: 'boardgame',
   yearPublished: 2011
 };
+const BGG_AI_MATCH_CACHE_KEY = 'ai_match:boardgame,boardgameexpansion,boardgameaccessory';
 
 const warCoverUrl = 'https://store.mx/war-ring.jpg';
 const coffeeRushCoverUrl = 'https://store.mx/coffee-rush.jpg';
@@ -22,7 +23,7 @@ const canonicalWarImageKey = `war of the ring second edition::cover-context:${wa
 const spanishWarNameOnlyKey = 'la guerra del anillo::cover-context:name-only';
 
 describe('BGG match cache', () => {
-  it('reads a legacy Thing-cache name with the accessory request identity', async () => {
+  it('reads Thing-cache names across current and legacy request types', async () => {
     const queriedThingCacheParams: unknown[][] = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -39,7 +40,11 @@ describe('BGG match cache', () => {
       cacheHit: true,
       matches: [{ item: { bggId: 337190, name: 'Catan Accessory', type: 'boardgameaccessory', yearPublished: 2022 }, verifiedByAi: false }]
     });
-    expect(queriedThingCacheParams).toEqual([['boardgame,boardgameexpansion,boardgameaccessory', 'boardgame,boardgameexpansion', '%catan%accessory%', 'Catan Accessory']]);
+    expect(queriedThingCacheParams).toEqual([[
+      ['boardgame,boardgameexpansion,boardgameaccessory,rpgitem', 'boardgame,boardgameexpansion,boardgameaccessory', 'boardgame,boardgameexpansion'],
+      '%catan%accessory%',
+      'Catan Accessory'
+    ]]);
   });
 
   it('prefers the new Thing-cache row over a legacy duplicate', async () => {
@@ -62,10 +67,7 @@ describe('BGG match cache', () => {
       matches: [{ item: { bggId: 337190, name: 'New Catan Accessory', type: 'boardgameaccessory', yearPublished: 2022 }, verifiedByAi: false }]
     });
     expect(thingCacheSql[0]).toContain('select distinct on (bgg_id)');
-    expect(thingCacheSql[0]).toContain('case when request_type = $1 then 0 else 1 end');
-  });
-  it('uses an accessory-aware cache identity', () => {
-    expect(BGG_SEARCH_TYPE).toBe('boardgame,boardgameexpansion,boardgameaccessory');
+    expect(thingCacheSql[0]).toContain('order by bgg_id, array_position($1::text[], request_type)');
   });
   it('marks AI query associations as verified', async () => {
     const cache = createBggMatchCache(databaseForAiQueryRow({
@@ -165,6 +167,44 @@ describe('BGG match cache', () => {
     });
   });
 
+  it('keeps ranked legacy alternate-title matches available without marking the expanded search cached', async () => {
+    const first = { bggId: 377061, name: 'Coffee Rush', type: 'boardgame', yearPublished: 2023 };
+    const second = { bggId: 1, name: 'Coffee Shop', type: 'boardgame', yearPublished: 2012 };
+    const older = { bggId: 100, name: 'Barista', type: 'boardgame', yearPublished: 2008 };
+    const cache = createBggMatchCache(databaseForLookup({
+      legacyOrdinaryQuery: {
+        normalizedTitle: 'cafe de prisa',
+        rows: [
+          toCacheRow(first),
+          toCacheRow(second),
+          toCacheRow({ ...first, name: 'Older Coffee Rush' }),
+          toCacheRow(older)
+        ]
+      }
+    }));
+
+    await expect(cache.lookup('Café de Prisa')).resolves.toEqual({
+      cacheHit: false,
+      matches: [
+        { item: first, verifiedByAi: false },
+        { item: second, verifiedByAi: false },
+        { item: older, verifiedByAi: false }
+      ]
+    });
+  });
+
+  it('uses the authoritative current ordinary query even when it has no results', async () => {
+    const cache = createBggMatchCache(databaseForLookup({
+      ordinaryRows: [],
+      legacyOrdinaryQuery: {
+        normalizedTitle: 'la guerra del anillo',
+        rows: [toCacheRow(warOfTheRing)]
+      }
+    }));
+
+    await expect(cache.lookup('La Guerra del Anillo')).resolves.toEqual({ cacheHit: true, matches: [] });
+  });
+
   it('returns direct BGG cache-name matches as unverified', async () => {
     const cache = createBggMatchCache(databaseForDirectCacheRow({
       bgg_id: 13,
@@ -227,8 +267,8 @@ describe('BGG match cache', () => {
     expect(executedSql).toContainEqual(expect.stringContaining('insert into bgg_search_cache'));
     expect(executedParams).toContainEqual(expect.arrayContaining([BGG_AI_MATCH_SEARCH_TYPE]));
     expect(executedParams.filter((params) => params[2] === BGG_AI_MATCH_SEARCH_TYPE)).toEqual([
-      ['La Guerra del Anillo', spanishWarImageKey, BGG_AI_MATCH_SEARCH_TYPE],
-      ['War of the Ring: Second Edition', canonicalWarImageKey, BGG_AI_MATCH_SEARCH_TYPE]
+      ['La Guerra del Anillo', spanishWarImageKey, BGG_AI_MATCH_CACHE_KEY],
+      ['War of the Ring: Second Edition', canonicalWarImageKey, BGG_AI_MATCH_CACHE_KEY]
     ]);
     expect(executedParams.filter((params) => params.length === 3 && params[2] === 0)).toEqual([
       [201, 101, 0],
@@ -357,13 +397,14 @@ function databaseForLookup(options: {
   aiAssociationKeys?: string[];
   aiRows?: unknown[];
   directRows?: unknown[];
+  legacyOrdinaryQuery?: { normalizedTitle: string; rows: unknown[] };
   ordinaryRows?: unknown[];
   thingRows?: unknown[];
 }): Database {
   return {
     query: async (sql, params) => {
       const normalized = normalizeSql(sql);
-      if (normalized.includes('from bgg_search_queries q')) {
+      if (normalized.includes('from bgg_search_queries q') && params?.[0] === BGG_AI_MATCH_CACHE_KEY) {
         const pattern = String(params?.[1] ?? '');
         const associationPrefix = pattern.endsWith('%') ? pattern.slice(0, -1) : pattern;
         const exactAssociationKey = String(params?.[2] ?? '');
@@ -372,10 +413,22 @@ function databaseForLookup(options: {
         );
         return { rows: hasOtherContext ? (options.aiRows ?? []) : [] };
       }
+      if (normalized.includes('from bgg_search_queries q')) {
+        if (!options.legacyOrdinaryQuery) {
+          return { rows: [] };
+        }
+        expect(params).toEqual([
+          options.legacyOrdinaryQuery.normalizedTitle,
+          ['boardgame,boardgameexpansion,boardgameaccessory', 'boardgame,boardgameexpansion']
+        ]);
+        expect(normalized).toContain('join bgg_search_query_results qr on qr.query_id = q.id');
+        expect(normalized).toContain('order by array_position($2::text[], q.search_type), qr.result_rank asc');
+        return { rows: options.legacyOrdinaryQuery.rows };
+      }
       if (normalized.startsWith('select id from bgg_search_queries')) {
         const searchType = params?.[1];
         if (
-          searchType === BGG_AI_MATCH_SEARCH_TYPE &&
+          searchType === BGG_AI_MATCH_CACHE_KEY &&
           options.aiRows !== undefined &&
           options.aiAssociationKeys?.includes(String(params?.[0]))
         ) {

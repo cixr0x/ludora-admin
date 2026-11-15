@@ -2,7 +2,7 @@ import { Router } from 'express';
 
 import type { BggItemImporter } from '../bgg/bggItemImporter.js';
 import { parseBggThingResponse } from '../bgg/bggParser.js';
-import { BGG_LEGACY_REQUEST_TYPE, BGG_REQUEST_TYPE } from '../bgg/bggTypes.js';
+import { BGG_CACHE_REQUEST_TYPES } from '../bgg/bggTypes.js';
 import type { Database } from '../db.js';
 import { prepareCatalogImageHash, type CatalogImageHasher } from '../catalogImageHash.js';
 import type { ItemMatchingService, ManualAiItemMatchResult } from '../itemMatching/itemMatchingService.js';
@@ -15,7 +15,21 @@ import {
 import { createTraceLoggerFromHeaders } from '../trace.js';
 import { storeItemStatisticsAggregateSql, storeItemStatisticsFields } from '../storeItemStatistics.js';
 
-const BGG_THING_REQUEST_TYPE = BGG_REQUEST_TYPE;
+const bggCacheRequestTypesSql = `array[${BGG_CACHE_REQUEST_TYPES.map((type) => `'${type}'`).join(', ')}]`;
+
+function bggThingMetadataJoin(itemAlias: 'item_record' | 'updated_item'): string {
+  return `
+    left join lateral (
+      select raw_xml, parsed_json
+      from bgg_thing_cache
+      where bgg_id = ${itemAlias}.bgg_id
+        and request_type = any(${bggCacheRequestTypesSql})
+        and (parsed_json ? 'alternateNames' or raw_xml ~ '<item[[:space:]>]')
+      order by array_position(${bggCacheRequestTypesSql}, request_type)
+      limit 1
+    ) thing_cache on true
+  `;
+}
 
 type StoreCandidateInput = {
   canonical_domain: string;
@@ -1126,15 +1140,7 @@ export function createDiscoveryRouter(
           from items
           where id = $1
         ) item_record
-        left join bgg_thing_cache thing_cache
-          on thing_cache.bgg_id = item_record.bgg_id
-         and (thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}' or (
-           thing_cache.request_type = '${BGG_LEGACY_REQUEST_TYPE}' and not exists (
-             select 1 from bgg_thing_cache current_cache
-             where current_cache.bgg_id = item_record.bgg_id
-               and current_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
-           )
-         ))
+        ${bggThingMetadataJoin('item_record')}
         `,
         [itemId]
       );
@@ -1162,15 +1168,7 @@ export function createDiscoveryRouter(
           from items
           where id = $1
         ) item_record
-        left join bgg_thing_cache thing_cache
-          on thing_cache.bgg_id = item_record.bgg_id
-         and (thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}' or (
-           thing_cache.request_type = '${BGG_LEGACY_REQUEST_TYPE}' and not exists (
-             select 1 from bgg_thing_cache current_cache
-             where current_cache.bgg_id = item_record.bgg_id
-               and current_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
-           )
-         ))
+        ${bggThingMetadataJoin('item_record')}
         `,
         [request.params.id]
       );
@@ -1530,15 +1528,7 @@ export function createDiscoveryRouter(
           thing_cache.raw_xml as bgg_thing_raw_xml,
           thing_cache.parsed_json as bgg_thing_parsed_json
         from updated_item
-        left join bgg_thing_cache thing_cache
-          on thing_cache.bgg_id = updated_item.bgg_id
-         and (thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}' or (
-           thing_cache.request_type = '${BGG_LEGACY_REQUEST_TYPE}' and not exists (
-             select 1 from bgg_thing_cache current_cache
-             where current_cache.bgg_id = updated_item.bgg_id
-               and current_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
-           )
-         ))
+        ${bggThingMetadataJoin('updated_item')}
         `,
         [...itemParams(input), request.params.id, imageHash, spanishImageHash]
       );
@@ -2359,15 +2349,7 @@ export function createDiscoveryRouter(
           thing_cache.raw_xml as bgg_thing_raw_xml,
           thing_cache.parsed_json as bgg_thing_parsed_json
         from updated_item
-        left join bgg_thing_cache thing_cache
-          on thing_cache.bgg_id = updated_item.bgg_id
-         and (thing_cache.request_type = '${BGG_THING_REQUEST_TYPE}' or (
-           thing_cache.request_type = '${BGG_LEGACY_REQUEST_TYPE}' and not exists (
-             select 1 from bgg_thing_cache current_cache
-             where current_cache.bgg_id = updated_item.bgg_id
-               and current_cache.request_type = '${BGG_THING_REQUEST_TYPE}'
-           )
-         ))
+        ${bggThingMetadataJoin('updated_item')}
         `,
         [candidateId, sourceUrl, imageHash, sourceItemId]
       );

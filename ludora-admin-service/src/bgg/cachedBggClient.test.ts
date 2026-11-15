@@ -6,7 +6,9 @@ import type { BggMatchCache } from './bggMatchCache.js';
 import type { BggSearchItem } from './bggParser.js';
 import { createCachedBggClient } from './cachedBggClient.js';
 
-const BGG_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion,boardgameaccessory';
+const BGG_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion,boardgameaccessory,rpgitem';
+const PRIOR_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion,boardgameaccessory';
+const LEGACY_THING_REQUEST_TYPE = 'boardgame,boardgameexpansion';
 
 const coffeeRushXml = `
 <items>
@@ -20,7 +22,7 @@ const coffeeRushXml = `
 
 describe('cached BGG client', () => {
   it('returns cached thing XML without calling the upstream BGG client', async () => {
-    const { database, queries } = fakeDatabase([[{ raw_xml: coffeeRushXml }]]);
+    const { database, queries } = fakeDatabase([[{ raw_xml: coffeeRushXml, request_type: BGG_THING_REQUEST_TYPE }]]);
     const upstream = fakeUpstreamClient(async () => {
       throw new Error('BGG API should not be called when thing XML is cached');
     });
@@ -31,6 +33,25 @@ describe('cached BGG client', () => {
     expect(result?.rawXml).toBe(coffeeRushXml);
     expect(queries).toHaveLength(1);
     expect(normalizeSql(queries[0]?.sql ?? '')).toContain('from bgg_thing_cache');
+    expect(queries[0]?.params).toEqual([
+      377061,
+      [BGG_THING_REQUEST_TYPE, PRIOR_THING_REQUEST_TYPE, LEGACY_THING_REQUEST_TYPE]
+    ]);
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain('order by array_position($2::text[], request_type)');
+  });
+
+  it('falls back to a positive older row when an intervening legacy row is empty', async () => {
+    const { database } = fakeDatabase([[
+      { raw_xml: '<items></items>', request_type: PRIOR_THING_REQUEST_TYPE },
+      { raw_xml: coffeeRushXml, request_type: LEGACY_THING_REQUEST_TYPE }
+    ]]);
+    const upstream = fakeUpstreamClient(async () => {
+      throw new Error('BGG API should not be called when an older row has cached details');
+    });
+
+    const result = await createCachedBggClient(database, upstream).fetchThing(377061);
+
+    expect(result?.details.name).toBe('Coffee Rush');
   });
 
   it('stores fresh upstream thing XML before returning parsed details', async () => {
@@ -76,8 +97,8 @@ describe('cached BGG client', () => {
     expect(cacheWrite?.params?.[6]).toEqual({});
   });
 
-  it('refreshes a legacy negative Thing-cache row under the accessory-aware request identity', async () => {
-    const { database, queries } = fakeDatabase([[{ raw_xml: '<items></items>', request_type: 'boardgame,boardgameexpansion' }]]);
+  it.each([PRIOR_THING_REQUEST_TYPE, LEGACY_THING_REQUEST_TYPE])('retries an empty Thing-cache row from %s', async (requestType) => {
+    const { database, queries } = fakeDatabase([[{ raw_xml: '<items></items>', request_type: requestType }]]);
     const fetchedBggIds: number[] = [];
     const upstream = fakeUpstreamClient(async (bggId) => {
       fetchedBggIds.push(bggId);
@@ -91,7 +112,7 @@ describe('cached BGG client', () => {
     expect(queries.find((query) => normalizeSql(query.sql).startsWith('insert into bgg_thing_cache'))?.params?.[1]).toBe(BGG_THING_REQUEST_TYPE);
   });
 
-  it('keeps a negative Thing-cache row in the accessory-aware namespace', async () => {
+  it('keeps a negative Thing-cache row for the current request type', async () => {
     const { database } = fakeDatabase([[{ raw_xml: '<items></items>', request_type: BGG_THING_REQUEST_TYPE }]]);
     const upstream = fakeUpstreamClient(async () => {
       throw new Error('current-namespace negative cache should not fetch upstream');
@@ -194,6 +215,7 @@ describe('cached BGG client', () => {
 
   it('returns thing cache search results before calling the upstream BGG search API', async () => {
     const { database, queries } = fakeDatabase([
+      [],
       [],
       [],
       [],
