@@ -37,6 +37,7 @@ export function createTutorialCurationRouter(database: Database): Router {
           i.item_type
         from active_item i
         where i.is_expansion = false
+          and i.has_approved_listing = true
           and i.id <> all($2::bigint[])
           and not exists (
             select 1

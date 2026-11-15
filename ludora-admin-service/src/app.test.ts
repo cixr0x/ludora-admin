@@ -998,6 +998,7 @@ describe('ludora admin service', () => {
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('from active_item i');
     expect(sql).toContain('i.is_expansion = false');
+    expect(sql).toContain('i.has_approved_listing = true');
     expect(sql).toContain('i.description');
     expect(sql).toContain('i.description_es');
     expect(sql).toContain('i.image_url');
