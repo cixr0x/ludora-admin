@@ -117,6 +117,7 @@ class BggItemImporter:
             None,
             thing.bgg_id,
             _bgg_url(thing),
+            thing.item_type == "rpgitem",
             thing.year_published,
             thing.description,
             thing.min_players,
@@ -138,6 +139,7 @@ class BggItemImporter:
                     bgg_id = %s,
                     bgg_url = %s,
                     bgg_last_sync_at = now(),
+                    is_rpg = %s,
                     year_published = %s,
                     description = %s,
                     min_players = %s,
@@ -165,6 +167,7 @@ class BggItemImporter:
                 bgg_id,
                 bgg_url,
                 bgg_last_sync_at,
+                is_rpg,
                 year_published,
                 description,
                 min_players,
@@ -177,7 +180,7 @@ class BggItemImporter:
                 status,
                 updated_at
             )
-            values (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', now())
+            values (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', now())
             returning id
             """,
             params,
@@ -334,8 +337,6 @@ class BggItemImporter:
 def _bgg_type_to_item_type(value: str) -> str:
     if value == "boardgameexpansion":
         return "expansion"
-    if value == "rpgitem":
-        return "unknown"
     return "base_game"
 
 

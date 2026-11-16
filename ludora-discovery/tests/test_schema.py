@@ -352,6 +352,17 @@ class SchemaTests(unittest.TestCase):
             "alter table if exists items\n    add column if not exists is_accessory boolean not null default false;",
         )
 
+    def test_rpg_flag_belongs_to_catalog_items_and_has_an_incremental_patch(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+        items_table = schema.split("create table if not exists items", 1)[1].split(");", 1)[0]
+        self.assertIn("is_rpg boolean not null default false", items_table)
+        self.assertIn("item_type text not null check (item_type in ('base_game', 'expansion'))", items_table)
+
+        patch_path = patches_path() / "20261115_001_add_item_is_rpg.sql"
+        self.assertTrue(patch_path.is_file(), "The catalog RPG flag needs an incremental patch")
+        patch = " ".join(patch_path.read_text(encoding="utf-8").casefold().split())
+        self.assertEqual(patch, "alter table public.items add column if not exists is_rpg boolean not null default false;")
+
     def test_store_items_replaces_listing_candidates(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()
         item_candidate_table = schema.split("create table if not exists store_items", 1)[1].split(");", 1)[0]

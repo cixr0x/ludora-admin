@@ -6,7 +6,7 @@ export const BGG_CACHE_REQUEST_TYPES = [BGG_REQUEST_TYPE, BGG_BOARD_GAME_REQUEST
 
 export function bggTypeToItemType(type: string): 'base_game' | 'expansion' | 'unknown' {
   if (type === 'boardgameexpansion' || type === 'boardgameaccessory') return 'expansion';
-  if (type === 'boardgame') return 'base_game';
+  if (type === 'boardgame' || type === 'rpgitem') return 'base_game';
   return 'unknown';
 }
 

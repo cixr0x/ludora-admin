@@ -211,6 +211,7 @@ const itemDetailFields: ItemDetailField[] = [
   { gridColumn: { md: '1 / -1' }, key: 'description_es', label: 'Description ES', multiline: true },
   { key: 'item_type', label: 'Item Type' },
   { key: 'is_accessory', label: 'Accessory', readOnly: true },
+  { key: 'is_rpg', label: 'RPG', readOnly: true },
   { key: 'parent_item_id', label: 'Parent Item ID' },
   { key: 'bgg_id', label: 'BGG ID' },
   { gridColumn: { md: 'span 2' }, key: 'bgg_url', label: 'BGG URL' },
@@ -293,6 +294,17 @@ const itemColumns: DataTableColumn<AdminRecord>[] = [
     minWidth: 130,
     render: (row) => field(row, ['item_type']),
     sortValue: (row) => field(row, ['item_type'])
+  },
+  {
+    filterable: false,
+    id: 'is_rpg',
+    label: 'RPG',
+    minWidth: 80,
+    render: (row) => {
+      if (typeof row.is_rpg !== 'boolean') return '-';
+      return row.is_rpg ? 'Yes' : 'No';
+    },
+    sortable: false
   },
   {
     filterValue: (row) => field(row, ['bgg_id']),

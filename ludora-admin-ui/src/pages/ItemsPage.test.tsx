@@ -25,6 +25,34 @@ describe('ItemsPage', () => {
     expect(screen.getByLabelText('Accessory')).toHaveAttribute('readonly');
   });
 
+  it('shows the RPG flag in the catalog list and as a read-only item detail', async () => {
+    const rpg = { id: '427124', canonical_name: 'Player Handbook', item_type: 'base_game', is_rpg: true };
+    const boardGame = { id: '377061', canonical_name: 'Coffee Rush', item_type: 'base_game', is_rpg: false };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = pathOf(String(input));
+      if (path === '/items') return jsonResponse([rpg, boardGame]);
+      if (path === '/items/427124') return jsonResponse(rpg);
+      if (path === '/items/427124/store-items' || path === '/items/427124/relationships') return jsonResponse([]);
+      if (path === '/items/427124/taxonomy') return jsonResponse({ categories: [], families: [], mechanics: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    render(<ItemsPage />);
+
+    const rpgName = await screen.findByText('Player Handbook');
+    const itemsTable = screen.getByRole('table', { name: 'Items' });
+    expect(within(itemsTable).getByRole('columnheader', { name: 'RPG' })).toBeInTheDocument();
+    expect(within(rpgName.closest('tr')!).getByRole('cell', { name: 'Yes' })).toBeInTheDocument();
+    const boardGameRow = screen.getByText('Coffee Rush').closest('tr')!;
+    expect(within(boardGameRow).getByRole('cell', { name: 'No' })).toBeInTheDocument();
+
+    fireEvent.doubleClick(rpgName);
+
+    const rpgField = await screen.findByLabelText('RPG');
+    expect(rpgField).toHaveValue('true');
+    expect(rpgField).toHaveAttribute('readonly');
+  });
+
   it('renders catalog items in a server-side table', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       jsonResponse([

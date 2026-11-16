@@ -633,6 +633,7 @@ create table if not exists items (
     normalized_name_es text not null default '',
     item_type text not null check (item_type in ('base_game', 'expansion')),
     is_accessory boolean not null default false,
+    is_rpg boolean not null default false,
     parent_item_id bigint references items(id) on delete set null,
     bgg_id bigint,
     bgg_url text,

@@ -79,7 +79,8 @@ async function upsertItem(database: Database, thing: BggThingDetails, catalogIma
     thing.maxPlaytime ?? thing.playingTime,
     thing.minAge,
     imageUrl,
-    imageHash
+    imageHash,
+    thing.type === 'rpgitem'
   ];
 
   if (existingId !== null) {
@@ -105,9 +106,10 @@ async function upsertItem(database: Database, thing: BggThingDetails, catalogIma
           min_age = $16,
           image_url = $17,
           image_phash = $18,
+          is_rpg = $19,
           status = 'active',
           updated_at = now()
-      where id = $19
+      where id = $20
       returning id
       `,
       [...params, existingId]
@@ -137,10 +139,11 @@ async function upsertItem(database: Database, thing: BggThingDetails, catalogIma
       min_age,
       image_url,
       image_phash,
+      is_rpg,
       status,
       updated_at
     )
-    values ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, 'active', now())
+    values ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'active', now())
     returning id
     `,
     params

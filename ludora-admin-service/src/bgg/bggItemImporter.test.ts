@@ -6,15 +6,24 @@ import { parseBggThingResponse } from './bggParser.js';
 import type { Database } from '../db.js';
 
 describe('BGG item importer', () => {
-  it('imports an RPG item as an unknown item with an RPGGeek source URL', async () => {
+  it.each([
+    ['rpgitem', true, 'https://rpggeek.com/rpgitem/123456'],
+    ['boardgame', false, 'https://boardgamegeek.com/boardgame/123456']
+  ])('writes the catalog RPG flag on insert and refresh for %s', async (type, isRpg, bggUrl) => {
     const bggId = 123456;
-    const rawXml = '<items><item type="rpgitem" id="123456"><name type="primary" value="Player Handbook" /></item></items>';
+    const rawXml = `<items><item type="${type}" id="${bggId}"><name type="primary" value="Player Handbook" /></item></items>`;
     const details = parseBggThingResponse(rawXml)!;
-    const itemWrites: unknown[][] = [];
+    const itemWrites: Array<{ params?: unknown[]; sql: string }> = [];
+    let existing = false;
     const database: Database = {
       query: async (sql, params) => {
-        if (normalizeSql(sql).startsWith('insert into items')) {
-          itemWrites.push(params ?? []);
+        const normalized = normalizeSql(sql);
+        if (normalized.startsWith('select id') && existing) {
+          return { rows: [{ bgg_last_sync_at: null, id: 77 }] };
+        }
+        if (normalized.startsWith('insert into items') || normalized.startsWith('update items')) {
+          itemWrites.push({ params, sql: normalized });
+          existing = true;
           return { rows: [{ id: 77 }] };
         }
         return { rows: [] };
@@ -25,9 +34,20 @@ describe('BGG item importer', () => {
       search: async () => []
     };
 
-    await expect(createBggItemImporter(database, bggClient).importBggId(bggId)).resolves.toBe(77);
+    const importer = createBggItemImporter(database, bggClient);
+    await expect(importer.importBggId(bggId)).resolves.toBe(77);
+    await expect(importer.importBggId(bggId)).resolves.toBe(77);
 
-    expect(itemWrites[0]?.slice(2, 7)).toEqual(['unknown', false, null, bggId, 'https://rpggeek.com/rpgitem/123456']);
+    expect(itemWrites).toHaveLength(2);
+    for (const { params } of itemWrites) {
+      expect(params?.slice(2, 7)).toEqual(['base_game', false, null, bggId, bggUrl]);
+      expect(params?.[18]).toBe(isRpg);
+    }
+    expect(itemWrites[0]?.sql).toContain('image_phash, is_rpg, status');
+    expect(itemWrites[0]?.sql).toContain("$18, $19, 'active'");
+    expect(itemWrites[1]?.sql).toContain('is_rpg = $19');
+    expect(itemWrites[1]?.sql).toContain('where id = $20');
+    expect(itemWrites[1]?.params?.[19]).toBe(77);
   });
 
   it('uses a recently synced local item before fetching BGG item metadata', async () => {

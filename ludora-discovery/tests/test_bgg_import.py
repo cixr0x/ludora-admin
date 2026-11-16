@@ -117,14 +117,29 @@ class FakeConnection:
 
 
 class BggImportTests(unittest.TestCase):
-    def test_imports_rpg_item_with_unknown_type_and_rpggeek_source(self):
-        connection = FakeConnection()
-        importer = BggItemImporter(connection)
+    def test_writes_catalog_rpg_flag_on_insert_and_refresh(self):
+        for bgg_type, item_type, is_rpg, url in [
+            ("rpgitem", "base_game", True, "https://rpggeek.com/rpgitem/123456"),
+            ("boardgameexpansion", "expansion", False, "https://boardgamegeek.com/boardgameexpansion/123456"),
+        ]:
+            with self.subTest(bgg_type=bgg_type):
+                connection = FakeConnection()
+                importer = BggItemImporter(connection)
+                thing = BggThing(bgg_id=123456, item_type=bgg_type, name="Player Handbook")
 
-        importer.import_thing(BggThing(bgg_id=123456, item_type="rpgitem", name="Player Handbook"))
+                item_id = importer.import_thing(thing)
+                self.assertEqual(importer.import_thing(thing), item_id)
 
-        params, = [params for sql, params in connection.cursor_instance.executions if "insert into items" in sql]
-        self.assertEqual(params[2:6], ("unknown", None, 123456, "https://rpggeek.com/rpgitem/123456"))
+                writes = [
+                    (" ".join(sql.split()), params)
+                    for sql, params in connection.cursor_instance.executions
+                    if "insert into items" in sql or "update items" in sql
+                ]
+                self.assertEqual(len(writes), 2)
+                for _, params in writes:
+                    self.assertEqual(params[2:7], (item_type, None, 123456, url, is_rpg))
+                self.assertIn("bgg_last_sync_at, is_rpg, year_published", writes[0][0])
+                self.assertIn("is_rpg = %s", writes[1][0])
 
     def test_image_and_hash_are_written_together_on_insert_update_and_removal(self):
         connection = FakeConnection()

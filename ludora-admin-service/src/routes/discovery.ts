@@ -186,7 +186,7 @@ const itemCandidateSelect = `
 
 const itemSelect = `
   id, canonical_name, normalized_name, canonical_name_es, normalized_name_es,
-  item_type, is_accessory, parent_item_id, bgg_id, bgg_url, bgg_last_sync_at,
+  item_type, is_accessory, is_rpg, parent_item_id, bgg_id, bgg_url, bgg_last_sync_at,
   year_published, rating, weight, description, description_es, min_players, max_players,
   min_minutes, max_minutes, complexity, min_age, image_url, image_url_es, status,
   created_at, updated_at
@@ -2339,7 +2339,7 @@ export function createDiscoveryRouter(
             and nullif(trim(source.image_url), '') is not null
           returning
             i.id, i.canonical_name, i.normalized_name, i.canonical_name_es, i.normalized_name_es,
-            i.item_type, i.is_accessory, i.parent_item_id, i.bgg_id, i.bgg_url, i.bgg_last_sync_at,
+            i.item_type, i.is_accessory, i.is_rpg, i.parent_item_id, i.bgg_id, i.bgg_url, i.bgg_last_sync_at,
             i.year_published, i.rating, i.weight, i.description, i.description_es,
             i.min_players, i.max_players, i.min_minutes, i.max_minutes, i.complexity,
             i.min_age, i.image_url, i.image_url_es, i.status, i.created_at, i.updated_at

@@ -763,7 +763,7 @@ describe('ludora admin service', () => {
   });
 
   it('searches catalog items across canonical and Spanish names', async () => {
-    const rows = [{ canonical_name: 'Eternal', canonical_name_es: 'Aeterna', id: 77 }];
+    const rows = [{ canonical_name: 'Eternal', canonical_name_es: 'Aeterna', id: 77, is_rpg: true }];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -782,6 +782,7 @@ describe('ludora admin service', () => {
     expect(response.status).toBe(200);
     expect(response.body.data).toEqual(rows);
     const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select id, canonical_name'));
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('is_rpg');
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain(
       "where coalesce((concat_ws(' ', canonical_name, canonical_name_es, normalized_name, normalized_name_es))::text, '') ilike $1 escape '\\'"
     );
@@ -838,7 +839,7 @@ describe('ludora admin service', () => {
   });
 
   it('lists catalog items from all items when no table query is provided', async () => {
-    const rows = [{ canonical_name: 'Coffee Rush', id: 377061, item_type: 'base_game' }];
+    const rows = [{ canonical_name: 'Coffee Rush', id: 377061, is_rpg: false, item_type: 'base_game' }];
     const queries: string[] = [];
     const database: Database = {
       query: async (sql) => {
@@ -853,6 +854,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0] ?? '');
     expect(sql).toContain('from items');
+    expect(sql).toContain('is_rpg');
     expect(sql).not.toContain('from active_item');
     expect(sql).toContain('order by canonical_name asc');
     expect(sql).toContain('limit 200');
@@ -866,6 +868,7 @@ describe('ludora admin service', () => {
       canonical_name: 'Coffee Rush',
       id: 77,
       is_accessory: true,
+      is_rpg: false,
       item_type: 'base_game'
     };
     const importedBggIds: number[] = [];
@@ -895,11 +898,13 @@ describe('ludora admin service', () => {
         canonical_name: 'Coffee Rush',
         id: 77,
         is_accessory: true,
+        is_rpg: false,
         item_type: 'base_game'
       }
     });
     expect(importedBggIds).toEqual([377061]);
     expect(queries).toHaveLength(1);
+    expect(normalizeSql(queries[0].sql)).toContain('is_rpg');
     expect(normalizeSql(queries[0].sql)).toContain('where id = $1');
     expect(queries[0].params).toEqual([77]);
   });
@@ -962,6 +967,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('description_es');
     expect(sql).toContain('image_url_es');
     expect(sql).toContain('is_accessory');
+    expect(sql).toContain('is_rpg');
     expect(sql).toContain('where id = $1');
     expect(sql).toContain('left join lateral ( select raw_xml, parsed_json from bgg_thing_cache');
     expect(sql).toContain("array_position(array['boardgame,boardgameexpansion,boardgameaccessory,rpgitem', 'boardgame,boardgameexpansion,boardgameaccessory', 'boardgame,boardgameexpansion'], request_type)");
@@ -1667,6 +1673,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('image_url_es = $21');
     expect(sql).toContain('where id = $23');
     expect(sql).toContain('returning id, canonical_name, normalized_name, canonical_name_es, normalized_name_es');
+    expect(sql).toContain('is_rpg');
     expect(sql).toContain('left join lateral ( select raw_xml, parsed_json from bgg_thing_cache');
     expect(query.params).toEqual([
       'Coffee Rush Updated',
@@ -3337,6 +3344,7 @@ describe('ludora admin service', () => {
       expect(sql).toContain("nullif(trim(source.image_url), '') is not null");
       expect(sql).toContain('returning i.id, i.canonical_name');
       expect(sql).toContain('i.is_accessory');
+      expect(sql).toContain('i.is_rpg');
       expect(sql).toContain('select updated_item.*, thing_cache.raw_xml as bgg_thing_raw_xml');
       expect(queries[1].params).toEqual([42, 'https://store.mx/kitchen-rush.jpg', null, 77]);
     }
