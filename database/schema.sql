@@ -631,7 +631,8 @@ create table if not exists items (
     normalized_name text not null,
     canonical_name_es text not null default '',
     normalized_name_es text not null default '',
-    item_type text not null check (item_type in ('base_game', 'expansion')),
+    item_type text not null constraint items_item_type_check
+        check (item_type in ('base_game', 'expansion', 'unknown')),
     is_accessory boolean not null default false,
     parent_item_id bigint references items(id) on delete set null,
     bgg_id bigint,

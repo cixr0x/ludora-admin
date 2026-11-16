@@ -1337,6 +1337,39 @@ describe('ListingCandidatesPage', () => {
     expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({ bgg_id: '377061' });
   }, 60000);
 
+  it('shows the API error when creating an item from a BGG ID fails', async () => {
+    const user = userEvent.setup();
+    const candidate = {
+      id: '3365',
+      item_id: null,
+      matched_bgg_id: 427124,
+      listing_status: 'PENDING',
+      store_id: 42,
+      title: 'RPG Rulebook'
+    };
+    const errorMessage = 'new row for relation "items" violates check constraint "items_item_type_check"';
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/discovery/listings' && !init?.method) {
+        return jsonResponse([candidate], 200, { page: 0, page_size: 100, total: 1 });
+      }
+      if (path === '/discovery/listings/3365/create-item-from-bgg' && init?.method === 'POST') {
+        return Response.json({ error: { message: errorMessage } }, { status: 500 });
+      }
+      throw new Error(`Unexpected request: ${String(input)}`);
+    });
+    render(<ListingCandidatesPage />);
+
+    const titleCells = await screen.findAllByText('RPG Rulebook');
+    await user.dblClick(titleCells[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Create item from BGG ID' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Create Item from BGG' });
+    expect(within(dialog).getByLabelText('BGG ID')).toHaveValue('427124');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Create BGG Item' }));
+
+    expect(await screen.findByText(errorMessage)).toBeInTheDocument();
+  });
+
   it('appends the next page when scrolled near the bottom', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);

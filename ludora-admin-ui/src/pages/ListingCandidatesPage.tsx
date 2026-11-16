@@ -1087,8 +1087,8 @@ export function ListingCandidatesPage({
       if (itemId) {
         onOpenItem?.(itemId);
       }
-    } catch {
-      setSaveError('Item could not be created from BGG ID.');
+    } catch (error) {
+      setSaveError(error instanceof Error && error.message.trim() ? error.message : 'Item could not be created from BGG ID.');
     } finally {
       setIsCreatingBggItem(false);
     }

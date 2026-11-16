@@ -339,6 +339,30 @@ class SchemaTests(unittest.TestCase):
         self.assertIn("alter table if exists items add column if not exists description_es text not null default ''", schema)
         self.assertIn("alter table if exists items add column if not exists image_url_es text not null default ''", schema)
 
+    def test_catalog_item_type_constraint_includes_unknown(self):
+        schema = schema_path().read_text(encoding="utf-8").casefold()
+        items_table = schema.split("create table if not exists items", 1)[1].split(");", 1)[0]
+
+        self.assertIn(
+            "item_type text not null constraint items_item_type_check check (item_type in ('base_game', 'expansion', 'unknown'))",
+            " ".join(items_table.split()),
+        )
+
+    def test_catalog_item_type_constraint_patch_uses_one_bounded_alter(self):
+        patch_path = patches_path() / "20261115_001_allow_unknown_catalog_item_type.sql"
+        self.assertTrue(patch_path.is_file(), "Catalog item type needs an incremental patch")
+        patch = patch_path.read_text(encoding="utf-8").casefold()
+        statements = [" ".join(statement.split()) for statement in patch.split(";") if statement.strip()]
+
+        self.assertEqual(statements, [
+            "begin",
+            "set local lock_timeout = '5s'",
+            "set local statement_timeout = '30s'",
+            "alter table public.items drop constraint items_item_type_check, "
+            "add constraint items_item_type_check check (item_type in ('base_game', 'expansion', 'unknown'))",
+            "commit",
+        ])
+
     def test_accessory_flag_belongs_to_items_and_has_an_incremental_patch(self):
         schema = schema_path().read_text(encoding="utf-8").casefold()
         items_table = schema.split("create table if not exists items", 1)[1].split(");", 1)[0]
