@@ -12,7 +12,7 @@ import {
   TableRow,
   Typography
 } from '@mui/material';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { adminApi, type FeedbackSubmission, type PagedRows } from '../api/client';
 
 const PAGE_SIZE = 25;
@@ -23,6 +23,7 @@ type FeedbackState =
   | { status: 'ready'; data: PagedRows<FeedbackSubmission> };
 
 export function FeedbackPage() {
+  const headingRef = useRef<HTMLHeadingElement>(null);
   const [page, setPage] = useState(0);
   const [feedback, setFeedback] = useState<FeedbackState>({ status: 'loading' });
 
@@ -40,7 +41,9 @@ export function FeedbackPage() {
 
   return (
     <Stack spacing={2}>
-      <Typography component="h2" variant="h5" sx={{ fontWeight: 700 }}>Feedback</Typography>
+      <Typography component="h2" ref={headingRef} tabIndex={-1} variant="h5" sx={{ fontWeight: 700 }}>
+        Feedback
+      </Typography>
       {feedback.status === 'loading' && <CircularProgress aria-label="Loading feedback" size={28} />}
       {feedback.status === 'error' && <Alert severity="error">Feedback could not be loaded.</Alert>}
       {data && (
@@ -76,6 +79,7 @@ export function FeedbackPage() {
               component="div"
               count={data.total}
               onPageChange={(_event, nextPage) => {
+                headingRef.current?.focus();
                 setFeedback({ status: 'loading' });
                 setPage(nextPage);
               }}

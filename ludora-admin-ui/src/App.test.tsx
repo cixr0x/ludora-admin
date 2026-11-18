@@ -1,4 +1,5 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, vi } from 'vitest';
 import App from './App';
 
@@ -57,6 +58,7 @@ describe('App', () => {
   });
 
   it('opens Feedback from the sidebar, shows complete plain-text messages, and navigates to older pages', async () => {
+    const user = userEvent.setup();
     const message = 'Initial line\n\nLiteral <strong>markup</strong> and the full ending.';
     const newest = {
       id: '9007199254740995', created_at: '2026-11-20T12:00:00.000Z', name: 'Visitor',
@@ -66,12 +68,15 @@ describe('App', () => {
     const firstPage = [newest, ...Array.from({ length: 24 }, (_, index) => ({
       ...newest, id: String(1000 - index), message: `Submission ${index}`
     }))];
+    let resolveOlderPage = () => {};
+    const olderPage = new Promise<void>((resolve) => { resolveOlderPage = resolve; });
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = new URL(String(input));
       if (url.pathname === '/admin/auth/me') return jsonResponse({ username: 'admin' });
       if (url.pathname === '/discovery/stores') return jsonResponse([]);
       if (url.pathname === '/admin/feedback') {
         const page = Number(url.searchParams.get('page'));
+        if (page === 1) await olderPage;
         return new Response(JSON.stringify({ data: page === 0 ? firstPage : [older], meta: { page, page_size: 25, total: 26 } }), {
           headers: { 'Content-Type': 'application/json' }
         });
@@ -83,7 +88,7 @@ describe('App', () => {
     const link = await screen.findByRole('link', { name: 'Feedback' });
     expect(link).toHaveAttribute('href', '#feedback');
     fireEvent.click(link);
-    expect(await screen.findByRole('heading', { name: 'Feedback' })).toBeInTheDocument();
+    const heading = await screen.findByRole('heading', { name: 'Feedback' });
     expect(window.location.hash).toBe('#feedback');
     const id = await screen.findByRole('cell', { name: newest.id });
     const row = within(id.closest('tr')!);
@@ -95,8 +100,14 @@ describe('App', () => {
     expect(messageCell).toHaveStyle({ whiteSpace: 'pre-wrap' });
     expect(messageCell.querySelector('strong')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+    const next = screen.getByRole('button', { name: 'Go to next page' });
+    act(() => { next.focus(); });
+    await user.keyboard('{Enter}');
+    expect(await screen.findByRole('progressbar', { name: 'Loading feedback' })).toBeInTheDocument();
+    expect(heading).toHaveFocus();
+    resolveOlderPage();
     expect(await screen.findByRole('cell', { name: 'An older submission.' })).toBeInTheDocument();
+    expect(heading).toHaveFocus();
     expect(screen.queryByRole('cell', { name: newest.id })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Go to next page' })).toBeDisabled();
     expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/admin/feedback?page=1&page_size=25'),
