@@ -54,11 +54,13 @@ class BrowserTextFetcher:
         *,
         max_fetches: int | None = None,
         max_age_seconds: float | None = None,
+        start_on_fetch: bool = False,
     ) -> None:
         self.timeout_ms = timeout_ms
         self.trace_logger = trace_logger
         self.max_fetches = max_fetches
         self.max_age_seconds = max_age_seconds
+        self.start_on_fetch = start_on_fetch
         self._completed_fetches = 0
         self._driver_started_at: float | None = None
         self._playwright = None
@@ -72,8 +74,9 @@ class BrowserTextFetcher:
         self.last_failure: dict[str, object] | None = None
 
     def __enter__(self) -> BrowserTextFetcher:
-        with browser_watchdog_scope(phase="startup"):
-            self._start_browser()
+        if not self.start_on_fetch:
+            with browser_watchdog_scope(phase="startup"):
+                self._start_browser()
         return self
 
     def _start_browser(self) -> None:
@@ -244,7 +247,10 @@ class BrowserTextFetcher:
         amazon_resource_counts = None
         count_fetch = False
         try:
-            self._recycle_if_due()
+            if self.start_on_fetch and self._driver_started_at is None:
+                self._start_browser()
+            else:
+                self._recycle_if_due()
             if self._context is None and self._page is None:
                 raise BrowserFetchUnavailable("Browser fetcher has not been started.")
             count_fetch = True

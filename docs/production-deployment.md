@@ -120,6 +120,7 @@ LUDORA_DISCOVERY_ENV_FILE=/opt/ludora/ludora-admin/ludora-discovery/.env
 LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS=120
 LUDORA_DAILY_ITEM_DISCOVERY_ENABLED=true
 LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED=true
+LUDORA_CONTINUOUS_ITEM_UPDATE_CONCURRENCY=3
 LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS=1
 LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS=300
 LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS=120
@@ -137,22 +138,35 @@ admin service distributes eligible items daily from 3:00 AM across a 23-hour
 window. Each due slot selects a store, and the worker refreshes that store's
 stalest eligible product while atomically preserving the scheduled slots. It
 uses a five-minute expiring lease and clears the claimed product's due time
-after a successful update. It uses a PostgreSQL
-advisory lock, so a manual batch update cannot run concurrently and double the
-store request rate. HTTP 429 responses trigger independent store cooldowns for
-Shopify and WooCommerce, allowing the worker to continue with other stores,
+after a successful update. The coordinator claims at most one item per poll
+interval and allows up to three distinct stores to update concurrently. A
+store stays reserved through persistence. Set
+`LUDORA_CONTINUOUS_ITEM_UPDATE_CONCURRENCY` to an integer from 1 to 3, with
+1 restoring serial processing. Continuous startup and recovery use the
+exclusive PostgreSQL advisory lock. The coordinator and each active slot then
+hold shared locks on the same key to exclude manual batch updates and other
+continuous workers even if the coordinator connection drops. HTTP 429
+responses trigger independent store cooldowns for Shopify and WooCommerce,
+allowing the worker to continue with other stores,
 including stores on the same platform, while the affected store recovers. Its
 heartbeat, leases, attempts, store cooldowns, pause/resume controls, and hourly
-staleness distribution are available under **Operations > Update Monitor**. Pausing lets
-the in-flight item finish, stops the automatic worker, and releases the
-coordinator lock for manual updates. The pause is process-local, so restarting
+staleness distribution are available under **Operations > Update Monitor**.
+The worker heartbeat continues while items are running, and the current-item
+field shows the oldest active attempt when its item row is available. The
+monitor uses the coordinator heartbeat to decide whether the worker is healthy.
+Pausing stops new claims, lets in-flight attempts finish, and releases the
+coordinator lock for manual updates. The supervisor force-stops the worker if
+it fails to drain within one item timeout plus ten seconds.
+The pause is process-local, so restarting
 admin-service starts the automatic worker again when it is enabled by
 configuration.
 
-The continuous worker recycles its complete Playwright browser and Node driver
-after 250 browser fallback fetches or six hours, whichever occurs first. The
-recycle happens between item fetches and preserves the worker session, database
-connection, coordinator lock, and current job. Review
+Each processing slot owns a database connection. With browser fetching
+enabled, a slot starts its own Playwright browser and Node driver on its
+first browser fetch, then reuses them for subsequent items. A slot recycles its
+browser after 250 browser fallback fetches or six hours, whichever occurs
+first. The recycle happens between item fetches and preserves the worker
+session, database connection, coordinator lock, and current job. Review
 `browser_fetch.recycle.started`, `browser_fetch.recycle.completed`, and
 `browser_fetch.recycle.failed` entries in the item-update trace when validating
 the lifecycle in production.
@@ -160,15 +174,16 @@ the lifecycle in production.
 The admin-service supervisor also applies a hard per-item watchdog outside
 Python and Playwright. `LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS`
 defaults to 120, must be positive, and must remain shorter than
-`LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS`. It starts when the worker emits
-`worker.item.started` and clears on the corresponding success, failure, or
-deactivation lifecycle event. On expiry, admin-service logs the attempt ID,
-store-item ID, platform, configured deadline, and elapsed time, then kills the
-entire worker process tree (the dedicated POSIX process group includes Python,
-Playwright, and Chromium) before its normal restart loop launches one
-replacement worker. On restart, any interrupted item attempts are recorded as
-`lease_lost`; their leases are cleared and their next update is delayed by at
-least 15 minutes so the same broken item cannot immediately restart the cycle.
+`LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS`. Each attempt gets its own
+deadline before slot setup begins. A success, failure, or deactivation clears
+the matching deadline. On expiry, admin-service logs the attempt ID,
+store-item ID, platform, configured deadline, and elapsed time. On POSIX, the
+supervisor sends SIGKILL to the process group containing Python and the
+Playwright driver. A detached Chromium process can survive that signal. On
+Windows, the supervisor uses `taskkill /T /F`. The normal restart loop launches
+a replacement worker after the child exits. The replacement records all
+interrupted item attempts as `lease_lost`, clears their leases, and delays their
+next update by at least 15 minutes.
 
 ### Daily item-discovery schedule
 

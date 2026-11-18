@@ -4753,6 +4753,31 @@ describe('ludora admin service', () => {
     }
   );
 
+  it('reports a stale continuous worker heartbeat even while its representative item is leased', async () => {
+    const database: Database = {
+      query: async (sql) => ({
+        rows: normalizeSql(sql).includes('from store_item_update_worker_state')
+          ? [{
+              heartbeat_at: new Date(Date.now() - 60_000).toISOString(),
+              current_lease_expires_at: new Date(Date.now() + 60_000).toISOString(),
+              poll_seconds: 1,
+              status: 'running',
+              worker_name: 'continuous'
+            }]
+          : []
+      })
+    };
+
+    const response = await request(createApp({
+      continuousItemUpdateWorkerManager: idleContinuousItemUpdateWorkerManager('running'),
+      database,
+      operationsClient: idleOperationsClient()
+    })).get('/admin/operations/store-item-update-monitor');
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.worker).toMatchObject({ health: 'stale', status: 'running' });
+  });
+
   it('returns continuous update worker health and hourly staleness data for a selected store', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {

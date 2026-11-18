@@ -13,6 +13,7 @@ from ludora.browser_fetch import (
     _browser_user_agent,
     _significant_url_tokens,
 )
+from ludora.continuous_update_worker import _create_continuous_browser_session
 
 
 class FakeResponse:
@@ -88,6 +89,23 @@ class FakeContext:
 
 
 class BrowserFetchTests(unittest.TestCase):
+    def test_continuous_slot_starts_its_browser_only_on_first_fetch(self):
+        url = "https://example.mx/products/catan"
+        response = FakeResponse(url, "<html></html>", "text/html")
+        page = FakePage(response, "<html><h1>Catan</h1></html>")
+        fetcher = _create_continuous_browser_session(Mock())
+
+        def start_browser():
+            fetcher._context = FakeContext([page, page])
+            fetcher._driver_started_at = time.monotonic()
+
+        with patch.object(fetcher, "_start_browser", side_effect=start_browser) as start:
+            with fetcher as browser:
+                start.assert_not_called()
+                self.assertEqual(browser.fetch(url).text, "<html><h1>Catan</h1></html>")
+                self.assertEqual(browser.fetch(url).text, "<html><h1>Catan</h1></html>")
+            start.assert_called_once()
+
     def _configured_recycling_fetcher(
         self,
         *,

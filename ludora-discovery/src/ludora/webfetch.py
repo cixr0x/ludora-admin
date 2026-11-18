@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from http.client import HTTPException
 from random import uniform
+from threading import Lock
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -61,12 +62,14 @@ class PerHostRequestThrottle:
         self._jitter = jitter or uniform
         self._next_request_at: dict[str, float] = {}
         self._cooldown_until: dict[str, float] = {}
+        self._lock = Lock()
 
     def cooldown_remaining(self, url: str) -> float:
         host = _request_host(url)
         if not host:
             return 0.0
-        return max(0.0, self._cooldown_until.get(host, 0.0) - self._clock())
+        with self._lock:
+            return max(0.0, self._cooldown_until.get(host, 0.0) - self._clock())
 
     def start_cooldown(self, url: str, retry_after_seconds: float | None) -> float:
         host = _request_host(url)
@@ -78,10 +81,11 @@ class PerHostRequestThrottle:
             else max(0.0, retry_after_seconds)
         )
         delay_seconds = min(self.maximum_cooldown_seconds, requested_delay)
-        self._cooldown_until[host] = max(
-            self._cooldown_until.get(host, 0.0),
-            self._clock() + delay_seconds,
-        )
+        with self._lock:
+            self._cooldown_until[host] = max(
+                self._cooldown_until.get(host, 0.0),
+                self._clock() + delay_seconds,
+            )
         return delay_seconds
 
     def wait_before_request(
@@ -94,25 +98,25 @@ class PerHostRequestThrottle:
         if not host:
             return HostThrottleWait(host="", delay_seconds=0.0, reason="")
 
-        now = self._clock()
-        cooldown_until = self._cooldown_until.get(host, 0.0)
-        paced_until = self._next_request_at.get(host, 0.0)
-        ready_at = max(cooldown_until, paced_until)
-        delay_seconds = max(0.0, ready_at - now)
-        reason = "cooldown" if cooldown_until >= paced_until and cooldown_until > now else "pacing"
-        if delay_seconds > 0.0:
+        total_delay = 0.0
+        reason = ""
+        while True:
+            with self._lock:
+                now = self._clock()
+                cooldown_until = self._cooldown_until.get(host, 0.0)
+                paced_until = self._next_request_at.get(host, 0.0)
+                delay = max(cooldown_until, paced_until) - now
+                if delay <= 0.0:
+                    jitter = self._jitter(0.0, self.jitter_seconds) if self.jitter_seconds > 0.0 else 0.0
+                    self._next_request_at[host] = now + self.minimum_interval_seconds + max(0.0, jitter)
+                    self._cooldown_until.pop(host, None)
+                    return HostThrottleWait(host=host, delay_seconds=total_delay, reason=reason)
+            wait_reason = "cooldown" if cooldown_until >= paced_until else "pacing"
+            total_delay += delay
+            reason = reason or wait_reason
             if on_wait is not None:
-                on_wait(HostThrottleWait(host=host, delay_seconds=delay_seconds, reason=reason))
-            self._waiter(delay_seconds, cancellation_token)
-
-        request_started_at = self._clock()
-        jitter_seconds = self._jitter(0.0, self.jitter_seconds) if self.jitter_seconds > 0.0 else 0.0
-        self._next_request_at[host] = (
-            request_started_at + self.minimum_interval_seconds + max(0.0, jitter_seconds)
-        )
-        if self._cooldown_until.get(host, 0.0) <= request_started_at:
-            self._cooldown_until.pop(host, None)
-        return HostThrottleWait(host=host, delay_seconds=delay_seconds, reason=reason if delay_seconds > 0.0 else "")
+                on_wait(HostThrottleWait(host=host, delay_seconds=delay, reason=wait_reason))
+            self._waiter(delay, cancellation_token)
 
 
 def fetch_html(

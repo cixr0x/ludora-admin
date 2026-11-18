@@ -8,8 +8,11 @@ import signal
 import threading
 import time
 import uuid
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from contextlib import ExitStack
 from datetime import datetime, timedelta, timezone
-from typing import Mapping
+from queue import Queue
+from typing import Callable, Mapping
 
 from ludora.admin_title_extraction import AdminAmazonTitleExtractor
 from ludora.admin_web_bot_auth import AdminWebBotAuthHeadersProvider
@@ -36,11 +39,14 @@ from ludora.woocommerce_batch_refresh import ChocitaBatchRefresher
 
 
 WORKER_NAME = "continuous"
+MAX_CONCURRENCY = 3
 BROWSER_RECYCLE_MAX_FETCHES = 250
 BROWSER_RECYCLE_MAX_AGE_SECONDS = 6 * 60 * 60
 ITEM_FAILURE_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 STORE_429_BACKOFF_MINUTES = (15, 60, 360, 1_440)
 RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
+_LOG_LOCK = threading.Lock()
+_SlotInbox = Queue[tuple[ClaimedStoreItemUpdate, Future[None]] | None]
 
 
 class _ContextTraceLogger:
@@ -61,6 +67,7 @@ def _create_continuous_browser_session(trace_logger: TraceLogger) -> BrowserText
         trace_logger=trace_logger,
         max_fetches=BROWSER_RECYCLE_MAX_FETCHES,
         max_age_seconds=BROWSER_RECYCLE_MAX_AGE_SECONDS,
+        start_on_fetch=True,
     )
 
 
@@ -70,6 +77,7 @@ def run_continuous_update_worker(
     env_file: str = ".env",
     poll_seconds: float = 1.0,
     lease_seconds: int = 300,
+    concurrency: int = MAX_CONCURRENCY,
     stop_event: threading.Event | None = None,
 ) -> None:
     current_env = env if env is not None else os.environ
@@ -80,6 +88,8 @@ def run_continuous_update_worker(
         raise ValueError("poll_seconds must be positive")
     if lease_seconds <= 0:
         raise ValueError("lease_seconds must be positive")
+    if type(concurrency) is not int or not 1 <= concurrency <= MAX_CONCURRENCY:
+        raise ValueError(f"concurrency must be an integer from 1 to {MAX_CONCURRENCY}")
 
     resolved_stop_event = stop_event or threading.Event()
     retry_seconds = 5.0
@@ -91,6 +101,7 @@ def run_continuous_update_worker(
                 env_file=env_file,
                 lease_seconds=lease_seconds,
                 poll_seconds=poll_seconds,
+                concurrency=concurrency,
                 stop_event=resolved_stop_event,
             )
             return
@@ -108,6 +119,7 @@ def _run_worker_session(
     env_file: str,
     lease_seconds: int,
     poll_seconds: float,
+    concurrency: int,
     stop_event: threading.Event,
 ) -> None:
     worker_id = str(uuid.uuid4())
@@ -136,12 +148,10 @@ def _run_worker_session(
 
     connection = connect_database(database_url)
     repository = DiscoveryRepository(connection)
-    batch_refresher = ChocitaBatchRefresher(repository)
+    batch_refresher = ChocitaBatchRefresher()
     from ludora.operations import create_item_update_redirect_handler
 
-    redirect_handler = create_item_update_redirect_handler(repository, current_env=current_env, env_file=env_file)
     job_id: int | None = None
-    browser_session: BrowserTextFetcher | None = None
     try:
         if not repository.try_acquire_store_item_update_coordinator_lock():
             raise RuntimeError("Another store item update process owns the coordinator lock")
@@ -152,68 +162,104 @@ def _run_worker_session(
             poll_seconds=poll_seconds,
         )
         job_id = repository.start_store_item_update_log(run_id=run_id)
-        trace_logger = create_item_update_trace_logger(connection, run_id=run_id, job_id=job_id)
-        browser_fetcher = None
-        if browser_fetch_enabled:
-            browser_session = _create_continuous_browser_session(trace_logger)
-            browser_fetcher = browser_session.__enter__().fetch
+        trace_started_at = time.monotonic()
+        repository.downgrade_store_item_update_coordinator_lock()
+
+        def process_slot(inbox: _SlotInbox) -> None:
+            # Open, reuse and close the slot's connection and Playwright objects on this thread.
+            with ExitStack() as resources:
+                slot_repository = None
+                browser_session = None
+                while (work := inbox.get()) is not None:
+                    claim, finished = work
+                    try:
+                        _log(
+                            "worker.item.started",
+                            attempt_id=claim.attempt_id,
+                            platform=claim.platform,
+                            store_item_id=claim.record.store_item_id,
+                            store_name=claim.store_name,
+                        )
+                        if slot_repository is None:
+                            slot_connection = connect_database(database_url)
+                            resources.callback(slot_connection.close)
+                            slot_repository = DiscoveryRepository(slot_connection)
+                            if not slot_repository.try_acquire_store_item_update_shared_lock():
+                                raise RuntimeError("Another store item update process owns the exclusive coordinator lock")
+                            trace_logger = create_item_update_trace_logger(
+                                slot_connection, run_id=run_id, job_id=job_id, started_at=trace_started_at,
+                            )
+                            redirect_handler = create_item_update_redirect_handler(
+                                slot_repository, current_env=current_env, env_file=env_file,
+                            )
+                        # A replacement may have recovered this claim before a new slot got its lock.
+                        if not slot_repository.continuous_update_claim_is_owned(claim=claim, worker_id=worker_id):
+                            raise RuntimeError("Store item update claim expired or was recovered before processing")
+                        attempt_trace_logger = _ContextTraceLogger(
+                            trace_logger,
+                            platform=claim.platform,
+                            store_id=claim.record.store_id,
+                            store_item_id=claim.record.store_item_id,
+                            update_attempt_id=claim.attempt_id,
+                        )
+                        if browser_fetch_enabled:
+                            if browser_session is None:
+                                browser_session = resources.enter_context(_create_continuous_browser_session(attempt_trace_logger))
+                            else:
+                                browser_session.trace_logger = attempt_trace_logger
+                        _process_claim(
+                            browser_fetcher=browser_session.fetch if browser_session is not None else None,
+                            claim=claim,
+                            item_title_extractor=item_title_extractor,
+                            job_id=job_id,
+                            repository=slot_repository,
+                            request_headers_provider=request_headers_provider,
+                            run_id=run_id,
+                            throttle=throttle,
+                            trace_logger=attempt_trace_logger,
+                            worker_id=worker_id,
+                            redirect_handler=redirect_handler,
+                            batch_refresher=batch_refresher,
+                            sitemap_checker=sitemap_checker,
+                        )
+                        if browser_session is not None:
+                            browser_session.trace_logger = trace_logger
+                    except Exception as exc:
+                        finished.set_exception(exc)
+                        # Keep the attempt's deadline armed through potentially blocking cleanup.
+                        try:
+                            resources.close()
+                        finally:
+                            _log(
+                                "worker.item.failed", attempt_id=claim.attempt_id,
+                                store_item_id=claim.record.store_item_id,
+                                reason="worker_session_error", error=str(exc),
+                            )
+                        return
+                    else:
+                        finished.set_result(None)
+
         _log(
             "worker.session.started",
             browser_fetch_enabled=browser_fetch_enabled,
+            concurrency=concurrency,
             job_id=job_id,
             poll_seconds=poll_seconds,
             web_bot_auth_enabled=web_bot_auth_enabled,
             worker_id=worker_id,
         )
 
-        next_slot = time.monotonic()
-        while not stop_event.is_set():
-            wait_seconds = max(0.0, next_slot - time.monotonic())
-            if stop_event.wait(wait_seconds):
-                break
-            next_slot = time.monotonic() + poll_seconds
-
-            lease_token = str(uuid.uuid4())
-            claim = repository.claim_due_store_item_update(
-                worker_name=WORKER_NAME,
+        with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="item-update") as executor:
+            _dispatch_claims(
+                executor=executor,
+                process_slot=process_slot,
+                repository=repository,
                 worker_id=worker_id,
-                lease_token=lease_token,
                 lease_seconds=lease_seconds,
+                poll_seconds=poll_seconds,
+                concurrency=concurrency,
+                stop_event=stop_event,
             )
-            if claim is None:
-                repository.heartbeat_continuous_update_worker(
-                    worker_name=WORKER_NAME,
-                    worker_id=worker_id,
-                )
-                continue
-            attempt_trace_logger = _ContextTraceLogger(
-                trace_logger,
-                platform=claim.platform,
-                store_id=claim.record.store_id,
-                store_item_id=claim.record.store_item_id,
-                update_attempt_id=claim.attempt_id,
-            )
-            if browser_session is not None:
-                browser_session.trace_logger = attempt_trace_logger
-            try:
-                _process_claim(
-                    browser_fetcher=browser_fetcher,
-                    claim=claim,
-                    item_title_extractor=item_title_extractor,
-                    job_id=job_id,
-                    repository=repository,
-                    request_headers_provider=request_headers_provider,
-                    run_id=run_id,
-                    throttle=throttle,
-                    trace_logger=attempt_trace_logger,
-                    worker_id=worker_id,
-                    redirect_handler=redirect_handler,
-                    batch_refresher=batch_refresher,
-                    sitemap_checker=sitemap_checker,
-                )
-            finally:
-                if browser_session is not None:
-                    browser_session.trace_logger = trace_logger
 
         repository.mark_continuous_update_worker_stopped(worker_name=WORKER_NAME, worker_id=worker_id)
         repository.complete_store_item_update_log(
@@ -234,9 +280,80 @@ def _run_worker_session(
                 pass
         raise
     finally:
-        if browser_session is not None:
-            browser_session.__exit__(None, None, None)
         connection.close()
+
+
+def _dispatch_claims(
+    *,
+    executor: ThreadPoolExecutor,
+    process_slot: Callable[[_SlotInbox], None],
+    repository: DiscoveryRepository,
+    worker_id: str,
+    lease_seconds: int,
+    poll_seconds: float,
+    concurrency: int,
+    stop_event: threading.Event,
+) -> None:
+    inboxes: list[_SlotInbox] = [Queue() for _ in range(concurrency)]
+    slots = []
+    # Insertion order lets the existing single-item monitor show the oldest active attempt.
+    active: dict[int, tuple[ClaimedStoreItemUpdate, Future[None]]] = {}
+
+    def publish_heartbeat() -> None:
+        oldest = next(iter(active.values()), None)
+        repository.heartbeat_continuous_update_worker(
+            worker_name=WORKER_NAME,
+            worker_id=worker_id,
+            current_store_item_id=oldest[0].record.store_item_id if oldest else None,
+        )
+
+    def reap_finished() -> None:
+        for slot, (_claim, finished) in list(active.items()):
+            if finished.done():
+                finished.result()
+                del active[slot]
+
+    try:
+        for inbox in inboxes:
+            slots.append(executor.submit(process_slot, inbox))
+        next_slot = time.monotonic()
+        while not stop_event.wait(max(0.0, next_slot - time.monotonic())):
+            next_slot = time.monotonic() + poll_seconds
+            reap_finished()
+            free_slot = next((slot for slot in range(concurrency) if slot not in active), None)
+            if free_slot is not None and not stop_event.is_set():
+                claim = repository.claim_due_store_item_update(
+                    worker_name=WORKER_NAME,
+                    worker_id=worker_id,
+                    lease_token=str(uuid.uuid4()),
+                    lease_seconds=lease_seconds,
+                    excluded_store_ids=tuple(claim.record.store_id for claim, _finished in active.values()),
+                )
+                if claim is not None:
+                    finished = Future()
+                    active[free_slot] = (claim, finished)
+                    inboxes[free_slot].put((claim, finished))
+            publish_heartbeat()
+
+        while active:
+            wait([finished for _claim, finished in active.values()], timeout=poll_seconds, return_when=FIRST_COMPLETED)
+            reap_finished()
+            publish_heartbeat()
+    except Exception:
+        _log("worker.session.draining")
+        # Release locks from an interrupted coordinator statement before draining slots.
+        try:
+            repository.connection.rollback()
+        except Exception:
+            pass
+        raise
+    else:
+        _log("worker.session.draining")
+    finally:
+        for inbox in inboxes:
+            inbox.put(None)
+        for slot in slots:
+            slot.result()
 
 
 def _process_claim(
@@ -256,13 +373,6 @@ def _process_claim(
     sitemap_checker: UpdateSitemapChecker | None = None,
 ) -> None:
     store_item_id = claim.record.store_item_id
-    _log(
-        "worker.item.started",
-        attempt_id=claim.attempt_id,
-        platform=claim.platform,
-        store_item_id=store_item_id,
-        store_name=claim.store_name,
-    )
 
     def is_sitemap_missing(source_url: str) -> bool:
         return sitemap_checker is not None and sitemap_checker.is_missing(
@@ -293,6 +403,7 @@ def _process_claim(
             if batch_refresher is not None and batch_refresher.supports(claim):
                 refreshed_record = batch_refresher.refresh(
                     claim, trace_logger=trace_logger, is_sitemap_missing=is_sitemap_missing,
+                    repository=repository,
                 )
             else:
                 refreshed_record = refresh_confirmed_store_item_candidate(
@@ -344,7 +455,11 @@ def _process_claim(
             worker_id=worker_id,
             worker_name=WORKER_NAME,
         )
-        _log("worker.item.deactivated", message="Store item marked unavailable after removed product", availability="unavailable", error=str(exc), store_item_id=store_item_id)
+        _log(
+            "worker.item.deactivated", attempt_id=claim.attempt_id,
+            message="Store item marked unavailable after removed product",
+            availability="unavailable", error=str(exc), store_item_id=store_item_id,
+        )
     except Exception as exc:
         status_code = exc.status_code if isinstance(exc, TransientProductFetchError) else None
         retry_after_seconds = exc.retry_after_seconds if isinstance(exc, TransientProductFetchError) else None
@@ -399,7 +514,9 @@ def _utc_now() -> datetime:
 
 
 def _log(event: str, **payload: object) -> None:
-    print(json.dumps({"event": event, **payload}, ensure_ascii=False, default=str), flush=True)
+    line = json.dumps({"event": event, **payload}, ensure_ascii=False, default=str)
+    with _LOG_LOCK:
+        print(line, flush=True)
 
 
 def _positive_float(value: str) -> float:
@@ -421,6 +538,7 @@ def main() -> None:
     parser.add_argument("--env-file", default=".env")
     parser.add_argument("--poll-seconds", type=_positive_float, default=1.0)
     parser.add_argument("--lease-seconds", type=_positive_int, default=300)
+    parser.add_argument("--concurrency", type=int, choices=range(1, MAX_CONCURRENCY + 1), default=MAX_CONCURRENCY)
     args = parser.parse_args()
     stop_event = threading.Event()
 
@@ -433,6 +551,7 @@ def main() -> None:
         env_file=args.env_file,
         poll_seconds=args.poll_seconds,
         lease_seconds=args.lease_seconds,
+        concurrency=args.concurrency,
         stop_event=stop_event,
     )
 

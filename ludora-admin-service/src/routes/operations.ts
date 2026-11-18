@@ -818,16 +818,7 @@ function workerHealth(worker: Record<string, unknown>, pollSeconds: number): 'he
   }
   const heartbeatAt = new Date(String(worker.heartbeat_at ?? '')).getTime();
   const maximumAgeMs = Math.max(30, pollSeconds * 3) * 1_000;
-  const activeLease = worker.status === 'running' && isFutureDate(worker.current_lease_expires_at);
-  return activeLease || (Number.isFinite(heartbeatAt) && Date.now() - heartbeatAt <= maximumAgeMs) ? 'healthy' : 'stale';
-}
-
-function isFutureDate(value: unknown): boolean {
-  if (!value) {
-    return false;
-  }
-  const timestamp = new Date(String(value)).getTime();
-  return Number.isFinite(timestamp) && timestamp > Date.now();
+  return Number.isFinite(heartbeatAt) && Date.now() - heartbeatAt <= maximumAgeMs ? 'healthy' : 'stale';
 }
 
 function parseEmbeddingRefreshMode(body: unknown): 'full' | 'missing' {

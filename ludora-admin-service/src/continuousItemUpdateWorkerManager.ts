@@ -1,6 +1,8 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'node:child_process';
 import path from 'node:path';
 
+const SHUTDOWN_GRACE_MS = 10_000;
+
 export type SpawnContinuousItemUpdateWorker = (
   command: string,
   args: string[],
@@ -50,6 +52,7 @@ export function createContinuousItemUpdateWorkerProcessTreeTerminator({
 
 type ContinuousItemUpdateWorkerManagerOptions = {
   adminApiUrl: string;
+  concurrency: number;
   envFile: string;
   internalApiToken: string;
   itemTimeoutSeconds: number;
@@ -74,6 +77,7 @@ export type ContinuousItemUpdateWorkerControlStatus = 'paused' | 'running' | 'st
 
 export function createContinuousItemUpdateWorkerManager({
   adminApiUrl,
+  concurrency,
   envFile,
   internalApiToken,
   itemTimeoutSeconds,
@@ -86,23 +90,53 @@ export function createContinuousItemUpdateWorkerManager({
   terminateProcessTree = createContinuousItemUpdateWorkerProcessTreeTerminator()
 }: ContinuousItemUpdateWorkerManagerOptions): ContinuousItemUpdateWorkerManager {
   let child: ChildProcessWithoutNullStreams | null = null;
-  let itemWatchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  const itemWatchdogs = new Map<string, ReturnType<typeof setTimeout>>();
+  let drainWatchdog: ReturnType<typeof setTimeout> | null = null;
   let restartTimer: ReturnType<typeof setTimeout> | null = null;
   let stdoutBuffer = '';
-  let watchedItem: { attemptId: string; platform: string; startedAt: number; storeItemId: string } | null = null;
+  let forceTerminationRequested = false;
   let isPaused = false;
   let isShuttingDown = false;
   let isStopping = false;
 
-  function clearItemWatchdog(): void {
-    if (itemWatchdogTimer) {
-      clearTimeout(itemWatchdogTimer);
-      itemWatchdogTimer = null;
+  function clearItemWatchdogs(): void {
+    for (const timer of itemWatchdogs.values()) {
+      clearTimeout(timer);
     }
-    watchedItem = null;
+    itemWatchdogs.clear();
+  }
+
+  function clearDrainWatchdog(): void {
+    if (drainWatchdog) {
+      clearTimeout(drainWatchdog);
+      drainWatchdog = null;
+    }
+  }
+
+  function forceTerminateChild(activeChild: ChildProcessWithoutNullStreams): void {
+    if (child !== activeChild || forceTerminationRequested) {
+      return;
+    }
+    forceTerminationRequested = true;
+    clearItemWatchdogs();
+    clearDrainWatchdog();
+    terminateProcessTree(activeChild, 'SIGKILL');
+  }
+
+  function armDrainWatchdog(activeChild: ChildProcessWithoutNullStreams): void {
+    if (drainWatchdog || forceTerminationRequested) {
+      return;
+    }
+    drainWatchdog = setTimeout(() => {
+      console.error('[continuous-item-update] worker timed out while draining item slots');
+      forceTerminateChild(activeChild);
+    }, itemTimeoutSeconds * 1_000 + SHUTDOWN_GRACE_MS);
   }
 
   function handleWorkerLifecycleOutput(spawnedChild: ChildProcessWithoutNullStreams, chunk: unknown): void {
+    if (child !== spawnedChild || isShuttingDown || forceTerminationRequested) {
+      return;
+    }
     stdoutBuffer += String(chunk);
     let newlineIndex = stdoutBuffer.indexOf('\n');
     while (newlineIndex >= 0) {
@@ -118,32 +152,45 @@ export function createContinuousItemUpdateWorkerManager({
           continue;
         }
         const lifecycleEvent = event as Record<string, unknown>;
+        if (lifecycleEvent.event === 'worker.session.draining') {
+          armDrainWatchdog(spawnedChild);
+          continue;
+        }
+        if (lifecycleEvent.event === 'worker.session.failed') {
+          clearItemWatchdogs();
+          clearDrainWatchdog();
+          continue;
+        }
+        const { attempt_id: attemptId } = lifecycleEvent;
+        if (typeof attemptId !== 'number' && typeof attemptId !== 'string') {
+          continue;
+        }
+        const key = String(attemptId);
         if (lifecycleEvent.event === 'worker.item.started') {
-          clearItemWatchdog();
-          const item = {
-            attemptId: String(lifecycleEvent.attempt_id),
-            platform: String(lifecycleEvent.platform),
-            startedAt: Date.now(),
-            storeItemId: String(lifecycleEvent.store_item_id)
-          };
-          watchedItem = item;
-          itemWatchdogTimer = setTimeout(() => {
-            if (child !== spawnedChild || watchedItem !== item) {
+          if (itemWatchdogs.has(key)) {
+            continue;
+          }
+          const platform = String(lifecycleEvent.platform);
+          const storeItemId = String(lifecycleEvent.store_item_id);
+          const startedAt = Date.now();
+          const timer = setTimeout(() => {
+            if (child !== spawnedChild || itemWatchdogs.get(key) !== timer) {
               return;
             }
-            itemWatchdogTimer = null;
-            const elapsedMs = Date.now() - item.startedAt;
+            const elapsedMs = Date.now() - startedAt;
             console.error(
-              `[continuous-item-update] item watchdog timed out: attempt_id=${item.attemptId} store_item_id=${item.storeItemId} platform=${item.platform} timeout_seconds=${itemTimeoutSeconds} elapsed_ms=${elapsedMs}`
+              `[continuous-item-update] item watchdog timed out: attempt_id=${key} store_item_id=${storeItemId} platform=${platform} timeout_seconds=${itemTimeoutSeconds} elapsed_ms=${elapsedMs}`
             );
-            terminateProcessTree(spawnedChild, 'SIGKILL');
+            forceTerminateChild(spawnedChild);
           }, itemTimeoutSeconds * 1_000);
+          itemWatchdogs.set(key, timer);
         } else if (
           lifecycleEvent.event === 'worker.item.succeeded'
           || lifecycleEvent.event === 'worker.item.failed'
           || lifecycleEvent.event === 'worker.item.deactivated'
         ) {
-          clearItemWatchdog();
+          clearTimeout(itemWatchdogs.get(key));
+          itemWatchdogs.delete(key);
         }
       } catch {
         // Child stdout also includes non-lifecycle logs; keep forwarding it unchanged.
@@ -164,7 +211,9 @@ export function createContinuousItemUpdateWorkerManager({
       '--poll-seconds',
       String(pollSeconds),
       '--lease-seconds',
-      String(leaseSeconds)
+      String(leaseSeconds),
+      '--concurrency',
+      String(concurrency)
     ];
     const spawnedChild = spawnProcess(pythonExecutable, args, {
       cwd: packageDir,
@@ -192,8 +241,10 @@ export function createContinuousItemUpdateWorkerManager({
         return;
       }
       const stoppedForPause = isStopping;
-      clearItemWatchdog();
+      clearItemWatchdogs();
+      clearDrainWatchdog();
       stdoutBuffer = '';
+      forceTerminationRequested = false;
       child = null;
       isStopping = false;
       if (isShuttingDown) {
@@ -231,6 +282,7 @@ export function createContinuousItemUpdateWorkerManager({
       }
       if (child && !isStopping) {
         isStopping = true;
+        armDrainWatchdog(child);
         child.kill('SIGTERM');
       }
       return child ? 'stopping' : 'paused';
@@ -245,7 +297,8 @@ export function createContinuousItemUpdateWorkerManager({
     start: launch,
     async shutdown(): Promise<void> {
       isShuttingDown = true;
-      clearItemWatchdog();
+      clearItemWatchdogs();
+      clearDrainWatchdog();
       if (restartTimer) {
         clearTimeout(restartTimer);
         restartTimer = null;
@@ -268,9 +321,9 @@ export function createContinuousItemUpdateWorkerManager({
           resolve();
         };
         forceKillTimer = setTimeout(() => {
-          activeChild.kill('SIGKILL');
+          forceTerminateChild(activeChild);
           settle();
-        }, 10_000);
+        }, SHUTDOWN_GRACE_MS);
         activeChild.once('close', settle);
         activeChild.kill('SIGTERM');
       });

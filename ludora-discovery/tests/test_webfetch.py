@@ -1,8 +1,10 @@
 import sys
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from email.message import Message
 from http.client import HTTPException
 from pathlib import Path
+from threading import Event
 from urllib.error import HTTPError, URLError
 from unittest.mock import Mock, patch
 
@@ -229,6 +231,40 @@ class WebFetchTests(unittest.TestCase):
         self.assertEqual(after_cooldown.delay_seconds, 120.0)
         self.assertEqual(after_cooldown.reason, "cooldown")
         self.assertEqual(waits, [3.0, 120.0])
+
+    def test_concurrent_requests_recheck_the_same_host_after_sleeping(self):
+        clock = [10.0]
+        entered_wait = {name: Event() for name in ("first", "second")}
+        release_wait = {name: Event() for name in ("first", "second")}
+
+        def wait(delay, request):
+            waiting = entered_wait[request]
+            if not waiting.is_set():
+                waiting.set()
+                if not release_wait[request].wait(2):
+                    raise TimeoutError("request was not released")
+                clock[0] = 12.0
+            else:
+                clock[0] += delay
+
+        throttle = PerHostRequestThrottle(minimum_interval_seconds=2.0, clock=lambda: clock[0], waiter=wait)
+        url = "https://shop.example/products/catan"
+        throttle.wait_before_request(url)
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            first = executor.submit(throttle.wait_before_request, url, "first")
+            second = executor.submit(throttle.wait_before_request, url, "second")
+            try:
+                self.assertTrue(entered_wait["first"].wait(1))
+                self.assertTrue(entered_wait["second"].wait(1))
+                other_host = throttle.wait_before_request("https://other.example/products/azul")
+                self.assertEqual(other_host.delay_seconds, 0.0)
+                release_wait["first"].set()
+                self.assertEqual(first.result(timeout=1).delay_seconds, 2.0)
+            finally:
+                release_wait["first"].set()
+                release_wait["second"].set()
+            self.assertEqual(second.result(timeout=1).delay_seconds, 4.0)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from queue import Empty, Queue
-from threading import BoundedSemaphore, Thread
+from threading import BoundedSemaphore, Lock, Thread
 from urllib.error import HTTPError
 from urllib.parse import SplitResult, quote_from_bytes, unquote, urljoin, urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
@@ -42,6 +42,10 @@ HOST_LABEL = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 BAD_ESCAPE = re.compile(r"%(?![a-fA-F0-9]{2})")
 PERCENT_ESCAPE = re.compile(r"%([a-fA-F0-9]{2})")
 _LOAD_SLOT = BoundedSemaphore()
+
+
+class _SitemapLoadBusy(Exception):
+    pass
 
 
 @dataclass(frozen=True)
@@ -81,6 +85,7 @@ class UpdateSitemapChecker:
         self._load_budget_seconds = load_budget_seconds
         self._fetcher = fetcher
         self._cache: OrderedDict[tuple[int, bool], _CachedSnapshot] = OrderedDict()
+        self._cache_lock = Lock()
 
     @classmethod
     def from_environment(
@@ -144,22 +149,29 @@ class UpdateSitemapChecker:
             return False
 
         cache_key = (store_id, shopify)
-        cached = self._cache.get(cache_key)
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                self._cache.move_to_end(cache_key)
         now = self._clock()
         if cached is None or cached.expires_at <= now:
             try:
                 pages = self._load_within_budget(config, store_host, shopify, cancellation_token)
             except OperationCancelled:
                 raise
+            except _SitemapLoadBusy:
+                return False
             except Exception:
                 raise_if_cancelled(cancellation_token)
                 pages = None
             ttl = SNAPSHOT_TTL_SECONDS if pages is not None else FAILURE_TTL_SECONDS
             expires_at = (now if pages is not None else self._clock()) + ttl
-            cached = self._cache[cache_key] = _CachedSnapshot(expires_at, pages)
-        self._cache.move_to_end(cache_key)
-        if len(self._cache) > MAX_CACHED_STORES:
-            self._cache.popitem(last=False)
+            cached = _CachedSnapshot(expires_at, pages)
+            with self._cache_lock:
+                self._cache[cache_key] = cached
+                self._cache.move_to_end(cache_key)
+                if len(self._cache) > MAX_CACHED_STORES:
+                    self._cache.popitem(last=False)
         raise_if_cancelled(cancellation_token)
         return (
             cached.pages is not None
@@ -198,7 +210,7 @@ class UpdateSitemapChecker:
             completed.put_nowait(result)
 
         if not _LOAD_SLOT.acquire(blocking=False):
-            return None
+            raise _SitemapLoadBusy
         try:
             Thread(target=load, name="update-sitemap", daemon=True).start()
         except Exception:

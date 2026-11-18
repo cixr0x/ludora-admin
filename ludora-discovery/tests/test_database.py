@@ -12,6 +12,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from ludora.database import (
+    ClaimedStoreItemUpdate,
     DiscoveryRepository,
     ItemSearchEmbeddingSource,
     TutorialLinkUpsertResult,
@@ -195,6 +196,33 @@ class DatabaseRepositoryTests(unittest.TestCase):
         claim = repository.claim_due_store_item_update(worker_name="continuous", worker_id="worker-1", lease_token="token", lease_seconds=300)
         self.assertEqual(claim.canonical_domain, "chocitajuegos.com")
 
+    def test_claim_excludes_busy_stores_inside_the_due_window(self):
+        connection = FakeConnection(fetchone_rows=[None])
+        repository = DiscoveryRepository(connection)
+
+        self.assertIsNone(repository.claim_due_store_item_update(
+            worker_name="continuous", worker_id="worker-1", lease_token="token", lease_seconds=300,
+            excluded_store_ids=(12, 17),
+        ))
+
+        query, params = connection.cursor_instance.executions[0]
+        due_window = query.split("), scheduled as (", 1)[0]
+        self.assertLess(due_window.index("store_items.store_id <> all("), due_window.index("limit 256"))
+        self.assertIn([12, 17], params)
+
+    def test_worker_heartbeat_does_not_wait_for_the_representative_item_row(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+
+        repository.heartbeat_continuous_update_worker(
+            worker_name="continuous", worker_id="worker-1", current_store_item_id=501,
+        )
+
+        query, params = connection.cursor_instance.executions[0]
+        self.assertIn("for key share skip locked", query.casefold())
+        self.assertEqual(params, (501, "running", "continuous", "worker-1"))
+        self.assertEqual(connection.commits, 1)
+
     def test_claim_due_store_item_update_skips_only_the_blocked_store_and_reads_its_count(self):
         connection = FakeConnection(
             fetchone_rows=[
@@ -311,7 +339,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("select id from updated where id = target_id", normalized_sql)
         self.assertEqual(
             claim_params,
-            ("continuous", "ee2bf2df-2330-430b-8f65-ad41dad4dc62", 300),
+            ([], "continuous", "ee2bf2df-2330-430b-8f65-ad41dad4dc62", 300),
         )
         self.assertEqual(claim.record.store_item_id, 777)
 
@@ -486,8 +514,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         worker_update, worker_params = connection.cursor_instance.executions[3]
         normalized_worker_update = " ".join(worker_update.casefold().split())
         self.assertIn("update store_item_update_worker_state", normalized_worker_update)
-        self.assertIn("status = 'idle'", normalized_worker_update)
-        self.assertIn("current_store_item_id = null", normalized_worker_update)
+        self.assertNotIn("status =", normalized_worker_update)
+        self.assertNotIn("current_store_item_id", normalized_worker_update)
         self.assertIn("last_success_at = now()", normalized_worker_update)
         self.assertEqual(worker_params, ("continuous", "worker-1"))
 
@@ -1693,6 +1721,36 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(discovery_params, ("ludora:item-discovery-coordinator",))
         self.assertEqual(update_params, ("ludora:store-item-update-coordinator",))
         self.assertNotEqual(discovery_params, update_params)
+
+    def test_downgrade_acquires_shared_lock_before_releasing_exclusive_lock(self):
+        connection = FakeConnection(fetchone_rows=[(True,), (True,)])
+        repository = DiscoveryRepository(connection)
+
+        repository.downgrade_store_item_update_coordinator_lock()
+
+        [(shared_sql, shared_params), (unlock_sql, unlock_params)] = connection.cursor_instance.executions
+        self.assertIn("pg_try_advisory_lock_shared", shared_sql)
+        self.assertIn("pg_advisory_unlock(", unlock_sql)
+        self.assertEqual(shared_params, ("ludora:store-item-update-coordinator",))
+        self.assertEqual(unlock_params, shared_params)
+
+    def test_slot_rechecks_attempt_owner_and_expiring_item_lease(self):
+        connection = FakeConnection(fetchone_rows=[(False,)])
+        repository = DiscoveryRepository(connection)
+        claim = ClaimedStoreItemUpdate(
+            attempt_id=91, consecutive_failures=0, lease_token="lease",
+            platform="shopify", record=confirmed_store_item_record(), store_consecutive_429s=0,
+            store_name="Example",
+        )
+
+        self.assertFalse(repository.continuous_update_claim_is_owned(claim=claim, worker_id="worker-1"))
+
+        query, params = connection.cursor_instance.executions[0]
+        self.assertIn("attempt.status = 'running'", query)
+        self.assertIn("store_items.update_lease_token = attempt.lease_token", query)
+        self.assertIn("store_items.update_lease_expires_at > now()", query)
+        self.assertEqual(params, (91, "worker-1", "lease", 501))
+        self.assertEqual(connection.commits, 1)
 
 
 if __name__ == "__main__":

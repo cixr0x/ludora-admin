@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
@@ -123,6 +123,7 @@ STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS = (
     "availability_source",
 )
 STORE_ITEM_UPDATE_RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
+STORE_ITEM_UPDATE_COORDINATOR_KEY = "ludora:store-item-update-coordinator"
 
 
 class DiscoveryRepository:
@@ -451,9 +452,55 @@ class DiscoveryRepository:
         with self.connection.cursor() as cursor:
             cursor.execute(
                 "select pg_try_advisory_lock(hashtext(%s))",
-                ("ludora:store-item-update-coordinator",),
+                (STORE_ITEM_UPDATE_COORDINATOR_KEY,),
             )
             row = cursor.fetchone()
+        return bool(row and row[0])
+
+    def try_acquire_store_item_update_shared_lock(self) -> bool:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "select pg_try_advisory_lock_shared(hashtext(%s))",
+                (STORE_ITEM_UPDATE_COORDINATOR_KEY,),
+            )
+            row = cursor.fetchone()
+        return bool(row and row[0])
+
+    def downgrade_store_item_update_coordinator_lock(self) -> None:
+        # Take the shared session lock before releasing the exclusive startup lock.
+        if not self.try_acquire_store_item_update_shared_lock():
+            raise RuntimeError("Could not acquire the shared store item update coordinator lock")
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                "select pg_advisory_unlock(hashtext(%s))",
+                (STORE_ITEM_UPDATE_COORDINATOR_KEY,),
+            )
+            row = cursor.fetchone()
+        self.connection.commit()
+        if not row or not row[0]:
+            raise RuntimeError("The store item update coordinator no longer owns its exclusive startup lock")
+
+    def continuous_update_claim_is_owned(self, *, claim: ClaimedStoreItemUpdate, worker_id: str) -> bool:
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                """
+                select exists (
+                    select 1
+                    from store_item_update_attempt_log attempt
+                    join store_items on store_items.id = attempt.store_item_id
+                    where attempt.id = %s
+                      and attempt.worker_id = %s
+                      and attempt.lease_token = %s::uuid
+                      and attempt.status = 'running'
+                      and store_items.id = %s
+                      and store_items.update_lease_token = attempt.lease_token
+                      and store_items.update_lease_expires_at > now()
+                )
+                """,
+                (claim.attempt_id, worker_id, claim.lease_token, claim.record.store_item_id),
+            )
+            row = cursor.fetchone()
+        self.connection.commit()
         return bool(row and row[0])
 
     def try_acquire_item_discovery_coordinator_lock(self) -> bool:
@@ -548,22 +595,25 @@ class DiscoveryRepository:
         *,
         worker_name: str,
         worker_id: str,
-        status: str = "idle",
-        error: str = "",
+        current_store_item_id: int | None,
     ) -> None:
         with self.connection.cursor() as cursor:
+            # Slot persistence can hold an item row lock while updating worker history.
+            # Skip a locked representative so its FK check cannot block the heartbeat.
             cursor.execute(
                 """
+                with representative as materialized (
+                    select id from store_items where id = %s for key share skip locked
+                )
                 update store_item_update_worker_state
                 set status = %s,
                     heartbeat_at = now(),
-                    current_store_item_id = null,
-                    last_error = %s,
+                    current_store_item_id = (select id from representative),
                     updated_at = now()
                 where worker_name = %s
                   and worker_id = %s
                 """,
-                (status, error, worker_name, worker_id),
+                (current_store_item_id, "idle" if current_store_item_id is None else "running", worker_name, worker_id),
             )
         self.connection.commit()
 
@@ -590,6 +640,7 @@ class DiscoveryRepository:
         worker_id: str,
         lease_token: str,
         lease_seconds: int,
+        excluded_store_ids: Sequence[int] = (),
     ) -> ClaimedStoreItemUpdate | None:
         with self.connection.cursor() as cursor:
             cursor.execute(
@@ -605,7 +656,8 @@ class DiscoveryRepository:
                       and store_items.source_url <> ''
                       and store_items.listing_status = 'LISTED'
                       and store_items.store_active = true
-              and store_items.availability <> 'unavailable'
+                      and store_items.availability <> 'unavailable'
+                      and store_items.store_id <> all(%s::bigint[])
                       and store_items.next_update_at <= now()
                       and (
                         store_items.update_lease_token is null
@@ -690,7 +742,7 @@ class DiscoveryRepository:
                 from updated
                 where id = target_id
                 """,
-                (worker_name, lease_token, lease_seconds),
+                (list(excluded_store_ids), worker_name, lease_token, lease_seconds),
             )
             claimed_row = cursor.fetchone()
             if not claimed_row:
@@ -750,16 +802,13 @@ class DiscoveryRepository:
             cursor.execute(
                 """
                 update store_item_update_worker_state
-                set status = 'running',
-                    heartbeat_at = now(),
-                    current_store_item_id = %s,
-                    last_attempt_at = now(),
+                set last_attempt_at = now(),
                     last_error = '',
                     updated_at = now()
                 where worker_name = %s
                   and worker_id = %s
                 """,
-                (store_item_id, worker_name, worker_id),
+                (worker_name, worker_id),
             )
         self.connection.commit()
         return ClaimedStoreItemUpdate(
@@ -914,10 +963,7 @@ class DiscoveryRepository:
             cursor.execute(
                 """
                 update store_item_update_worker_state
-                set status = 'idle',
-                    heartbeat_at = now(),
-                    current_store_item_id = null,
-                    last_success_at = now(),
+                set last_success_at = now(),
                     last_error = '',
                     updated_at = now()
                 where worker_name = %s
@@ -1021,10 +1067,7 @@ class DiscoveryRepository:
             cursor.execute(
                 """
                 update store_item_update_worker_state
-                set status = 'idle',
-                    heartbeat_at = now(),
-                    current_store_item_id = null,
-                    last_success_at = now(),
+                set last_success_at = now(),
                     last_error = '',
                     updated_at = now()
                 where worker_name = %s
@@ -1125,10 +1168,7 @@ class DiscoveryRepository:
             cursor.execute(
                 """
                 update store_item_update_worker_state
-                set status = 'idle',
-                    heartbeat_at = now(),
-                    current_store_item_id = null,
-                    last_failure_at = now(),
+                set last_failure_at = now(),
                     last_error = %s,
                     updated_at = now()
                 where worker_name = %s
@@ -1173,10 +1213,7 @@ class DiscoveryRepository:
         cursor.execute(
             """
             update store_item_update_worker_state
-            set status = 'idle',
-                heartbeat_at = now(),
-                current_store_item_id = null,
-                last_failure_at = now(),
+            set last_failure_at = now(),
                 last_error = 'Update lease expired or was replaced before persistence',
                 updated_at = now()
             where worker_name = %s
@@ -1365,8 +1402,8 @@ class DiscoveryRepository:
                         where id = %s
                     """, (changed, attempt_id))
                     cursor.execute("""
-                        update store_item_update_worker_state set status = 'idle', heartbeat_at = now(),
-                            current_store_item_id = null, last_success_at = now(), last_error = '', updated_at = now()
+                        update store_item_update_worker_state
+                        set last_success_at = now(), last_error = '', updated_at = now()
                         where worker_name = %s and worker_id = %s
                     """, (worker_name, worker_id))
                     cursor.execute("""
@@ -1650,11 +1687,10 @@ class DiscoveryRepository:
                     cursor.execute(
                         """
                         update store_item_update_worker_state
-                        set status = 'idle', heartbeat_at = now(), current_store_item_id = null,
-                            last_success_at = now(), last_error = '', updated_at = now()
-                        where worker_name = %s and worker_id = %s and current_store_item_id = %s
+                        set last_success_at = now(), last_error = '', updated_at = now()
+                        where worker_name = %s and worker_id = %s
                         """,
-                        (worker_name, worker_id, store_item_id),
+                        (worker_name, worker_id),
                     )
                     cursor.execute(
                         """
@@ -1691,10 +1727,9 @@ class DiscoveryRepository:
                 returning store_item_id
             )
             update store_item_update_worker_state
-            set status = 'idle', heartbeat_at = now(), current_store_item_id = null,
-                last_failure_at = now(), last_error = %s, updated_at = now()
+            set last_failure_at = now(), last_error = %s, updated_at = now()
             from lost_attempt
-            where worker_name = %s and worker_id = %s and current_store_item_id = lost_attempt.store_item_id
+            where worker_name = %s and worker_id = %s
             """,
             (error, claim.attempt_id, worker_id, claim.lease_token, error, worker_name, worker_id),
         )

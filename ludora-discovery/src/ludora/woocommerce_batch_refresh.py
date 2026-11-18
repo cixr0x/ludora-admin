@@ -8,6 +8,7 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from decimal import Decimal
+from threading import Lock
 from urllib.parse import unquote, urlencode, urlparse
 
 from ludora.database import ClaimedStoreItemUpdate, DiscoveryRepository
@@ -42,7 +43,7 @@ class ChocitaBatchRefresher:
 
     def __init__(
         self,
-        repository: DiscoveryRepository,
+        repository: DiscoveryRepository | None = None,
         *,
         fetcher: Callable[[str], FetchResult | None] | None = None,
         clock: Callable[[], float] | None = None,
@@ -58,6 +59,7 @@ class ChocitaBatchRefresher:
             waiter=lambda seconds, _token: self._waiter(seconds),
         )
         self._cache: dict[tuple[int, int, str], _BatchEntry] = {}
+        self._cache_lock = Lock()
 
     @staticmethod
     def supports(claim: ClaimedStoreItemUpdate) -> bool:
@@ -75,19 +77,24 @@ class ChocitaBatchRefresher:
         *,
         trace_logger: TraceLogger | None = None,
         is_sitemap_missing: Callable[[str], bool] | None = None,
+        repository: DiscoveryRepository | None = None,
     ) -> DiscoveryItemCandidateRecord:
         if not self.supports(claim):
             raise ValueError("Chocita batch refresh requires the confirmed WooCommerce store and HTTPS origin")
         trace = trace_logger or NullTraceLogger()
         record = claim.record
-        self._expire_cache()
         key = (record.store_id, record.store_item_id, record.source_url)
-        cache_hit = key in self._cache
         try:
-            if not cache_hit:
-                self._cache.clear()
-                self._fetch_batch(claim, trace, is_sitemap_missing)
-            entry = self._cache.pop(key, None)
+            with self._cache_lock:
+                self._expire_cache()
+                cache_hit = key in self._cache
+                if not cache_hit:
+                    targets_repository = self.repository if self.repository is not None else repository
+                    if targets_repository is None:
+                        raise ValueError("Chocita batch refresh requires a repository for batch targets")
+                    self._cache.clear()
+                    self._fetch_batch(targets_repository, claim, trace, is_sitemap_missing)
+                entry = self._cache.pop(key, None)
             if entry is None:
                 raise RuntimeError("Chocita claimed product has no unique eligible batch source URL")
             age_seconds = max(0.0, self._clock() - entry.fetched_at)
@@ -125,12 +132,13 @@ class ChocitaBatchRefresher:
 
     def _fetch_batch(
         self,
+        repository: DiscoveryRepository,
         claim: ClaimedStoreItemUpdate,
         trace: TraceLogger,
         is_sitemap_missing: Callable[[str], bool] | None,
     ) -> None:
         record = claim.record
-        targets = self.repository.list_store_item_update_batch_targets(
+        targets = repository.list_store_item_update_batch_targets(
             store_id=record.store_id,
             claimed_store_item_id=record.store_item_id,
             limit=BATCH_SIZE,

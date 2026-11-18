@@ -19,12 +19,13 @@ class DatabaseTraceLogger:
         run_id: str,
         source: str = "discovery",
         update_job_id: int | None = None,
+        started_at: float | None = None,
     ) -> None:
         self.connection = connection
         self.run_id = run_id
         self.source = source
         self.update_job_id = update_job_id
-        self.started_at = time.monotonic()
+        self.started_at = time.monotonic() if started_at is None else started_at
 
     def log(self, event: str, **fields: object) -> None:
         payload = {
@@ -89,5 +90,9 @@ def create_item_update_trace_logger(
     connection: Any,
     run_id: str,
     job_id: int,
+    *,
+    started_at: float | None = None,
 ) -> TraceLogger:
-    return DatabaseTraceLogger(connection, run_id=run_id, source="item_update", update_job_id=job_id)
+    return DatabaseTraceLogger(
+        connection, run_id=run_id, source="item_update", update_job_id=job_id, started_at=started_at,
+    )

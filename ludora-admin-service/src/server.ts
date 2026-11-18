@@ -123,6 +123,7 @@ const continuousItemUpdateWorkerManager =
   config.continuousItemUpdateWorker.enabled && config.discoveryRunner.mode === 'local'
     ? createContinuousItemUpdateWorkerManager({
         adminApiUrl: `http://127.0.0.1:${config.port}`,
+        concurrency: config.continuousItemUpdateWorker.concurrency,
         envFile: config.discoveryRunner.envFile,
         internalApiToken,
         itemTimeoutSeconds: config.continuousItemUpdateWorker.itemTimeoutSeconds,

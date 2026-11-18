@@ -232,10 +232,12 @@ describe('loadConfig', () => {
     expect(loadConfig().continuousItemUpdateWorker.enabled).toBe(false);
 
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED', 'true');
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_CONCURRENCY', '1');
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', '5');
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', '300');
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS', '120');
     expect(loadConfig().continuousItemUpdateWorker).toEqual({
+      concurrency: 1,
       enabled: true,
       itemTimeoutSeconds: 120,
       leaseSeconds: 300,
@@ -260,6 +262,18 @@ describe('loadConfig', () => {
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', undefined);
 
     expect(loadConfig().continuousItemUpdateWorker.pollSeconds).toBe(1);
+  });
+
+  it('defaults the continuous updater to three concurrent slots', () => {
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_CONCURRENCY', undefined);
+
+    expect(loadConfig().continuousItemUpdateWorker.concurrency).toBe(3);
+  });
+
+  it.each(['0', '-1', '1.5', '4', 'Infinity'])('rejects invalid continuous updater concurrency %s', (value) => {
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_CONCURRENCY', value);
+
+    expect(() => loadConfig()).toThrow(/LUDORA_CONTINUOUS_ITEM_UPDATE_CONCURRENCY/);
   });
 
   it('keeps daily item discovery scheduling off outside production and accepts an explicit override', () => {

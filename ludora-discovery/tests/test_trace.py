@@ -2,7 +2,7 @@ import json
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -11,6 +11,16 @@ from ludora.trace import create_item_update_trace_logger
 
 
 class TraceLoggerTests(unittest.TestCase):
+    def test_slot_trace_can_use_the_shared_run_start(self):
+        connection = MagicMock()
+        cursor = connection.cursor.return_value.__enter__.return_value
+        with patch("ludora.trace.time.monotonic", return_value=13.0):
+            trace = create_item_update_trace_logger(connection, "run-update-27", 27, started_at=10.0)
+            trace.log("item_update.item.fetch.http_error")
+
+        params = cursor.execute.call_args.args[1]
+        self.assertEqual(json.loads(params[4])["elapsed_ms"], 3000)
+
     def test_item_update_trace_logger_persists_job_scoped_payload_immediately(self):
         connection = MagicMock()
         cursor = connection.cursor.return_value.__enter__.return_value

@@ -34,6 +34,7 @@ export type Config = {
   databaseUrl?: string;
   corsOrigin: string[];
   continuousItemUpdateWorker: {
+    concurrency: number;
     enabled: boolean;
     itemTimeoutSeconds: number;
     leaseSeconds: number;
@@ -93,6 +94,11 @@ export function loadConfig(): Config {
 }
 
 function readContinuousItemUpdateWorkerConfig(): Config['continuousItemUpdateWorker'] {
+  const concurrencyKey = 'LUDORA_CONTINUOUS_ITEM_UPDATE_CONCURRENCY';
+  const concurrency = Number(readOptionalEnv(concurrencyKey) ?? '3');
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 3) {
+    throw new Error(`${concurrencyKey} must be an integer from 1 to 3`);
+  }
   const leaseSeconds = readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', 300);
   const itemTimeoutSeconds = readPositiveNumberEnv(
     'LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS',
@@ -104,6 +110,7 @@ function readContinuousItemUpdateWorkerConfig(): Config['continuousItemUpdateWor
     );
   }
   return {
+    concurrency,
     enabled: readBooleanEnv(
       'LUDORA_CONTINUOUS_ITEM_UPDATE_ENABLED',
       process.env.NODE_ENV === 'production'

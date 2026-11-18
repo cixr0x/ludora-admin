@@ -31,6 +31,7 @@ function createManager(
   const terminateProcessTree = vi.fn();
   const manager = createContinuousItemUpdateWorkerManager({
     adminApiUrl: 'http://127.0.0.1:4001',
+    concurrency: 3,
     envFile: 'C:/ludora-discovery/.env',
     internalApiToken: 'internal-token',
     itemTimeoutSeconds: 120,
@@ -65,6 +66,7 @@ describe('continuous item update worker manager', () => {
     };
     const manager = createContinuousItemUpdateWorkerManager({
       adminApiUrl: 'http://127.0.0.1:4001',
+      concurrency: 1,
       envFile: 'C:/PROJECTS/ludora/ludora-admin/ludora-discovery/.env',
       internalApiToken: 'internal-token',
       itemTimeoutSeconds: 120,
@@ -87,7 +89,9 @@ describe('continuous item update worker manager', () => {
         '--poll-seconds',
         '5',
         '--lease-seconds',
-        '300'
+        '300',
+        '--concurrency',
+        '1'
       ],
       command: 'python',
       options: {
@@ -133,6 +137,7 @@ describe('continuous item update worker manager', () => {
     const manager = createContinuousItemUpdateWorkerManager({
       adminApiUrl: 'http://127.0.0.1:4001',
       envFile: 'C:/ludora-discovery/.env',
+      concurrency: 3,
       internalApiToken: 'internal-token',
       itemTimeoutSeconds: 120,
       leaseSeconds: 300,
@@ -169,6 +174,7 @@ describe('continuous item update worker manager', () => {
     const manager = createContinuousItemUpdateWorkerManager({
       adminApiUrl: 'http://127.0.0.1:4001',
       envFile: 'C:/ludora-discovery/.env',
+      concurrency: 3,
       internalApiToken: 'internal-token',
       itemTimeoutSeconds: 120,
       leaseSeconds: 300,
@@ -237,6 +243,66 @@ describe('continuous item update worker manager', () => {
     expect(spawned).toHaveLength(2);
   });
 
+  it('keeps an older attempt armed when a later, different attempt completes', () => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { manager, spawned, terminateProcessTree } = createManager({ itemTimeoutSeconds: 2 });
+
+    manager.start();
+    spawned[0].stdout.emit('data', '{"event":"worker.item.started","attempt_id":17,"store_item_id":42}\n');
+    vi.advanceTimersByTime(1_000);
+    spawned[0].stdout.emit('data', [
+      '{"event":"worker.item.started","attempt_id":18,"store_item_id":81}',
+      '{"event":"worker.item.succeeded","attempt_id":18,"store_item_id":81}',
+      '{"event":"worker.item.failed","attempt_id":16,"store_item_id":54}',
+      ''
+    ].join('\n'));
+    vi.advanceTimersByTime(1_000);
+
+    expect(terminateProcessTree).toHaveBeenCalledExactlyOnceWith(spawned[0], 'SIGKILL');
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('attempt_id=17 store_item_id=42'));
+  });
+
+  it('terminates a child once when multiple watchdogs expire before close', () => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { manager, spawned, terminateProcessTree } = createManager({ itemTimeoutSeconds: 2 });
+
+    manager.start();
+    spawned[0].stdout.emit('data', [
+      '{"event":"worker.item.started","attempt_id":17,"store_item_id":42}',
+      '{"event":"worker.item.started","attempt_id":18,"store_item_id":81}',
+      ''
+    ].join('\n'));
+    vi.advanceTimersByTime(2_000);
+
+    expect(terminateProcessTree).toHaveBeenCalledExactlyOnceWith(spawned[0], 'SIGKILL');
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('attempt_id=17 store_item_id=42'));
+    spawned[0].emit('close', null, 'SIGKILL');
+    vi.advanceTimersByTime(15_000);
+    expect(spawned).toHaveLength(2);
+  });
+
+  it('discards deadlines from a failed Python session before the next session starts', () => {
+    vi.useFakeTimers();
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { manager, spawned, terminateProcessTree } = createManager({ itemTimeoutSeconds: 2 });
+
+    manager.start();
+    spawned[0].stdout.emit('data', '{"event":"worker.item.started","attempt_id":17,"store_item_id":42}\n');
+    vi.advanceTimersByTime(1_000);
+    spawned[0].stdout.emit('data', [
+      '{"event":"worker.session.failed","error":"database connection lost"}',
+      '{"event":"worker.item.started","attempt_id":18,"store_item_id":81}',
+      ''
+    ].join('\n'));
+    vi.advanceTimersByTime(1_000);
+    expect(terminateProcessTree).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1_000);
+    expect(error).toHaveBeenCalledWith(expect.stringContaining('attempt_id=18 store_item_id=81'));
+  });
+
   it('clears an active watchdog during shutdown', async () => {
     vi.useFakeTimers();
     const { manager, spawned, terminateProcessTree } = createManager({ itemTimeoutSeconds: 2 });
@@ -252,6 +318,68 @@ describe('continuous item update worker manager', () => {
 
     expect(terminateProcessTree).not.toHaveBeenCalled();
     spawned[0].emit('close', 0, 'SIGTERM');
+    await shutdown;
+  });
+
+  it('force-kills a paused worker that hangs cleaning up after its attempt completed', () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { manager, spawned, terminateProcessTree } = createManager({ itemTimeoutSeconds: 2 });
+
+    manager.start();
+    spawned[0].closeOnSigterm = false;
+    spawned[0].stdout.emit('data', [
+      '{"event":"worker.item.started","attempt_id":17}',
+      '{"event":"worker.item.succeeded","attempt_id":17}',
+      ''
+    ].join('\n'));
+    expect(manager.pause()).toBe('stopping');
+    vi.advanceTimersByTime(11_999);
+    expect(terminateProcessTree).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(terminateProcessTree).toHaveBeenCalledExactlyOnceWith(spawned[0], 'SIGKILL');
+    spawned[0].emit('close', null, 'SIGKILL');
+    expect(manager.getStatus()).toBe('paused');
+  });
+
+  it('does not force-kill a paused worker again when an item watchdog expires first', () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { manager, spawned, terminateProcessTree } = createManager({ itemTimeoutSeconds: 2 });
+
+    manager.start();
+    spawned[0].closeOnSigterm = false;
+    spawned[0].stdout.emit('data', '{"event":"worker.item.started","attempt_id":17}\n');
+    manager.pause();
+    vi.advanceTimersByTime(12_000);
+
+    expect(terminateProcessTree).toHaveBeenCalledExactlyOnceWith(spawned[0], 'SIGKILL');
+  });
+
+  it('force-kills a worker stuck draining its slots after a fatal session error', () => {
+    vi.useFakeTimers();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { manager, spawned, terminateProcessTree } = createManager({ itemTimeoutSeconds: 2 });
+
+    manager.start();
+    spawned[0].stdout.emit('data', '{"event":"worker.session.draining"}\n');
+    vi.advanceTimersByTime(12_000);
+
+    expect(terminateProcessTree).toHaveBeenCalledExactlyOnceWith(spawned[0], 'SIGKILL');
+  });
+
+  it('terminates the process tree if graceful shutdown cannot drain the slots', async () => {
+    vi.useFakeTimers();
+    const { manager, spawned, terminateProcessTree } = createManager();
+
+    manager.start();
+    spawned[0].closeOnSigterm = false;
+    const shutdown = manager.shutdown();
+    expect(spawned[0].killSignals).toEqual(['SIGTERM']);
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(terminateProcessTree).toHaveBeenCalledExactlyOnceWith(spawned[0], 'SIGKILL');
     await shutdown;
   });
 });
