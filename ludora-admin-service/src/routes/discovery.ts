@@ -152,6 +152,7 @@ type TableColumnConfig = {
   filterSql: string;
   normalizeFilterValue?: (value: string) => string;
   sortSql: string;
+  sortTieBreakerSql?: string;
 };
 
 type TableQueryConfig = {
@@ -720,7 +721,7 @@ const itemsTableConfig: TableQueryConfig = {
     bgg_id: columnSql('bgg_id'),
     bgg_last_sync_at: columnSql('bgg_last_sync_at'),
     bgg_url: columnSql('bgg_url'),
-    canonical_name: columnSql('canonical_name'),
+    canonical_name: { ...columnSql('canonical_name'), sortTieBreakerSql: 'id asc' },
     canonical_name_es: columnSql('canonical_name_es'),
     complexity: columnSql('complexity'),
     created_at: columnSql('created_at'),
@@ -735,7 +736,8 @@ const itemsTableConfig: TableQueryConfig = {
         "concat_ws(' ', canonical_name, canonical_name_es, normalized_name, normalized_name_es)"
       ),
       normalizeFilterValue: normalizeItemName,
-      sortSql: 'canonical_name'
+      sortSql: 'canonical_name',
+      sortTieBreakerSql: 'id asc'
     },
     max_minutes: columnSql('max_minutes'),
     max_players: columnSql('max_players'),
@@ -2611,7 +2613,7 @@ async function queryTable(database: Database, config: TableQueryConfig, query: R
     `select ${config.selectSql}
      ${config.fromSql}
      ${whereClause.sql}
-     order by ${tableQuery.sortSql} ${tableQuery.sortDirection}
+     order by ${tableQuery.orderBySql}
      limit $${limitParam} offset $${offsetParam}`,
     dataParams
   );
@@ -2638,15 +2640,13 @@ function parseTableQuery(query: Record<string, unknown>, config: TableQueryConfi
   const hasValidRequestedSort = Boolean(requestedSort && config.columns[requestedSort]);
   const sortColumn = hasValidRequestedSort ? config.columns[requestedSort] : config.columns[config.defaultSortColumnId];
   const requestedDirection = stringQueryField(query.sort_direction).toLowerCase();
+  const sortDirection = hasValidRequestedSort
+    ? requestedDirection === 'desc' ? 'desc' : 'asc'
+    : config.defaultSortDirection;
 
   return {
     filters: tableFilters(query, config),
-    sortDirection: (hasValidRequestedSort
-      ? requestedDirection === 'desc'
-        ? 'desc'
-        : 'asc'
-      : config.defaultSortDirection) as SortDirection,
-    sortSql: sortColumn.sortSql
+    orderBySql: [`${sortColumn.sortSql} ${sortDirection}`, sortColumn.sortTieBreakerSql].filter(Boolean).join(', ')
   };
 }
 

@@ -2801,73 +2801,12 @@ function CatalogItemSearchDialog({
   resultActionLabel: string;
   open: boolean;
 }) {
-  const [isSearching, setIsSearching] = useState(false);
   const [query, setQuery] = useState('');
-  const [results, setResults] = useState<AdminRecord[]>([]);
-  const [searchError, setSearchError] = useState('');
+  const searchQuery = query.trim();
 
   useEffect(() => {
-    if (!open) {
-      setQuery('');
-      setResults([]);
-      setSearchError('');
-      setIsSearching(false);
-      return;
-    }
-
-    setQuery(initialQuery);
-    setResults([]);
-    setSearchError('');
+    setQuery(open ? initialQuery : '');
   }, [initialQuery, open]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    const searchQuery = query.trim();
-    if (searchQuery.length < 2) {
-      setResults([]);
-      setSearchError('');
-      setIsSearching(false);
-      return;
-    }
-
-    let ignore = false;
-    setIsSearching(true);
-    setSearchError('');
-    const timeoutId = window.setTimeout(() => {
-      adminApi
-        .getItemsPage({
-          filters: { name: searchQuery },
-          page: 0,
-          pageSize: CATALOG_ITEM_SEARCH_LIMIT,
-          sortColumnId: 'canonical_name',
-          sortDirection: 'asc'
-        })
-        .then((page) => {
-          if (!ignore) {
-            setResults(page.rows.filter((item) => !excludedItemIds.has(field(item, ['id'], ''))));
-          }
-        })
-        .catch(() => {
-          if (!ignore) {
-            setResults([]);
-            setSearchError('Catalog items could not be searched.');
-          }
-        })
-        .finally(() => {
-          if (!ignore) {
-            setIsSearching(false);
-          }
-        });
-    }, 200);
-
-    return () => {
-      ignore = true;
-      window.clearTimeout(timeoutId);
-    };
-  }, [excludedItemIds, open, query]);
 
   return (
     <Dialog fullWidth maxWidth="sm" open={open} onClose={isSubmitting ? undefined : onClose}>
@@ -2884,50 +2823,16 @@ function CatalogItemSearchDialog({
             onChange={(event) => setQuery(event.target.value)}
           />
           {error ? <Alert severity="error">{error}</Alert> : null}
-          {searchError ? <Alert severity="error">{searchError}</Alert> : null}
-          {isSearching ? (
-            <Stack alignItems="center" direction="row" spacing={1.5} sx={{ py: 2 }}>
-              <CircularProgress size={18} />
-              <Typography color="text.secondary" variant="body2">
-                Searching catalog items
-              </Typography>
-            </Stack>
-          ) : null}
-          {!isSearching && query.trim().length >= 2 && results.length === 0 && !searchError ? (
-            <Typography color="text.secondary" sx={{ py: 2 }} textAlign="center" variant="body2">
-              No matching catalog items.
-            </Typography>
-          ) : null}
-          {!isSearching && results.length > 0 ? (
-            <List
-              aria-label={listAriaLabel}
-              disablePadding
-              sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 480, overflowY: 'auto' }}
-            >
-              {results.map((item) => {
-                const itemId = field(item, ['id'], '');
-                const primaryName = catalogItemDisplayName(item);
-                const canonicalName = field(item, ['canonical_name'], '');
-                const secondaryName = canonicalName && canonicalName !== primaryName ? canonicalName : '';
-                const imageUrl = field(item, ['image_url_es', 'image_url'], '');
-                return (
-                  <ListItemButton
-                    aria-label={`${resultActionLabel} ${primaryName}`}
-                    disabled={isSubmitting || !itemId}
-                    key={itemId}
-                    onClick={() => void onSelect(item)}
-                  >
-                    <ListItemAvatar>
-                      <Avatar alt={`${primaryName} cover`} src={imageUrl} sx={{ bgcolor: 'grey.100' }} variant="rounded" />
-                    </ListItemAvatar>
-                    <ListItemText
-                      primary={primaryName}
-                      secondary={[secondaryName, itemId ? `Item ${itemId}` : ''].filter(Boolean).join(' · ')}
-                    />
-                  </ListItemButton>
-                );
-              })}
-            </List>
+          {open && searchQuery.length >= 2 ? (
+            <CatalogItemSearchResults
+              key={searchQuery}
+              excludedItemIds={excludedItemIds}
+              isSubmitting={isSubmitting}
+              listAriaLabel={listAriaLabel}
+              query={searchQuery}
+              resultActionLabel={resultActionLabel}
+              onSelect={onSelect}
+            />
           ) : null}
         </Stack>
       </DialogContent>
@@ -2937,6 +2842,159 @@ function CatalogItemSearchDialog({
         </Button>
       </DialogActions>
     </Dialog>
+  );
+}
+
+const CATALOG_ITEM_SEARCH_LOAD_MORE_DISTANCE_PX = 160;
+
+function isNearCatalogItemListEnd(list: HTMLUListElement) {
+  return list.scrollHeight - list.scrollTop - list.clientHeight <= CATALOG_ITEM_SEARCH_LOAD_MORE_DISTANCE_PX;
+}
+
+function CatalogItemSearchResults({
+  excludedItemIds,
+  isSubmitting,
+  listAriaLabel,
+  onSelect,
+  query,
+  resultActionLabel
+}: {
+  excludedItemIds: Set<string>;
+  isSubmitting: boolean;
+  listAriaLabel: string;
+  onSelect: (item: AdminRecord) => Promise<void>;
+  query: string;
+  resultActionLabel: string;
+}) {
+  const [search, setSearch] = useState<{
+    hasError: boolean;
+    isLoading: boolean;
+    nextPage: number | null;
+    rows: AdminRecord[];
+  }>({ hasError: false, isLoading: true, nextPage: 0, rows: [] });
+  const listRef = useRef<HTMLUListElement>(null);
+  const requestedPage = search.isLoading ? search.nextPage : null;
+  const isFirstPage = search.nextPage === 0;
+  const canLoadMore = !isSubmitting && !search.hasError && !search.isLoading && search.nextPage !== null;
+  const results = search.rows.filter((item) => !excludedItemIds.has(field(item, ['id'], '')));
+
+  useEffect(() => {
+    if (requestedPage === null) {
+      return;
+    }
+
+    let ignore = false;
+    async function loadPage(pageNumber: number) {
+      try {
+        const page = await adminApi.getItemsPage({
+          filters: { name: query },
+          page: pageNumber,
+          pageSize: CATALOG_ITEM_SEARCH_LIMIT,
+          sortColumnId: 'canonical_name',
+          sortDirection: 'asc'
+        });
+        if (!ignore) {
+          const nextPage = page.page + 1;
+          setSearch((current) => ({
+            hasError: false,
+            isLoading: false,
+            nextPage: nextPage > pageNumber && nextPage * page.pageSize < page.total ? nextPage : null,
+            rows: [...current.rows, ...page.rows]
+          }));
+        }
+      } catch {
+        if (!ignore) {
+          setSearch((current) => ({ ...current, hasError: true, isLoading: false }));
+        }
+      }
+    }
+
+    const timeoutId = requestedPage === 0 ? window.setTimeout(() => void loadPage(0), 200) : undefined;
+    if (requestedPage > 0) {
+      void loadPage(requestedPage);
+    }
+
+    return () => {
+      ignore = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [query, requestedPage]);
+
+  const requestNextPage = useCallback(() => {
+    setSearch((current) =>
+      current.nextPage === null || current.isLoading ? current : { ...current, hasError: false, isLoading: true }
+    );
+  }, []);
+
+  useEffect(() => {
+    const list = listRef.current;
+    if (canLoadMore && (!list || isNearCatalogItemListEnd(list))) {
+      requestNextPage();
+    }
+  }, [canLoadMore, requestNextPage, results.length, search.nextPage]);
+
+  return (
+    <>
+      {results.length > 0 ? (
+        <List
+          aria-label={listAriaLabel}
+          disablePadding
+          ref={listRef}
+          sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 480, overflowY: 'auto' }}
+          onScroll={(event) => {
+            if (canLoadMore && isNearCatalogItemListEnd(event.currentTarget)) {
+              requestNextPage();
+            }
+          }}
+        >
+          {results.map((item) => {
+            const itemId = field(item, ['id'], '');
+            const primaryName = catalogItemDisplayName(item);
+            const canonicalName = field(item, ['canonical_name'], '');
+            const secondaryName = canonicalName && canonicalName !== primaryName ? canonicalName : '';
+            const imageUrl = field(item, ['image_url_es', 'image_url'], '');
+            return (
+              <ListItemButton
+                aria-label={`${resultActionLabel} ${primaryName}`}
+                disabled={isSubmitting || !itemId}
+                key={itemId}
+                onClick={() => void onSelect(item)}
+              >
+                <ListItemAvatar>
+                  <Avatar alt={`${primaryName} cover`} src={imageUrl} sx={{ bgcolor: 'grey.100' }} variant="rounded" />
+                </ListItemAvatar>
+                <ListItemText
+                  primary={primaryName}
+                  secondary={[secondaryName, itemId ? `Item ${itemId}` : ''].filter(Boolean).join(' · ')}
+                />
+              </ListItemButton>
+            );
+          })}
+        </List>
+      ) : null}
+      {search.isLoading ? (
+        <Stack alignItems="center" direction="row" role="status" spacing={1.5} sx={{ py: 2 }}>
+          <CircularProgress size={18} />
+          <Typography color="text.secondary" variant="body2">
+            {isFirstPage ? 'Searching catalog items' : 'Loading more catalog items'}
+          </Typography>
+        </Stack>
+      ) : null}
+      {search.hasError && isFirstPage ? <Alert severity="error">Catalog items could not be searched.</Alert> : null}
+      {search.hasError && !isFirstPage ? (
+        <Alert
+          action={<Button color="inherit" disabled={isSubmitting} size="small" type="button" onClick={requestNextPage}>Retry</Button>}
+          severity="error"
+        >
+          More catalog items could not be loaded.
+        </Alert>
+      ) : null}
+      {search.nextPage === null && results.length === 0 ? (
+        <Typography color="text.secondary" sx={{ py: 2 }} textAlign="center" variant="body2">
+          No matching catalog items.
+        </Typography>
+      ) : null}
+    </>
   );
 }
 

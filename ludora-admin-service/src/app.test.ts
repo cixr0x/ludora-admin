@@ -762,7 +762,7 @@ describe('ludora admin service', () => {
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain('from items');
     expect(normalizeSql(rowQuery?.sql ?? '')).not.toContain('from active_item');
     expect(normalizeSql(rowQuery?.sql ?? '')).toContain("where coalesce((canonical_name)::text, '') ilike $1 escape '\\'");
-    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by canonical_name asc');
+    expect(normalizeSql(rowQuery?.sql ?? '')).toContain('order by canonical_name asc, id asc limit');
     expect(rowQuery?.params).toEqual(['%coffee%', 25, 0]);
   });
 
