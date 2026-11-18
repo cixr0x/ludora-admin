@@ -140,7 +140,7 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('starts item update for selected stores from the checkbox list and refreshes the update job log table', async () => {
+  it('selects only update-enabled stores and refreshes the update job log table', async () => {
     let jobRequests = 0;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -151,10 +151,12 @@ describe('OperationsPage', () => {
         return jsonResponse({
           data: [
             {
+              active: false,
               canonical_domain: 'alpha.mx',
               id: 12,
               name: 'Alpha Games',
               platform: 'shopify',
+              update_active: true,
               website_url: 'https://alpha.mx/'
             },
             {
@@ -162,6 +164,7 @@ describe('OperationsPage', () => {
               id: 34,
               name: 'Beta Games',
               platform: 'custom',
+              update_active: false,
               website_url: 'https://beta.mx/'
             }
           ]
@@ -216,6 +219,7 @@ describe('OperationsPage', () => {
     render(<OperationsPage operation="item_update" />);
 
     await screen.findByText('Alpha Games');
+    expect(screen.queryByRole('checkbox', { name: /Beta Games/i })).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole('checkbox', { name: /Alpha Games/i }));
     await userEvent.click(screen.getByRole('button', { name: /Run for selected stores/i }));
 
@@ -699,7 +703,7 @@ describe('OperationsPage', () => {
     });
   });
 
-  it('starts store item discovery for selected stores from the checkbox list and refreshes the discovery job log table', async () => {
+  it('allows explicit selection of stores with automatic discovery disabled', async () => {
     let jobRequests = 0;
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -711,9 +715,11 @@ describe('OperationsPage', () => {
           data: [
             {
               canonical_domain: 'alpha.mx',
+              discovery_active: false,
               id: 12,
               name: 'Alpha Games',
               platform: 'shopify',
+              update_active: false,
               website_url: 'https://alpha.mx/'
             },
             {

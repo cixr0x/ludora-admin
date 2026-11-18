@@ -38,6 +38,7 @@ type StoreFormState = {
   canonical_domain: string;
   city: string;
   country: string;
+  discovery_active: boolean;
   facebook_url: string;
   instagram_url: string;
   logo_url: string;
@@ -45,6 +46,7 @@ type StoreFormState = {
   platform: string;
   state: string;
   status: string;
+  update_active: boolean;
   website_url: string;
 };
 
@@ -53,6 +55,7 @@ const emptyFormState: StoreFormState = {
   canonical_domain: '',
   city: '',
   country: 'Mexico',
+  discovery_active: true,
   facebook_url: '',
   instagram_url: '',
   logo_url: '',
@@ -60,8 +63,15 @@ const emptyFormState: StoreFormState = {
   platform: '',
   state: '',
   status: 'active',
+  update_active: true,
   website_url: ''
 };
+
+const storeFlags = [
+  { id: 'active', label: 'Public visibility', enabled: 'Visible', disabled: 'Hidden' },
+  { id: 'discovery_active', label: 'Automatic discovery', enabled: 'Enabled', disabled: 'Disabled' },
+  { id: 'update_active', label: 'Item updates', enabled: 'Enabled', disabled: 'Disabled' }
+] as const;
 
 const emptyStoreItemStatistics: StoreItemStatistics = {
   total_items: 0,
@@ -133,6 +143,7 @@ function formStateFromRecord(record: AdminRecord): StoreFormState {
     canonical_domain: optionalValueFor(record, ['canonical_domain']),
     city: optionalValueFor(record, ['city']),
     country: optionalValueFor(record, ['country']) || 'Mexico',
+    discovery_active: booleanValueFor(record, 'discovery_active'),
     facebook_url: optionalValueFor(record, ['facebook_url']),
     instagram_url: optionalValueFor(record, ['instagram_url']),
     logo_url: optionalValueFor(record, ['logo_url']),
@@ -140,6 +151,7 @@ function formStateFromRecord(record: AdminRecord): StoreFormState {
     platform: optionalValueFor(record, ['platform']),
     state: optionalValueFor(record, ['state']),
     status: optionalValueFor(record, ['status']) || 'active',
+    update_active: booleanValueFor(record, 'update_active'),
     website_url: optionalValueFor(record, ['website_url'])
   };
 }
@@ -150,6 +162,7 @@ function inputFromForm(form: StoreFormState): StoreInput {
     canonical_domain: form.canonical_domain.trim(),
     city: form.city.trim(),
     country: form.country.trim() || 'Mexico',
+    discovery_active: form.discovery_active,
     facebook_url: form.facebook_url.trim(),
     instagram_url: form.instagram_url.trim(),
     logo_url: form.logo_url.trim(),
@@ -157,26 +170,27 @@ function inputFromForm(form: StoreFormState): StoreInput {
     platform: form.platform.trim(),
     state: form.state.trim(),
     status: form.status.trim() || 'active',
+    update_active: form.update_active,
     website_url: form.website_url.trim()
   };
 }
 
 function storeColumns(): DataTableColumn<AdminRecord>[] {
   return [
-    {
-      filterValue: (row) => String(booleanValueFor(row, 'active')),
-      id: 'active',
-      label: 'Active',
-      mobilePreview: true,
-      minWidth: 100,
+    ...storeFlags.map<DataTableColumn<AdminRecord>>(({ id, label, enabled, disabled }) => ({
+      filterValue: (row) => String(booleanValueFor(row, id)),
+      id,
+      label,
+      mobilePreview: id === 'active',
+      minWidth: 140,
       render: (row) => {
-        const active = booleanValueFor(row, 'active');
+        const active = booleanValueFor(row, id);
         return (
-          <Chip color={active ? 'success' : 'default'} label={active ? 'Active' : 'Inactive'} size="small" variant="outlined" />
+          <Chip color={active ? 'success' : 'default'} label={active ? enabled : disabled} size="small" variant="outlined" />
         );
       },
-      sortValue: (row) => String(booleanValueFor(row, 'active'))
-    },
+      sortValue: (row) => String(booleanValueFor(row, id))
+    })),
     {
       filterValue: (row) => valueFor(row, ['name']),
       id: 'name',
@@ -428,6 +442,7 @@ function StoreItemStatisticsSection({ storeId }: { storeId: string }) {
 export function StoresPage() {
   const [formMode, setFormMode] = useState<FormMode>('table');
   const [editingId, setEditingId] = useState('');
+  const [savedUpdateActive, setSavedUpdateActive] = useState(false);
   const [formState, setFormState] = useState<StoreFormState>(emptyFormState);
   const [isDetecting, setIsDetecting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -446,6 +461,7 @@ export function StoresPage() {
   function handleEditStore(row: AdminRecord) {
     setFormState(formStateFromRecord(row));
     setEditingId(valueFor(row, ['id'], ''));
+    setSavedUpdateActive(booleanValueFor(row, 'update_active'));
     setSaveError('');
     setDetectionMessage('');
     setOperationError('');
@@ -542,12 +558,17 @@ export function StoresPage() {
   }
 
   async function handleRunItemUpdate() {
+    const storeId = Number(editingId);
+    if (!savedUpdateActive || !Number.isSafeInteger(storeId) || storeId <= 0) {
+      return;
+    }
+
     setIsRunningItemUpdate(true);
     setOperationError('');
     setOperationMessage('');
 
     try {
-      await adminApi.startItemUpdateRun();
+      await adminApi.startItemUpdateRun({ store_ids: [storeId] });
       setOperationMessage('Item update started.');
     } catch {
       setOperationError('Item update could not be started.');
@@ -606,17 +627,19 @@ export function StoresPage() {
                   }
                 }}
               >
-                <FormControlLabel
-                  control={
-                    <Checkbox
-                      checked={formState.active}
-                      onChange={(event) =>
-                        setFormState((current) => ({ ...current, active: event.target.checked }))
+                <Stack direction={{ xs: 'column', sm: 'row' }} sx={{ gridColumn: '1 / -1' }}>
+                  {storeFlags.map(({ id, label }) => (
+                    <FormControlLabel
+                      key={id}
+                      control={
+                        <Checkbox checked={formState[id]} onChange={(_, checked) =>
+                          setFormState((current) => ({ ...current, [id]: checked }))
+                        } />
                       }
+                      label={label}
                     />
-                  }
-                  label="Active"
-                />
+                  ))}
+                </Stack>
                 <TextField
                   fullWidth
                   label="Name"
@@ -714,7 +737,7 @@ export function StoresPage() {
                       Run Item Discovery
                     </Button>
                     <Button
-                      disabled={isRunningDiscovery || isRunningItemUpdate}
+                      disabled={!savedUpdateActive || isRunningDiscovery || isRunningItemUpdate}
                       startIcon={isRunningItemUpdate ? <CircularProgress color="inherit" size={16} /> : <UpdateIcon />}
                       type="button"
                       variant="outlined"

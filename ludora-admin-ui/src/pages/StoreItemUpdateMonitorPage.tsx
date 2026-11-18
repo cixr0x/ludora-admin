@@ -179,7 +179,7 @@ export function StoreItemUpdateMonitorPage() {
   const latestAutomaticScheduleRun = monitor?.latest_automatic_schedule_run;
   const metrics = summary
     ? [
-        { label: 'Eligible items', value: formatInteger(summary.eligible_items), note: 'Active stores and listed confirmed items' },
+        { label: 'Eligible items', value: formatInteger(summary.eligible_items), note: 'Listed confirmed items at stores with updates enabled' },
         { label: 'Due now', value: formatInteger(summary.due_items), note: `${formatInteger(summary.leased_items)} currently leased` },
         { label: 'Fresh under 24h', value: `${summary.fresh_percent.toFixed(1)}%`, note: `${formatInteger(summary.stale_items)} stale items` },
         { label: 'Oldest staleness', value: formatHours(summary.oldest_staleness_hours), note: `Oldest overdue: ${formatHours(summary.oldest_due_hours)}` },
@@ -331,7 +331,7 @@ export function StoreItemUpdateMonitorPage() {
               Time since each eligible store item was last successfully refreshed. Items at 24 hours or more are highlighted.{' '}
               {selectedHistogramStore
                 ? `Showing ${recordText(selectedHistogramStore, 'store_name')}.`
-                : 'Showing all active stores.'}
+                : 'Showing all stores with updates enabled.'}
             </Typography>
           </Box>
           <Stack alignItems={{ sm: 'flex-end' }} spacing={0.75}>
@@ -364,7 +364,7 @@ export function StoreItemUpdateMonitorPage() {
           <Box sx={{ p: 2 }}>
             <Typography variant="h6">Store update statistics · last 24h</Typography>
             <Typography color="text.secondary" variant="body2">
-              All {monitor?.store_statistics.length ?? 0} active stores, including stores with no attempts or no failures during the period.
+              All {monitor?.store_statistics.length ?? 0} stores with updates enabled, including stores with no attempts or no failures during the period.
               {' '}Products and stale items reflect current eligible inventory; stale items were last refreshed more than 24h ago.
             </Typography>
           </Box>
@@ -411,7 +411,7 @@ export function StoreItemUpdateMonitorPage() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {!monitor?.store_statistics.length ? <EmptyRow columns={11} label="No active stores" /> : null}
+                {!monitor?.store_statistics.length ? <EmptyRow columns={11} label="No stores with updates enabled" /> : null}
               </TableBody>
             </Table>
           </TableContainer>

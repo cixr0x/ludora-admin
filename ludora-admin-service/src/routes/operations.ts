@@ -565,7 +565,7 @@ async function loadStoreItemUpdateMonitor(
        select store_items.*
        from store_items
        join stores on stores.id = store_items.store_id
-       where stores.active = true
+       where stores.update_active = true
          and store_items.is_boardgame = true
          and store_items.is_boardgame_confirmed = true
          and store_items.item_id is not null
@@ -644,7 +644,7 @@ async function loadStoreItemUpdateMonitor(
        select greatest(0, floor(extract(epoch from (now() - store_items.refreshed_date)) / 3600))::int as staleness_hour
        from store_items
        join stores on stores.id = store_items.store_id
-       where stores.active = true
+       where stores.update_active = true
          and ($2::bigint is null or store_items.store_id = $2::bigint)
          and store_items.is_boardgame = true
          and store_items.is_boardgame_confirmed = true
@@ -677,7 +677,7 @@ async function loadStoreItemUpdateMonitor(
          stores.name,
          coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform
        from stores
-       where stores.active = true
+       where stores.update_active = true
      ), eligible_items as (
        select
          store_items.store_id,

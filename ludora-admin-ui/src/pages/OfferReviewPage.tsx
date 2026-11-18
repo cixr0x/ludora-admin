@@ -340,7 +340,7 @@ function buildOfferReviewColumns(
   {
     filterValue: (row) => storeItemVisibilityLabel(row.store_active),
     id: 'store_active',
-    label: 'Public visibility',
+    label: 'Item visibility',
     mobilePreview: true,
     minWidth: 160,
     render: (row) => storeItemVisibilityLabel(row.store_active),

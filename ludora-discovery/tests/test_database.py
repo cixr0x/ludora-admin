@@ -129,6 +129,20 @@ def confirmed_store_item_row(*, store_item_id: int = 501, store_id: int = 12) ->
 
 
 class DatabaseRepositoryTests(unittest.TestCase):
+    def test_update_batch_eligibility_uses_update_switch_even_for_hidden_stores(self):
+        item = replace(confirmed_store_item_record(), store_id=17)
+        for visible, updates_enabled in [(False, True), (True, False)]:
+            with self.subTest(visible=visible, updates_enabled=updates_enabled):
+                connection = BatchTargetSelectConnection(
+                    [batch_target_row(item)],
+                    stores=[{"id": 17, "active": visible, "update_active": updates_enabled}],
+                )
+                self.addCleanup(connection.close)
+                targets = DiscoveryRepository(connection).list_store_item_update_batch_targets(
+                    store_id=17, claimed_store_item_id=item.store_item_id, limit=100,
+                )
+                self.assertEqual(targets, [(item.store_item_id, item.source_url)] if updates_enabled else [])
+
     def test_batch_target_uniqueness_counts_only_active_non_rejected_representatives(self):
         current = replace(confirmed_store_item_record(), store_id=17)
         cases = (
@@ -160,7 +174,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertNotIn("update store_items", normalized)
         self.assertNotIn("for update", normalized)
         self.assertIn("store_items.store_id = %s", normalized)
-        self.assertIn("stores.active = true", normalized)
+        self.assertIn("stores.update_active = true", normalized)
         self.assertIn("store_items.is_boardgame_confirmed = true", normalized)
         self.assertIn("store_items.item_id is not null", normalized)
         self.assertIn("store_items.listing_status = 'listed'", normalized)
@@ -245,7 +259,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         scheduled_sql, remainder = remainder.split("), target as (", 1)
         target_sql, _updated_sql = remainder.split("), updated as (", 1)
         self.assertIn("with due_window as materialized", normalized_sql)
-        self.assertIn("stores.active = true", due_sql)
+        self.assertIn("stores.update_active = true", due_sql)
         self.assertIn("store_items.is_boardgame = true", due_sql)
         self.assertIn("store_items.is_boardgame_confirmed = true", due_sql)
         self.assertIn("store_items.item_id is not null", due_sql)
@@ -269,7 +283,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("select store_items.id, store_items.next_update_at from store_items", target_sql)
         self.assertIn("join stores on stores.id = store_items.store_id", target_sql)
         self.assertIn("where store_items.store_id = scheduled.store_id", target_sql)
-        self.assertIn("stores.active = true", target_sql)
+        self.assertIn("stores.update_active = true", target_sql)
         self.assertIn("store_items.is_boardgame = true", target_sql)
         self.assertIn("store_items.is_boardgame_confirmed = true", target_sql)
         self.assertIn("store_items.item_id is not null", target_sql)
@@ -862,14 +876,14 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(params[:5], ("batch:12", 12, "https://example.mx/", "failed", "child stalled"))
         self.assertEqual(connection.commits, 1)
 
-    def test_lists_only_active_store_item_discovery_sources_by_default(self):
+    def test_lists_only_discovery_enabled_store_item_discovery_sources_by_default(self):
         connection = FakeConnection(fetchall_rows=[[]])
         repository = DiscoveryRepository(connection)
 
         repository.list_store_item_discovery_sources()
 
         sql, params = connection.cursor_instance.executions[0]
-        self.assertIn("where stores.active = true", sql.casefold())
+        self.assertIn("where stores.discovery_active = true", sql.casefold())
         self.assertEqual(params, [])
 
     def test_lists_store_item_discovery_sources_for_selected_stores(self):
@@ -889,6 +903,8 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("from stores", sql.casefold())
         self.assertIn("where stores.id in (%s, %s)", sql.casefold())
         self.assertNotIn("stores.active = true", sql.casefold())
+        self.assertNotIn("stores.discovery_active", sql.casefold())
+        self.assertNotIn("stores.update_active", sql.casefold())
         self.assertIn("store_items.raw_payload::text ilike '%%shopify%%'", sql.casefold())
         self.assertEqual(params, [12, 34])
         self.assertEqual([store.store_id for store in stores], [12, 34])
@@ -1504,7 +1520,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("listing_status = 'listed'", normalized_sql)
         self.assertIn("store_active = true", normalized_sql)
         self.assertIn("store_items.availability_source, store_items.store_active, store_items.store_sku", compact_sql)
-        self.assertIn("stores.active = true", normalized_sql)
+        self.assertIn("stores.update_active = true", normalized_sql)
         self.assertIn("store_items.update_lease_expires_at <= now()", normalized_sql)
         self.assertIn("order by store_items.refreshed_date asc nulls first, store_items.id asc", normalized_sql)
         self.assertIn("limit %s", normalized_sql)

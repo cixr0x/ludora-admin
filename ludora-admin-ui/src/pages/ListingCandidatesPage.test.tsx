@@ -73,7 +73,7 @@ describe('ListingCandidatesPage', () => {
 
     const headers = await screen.findAllByRole('columnheader');
     expect(headers[0]).toHaveTextContent('Image');
-    expect(headers[2]).toHaveTextContent('Public visibility');
+    expect(headers[2]).toHaveTextContent('Item visibility');
     expect(screen.getByRole('columnheader', { name: 'Original Title' })).toBeInTheDocument();
     expect(await screen.findByText('Azul MX')).toBeInTheDocument();
     expect(screen.getByText('Azul MX Original')).toBeInTheDocument();
@@ -90,7 +90,7 @@ describe('ListingCandidatesPage', () => {
     expect(screen.getByText('unavailable')).toBeInTheDocument();
     expect(screen.getByText('Hidden')).toBeInTheDocument();
     expect(screen.getByText('Visible')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Public visibility' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Item visibility' })).toBeInTheDocument();
     expect(screen.getByText('2026-05-26T09:00:00.000Z')).toBeInTheDocument();
     expect(screen.getAllByText('json_ld_offer').length).toBeGreaterThanOrEqual(2);
     expect(screen.getByText('es')).toBeInTheDocument();
@@ -637,8 +637,8 @@ describe('ListingCandidatesPage', () => {
     await user.dblClick(titleCells[0]);
 
     expect(screen.getByRole('heading', { name: 'Store Item Details' })).toBeInTheDocument();
-    expect(screen.getByText('Public visibility: Hidden')).toBeInTheDocument();
-    expect(screen.queryByRole('checkbox', { name: 'Public visibility' })).not.toBeInTheDocument();
+    expect(screen.getByText('Item visibility: Hidden')).toBeInTheDocument();
+    expect(screen.queryByRole('checkbox', { name: 'Item visibility' })).not.toBeInTheDocument();
     expect(screen.getByDisplayValue('3365')).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://store.mx/products/kitchen-rush')).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://store.mx/collections/boardgames')).toBeInTheDocument();
@@ -1553,7 +1553,7 @@ describe('ListingCandidatesPage', () => {
     expect(await screen.findByRole('heading', { name: 'Store Item Review Details' })).toBeInTheDocument();
     const storeItemSection = screen.getByRole('heading', { name: 'Store Item Review Details' }).closest('section');
     expect(storeItemSection).not.toBeNull();
-    expect(within(storeItemSection!).getByText('Public visibility: Visible')).toBeInTheDocument();
+    expect(within(storeItemSection!).getByText('Item visibility: Visible')).toBeInTheDocument();
     expect(within(storeItemSection!).getByLabelText('Title')).toHaveValue('Cafe Barista');
     expect(within(storeItemSection!).getByLabelText('Description')).toHaveValue(
       'Run a coffee shop before the customers lose patience.'

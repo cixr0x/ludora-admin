@@ -17,11 +17,12 @@ describe('StoresPage', () => {
 
     const table = await screen.findByRole('table', { name: 'Stores' });
     const headers = within(table).getAllByRole('columnheader').map((cell) => cell.textContent);
-    expect(headers.slice(0, 12)).toEqual(['Active', 'Name', 'Domain', ...statisticsLabels, 'Website']);
+    expect(headers.slice(0, 14)).toEqual(['Public visibility', 'Automatic discovery', 'Item updates', 'Name', 'Domain', ...statisticsLabels, 'Website']);
     const row = screen.getByText('Example Juegos').closest('tr')!;
     const cells = within(row).getAllByRole('cell');
-    expect(cells.slice(3, 11).map((cell) => cell.textContent)).toEqual(['31', '17', '7', '2', '5', '11', '3', '2']);
-    for (const cell of cells.slice(3, 11)) expect(cell).toHaveStyle({ textAlign: 'right' });
+    expect(cells.slice(0, 3).map((cell) => cell.textContent)).toEqual(['Visible', 'Disabled', 'Enabled']);
+    expect(cells.slice(5, 13).map((cell) => cell.textContent)).toEqual(['31', '17', '7', '2', '5', '11', '3', '2']);
+    for (const cell of cells.slice(5, 13)) expect(cell).toHaveStyle({ textAlign: 'right' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(new URL(String(fetchMock.mock.calls[0][0])).searchParams.get('page')).toBe('0');
   });
@@ -197,10 +198,10 @@ describe('StoresPage', () => {
 
     render(<StoresPage />);
 
-    for (const heading of ['Active', 'Name', 'Domain', 'Website', 'Platform', 'City', 'State', 'Country', 'Logo', 'Status', 'Updated']) {
+    for (const heading of ['Public visibility', 'Automatic discovery', 'Item updates', 'Name', 'Domain', 'Website', 'Platform', 'City', 'State', 'Country', 'Logo', 'Status', 'Updated']) {
       expect(await screen.findByRole('columnheader', { name: heading })).toBeInTheDocument();
     }
-    expect(screen.getByText('Inactive')).toBeInTheDocument();
+    expect(screen.getByText('Hidden')).toBeInTheDocument();
     expect(await screen.findByText('Example Juegos')).toBeInTheDocument();
     expect(screen.getByText('shopify')).toBeInTheDocument();
     expect(screen.getByText('CDMX')).toBeInTheDocument();
@@ -224,11 +225,13 @@ describe('StoresPage', () => {
             canonical_domain: 'example.mx',
             city: 'Ciudad de Mexico',
             country: 'Mexico',
+            discovery_active: false,
             id: 12,
             name: 'Example Juegos',
             platform: 'amazon',
             state: 'CDMX',
             status: 'active',
+            update_active: true,
             website_url: 'https://example.mx/'
           }
         ]);
@@ -261,17 +264,23 @@ describe('StoresPage', () => {
     expect(screen.getByLabelText('Platform')).toHaveValue('amazon');
     await user.clear(screen.getByLabelText('Platform'));
     await user.type(screen.getByLabelText('Platform'), 'shopify');
-    await user.click(screen.getByRole('checkbox', { name: 'Active' }));
+    expect(screen.getByRole('checkbox', { name: 'Public visibility' })).toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Automatic discovery' })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: 'Item updates' })).toBeChecked();
+    await user.click(screen.getByRole('checkbox', { name: 'Public visibility' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Automatic discovery' }));
     await user.click(screen.getByRole('button', { name: 'Save Store' }));
 
     expect(await screen.findByText('Example Updated')).toBeInTheDocument();
     const updatedRow = screen.getByText('Example Updated').closest('tr')!;
-    expect(within(updatedRow).getAllByRole('cell').slice(3, 11).map((cell) => cell.textContent)).toEqual(['31', '17', '7', '2', '5', '11', '3', '2']);
+    expect(within(updatedRow).getAllByRole('cell').slice(5, 13).map((cell) => cell.textContent)).toEqual(['31', '17', '7', '2', '5', '11', '3', '2']);
     const patchCall = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/stores/12') && init?.method === 'PATCH');
     expect(JSON.parse(String(patchCall?.[1]?.body))).toMatchObject({
       active: false,
+      discovery_active: true,
       name: 'Example Updated',
       platform: 'shopify',
+      update_active: true,
       website_url: 'https://example.mx/'
     });
   });
@@ -327,20 +336,22 @@ describe('StoresPage', () => {
 
     expect(await screen.findByText('New Store')).toBeInTheDocument();
     const createdRow = screen.getByText('New Store').closest('tr')!;
-    expect(within(createdRow).getAllByRole('cell').slice(3, 11).map((cell) => cell.textContent)).toEqual(['0', '0', '0', '0', '0', '0', '0', '0']);
+    expect(within(createdRow).getAllByRole('cell').slice(5, 13).map((cell) => cell.textContent)).toEqual(['0', '0', '0', '0', '0', '0', '0', '0']);
     const createCall = fetchMock.mock.calls.find(
       ([url, init]) => pathOf(String(url)) === '/stores' && init?.method === 'POST'
     );
     expect(JSON.parse(String(createCall?.[1]?.body))).toMatchObject({
       active: true,
       canonical_domain: 'newstore.mx',
+      discovery_active: true,
       name: 'New Store',
       platform: 'woocommerce',
+      update_active: true,
       website_url: 'https://newstore.mx/'
     });
   });
 
-  it('starts item discovery from the clean store form', async () => {
+  it('allows manual discovery and disables item updates when both saved flags are off', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -349,9 +360,11 @@ describe('StoresPage', () => {
           {
             canonical_domain: 'example.mx',
             country: 'Mexico',
+            discovery_active: false,
             id: 12,
             name: 'Example Juegos',
             status: 'active',
+            update_active: false,
             website_url: 'https://example.mx/'
           }
         ]);
@@ -374,6 +387,10 @@ describe('StoresPage', () => {
     render(<StoresPage />);
 
     await user.dblClick(await screen.findByText('Example Juegos'));
+    expect(screen.getByRole('checkbox', { name: 'Automatic discovery' })).not.toBeChecked();
+    expect(screen.getByRole('button', { name: 'Run Item Update' })).toBeDisabled();
+    await user.click(screen.getByRole('checkbox', { name: 'Item updates' }));
+    expect(screen.getByRole('button', { name: 'Run Item Update' })).toBeDisabled();
     await user.click(screen.getByRole('button', { name: 'Run Item Discovery' }));
 
     expect(await screen.findByText('Item discovery started.')).toBeInTheDocument();
@@ -383,7 +400,7 @@ describe('StoresPage', () => {
     });
   });
 
-  it('starts item update from the clean store form', async () => {
+  it('runs updates for the selected store when its saved flag is on', async () => {
     const user = userEvent.setup();
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
@@ -395,6 +412,7 @@ describe('StoresPage', () => {
             id: 12,
             name: 'Example Juegos',
             status: 'active',
+            update_active: true,
             website_url: 'https://example.mx/'
           }
         ]);
@@ -417,13 +435,13 @@ describe('StoresPage', () => {
     render(<StoresPage />);
 
     await user.dblClick(await screen.findByText('Example Juegos'));
+    await user.click(screen.getByRole('checkbox', { name: 'Item updates' }));
     await user.click(screen.getByRole('button', { name: 'Run Item Update' }));
 
     expect(await screen.findByText('Item update started.')).toBeInTheDocument();
-    expect(fetchMock).toHaveBeenCalledWith('http://127.0.0.1:4001/admin/operations/item-update-runs', {
-      credentials: 'include',
-      method: 'POST'
-    });
+    const updateCall = fetchMock.mock.calls.find(([url]) => pathOf(String(url)) === '/admin/operations/item-update-runs');
+    expect(updateCall?.[1]).toMatchObject({ credentials: 'include', method: 'POST' });
+    expect(JSON.parse(String(updateCall?.[1]?.body))).toEqual({ store_ids: [12] });
   });
 });
 
@@ -431,9 +449,11 @@ const exampleStore = {
   active: true,
   canonical_domain: 'example.mx',
   country: 'Mexico',
+  discovery_active: false,
   id: 12,
   name: 'Example Juegos',
   status: 'active',
+  update_active: true,
   website_url: 'https://example.mx/'
 };
 

@@ -19,6 +19,20 @@ def patches_path() -> Path:
 
 
 class SchemaTests(unittest.TestCase):
+    def test_store_activity_flags_have_a_focused_incremental_patch(self):
+        schema = " ".join(schema_path().read_text(encoding="utf-8").lower().split())
+        stores = schema.split("create table if not exists stores (", 1)[1].split(");", 1)[0]
+        patch_file = patches_path() / "20261117_001_split_store_activity_flags.sql"
+        patch = " ".join(patch_file.read_text(encoding="utf-8").lower().split())
+
+        for flag in ("discovery_active", "update_active"):
+            self.assertIn(f"{flag} boolean not null default true", stores)
+            self.assertIn(f"add column if not exists {flag} boolean", patch)
+            self.assertIn(f"{flag} = coalesce({flag}, active)", patch)
+            self.assertIn(f"alter column {flag} set default true", patch)
+            self.assertIn(f"alter column {flag} set not null", patch)
+        self.assertIn("where discovery_active is null or update_active is null", patch)
+
     def test_catalog_image_hash_storage_has_a_focused_incremental_patch(self):
         schema = schema_path().read_text(encoding="utf-8")
         patch_path = patches_path() / "20260928_001_add_item_image_phashes.sql"

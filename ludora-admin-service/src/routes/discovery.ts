@@ -14,6 +14,7 @@ import {
 } from '../productDetailsExtraction/productDetailsExtractionService.js';
 import { createTraceLoggerFromHeaders } from '../trace.js';
 import { storeItemStatisticsAggregateSql, storeItemStatisticsFields } from '../storeItemStatistics.js';
+import { storeSelect } from './stores.js';
 
 const bggCacheRequestTypesSql = `array[${BGG_CACHE_REQUEST_TYPES.map((type) => `'${type}'`).join(', ')}]`;
 
@@ -46,10 +47,11 @@ type StoreCandidateInput = {
 };
 
 type StoreInput = {
-  active: boolean;
+  active: boolean | null;
   canonical_domain: string;
   city: string;
   country: string;
+  discovery_active: boolean | null;
   facebook_url: string;
   instagram_url: string;
   logo_url: string;
@@ -57,6 +59,7 @@ type StoreInput = {
   platform: string;
   state: string;
   status: string;
+  update_active: boolean | null;
   website_url: string;
 };
 
@@ -164,11 +167,6 @@ const storeCandidateSelect = `
   id, store_name, canonical_domain, website_url, instagram_url,
   facebook_url, city, state, country, store_logo, status, confidence,
   source_queries, evidence, first_seen_at, last_seen_at
-`;
-
-const storeSelect = `
-  id, name, canonical_domain, website_url, platform, instagram_url,
-  facebook_url, city, state, country, logo_url, status, active, created_at, updated_at
 `;
 
 const itemCandidateSelect = `
@@ -582,6 +580,7 @@ const cleanStoresTableConfig: TableQueryConfig = {
     canonical_domain: columnSql('canonical_domain'),
     city: columnSql('city'),
     country: columnSql('country'),
+    discovery_active: columnSql('discovery_active'),
     facebook_url: columnSql('facebook_url'),
     instagram_url: columnSql('instagram_url'),
     logo_url: columnSql('logo_url'),
@@ -595,6 +594,7 @@ const cleanStoresTableConfig: TableQueryConfig = {
       sortSql: `(store_item_statistics.${field}, stores.id)`
     }])),
     updated_at: columnSql('updated_at'),
+    update_active: columnSql('update_active'),
     website_url: columnSql('website_url')
   },
   defaultSortColumnId: 'canonical_domain',
@@ -910,9 +910,11 @@ export function createDiscoveryRouter(
             country = $9,
             logo_url = $10,
             status = $11,
-            active = $12,
+            active = coalesce($12, active),
+            discovery_active = coalesce($13, discovery_active),
+            update_active = coalesce($14, update_active),
             updated_at = now()
-        where id = $13
+        where id = $15
         returning ${storeSelect}
         `,
         [...storeParams(input), request.params.id]
@@ -2742,10 +2744,11 @@ function positiveIntegerBodyField(body: unknown, key: string): number {
 function parseStoreInput(body: unknown): StoreInput {
   const value = (body ?? {}) as Record<string, unknown>;
   const input: StoreInput = {
-    active: booleanField(value, 'active', true),
+    active: value.active == null ? null : booleanField(value, 'active', true),
     canonical_domain: stringField(value, 'canonical_domain'),
     city: stringField(value, 'city'),
     country: stringField(value, 'country') || 'Mexico',
+    discovery_active: value.discovery_active == null ? null : booleanField(value, 'discovery_active', true),
     facebook_url: stringField(value, 'facebook_url'),
     instagram_url: stringField(value, 'instagram_url'),
     logo_url: stringField(value, 'logo_url'),
@@ -2753,6 +2756,7 @@ function parseStoreInput(body: unknown): StoreInput {
     platform: stringField(value, 'platform'),
     state: stringField(value, 'state'),
     status: stringField(value, 'status') || 'active',
+    update_active: value.update_active == null ? null : booleanField(value, 'update_active', true),
     website_url: stringField(value, 'website_url')
   };
 
@@ -2776,7 +2780,9 @@ function storeParams(input: StoreInput): unknown[] {
     input.country,
     input.logo_url,
     input.status,
-    input.active
+    input.active,
+    input.discovery_active,
+    input.update_active
   ];
 }
 

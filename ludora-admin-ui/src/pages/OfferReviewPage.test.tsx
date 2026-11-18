@@ -50,7 +50,7 @@ describe('OfferReviewPage', () => {
     expect(await screen.findByRole('link', { name: 'Cafe Barista' })).toHaveAttribute('href', '#offer-reviews?id=920');
     expect(screen.getByRole('link', { name: 'Coffee Rush (Cafe Barista)' })).toHaveAttribute('href', '#items?id=77');
     expect(screen.getByText('Store MX')).toBeInTheDocument();
-    expect(screen.getByRole('columnheader', { name: 'Public visibility' })).toBeInTheDocument();
+    expect(screen.getByRole('columnheader', { name: 'Item visibility' })).toBeInTheDocument();
     expect(screen.getByRole('cell', { name: 'Hidden' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Listing status' })).toBeInTheDocument();
     expect(screen.getByText('PENDING')).toBeInTheDocument();
@@ -228,7 +228,7 @@ describe('OfferReviewPage', () => {
       render(<OfferReviewPage />);
 
       const cards = await screen.findByRole('list', { name: 'Store item review cards' });
-      expect(within(cards).getByText('Public visibility')).toBeVisible();
+      expect(within(cards).getByText('Item visibility')).toBeVisible();
       expect(within(cards).getByText('Visible')).toBeVisible();
       const imageComparison = within(cards).getByRole('group', {
         name: 'Image comparison for Cafe Barista and Coffee Rush'

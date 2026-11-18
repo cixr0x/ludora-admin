@@ -331,6 +331,7 @@ export type StoreInput = {
   canonical_domain: string;
   city?: string;
   country?: string;
+  discovery_active?: boolean;
   facebook_url?: string;
   instagram_url?: string;
   logo_url?: string;
@@ -338,6 +339,7 @@ export type StoreInput = {
   platform?: string;
   state?: string;
   status?: string;
+  update_active?: boolean;
   website_url: string;
 };
 

@@ -44,7 +44,8 @@ class BatchTargetSelectConnection:
     def __init__(self, rows, stores=None):
         self.rows = rows
         self.stores = stores if stores is not None else [
-            {"id": store_id, "active": True} for store_id in {row["store_id"] for row in rows}
+            {"id": store_id, "active": True, "update_active": True}
+            for store_id in {row["store_id"] for row in rows}
         ]
         self.executions = []
         self.commits = 0
@@ -80,7 +81,8 @@ class _SelectCursor:
         fixture_ctes = (
             f"with store_items as (select {columns} from json_each(?)), "
             "stores as (select json_extract(value, '$.id') as id, "
-            "json_extract(value, '$.active') as active from json_each(?)) "
+            "json_extract(value, '$.active') as active, "
+            "json_extract(value, '$.update_active') as update_active from json_each(?)) "
         )
         self._cursor.execute(
             fixture_ctes + sql.replace("%s", "?"),

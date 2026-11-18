@@ -238,8 +238,8 @@ launches an all-store item-discovery run at 05:00
 conflict or launch failure has no same-day automatic retry. An operator may
 still start a manual retry.
 
-Scheduled and manual all-store runs select active stores only. Explicit store
-IDs remain targetable, including inactive stores. A second product-discovery job
+Scheduled and manual all-store runs select stores with automatic discovery enabled.
+Operators can target an individual store by ID regardless of that setting. A second product-discovery job
 is rejected while one is already running across batch and single-store entry
 points. The product-discovery lock is independent from the continuous
 item-update lock, so the continuous item-update worker remains active during

@@ -210,7 +210,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0] ?? '');
     expect(sql).toContain(
-      'select id, name, canonical_domain, website_url, platform, instagram_url, facebook_url, city, state, country, logo_url, status, active, created_at, updated_at'
+      'select id, name, canonical_domain, website_url, platform, instagram_url, facebook_url, city, state, country, logo_url, status, active, discovery_active, update_active, created_at, updated_at'
     );
     expect(sql).toContain('from stores');
     expect(sql).toContain('order by canonical_domain asc');
@@ -273,6 +273,7 @@ describe('ludora admin service', () => {
       canonical_domain: 'example.mx',
       city: 'Ciudad de Mexico',
       country: 'Mexico',
+      discovery_active: true,
       facebook_url: 'https://facebook.com/example',
       instagram_url: 'https://instagram.com/example',
       logo_url: 'https://example.mx/logo.png',
@@ -280,6 +281,7 @@ describe('ludora admin service', () => {
       platform: 'shopify',
       state: 'CDMX',
       status: 'active',
+      update_active: false,
       website_url: 'https://example.mx/'
     });
 
@@ -288,8 +290,8 @@ describe('ludora admin service', () => {
     const query = queries[0];
     const sql = normalizeSql(query.sql);
     expect(sql).toContain('update stores');
-    expect(sql).toContain('active = $12');
-    expect(sql).toContain('where id = $13');
+    expect(sql).toContain('active = coalesce($12, active)');
+    expect(sql).toContain('where id = $15');
     expect(query.params).toEqual([
       'Example Updated',
       'example.mx',
@@ -302,6 +304,8 @@ describe('ludora admin service', () => {
       'Mexico',
       'https://example.mx/logo.png',
       'active',
+      false,
+      true,
       false,
       '12'
     ]);
@@ -4970,7 +4974,7 @@ describe('ludora admin service', () => {
     expect(storeStatisticsSql).toContain("coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform");
     expect(storeStatisticsSql).not.toContain('raw_payload');
     expect(storeStatisticsSql).not.toContain('ilike');
-    expect(storeStatisticsSql).toContain('where stores.active = true');
+    expect(storeStatisticsSql).toContain('where stores.update_active = true');
     const eligibleItemsSql = storeStatisticsSql.match(/eligible_items as \((.*?)\) select stores.id/)?.[1] ?? '';
     expect(eligibleItemsSql).toContain("count(*) filter (where store_items.refreshed_date < now() - interval '24 hours')::int as stale_items");
     expect(eligibleItemsSql).toContain('store_items.is_boardgame = true');

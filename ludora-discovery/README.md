@@ -295,7 +295,7 @@ GET  /operations/store-discovery-runs/{run_id}
 
 ## Product-discovery coordinator
 
-Scheduled and manual all-store item-discovery runs select active stores only. Explicit store IDs remain targetable, including when a store is inactive. One product-discovery job may run at a time across batch and single-store entry points; a second product-discovery start is rejected with HTTP `409`.
+Scheduled and manual all-store item-discovery runs select stores with automatic discovery enabled (`stores.discovery_active`). An operator can target a store explicitly even when its automatic discovery is disabled. One product-discovery job may run at a time across batch and single-store entry points; a second product-discovery start is rejected with HTTP `409`.
 
 This product-discovery lock is independent from the continuous item-update lock. Discovery and continuous item updates may run concurrently.
 

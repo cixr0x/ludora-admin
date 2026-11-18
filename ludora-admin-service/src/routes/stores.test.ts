@@ -33,6 +33,7 @@ describe('stores routes', () => {
     expect(response.body).toEqual({ data: rows, meta: { page: 1, page_size: 25, total: 2 } });
     expect(queries).toHaveLength(2);
     const sql = normalizeSql(queries[0]?.sql ?? '');
+    expect(sql).toContain('active, discovery_active, update_active');
     expect(sql).toContain('left join lateral (select count(si.id)::integer as total_items');
     expect(sql).toContain('from store_items si where si.store_id = stores.id) store_item_statistics on true');
     for (const field of statisticsFields) {
@@ -56,6 +57,21 @@ describe('stores routes', () => {
     expect(sql).not.toContain('store_active');
     expect(sql).not.toContain('unlisted');
     expect(queries[0]?.params).toEqual([25, 25]);
+  });
+
+  it.each(['active', 'discovery_active', 'update_active'])('filters the stores list by %s', async (flag) => {
+    const query = vi.fn<Database['query']>(async () => ({ rows: [] }));
+    const response = await request(createApp({ database: { query } })).get('/stores').query({
+      page: 0,
+      sort: flag,
+      [`filter_${flag}`]: 'false'
+    });
+
+    expect(response.status).toBe(200);
+    const [sql, params] = query.mock.calls[0];
+    expect(normalizeSql(sql)).toContain(`where coalesce((${flag})::text, '') ilike $1`);
+    expect(normalizeSql(sql)).toContain(`order by ${flag} asc`);
+    expect(params?.[0]).toBe('%false%');
   });
 
   it.each(statisticsFields)('sorts %s numerically and retains text-filter semantics', async (field) => {
@@ -219,7 +235,7 @@ describe('stores routes', () => {
     expect(response.body).not.toHaveProperty('data');
   });
 
-  it('creates a clean store record', async () => {
+  it('creates a store with independent visibility, discovery, and update settings', async () => {
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const row = { canonical_domain: 'example.mx', id: 42, name: 'Example Juegos', website_url: 'https://example.mx/' };
     const database: Database = {
@@ -234,6 +250,7 @@ describe('stores routes', () => {
       canonical_domain: 'www.example.mx',
       city: 'Guadalajara',
       country: 'Mexico',
+      discovery_active: false,
       facebook_url: 'https://facebook.com/example',
       instagram_url: 'https://instagram.com/example',
       logo_url: 'https://example.mx/logo.png',
@@ -241,12 +258,13 @@ describe('stores routes', () => {
       platform: 'shopify',
       state: 'Jalisco',
       status: 'active',
+      update_active: true,
       website_url: 'https://example.mx/'
     });
 
     expect(response.status).toBe(201);
     expect(response.body).toEqual({ data: row });
-    expect(normalizeSql(queries[0]?.sql ?? '')).toContain('insert into stores');
+    expect(normalizeSql(queries[0]?.sql ?? '')).toContain('active, discovery_active, update_active, updated_at');
     expect(queries[0]?.params).toEqual([
       'Example Juegos',
       'example.mx',
@@ -259,8 +277,42 @@ describe('stores routes', () => {
       'Mexico',
       'https://example.mx/logo.png',
       'active',
-      false
+      false,
+      false,
+      true
     ]);
+  });
+
+  it('preserves omitted operation settings when saving visibility', async () => {
+    const query = vi.fn<Database['query']>(async () => ({ rows: [{ id: 42 }] }));
+    const response = await request(createApp({ database: { query } })).patch('/stores/42').send({
+      active: false,
+      canonical_domain: 'example.mx',
+      name: 'Example',
+      website_url: 'https://example.mx/'
+    });
+
+    expect(response.status).toBe(200);
+    const [sql, params] = query.mock.calls[0];
+    expect(normalizeSql(sql)).toContain('discovery_active = coalesce($13, discovery_active)');
+    expect(normalizeSql(sql)).toContain('update_active = coalesce($14, update_active)');
+    expect(params?.slice(11)).toEqual([false, null, null, '42']);
+  });
+
+  it.each([undefined, null])('preserves visibility when an update supplies %s for active', async (active) => {
+    const query = vi.fn<Database['query']>(async () => ({ rows: [{ id: 42, active: false }] }));
+    const response = await request(createApp({ database: { query } })).patch('/stores/42').send({
+      active,
+      canonical_domain: 'example.mx',
+      discovery_active: false,
+      name: 'Example',
+      website_url: 'https://example.mx/'
+    });
+
+    expect(response.status).toBe(200);
+    const [sql, params] = query.mock.calls[0];
+    expect(normalizeSql(sql)).toContain('active = coalesce($12, active)');
+    expect(params?.slice(11)).toEqual([null, false, null, '42']);
   });
 
   it('returns detected website details from the injected service', async () => {

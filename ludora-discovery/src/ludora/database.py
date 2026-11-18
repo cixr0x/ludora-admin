@@ -347,7 +347,7 @@ class DiscoveryRepository:
             sql += f"\n            where stores.id in ({placeholders})"
             params.extend(store_ids)
         else:
-            sql += "\n            where stores.active = true"
+            sql += "\n            where stores.discovery_active = true"
         sql += "\n            order by stores.canonical_domain asc"
 
         with self.connection.cursor() as cursor:
@@ -598,7 +598,7 @@ class DiscoveryRepository:
                     select store_items.id
                     from store_items
                     join stores on stores.id = store_items.store_id
-                    where stores.active = true
+                    where stores.update_active = true
                       and store_items.is_boardgame = true
                       and store_items.is_boardgame_confirmed = true
                       and store_items.item_id is not null
@@ -642,7 +642,7 @@ class DiscoveryRepository:
                         from store_items
                         join stores on stores.id = store_items.store_id
                         where store_items.store_id = scheduled.store_id
-                          and stores.active = true
+                          and stores.update_active = true
                           and store_items.is_boardgame = true
                           and store_items.is_boardgame_confirmed = true
                           and store_items.item_id is not null
@@ -792,7 +792,7 @@ class DiscoveryRepository:
                 from store_items
                 join stores on stores.id = store_items.store_id
                 where store_items.store_id = %s
-                  and stores.active = true
+                  and stores.update_active = true
                   and store_items.is_boardgame = true
                   and store_items.is_boardgame_confirmed = true
                   and store_items.item_id is not null
@@ -1894,7 +1894,7 @@ class DiscoveryRepository:
             select {_qualified_item_candidate_select_columns('store_items')}
             from store_items
             join stores on stores.id = store_items.store_id
-            where stores.active = true
+            where stores.update_active = true
               and store_items.is_boardgame = true
               and store_items.is_boardgame_confirmed = true
               and store_items.item_id is not null

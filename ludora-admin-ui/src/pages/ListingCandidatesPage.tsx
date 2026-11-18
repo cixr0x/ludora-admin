@@ -540,7 +540,7 @@ function buildItemCandidateColumns(
   {
     filterValue: (row) => field(row, ['store_active']),
     id: 'store_active',
-    label: 'Public visibility',
+    label: 'Item visibility',
     mobilePreview: true,
     minWidth: 160,
     render: (row) => storeItemVisibilityLabel(row.store_active),
@@ -1723,7 +1723,7 @@ function ItemCandidateForm({
               {subtitle}
             </Typography>
             <Chip
-              label={`Public visibility: ${storeItemVisibilityLabel(candidate.store_active)}`}
+              label={`Item visibility: ${storeItemVisibilityLabel(candidate.store_active)}`}
               size="small"
               sx={{ mt: 1 }}
               variant="outlined"

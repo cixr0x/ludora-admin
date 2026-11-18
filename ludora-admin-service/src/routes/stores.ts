@@ -9,6 +9,7 @@ type StoreInput = {
   canonical_domain: string;
   city: string;
   country: string;
+  discovery_active: boolean;
   facebook_url: string;
   instagram_url: string;
   logo_url: string;
@@ -16,12 +17,14 @@ type StoreInput = {
   platform: string;
   state: string;
   status: string;
+  update_active: boolean;
   website_url: string;
 };
 
-const storeSelect = `
+export const storeSelect = `
   id, name, canonical_domain, website_url, platform, instagram_url,
-  facebook_url, city, state, country, logo_url, status, active, created_at, updated_at
+  facebook_url, city, state, country, logo_url, status, active, discovery_active, update_active,
+  created_at, updated_at
 `;
 
 export function createStoresRouter(
@@ -89,9 +92,11 @@ export function createStoresRouter(
           logo_url,
           status,
           active,
+          discovery_active,
+          update_active,
           updated_at
         )
-        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+        values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
         returning ${storeSelect}
         `,
         storeParams(input)
@@ -116,6 +121,7 @@ function parseStoreInput(body: unknown): StoreInput {
     canonical_domain: stringField(value, 'canonical_domain').toLowerCase().replace(/^www\./, ''),
     city: stringField(value, 'city'),
     country: stringField(value, 'country') || 'Mexico',
+    discovery_active: booleanField(value, 'discovery_active', true),
     facebook_url: stringField(value, 'facebook_url'),
     instagram_url: stringField(value, 'instagram_url'),
     logo_url: stringField(value, 'logo_url'),
@@ -123,6 +129,7 @@ function parseStoreInput(body: unknown): StoreInput {
     platform: stringField(value, 'platform'),
     state: stringField(value, 'state'),
     status: stringField(value, 'status') || 'active',
+    update_active: booleanField(value, 'update_active', true),
     website_url: stringField(value, 'website_url')
   };
   if (!input.name || !input.canonical_domain || !input.website_url) {
@@ -144,7 +151,9 @@ function storeParams(input: StoreInput): unknown[] {
     input.country,
     input.logo_url,
     input.status,
-    input.active
+    input.active,
+    input.discovery_active,
+    input.update_active
   ];
 }
 

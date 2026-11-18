@@ -416,7 +416,7 @@ const baseLinkedCandidateColumns: DataTableColumn<AdminRecord>[] = [
   {
     filterValue: (row) => field(row, ['store_active']),
     id: 'store_active',
-    label: 'Public visibility',
+    label: 'Item visibility',
     minWidth: 150,
     render: (row) => field(row, ['store_active'], '') === 'false' ? 'Hidden' : 'Visible',
     sortValue: (row) => field(row, ['store_active'])

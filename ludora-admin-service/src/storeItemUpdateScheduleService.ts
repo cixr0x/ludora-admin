@@ -64,7 +64,7 @@ with eligible as materialized (
     store_items.store_id
   from store_items
   join stores on stores.id = store_items.store_id
-  where stores.active = true
+  where stores.update_active = true
     and store_items.store_active = true
          and store_items.availability <> 'unavailable'
     and store_items.is_boardgame = true

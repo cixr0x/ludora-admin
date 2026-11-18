@@ -51,7 +51,7 @@ const operationPageContent: Record<OperationPageMode, { description: string; tit
     title: 'Item Embeddings'
   },
   item_update: {
-    description: 'Refresh confirmed boardgame store items from their product pages.',
+    description: 'Refresh confirmed boardgame store items at stores with Item updates enabled.',
     title: 'Store Item Update'
   },
   store_discovery: {
@@ -704,7 +704,7 @@ export function OperationsPage({ operation = 'store_discovery' }: { operation?: 
       .getStores()
       .then((rows) => {
         if (!ignore) {
-          setStores(rows);
+          setStores(operation === 'item_update' ? rows.filter((store) => store.update_active !== false) : rows);
           setStoreLoadState('ready');
         }
       })

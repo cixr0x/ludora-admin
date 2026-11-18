@@ -187,11 +187,11 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(screen.getByRole('img', { name: 'Store item staleness histogram' })).toBeInTheDocument();
     expect(screen.getByLabelText('24h: 2 items')).toBeInTheDocument();
     expect(screen.getByText('All stores')).toBeInTheDocument();
-    expect(screen.getByText(/Showing all active stores/)).toBeInTheDocument();
+    expect(screen.getByText(/Showing all stores with updates enabled/)).toBeInTheDocument();
     expect(screen.getAllByText('Alpha')).toHaveLength(2);
     expect(screen.getByText('Beta')).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Store update statistics · last 24h' })).toBeInTheDocument();
-    expect(screen.getByText(/All 3 active stores/)).toBeInTheDocument();
+    expect(screen.getByText(/All 3 stores with updates enabled/)).toBeInTheDocument();
     expect(screen.getByText('92.5%')).toBeInTheDocument();
     expect(screen.getAllByText('No data')).toHaveLength(2);
     expect(screen.getByText('40')).toBeInTheDocument();
@@ -230,13 +230,13 @@ describe('StoreItemUpdateMonitorPage', () => {
     expect(gammaCells.slice(2, 5).map((cell) => cell.textContent)).toEqual(['0', '0', '0']);
   });
 
-  it('spans every statistics column when no active stores are returned', async () => {
+  it('spans every statistics column when no stores have updates enabled', async () => {
     vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue({ ...monitor, store_statistics: [] });
     vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
 
     render(<StoreItemUpdateMonitorPage />);
 
-    const emptyCell = await screen.findByRole('cell', { name: 'No active stores' });
+    const emptyCell = await screen.findByRole('cell', { name: 'No stores with updates enabled' });
     expect(emptyCell).toHaveAttribute('colspan', '11');
     expect(within(emptyCell.closest('table')!).getAllByRole('columnheader')).toHaveLength(11);
   });
