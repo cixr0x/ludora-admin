@@ -20,6 +20,7 @@ const MAX_OUTPUT_DIMENSION = 800;
 const DEFAULT_TTL_MS = 30 * 60 * 1000;
 const CACHE_CONTROL = 'public, max-age=31536000, immutable';
 const MANUAL_CANDIDATE_INDEX = 3;
+const FIRST_AI_CANDIDATE_INDEX = 4;
 
 export type CoverFlatteningSourceField = CoverImageField;
 export type CoverFlatteningTargetField = CoverImageField;
@@ -67,11 +68,15 @@ type FlatteningCandidateFile = CoverFlatteningCandidate & {
 };
 
 type ManagedCoverFlatteningWorkflow = Omit<CoverFlatteningWorkflow, 'candidates'> & {
+  aiController?: AbortController;
   candidates: FlatteningCandidateFile[];
   itemNames: CoverItemNames;
   outputDir: string;
   sourcePath: string;
+  sourceUrl: string;
 };
+
+type StartCoverFlatteningOptions = { skipAutomatic?: boolean };
 
 type CoverItemNames = {
   canonical_name?: string | null;
@@ -122,6 +127,7 @@ export type CoverFlatteningWorkflowDependencies = {
     dimensions: { height: number; left: number; top: number; width: number }
   ): Promise<Buffer>;
   createId?(): string;
+  detectAiCorners(imageUrl: string, signal: AbortSignal): Promise<NormalizedCoverPoint[] | null>;
   downloadImage(url: string): Promise<Buffer>;
   now?(): Date;
   optimizeImage(image: Buffer, options: { maxBytes: number; maxDimension: number }): Promise<Buffer>;
@@ -130,7 +136,8 @@ export type CoverFlatteningWorkflowDependencies = {
   runManualFlattening(
     sourcePath: string,
     outputDir: string,
-    points: NormalizedCoverPoint[]
+    points: NormalizedCoverPoint[],
+    signal?: AbortSignal
   ): Promise<FlatteningMetadata>;
   runFlattening(sourcePath: string, outputDir: string): Promise<FlatteningMetadata>;
   uploadImage(image: Buffer, upload: CoverImageOptimizationUpload): Promise<void>;
@@ -147,11 +154,16 @@ export type CoverFlatteningWorkflowManager = {
     trimFraction?: number
   ): Promise<AcceptedCoverFlattening>;
   cancel(workflowId: string): Promise<void>;
+  createAiCandidate(workflowId: string): Promise<CoverFlatteningWorkflow>;
   createManualCandidate(workflowId: string, points: NormalizedCoverPoint[]): Promise<CoverFlatteningWorkflow>;
   getCandidateFile(workflowId: string, candidateIndex: number): Promise<string>;
   getSourceFile(workflowId: string): Promise<string>;
-  startFromItem(itemId: number, sourceField: CoverFlatteningSourceField): Promise<CoverFlatteningWorkflow>;
-  startFromStoreItem(storeItemId: number): Promise<CoverFlatteningWorkflow>;
+  startFromItem(
+    itemId: number,
+    sourceField: CoverFlatteningSourceField,
+    options?: StartCoverFlatteningOptions
+  ): Promise<CoverFlatteningWorkflow>;
+  startFromStoreItem(storeItemId: number, options?: StartCoverFlatteningOptions): Promise<CoverFlatteningWorkflow>;
 };
 
 export class CoverFlatteningWorkflowError extends Error {
@@ -172,7 +184,10 @@ export function createCoverFlatteningWorkflowManager(
   const createId = dependencies.createId ?? randomUUID;
   const ttlMs = dependencies.ttlMs ?? DEFAULT_TTL_MS;
 
-  async function startFromStoreItem(storeItemId: number): Promise<CoverFlatteningWorkflow> {
+  async function startFromStoreItem(
+    storeItemId: number,
+    { skipAutomatic = false }: StartCoverFlatteningOptions = {}
+  ): Promise<CoverFlatteningWorkflow> {
     await cleanupExpired();
     const row = await loadStoreItemSource(database, storeItemId);
     if (!row) {
@@ -188,6 +203,7 @@ export function createCoverFlatteningWorkflowManager(
     return start({
       itemId: Number(row.item_id),
       itemNames: row,
+      skipAutomatic,
       sourceField: 'store_item_image',
       sourceUrl,
       storeItemId
@@ -196,7 +212,8 @@ export function createCoverFlatteningWorkflowManager(
 
   async function startFromItem(
     itemId: number,
-    sourceField: CoverFlatteningSourceField
+    sourceField: CoverFlatteningSourceField,
+    { skipAutomatic = false }: StartCoverFlatteningOptions = {}
   ): Promise<CoverFlatteningWorkflow> {
     await cleanupExpired();
     const row = await loadItemSource(database, itemId);
@@ -210,6 +227,7 @@ export function createCoverFlatteningWorkflowManager(
     return start({
       itemId,
       itemNames: row,
+      skipAutomatic,
       sourceField,
       sourceUrl,
       storeItemId: null
@@ -219,12 +237,14 @@ export function createCoverFlatteningWorkflowManager(
   async function start({
     itemId,
     itemNames,
+    skipAutomatic,
     sourceField,
     sourceUrl,
     storeItemId
   }: {
     itemId: number;
     itemNames: CoverItemNames;
+    skipAutomatic: boolean;
     sourceField: CoverFlatteningWorkflow['source_field'];
     sourceUrl: string;
     storeItemId: number | null;
@@ -253,14 +273,15 @@ export function createCoverFlatteningWorkflowManager(
     let automaticError: string | null = null;
     let candidates: FlatteningCandidateFile[] = [];
     let perspective: CoverFlatteningWorkflow['perspective'] = null;
-    try {
-      const metadata = await dependencies.runFlattening(sourcePath, outputDir);
-      const parsedCandidates = parseCandidates(metadata);
-      const parsedPerspective = parsePerspective(metadata);
-      candidates = parsedCandidates;
-      perspective = parsedPerspective;
-    } catch (error) {
-      automaticError = automaticFailureMessage(error);
+    if (!skipAutomatic) {
+      try {
+        const metadata = await dependencies.runFlattening(sourcePath, outputDir);
+        const parsedCandidates = parseCandidates(metadata);
+        perspective = parsePerspective(metadata);
+        candidates = parsedCandidates;
+      } catch (error) {
+        automaticError = automaticFailureMessage(error);
+      }
     }
 
     const createdAt = now();
@@ -275,6 +296,7 @@ export function createCoverFlatteningWorkflowManager(
       perspective,
       source_field: sourceField,
       sourcePath,
+      sourceUrl,
       store_item_id: storeItemId,
       workflow_id: workflowId
     };
@@ -300,19 +322,12 @@ export function createCoverFlatteningWorkflowManager(
     const workflow = workflowFor(workflowId);
     const validatedPoints = validateNormalizedCoverPoints(points);
     try {
-      const metadata = await dependencies.runManualFlattening(
+      const candidate = await flattenFromPoints(
         workflow.sourcePath,
         workflow.outputDir,
         validatedPoints
       );
-      const candidates = parseCandidates(metadata);
-      if (candidates.length !== 1 || candidates[0]?.index !== MANUAL_CANDIDATE_INDEX) {
-        throw new CoverFlatteningWorkflowError('Manual flattening returned malformed candidate metadata.', 422);
-      }
-      workflow.candidates = [
-        ...workflow.candidates.filter((candidate) => candidate.index !== MANUAL_CANDIDATE_INDEX),
-        candidates[0]
-      ].sort((first, second) => first.index - second.index);
+      replaceCandidate(workflow, candidate);
       return publicWorkflow(workflow);
     } catch (error) {
       if (error instanceof CoverFlatteningWorkflowError) {
@@ -323,6 +338,70 @@ export function createCoverFlatteningWorkflowManager(
         422
       );
     }
+  }
+
+  async function createAiCandidate(workflowId: string): Promise<CoverFlatteningWorkflow> {
+    await cleanupExpired();
+    const workflow = workflowFor(workflowId);
+    if (workflow.aiController) {
+      throw new CoverFlatteningWorkflowError('AI cover generation is already in progress.', 409);
+    }
+    const controller = new AbortController();
+    workflow.aiController = controller;
+    let outputDir: string | undefined;
+    let completed = false;
+    try {
+      const corners = await dependencies.detectAiCorners(workflow.sourceUrl, controller.signal).catch(() => {
+        throw new CoverFlatteningWorkflowError('AI cover detection could not be completed.', 502);
+      });
+      requireActiveAiWorkflow(workflow);
+      if (!corners) {
+        throw new CoverFlatteningWorkflowError('AI could not identify all four front cover corners.', 422);
+      }
+
+      // Use a fresh output directory so a failed retry preserves the previous candidate and the manual files.
+      outputDir = configuredPathApi(workflow.outputDir).join(workflow.outputDir, `ai-${randomUUID()}`);
+      const candidate = await flattenFromPoints(workflow.sourcePath, outputDir, corners, controller.signal);
+      requireActiveAiWorkflow(workflow);
+      const previousAi = workflow.candidates.find((entry) => entry.index >= FIRST_AI_CANDIDATE_INDEX);
+      const index = previousAi ? previousAi.index + 1 : FIRST_AI_CANDIDATE_INDEX;
+      replaceCandidate(workflow, { ...candidate, index, construction: 'AI-selected corners' }, previousAi?.index);
+      completed = true;
+      return publicWorkflow(workflow);
+    } catch (error) {
+      await cleanupExpired();
+      requireActiveAiWorkflow(workflow);
+      if (error instanceof CoverFlatteningWorkflowError) {
+        throw error;
+      }
+      throw new CoverFlatteningWorkflowError('The AI-selected corners could not be flattened.', 422);
+    } finally {
+      workflow.aiController = undefined;
+      if (outputDir && !completed) {
+        // The Python process can have created its output directory after cancellation removed the workflow.
+        await dependencies.removeDirectory(workflows.get(workflowId) === workflow ? outputDir : workflow.outputDir);
+      }
+    }
+  }
+
+  function requireActiveAiWorkflow(workflow: ManagedCoverFlatteningWorkflow): void {
+    if (workflows.get(workflow.workflow_id) !== workflow || Date.parse(workflow.expires_at) <= now().getTime()) {
+      throw new CoverFlatteningWorkflowError('Cover flattening workflow not found or expired.', 404);
+    }
+  }
+
+  async function flattenFromPoints(
+    sourcePath: string,
+    outputDir: string,
+    points: NormalizedCoverPoint[],
+    signal?: AbortSignal
+  ): Promise<FlatteningCandidateFile> {
+    const candidates = parseCandidates(await dependencies.runManualFlattening(sourcePath, outputDir, points, signal));
+    const [candidate] = candidates;
+    if (candidates.length !== 1 || candidate?.index !== MANUAL_CANDIDATE_INDEX) {
+      throw new CoverFlatteningWorkflowError('Manual flattening returned malformed candidate metadata.', 422);
+    }
+    return candidate;
   }
 
   async function accept(
@@ -384,8 +463,7 @@ export function createCoverFlatteningWorkflowManager(
       key: s3Key
     });
     await updateItemImage(database, workflow.item_id, targetField, publicUrl, imageHash);
-    workflows.delete(workflowId);
-    await dependencies.removeDirectory(workflow.outputDir);
+    await discardWorkflow(workflow);
 
     return {
       item_id: workflow.item_id,
@@ -400,8 +478,12 @@ export function createCoverFlatteningWorkflowManager(
 
   async function cancel(workflowId: string): Promise<void> {
     await cleanupExpired();
-    const workflow = workflowFor(workflowId);
-    workflows.delete(workflowId);
+    await discardWorkflow(workflowFor(workflowId));
+  }
+
+  async function discardWorkflow(workflow: ManagedCoverFlatteningWorkflow): Promise<void> {
+    workflows.delete(workflow.workflow_id);
+    workflow.aiController?.abort();
     await dependencies.removeDirectory(workflow.outputDir);
   }
 
@@ -411,14 +493,16 @@ export function createCoverFlatteningWorkflowManager(
       (workflow) => new Date(workflow.expires_at).getTime() <= currentTime
     );
     for (const workflow of expired) {
-      workflows.delete(workflow.workflow_id);
-      await dependencies.removeDirectory(workflow.outputDir);
+      if (workflows.get(workflow.workflow_id) === workflow) {
+        await discardWorkflow(workflow);
+      }
     }
   }
 
   return {
     accept,
     cancel,
+    createAiCandidate,
     createManualCandidate,
     getCandidateFile,
     getSourceFile,
@@ -446,16 +530,19 @@ export function createCoverFlatteningWorkflowManager(
 
 export function createNodeCoverFlatteningWorkflowDependencies({
   config,
+  detectAiCorners,
   packageDir,
   pythonExecutable
 }: {
   config: LocalCoverWorkflowConfig;
+  detectAiCorners: CoverFlatteningWorkflowDependencies['detectAiCorners'];
   packageDir: string;
   pythonExecutable: string;
 }): CoverFlatteningWorkflowDependencies {
   const imageDependencies = createNodeExternalCoverImageOptimizerDependencies(config);
   return {
     config,
+    detectAiCorners,
     cropImage: async (image, dimensions) => Buffer.from(
       await sharp(image, { failOn: 'none' })
         .extract(dimensions)
@@ -473,7 +560,7 @@ export function createNodeCoverFlatteningWorkflowDependencies({
     removeDirectory: async (directory) => {
       await rm(directory, { force: true, recursive: true });
     },
-    runManualFlattening: async (sourcePath, outputDir, points) => {
+    runManualFlattening: async (sourcePath, outputDir, points, signal) => {
       const packagePath = configuredPathApi(packageDir);
       await execFileAsync(
         pythonExecutable,
@@ -492,7 +579,8 @@ export function createNodeCoverFlatteningWorkflowDependencies({
             ...process.env,
             PYTHONPATH: packagePath.join(packageDir, 'src')
           },
-          maxBuffer: 1024 * 1024
+          maxBuffer: 1024 * 1024,
+          signal
         }
       );
       return JSON.parse(await readFile(packagePath.join(outputDir, 'manual-cover.json'), 'utf8')) as FlatteningMetadata;
@@ -519,6 +607,17 @@ export function createNodeCoverFlatteningWorkflowDependencies({
       await writeFile(destination, image);
     }
   };
+}
+
+function replaceCandidate(
+  workflow: ManagedCoverFlatteningWorkflow,
+  candidate: FlatteningCandidateFile,
+  replacedIndex = candidate.index
+): void {
+  workflow.candidates = [
+    ...workflow.candidates.filter((entry) => entry.index !== replacedIndex),
+    candidate
+  ].sort((first, second) => first.index - second.index);
 }
 
 function parseCandidates(metadata: FlatteningMetadata): FlatteningCandidateFile[] {

@@ -5628,6 +5628,16 @@ describe('ludora admin service', () => {
       cancel: async (workflowId) => {
         calls.push(['cancel', workflowId]);
       },
+      createAiCandidate: async (workflowId) => {
+        calls.push(['ai', workflowId]);
+        return {
+          ...workflow,
+          candidates: [
+            ...workflow.candidates,
+            { ...workflow.candidates[0], index: 4, construction: 'AI-selected corners' }
+          ]
+        };
+      },
       createManualCandidate: async (workflowId, points) => {
         calls.push(['manual', workflowId, points]);
         return {
@@ -5655,8 +5665,8 @@ describe('ludora admin service', () => {
         calls.push(['source', workflowId]);
         return sourcePath;
       },
-      startFromItem: async (itemId, sourceField) => {
-        calls.push(['item', itemId, sourceField]);
+      startFromItem: async (itemId, sourceField, options) => {
+        calls.push(['item', itemId, sourceField, options]);
         return workflow;
       },
       startFromStoreItem: async (storeItemId) => {
@@ -5670,6 +5680,12 @@ describe('ludora admin service', () => {
       const start = await request(app)
         .post('/admin/cover-flattening-workflows/items')
         .send({ item_id: 77, source_field: 'image_url_es' });
+      const aiStart = await request(app)
+        .post('/admin/cover-flattening-workflows/items')
+        .send({ item_id: 77, source_field: 'image_url_es', skip_automatic: true });
+      const invalidStart = await request(app)
+        .post('/admin/cover-flattening-workflows/store-items')
+        .send({ store_item_id: 3365, skip_automatic: 'true' });
       const manualOnlyStart = await request(app)
         .post('/admin/cover-flattening-workflows/store-items')
         .send({ store_item_id: 3365 });
@@ -5686,6 +5702,7 @@ describe('ludora admin service', () => {
       const manual = await request(app)
         .post('/admin/cover-flattening-workflows/flatten-77/manual-candidate')
         .send({ points: manualPoints });
+      const ai = await request(app).post('/admin/cover-flattening-workflows/flatten-77/ai-candidate');
       const candidate = await request(app).get('/admin/cover-flattening-workflows/flatten-77/candidates/1');
       const invalidTrim = await request(app)
         .post('/admin/cover-flattening-workflows/flatten-77/accept')
@@ -5697,6 +5714,8 @@ describe('ludora admin service', () => {
 
       expect(start.status).toBe(201);
       expect(start.body).toEqual({ data: workflow });
+      expect(aiStart.status).toBe(201);
+      expect(invalidStart.status).toBe(400);
       expect(manualOnlyStart.status).toBe(201);
       expect(manualOnlyStart.body).toEqual({ data: manualOnlyWorkflow });
       expect(manualOnlyStart.body.data).toMatchObject({
@@ -5710,16 +5729,20 @@ describe('ludora admin service', () => {
       expect(manual.status).toBe(201);
       expect(manual.body.data.candidates).toHaveLength(2);
       expect(manual.body.data.candidates[1]).toMatchObject({ index: 3, construction: 'manual corner selection' });
+      expect(ai.status).toBe(201);
+      expect(ai.body.data.candidates[1]).toMatchObject({ index: 4, construction: 'AI-selected corners' });
       expect(candidate.status).toBe(200);
       expect(candidate.headers['cache-control']).toBe('no-store');
       expect(invalidTrim.status).toBe(400);
       expect(accepted.body.data).toMatchObject({ item_id: 77, target_field: 'image_url', trim_fraction: 0.001 });
       expect(cancelled.body).toEqual({ data: { cancelled: true } });
       expect(calls).toEqual([
-        ['item', 77, 'image_url_es'],
+        ['item', 77, 'image_url_es', undefined],
+        ['item', 77, 'image_url_es', { skipAutomatic: true }],
         ['store-item', 3365],
         ['source', 'flatten-77'],
         ['manual', 'flatten-77', manualPoints],
+        ['ai', 'flatten-77'],
         ['candidate', 'flatten-77', 1],
         ['accept', 'flatten-77', 1, 'image_url', 1, 0.001],
         ['cancel', 'flatten-77']

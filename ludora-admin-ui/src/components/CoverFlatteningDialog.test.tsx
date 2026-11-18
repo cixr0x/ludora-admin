@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CoverFlatteningDialog } from './CoverFlatteningDialog';
@@ -21,6 +21,170 @@ describe('CoverFlatteningDialog', () => {
     cleanup();
     vi.unstubAllGlobals();
     vi.clearAllMocks();
+  });
+
+  it('generates from a selected review source and uses the existing preview and save controls', async () => {
+    const workflow = {
+      automatic_error: null,
+      candidates: [],
+      created_at: '2026-07-29T12:00:00.000Z',
+      expires_at: '2026-07-29T12:30:00.000Z',
+      item_id: 77,
+      perspective: null,
+      source_field: 'image_url_es',
+      store_item_id: null,
+      workflow_id: 'flatten-ai'
+    };
+    const candidate = {
+      aspect_ratio: 0.8,
+      aspect_ratio_method: 'edge_average',
+      construction: 'AI-selected corners',
+      height: 500,
+      index: 4,
+      square_snapped: false,
+      vanishing_confidence: 0,
+      width: 400
+    };
+    let generation = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/cover-flattening-workflows/items')) {
+        return jsonResponse({ data: workflow }, 201);
+      }
+      if (url.endsWith('/flatten-ai/ai-candidate')) {
+        return jsonResponse({ data: { ...workflow, candidates: [{ ...candidate, index: 4 + generation++ }] } }, 201);
+      }
+      if (/\/flatten-ai\/candidates\/[45]$/.test(url)) {
+        return imageResponse('candidate');
+      }
+      if (url.endsWith('/flatten-ai/accept')) {
+        return jsonResponse({ data: { item_id: 77, target_field: 'image_url_es' } });
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const onAccepted = vi.fn();
+
+    render(
+      <CoverFlatteningDialog
+        request={{
+          id: '920',
+          itemId: '77',
+          kind: 'review',
+          sources: [
+            { field: 'store_item_image', url: 'https://store.example/box.jpg' },
+            { field: 'image_url_es', url: 'https://catalog.example/box-es.jpg' }
+          ],
+          title: 'AI box'
+        }}
+        onAccepted={onAccepted}
+        onClose={() => undefined}
+      />
+    );
+
+    expect(screen.getByRole('button', { name: 'Generate candidates' })).toBeEnabled();
+    fireEvent.click(screen.getByLabelText('Item Spanish image'));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate with AI' }));
+
+    expect(await screen.findByAltText('AI-flattened cover candidate')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'AI candidate' })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Select points manually' })).toBeEnabled();
+    const startRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/cover-flattening-workflows/items'));
+    expect(JSON.parse(String(startRequest?.[1]?.body))).toEqual({
+      item_id: '77',
+      skip_automatic: true,
+      source_field: 'image_url_es'
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Generate with AI' }));
+    expect(await screen.findByTestId('trim-preview-image-5')).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: 'AI candidate' })).toBeChecked();
+    fireEvent.click(screen.getByLabelText('Spanish image', { selector: 'input' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Accept candidate' }));
+    await waitFor(() => expect(onAccepted).toHaveBeenCalledWith({ item_id: 77, target_field: 'image_url_es' }));
+    const acceptRequest = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/flatten-ai/accept'));
+    expect(JSON.parse(String(acceptRequest?.[1]?.body))).toMatchObject({ candidate_index: 5 });
+  });
+
+  it.each(['Cancel', 'unmount'] as const)('%s ends pending AI generation before reopening the same store item', async (close) => {
+    const workflow = {
+      automatic_error: null,
+      candidates: [{
+        aspect_ratio: 1,
+        aspect_ratio_method: 'edge_average',
+        construction: 'two-face cover',
+        height: 500,
+        index: 1,
+        square_snapped: true,
+        vanishing_confidence: 0,
+        width: 500
+      }],
+      created_at: '2026-07-29T12:00:00.000Z',
+      expires_at: '2026-07-29T12:30:00.000Z',
+      item_id: 77,
+      perspective: 'two_faces',
+      source_field: 'store_item_image',
+      store_item_id: 920,
+      workflow_id: 'flatten-1'
+    };
+    let completeAi!: (response: Response) => void;
+    const pendingAi = new Promise<Response>((resolve) => { completeAi = resolve; });
+    let started = 0;
+    fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/cover-flattening-workflows/store-items')) {
+        return jsonResponse({ data: { ...workflow, workflow_id: `flatten-${++started}` } }, 201);
+      }
+      if (url.endsWith('/flatten-1/ai-candidate')) {
+        return pendingAi;
+      }
+      if (url.endsWith('/flatten-1') && init?.method === 'DELETE') {
+        return jsonResponse({ data: { cancelled: true } });
+      }
+      if (url.endsWith('/candidates/1')) {
+        return imageResponse('candidate');
+      }
+      throw new Error(`Unexpected request: ${url}`);
+    });
+    const request = { id: '920', kind: 'store_item' as const, title: 'Store box' };
+    const onClose = vi.fn();
+    const onAccepted = vi.fn();
+    const renderDialog = (activeRequest: typeof request | null) => (
+      <CoverFlatteningDialog request={activeRequest} onAccepted={onAccepted} onClose={onClose} />
+    );
+    const { rerender, unmount } = render(renderDialog(request));
+
+    expect(await screen.findByAltText('Flattened cover candidate 1')).toBeInTheDocument();
+    const generateButton = screen.getByRole('button', { name: 'Generate with AI' });
+    fireEvent.click(generateButton);
+    expect(generateButton).toBeDisabled();
+    fireEvent.click(generateButton);
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).endsWith('/ai-candidate'))).toHaveLength(1);
+    expect(screen.getByRole('radio', { name: 'Horizontal' })).toBeDisabled();
+    if (close === 'Cancel') {
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(onClose).toHaveBeenCalledOnce();
+      rerender(renderDialog(null));
+      rerender(renderDialog(request));
+    } else {
+      unmount();
+      render(renderDialog(request));
+    }
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/cover-flattening-workflows/flatten-1'),
+      expect.objectContaining({ method: 'DELETE' })
+    );
+
+    expect(await screen.findByAltText('Flattened cover candidate 1')).toBeInTheDocument();
+    await act(async () => {
+      completeAi(jsonResponse({
+        data: { ...workflow, candidates: [...workflow.candidates, { ...workflow.candidates[0], index: 4 }] }
+      }, 201));
+      await pendingAi;
+    });
+
+    expect(screen.queryByRole('radio', { name: 'AI candidate' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Generate with AI' })).toBeEnabled();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/flatten-1/candidates/4'))).toBe(false);
   });
 
   it('uses a fullscreen, stacked workflow layout below the md breakpoint', async () => {

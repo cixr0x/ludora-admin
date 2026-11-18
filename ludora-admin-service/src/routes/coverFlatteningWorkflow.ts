@@ -13,7 +13,7 @@ export function createCoverFlatteningWorkflowRouter(manager: CoverFlatteningWork
   router.post('/admin/cover-flattening-workflows/store-items', async (request, response, next) => {
     try {
       const storeItemId = positiveInteger(request.body, 'store_item_id');
-      response.status(201).json({ data: await manager.startFromStoreItem(storeItemId) });
+      response.status(201).json({ data: await manager.startFromStoreItem(storeItemId, startOptions(request.body)) });
     } catch (error) {
       next(asHttpError(error));
     }
@@ -23,7 +23,7 @@ export function createCoverFlatteningWorkflowRouter(manager: CoverFlatteningWork
     try {
       const itemId = positiveInteger(request.body, 'item_id');
       const sourceField = imageField(request.body, 'source_field') as CoverFlatteningSourceField;
-      response.status(201).json({ data: await manager.startFromItem(itemId, sourceField) });
+      response.status(201).json({ data: await manager.startFromItem(itemId, sourceField, startOptions(request.body)) });
     } catch (error) {
       next(asHttpError(error));
     }
@@ -56,6 +56,14 @@ export function createCoverFlatteningWorkflowRouter(manager: CoverFlatteningWork
       response.status(201).json({
         data: await manager.createManualCandidate(request.params.workflowId, points)
       });
+    } catch (error) {
+      next(asHttpError(error));
+    }
+  });
+
+  router.post('/admin/cover-flattening-workflows/:workflowId/ai-candidate', async (request, response, next) => {
+    try {
+      response.status(201).json({ data: await manager.createAiCandidate(request.params.workflowId) });
     } catch (error) {
       next(asHttpError(error));
     }
@@ -94,6 +102,17 @@ function positiveInteger(source: unknown, key: string): number {
     throw httpError(400, `${key} must be a positive integer`);
   }
   return parsed;
+}
+
+function startOptions(source: unknown): { skipAutomatic: boolean } | undefined {
+  const { skip_automatic: skipAutomatic } = (source ?? {}) as Record<string, unknown>;
+  if (skipAutomatic === undefined) {
+    return undefined;
+  }
+  if (typeof skipAutomatic !== 'boolean') {
+    throw httpError(400, 'skip_automatic must be a boolean');
+  }
+  return { skipAutomatic };
 }
 
 function imageField(source: unknown, key: string): 'image_url' | 'image_url_es' {

@@ -1,5 +1,6 @@
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import AddIcon from '@mui/icons-material/Add';
+import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import RemoveIcon from '@mui/icons-material/Remove';
 import {
   Alert,
@@ -27,6 +28,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   adminApi,
   type AcceptedCoverFlattening,
+  type CoverFlatteningCandidate,
   type CoverPoint,
   type CoverFlatteningWorkflow,
   type CoverImageField
@@ -78,32 +80,37 @@ export function CoverFlatteningDialog({
   const [trimSteps, setTrimSteps] = useState(0);
   const [sourceField, setSourceField] = useState<CoverFlatteningSourceField>('image_url');
   const [targetField, setTargetField] = useState<CoverImageField | ''>('');
-  const [isStarting, setIsStarting] = useState(false);
+  const [startingMode, setStartingMode] = useState<CoverGeneration | null>(null);
   const [isAccepting, setIsAccepting] = useState(false);
+  const [isGeneratingAiCandidate, setIsGeneratingAiCandidate] = useState(false);
   const [isCreatingManualCandidate, setIsCreatingManualCandidate] = useState(false);
   const [isLoadingManualSource, setIsLoadingManualSource] = useState(false);
   const [error, setError] = useState('');
   const requestKeyRef = useRef('');
-  const cancelRequestedRef = useRef(false);
+  const requestVersionRef = useRef(0);
+  const activeWorkflowIdRef = useRef<string | null>(null);
 
   const requestKey = request
     ? `${request.kind}:${request.id}:${request.kind === 'review' ? request.itemId : ''}`
     : '';
   const selectableSources = request?.kind === 'item' || request?.kind === 'review' ? request.sources : [];
   const needsSourceChoice = selectableSources.length > 1 && !workflow;
+  const isStarting = startingMode !== null;
+  const hasAiCandidate = workflow?.candidates.some(isAiCandidate);
   const trimFraction = trimSteps / 1000;
 
   useEffect(() => {
-    if (!request) {
-      requestKeyRef.current = '';
-      return;
-    }
     if (requestKeyRef.current === requestKey) {
       return;
     }
     requestKeyRef.current = requestKey;
-    cancelRequestedRef.current = false;
+    cancelActiveWorkflow();
     setWorkflow(null);
+    setStartingMode(null);
+    setIsGeneratingAiCandidate(false);
+    if (!request) {
+      return;
+    }
     setMode('candidates');
     setCandidateUrls({});
     setSelectedCandidate(null);
@@ -131,6 +138,11 @@ export function CoverFlatteningDialog({
       );
     }
   }, [request, requestKey]);
+
+  useEffect(() => () => {
+    requestKeyRef.current = '';
+    cancelActiveWorkflow();
+  }, []);
 
   useEffect(() => {
     if (!workflow) {
@@ -197,23 +209,29 @@ export function CoverFlatteningDialog({
     };
   }, [mode, workflow]);
 
-  async function startWorkflow(activeRequest: CoverFlatteningRequest, selectedSource: CoverFlatteningSourceField) {
-    const activeRequestKey = `${activeRequest.kind}:${activeRequest.id}:${
-      activeRequest.kind === 'review' ? activeRequest.itemId : ''
-    }`;
-    setIsStarting(true);
+  async function startWorkflow(
+    activeRequest: CoverFlatteningRequest,
+    selectedSource: CoverFlatteningSourceField,
+    initialGeneration: CoverGeneration = 'automatic'
+  ) {
+    const version = requestVersionRef.current;
+    const skipAutomatic = initialGeneration === 'ai';
+    setStartingMode(initialGeneration);
     setError('');
+    let started: CoverFlatteningWorkflow;
     try {
-      const started = activeRequest.kind === 'store_item' || selectedSource === 'store_item_image'
-        ? await adminApi.startStoreItemCoverFlattening(activeRequest.id)
+      started = activeRequest.kind === 'store_item' || selectedSource === 'store_item_image'
+        ? await adminApi.startStoreItemCoverFlattening(activeRequest.id, skipAutomatic)
         : await adminApi.startItemCoverFlattening(
             activeRequest.kind === 'review' ? activeRequest.itemId : activeRequest.id,
-            selectedSource
+            selectedSource,
+            skipAutomatic
           );
-      if (cancelRequestedRef.current || requestKeyRef.current !== activeRequestKey) {
+      if (requestVersionRef.current !== version) {
         await adminApi.cancelCoverFlattening(started.workflow_id).catch(() => undefined);
         return;
       }
+      activeWorkflowIdRef.current = started.workflow_id;
       setWorkflow(started);
       const onlyCandidate = started.candidates.length === 1 ? started.candidates[0] : undefined;
       setSelectedCandidate(onlyCandidate?.index ?? null);
@@ -221,13 +239,54 @@ export function CoverFlatteningDialog({
         setAspectRatioOrientation(orientationForRatio(onlyCandidate.aspect_ratio));
       }
     } catch (startError) {
-      if (!cancelRequestedRef.current) {
+      if (requestVersionRef.current === version) {
         setError(errorMessage(startError, 'Cover flattening could not be started.'));
       }
+      return;
     } finally {
-      if (requestKeyRef.current === activeRequestKey || cancelRequestedRef.current) {
-        setIsStarting(false);
+      if (requestVersionRef.current === version) {
+        setStartingMode(null);
       }
+    }
+    if (skipAutomatic) {
+      await generateAiCandidate(started.workflow_id);
+    }
+  }
+
+  async function generateAiCandidate(workflowId: string) {
+    const version = requestVersionRef.current;
+    setIsGeneratingAiCandidate(true);
+    setError('');
+    try {
+      const updatedWorkflow = await adminApi.createAiCoverFlatteningCandidate(workflowId);
+      if (requestVersionRef.current !== version) {
+        return;
+      }
+      selectGeneratedCandidate(updatedWorkflow, updatedWorkflow.candidates.find(isAiCandidate), 'AI');
+    } catch (aiError) {
+      if (requestVersionRef.current === version) {
+        setError(errorMessage(aiError, 'AI cover candidate could not be generated.'));
+      }
+    } finally {
+      if (requestVersionRef.current === version) {
+        setIsGeneratingAiCandidate(false);
+      }
+    }
+  }
+
+  function selectGeneratedCandidate(
+    updatedWorkflow: CoverFlatteningWorkflow,
+    candidate: CoverFlatteningCandidate | undefined,
+    label: string
+  ) {
+    if (!candidate) {
+      throw new Error(`${label} cover candidate was not returned by the server.`);
+    }
+    setCandidateUrls({});
+    setWorkflow(updatedWorkflow);
+    setSelectedCandidate(candidate.index);
+    if (aspectRatioChoice === 'auto') {
+      setAspectRatioOrientation(orientationForRatio(candidate.aspect_ratio));
     }
   }
 
@@ -261,6 +320,7 @@ export function CoverFlatteningDialog({
         aspectRatioOverride,
         trimFraction
       );
+      activeWorkflowIdRef.current = null;
       setWorkflow(null);
       onAccepted(result);
     } catch (acceptError) {
@@ -295,16 +355,11 @@ export function CoverFlatteningDialog({
         workflow.workflow_id,
         manualPoints
       );
-      const manualCandidate = updatedWorkflow.candidates.find((candidate) => candidate.index === 3);
-      if (!manualCandidate) {
-        setError('Manual cover candidate was not returned by the server.');
-        return;
-      }
-      setWorkflow(updatedWorkflow);
-      setSelectedCandidate(manualCandidate.index);
-      if (aspectRatioChoice === 'auto') {
-        setAspectRatioOrientation(orientationForRatio(manualCandidate.aspect_ratio));
-      }
+      selectGeneratedCandidate(
+        updatedWorkflow,
+        updatedWorkflow.candidates.find((candidate) => candidate.index === 3),
+        'Manual'
+      );
       setManualPoints([]);
       setMode('candidates');
     } catch (manualError) {
@@ -314,11 +369,17 @@ export function CoverFlatteningDialog({
     }
   }
 
-  function handleClose() {
-    cancelRequestedRef.current = true;
-    if (workflow) {
-      void adminApi.cancelCoverFlattening(workflow.workflow_id).catch(() => undefined);
+  function cancelActiveWorkflow() {
+    requestVersionRef.current++;
+    if (activeWorkflowIdRef.current) {
+      const workflowId = activeWorkflowIdRef.current;
+      activeWorkflowIdRef.current = null;
+      void adminApi.cancelCoverFlattening(workflowId).catch(() => undefined);
     }
+  }
+
+  function handleClose() {
+    cancelActiveWorkflow();
     setWorkflow(null);
     setMode('candidates');
     setManualPoints([]);
@@ -346,29 +407,49 @@ export function CoverFlatteningDialog({
               >
                 {selectableSources.map((source) => (
                   <FormControlLabel
-                    control={<Radio />}
+                    control={<Radio disabled={isStarting} />}
                     key={source.field}
                     label={coverSourceLabel(request, source.field)}
                     value={source.field}
                   />
                 ))}
               </RadioGroup>
-              <Button
-                disabled={isStarting}
-                startIcon={isStarting ? <CircularProgress size={18} /> : <AutoFixHighIcon />}
-                sx={{ alignSelf: 'flex-start', mt: 1 }}
-                variant="contained"
-                onClick={() => request && startWorkflow(request, sourceField)}
-              >
-                Generate candidates
-              </Button>
+              <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} sx={{ mt: 1 }}>
+                <Button
+                  disabled={isStarting}
+                  startIcon={<AutoFixHighIcon />}
+                  variant="contained"
+                  onClick={() => request && startWorkflow(request, sourceField)}
+                >
+                  Generate candidates
+                </Button>
+                <Button
+                  disabled={isStarting}
+                  startIcon={<AutoAwesomeIcon />}
+                  variant="outlined"
+                  onClick={() => request && startWorkflow(request, sourceField, 'ai')}
+                >
+                  Generate with AI
+                </Button>
+              </Stack>
             </FormControl>
           ) : null}
 
           {isStarting ? (
-            <Stack alignItems="center" direction="row" spacing={1.5}>
+            <Stack alignItems="center" direction="row" role="status" spacing={1.5}>
               <CircularProgress size={20} />
-              <Typography>Detecting the box perspective and flattening its cover…</Typography>
+              <Typography>
+                {startingMode === 'ai'
+                  ? 'Preparing the source image…'
+                  : 'Detecting the box perspective and flattening its cover…'}
+              </Typography>
+            </Stack>
+          ) : null}
+
+          {isGeneratingAiCandidate ? (
+            <Stack alignItems="center" direction="row" role="status" spacing={1.5}>
+              <CircularProgress size={20} />
+              <Typography>Detecting the front cover corners with AI…</Typography>
             </Stack>
           ) : null}
 
@@ -376,34 +457,34 @@ export function CoverFlatteningDialog({
 
           {workflow && mode === 'candidates' ? (
             <>
-              {workflow.candidates.length === 0 ? (
+              {workflow.candidates.length === 0 && workflow.automatic_error ? (
                 <Alert severity="warning">
                   <Typography variant="body2">
-                    Automatic point selection could not find a usable cover. Select the four cover corners manually to
-                    continue.
+                    Automatic point selection could not find a usable cover. Generate with AI or select the four cover
+                    corners manually.
                   </Typography>
-                  {workflow.automatic_error ? (
-                    <Typography color="text.secondary" sx={{ display: 'block', mt: 0.5 }} variant="caption">
-                      Detection detail: {workflow.automatic_error}
-                    </Typography>
-                  ) : null}
+                  <Typography color="text.secondary" sx={{ display: 'block', mt: 0.5 }} variant="caption">
+                    Detection detail: {workflow.automatic_error}
+                  </Typography>
                 </Alert>
-              ) : (
+              ) : workflow.candidates.length > 0 ? (
                 <Typography color="text.secondary" variant="body2">
-                  {workflow.candidates.some((candidate) => candidate.index === 3)
+                  {hasAiCandidate
+                    ? 'AI cover candidate generated. Select the candidate to save.'
+                    : workflow.candidates.some((candidate) => candidate.index === 3)
                     ? 'Manual cover candidate generated. Select the candidate to save.'
                     : workflow.perspective === 'two_faces'
                     ? 'Two-face perspective detected. One cover candidate was generated.'
                     : 'Three-face perspective detected. Select the correct cover candidate.'}
                 </Typography>
-              )}
+              ) : null}
               {workflow.candidates.length > 0 ? (
                 <>
               <Box
                 sx={{
                   display: 'grid',
                   gap: 2,
-                  gridTemplateColumns: { md: `repeat(${workflow.candidates.length}, minmax(0, 1fr))`, xs: '1fr' }
+                  gridTemplateColumns: { md: `repeat(${Math.min(3, workflow.candidates.length)}, minmax(0, 1fr))`, xs: '1fr' }
                 }}
               >
                 {workflow.candidates.map((candidate) => {
@@ -446,7 +527,7 @@ export function CoverFlatteningDialog({
                       <Stack spacing={1}>
                         <FormControlLabel
                           control={<Radio checked={selectedCandidate === candidate.index} />}
-                          label={`Candidate ${candidate.index}`}
+                          label={isAiCandidate(candidate) ? 'AI candidate' : `Candidate ${candidate.index}`}
                           value={candidate.index}
                         />
                         {candidateUrls[candidate.index] ? (
@@ -463,7 +544,9 @@ export function CoverFlatteningDialog({
                             }}
                           >
                             <Box
-                              alt={`Flattened cover candidate ${candidate.index}`}
+                              alt={isAiCandidate(candidate)
+                                ? 'AI-flattened cover candidate'
+                                : `Flattened cover candidate ${candidate.index}`}
                               component="img"
                               data-testid={`trim-preview-image-${candidate.index}`}
                               src={candidateUrls[candidate.index]}
@@ -493,7 +576,7 @@ export function CoverFlatteningDialog({
                 })}
               </Box>
 
-              <FormControl>
+              <FormControl disabled={isGeneratingAiCandidate}>
                 <FormLabel>Output aspect ratio</FormLabel>
                 <RadioGroup
                   row={!isMobile}
@@ -513,6 +596,7 @@ export function CoverFlatteningDialog({
                   <Box
                     aria-label="Custom width to height ratio"
                     component="input"
+                    disabled={isGeneratingAiCandidate}
                     max="5"
                     min="0.2"
                     step="0.01"
@@ -524,7 +608,7 @@ export function CoverFlatteningDialog({
                 ) : null}
               </FormControl>
 
-              <FormControl>
+              <FormControl disabled={isGeneratingAiCandidate}>
                 <FormLabel>Rectangle orientation</FormLabel>
                 <RadioGroup
                   row={!isMobile}
@@ -629,7 +713,21 @@ export function CoverFlatteningDialog({
           </>
         ) : (
           <>
-            <Button disabled={!workflow || isAccepting} variant="outlined" onClick={handleStartManualSelection}>
+            {workflow ? (
+              <Button
+                disabled={isAccepting || isGeneratingAiCandidate}
+                startIcon={<AutoAwesomeIcon />}
+                variant="outlined"
+                onClick={() => generateAiCandidate(workflow.workflow_id)}
+              >
+                Generate with AI
+              </Button>
+            ) : null}
+            <Button
+              disabled={!workflow || isAccepting || isGeneratingAiCandidate}
+              variant="outlined"
+              onClick={handleStartManualSelection}
+            >
               Select points manually
             </Button>
             {workflow && workflow.candidates.length > 0 ? (
@@ -644,7 +742,8 @@ export function CoverFlatteningDialog({
                     aspectRatioOrientation,
                     workflow.candidates.find((candidate) => candidate.index === selectedCandidate)?.aspect_ratio ?? 1
                   ) === undefined ||
-                  isAccepting
+                  isAccepting ||
+                  isGeneratingAiCandidate
                 }
                 startIcon={isAccepting ? <CircularProgress size={18} /> : undefined}
                 variant="contained"
@@ -663,7 +762,13 @@ export function CoverFlatteningDialog({
 type AspectRatioChoice = 'auto' | 'square' | '4:5' | '3:4' | '2:3' | '1:2' | '1:3' | 'custom';
 type AspectRatioOrientation = 'vertical' | 'horizontal';
 type CoverFlatteningMode = 'candidates' | 'manual';
+type CoverGeneration = 'automatic' | 'ai';
+const FIRST_AI_CANDIDATE_INDEX = 4;
 const MAX_TRIM_STEPS = 100;
+
+function isAiCandidate(candidate: CoverFlatteningCandidate): boolean {
+  return candidate.index >= FIRST_AI_CANDIDATE_INDEX;
+}
 
 function selectedAspectRatio(
   choice: AspectRatioChoice,

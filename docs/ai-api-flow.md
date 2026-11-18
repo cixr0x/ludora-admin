@@ -31,6 +31,7 @@ LUDORA_INTERNAL_API_TOKEN=optional_shared_internal_token
 - `POST /admin/discovery/item-candidates/:id/product-details`
 - `POST /admin/ai/amazon-title-extractions`
 - `POST /admin/store-profile-detections` (website metadata first, AI only for unresolved store fields)
+- `POST /admin/cover-flattening-workflows/:workflowId/ai-candidate` (uses `gpt-6.2-sol` with `xhigh` reasoning and the selected source as an `input_image`)
 - AI BGG matching after local and cached BGG candidates cannot produce an accepted match
 - Auto-list evaluation after an automated store item match links a catalog item
 

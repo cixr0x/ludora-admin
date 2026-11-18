@@ -8,6 +8,7 @@ import { createApp } from './app.js';
 import { createAmazonTitleExtractionService } from './amazonTitleExtraction/amazonTitleExtractionService.js';
 import { createOpenAiAmazonTitleExtractionClient } from './amazonTitleExtraction/openAiAmazonTitleExtractionClient.js';
 import { createAiBggMatchingService } from './aiBggMatching/aiBggMatchingService.js';
+import { createCodexCoverCornersClient } from './ai/codexCoverCornersClient.js';
 import { createCodexAiBggMatchingClient } from './aiBggMatching/codexAiBggMatchingClient.js';
 import { createAutoListEvaluationService } from './autoListEvaluation/autoListEvaluationService.js';
 import { createCodexAutoListEvaluationClient } from './autoListEvaluation/codexAutoListEvaluationClient.js';
@@ -176,6 +177,7 @@ const coverFlatteningWorkflowManager = createCoverFlatteningWorkflowManager(
   database,
   { ...createNodeCoverFlatteningWorkflowDependencies({
     config: { ...config.localCoverWorkflow, workDir: config.coverFlatteningWorkDir },
+    detectAiCorners: createCodexCoverCornersClient(codexOptions),
     packageDir: config.discoveryRunner.packageDir,
     pythonExecutable: config.discoveryRunner.pythonExecutable
   }), catalogImageHasher }

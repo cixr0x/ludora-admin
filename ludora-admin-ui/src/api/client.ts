@@ -821,14 +821,16 @@ export const adminApi = {
     sendJson<LocalCoverWorkflow>('/admin/local-cover-workflows/items', 'POST', {
       item_id: itemId
     }),
-  startStoreItemCoverFlattening: (storeItemId: string) =>
+  startStoreItemCoverFlattening: (storeItemId: string, skipAutomatic = false) =>
     sendJson<CoverFlatteningWorkflow>('/admin/cover-flattening-workflows/store-items', 'POST', {
-      store_item_id: storeItemId
+      store_item_id: storeItemId,
+      ...(skipAutomatic ? { skip_automatic: true } : {})
     }),
-  startItemCoverFlattening: (itemId: string, sourceField: CoverImageField) =>
+  startItemCoverFlattening: (itemId: string, sourceField: CoverImageField, skipAutomatic = false) =>
     sendJson<CoverFlatteningWorkflow>('/admin/cover-flattening-workflows/items', 'POST', {
       item_id: itemId,
-      source_field: sourceField
+      source_field: sourceField,
+      ...(skipAutomatic ? { skip_automatic: true } : {})
     }),
   getCoverFlatteningCandidate: (workflowId: string, candidateIndex: number) =>
     fetchBlob(
@@ -841,6 +843,11 @@ export const adminApi = {
       `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/manual-candidate`,
       'POST',
       { points }
+    ),
+  createAiCoverFlatteningCandidate: (workflowId: string) =>
+    fetchData<CoverFlatteningWorkflow>(
+      `/admin/cover-flattening-workflows/${encodeURIComponent(workflowId)}/ai-candidate`,
+      { method: 'POST' }
     ),
   acceptCoverFlattening: (
     workflowId: string,

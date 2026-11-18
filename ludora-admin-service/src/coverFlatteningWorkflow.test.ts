@@ -117,6 +117,139 @@ describe('cover flattening workflow', () => {
     expect(workflow.store_item_id).toBeNull();
   });
 
+  it('adds one independent AI candidate from the selected original source and accepts it', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const source = 'https://example.com/spanish.jpg';
+    const points = [
+      { x: 0.1, y: 0.2 },
+      { x: 0.8, y: 0.1 },
+      { x: 0.9, y: 0.7 },
+      { x: 0.2, y: 0.8 }
+    ];
+    const detectedSources: string[] = [];
+    const database: Database = {
+      query: async (sql) => ({
+        rows: sql.includes('from items i')
+          ? [{ image_url: 'https://example.com/english.jpg', image_url_es: source, item_id: 77 }]
+          : [{ id: 77 }]
+      })
+    };
+    let warpNumber = 0;
+    const manager = createCoverFlatteningWorkflowManager(database, fakeDependencies(root, {
+      detectAiCorners: async (url) => {
+        detectedSources.push(url);
+        return points;
+      },
+      optimizeImage: async (image) => {
+        expect(image.toString('utf8')).toBe('warp-3');
+        return Buffer.alloc(80_000);
+      },
+      runManualFlattening: async (sourcePath, outputDir, receivedPoints) => {
+        expect(await readFile(sourcePath, 'utf8')).toBe('source');
+        expect(receivedPoints).toEqual(points);
+        await mkdir(outputDir, { recursive: true });
+        return manualCandidateMetadata(outputDir, `warp-${++warpNumber}`);
+      }
+    }));
+    const { workflow_id: id } = await manager.startFromItem(77, 'image_url_es');
+    await manager.createManualCandidate(id, points);
+    await expect(manager.createAiCandidate(id)).resolves.toMatchObject({
+      candidates: [{ index: 1 }, { index: 2 }, { index: 3 }, { index: 4, construction: 'AI-selected corners' }]
+    });
+    await expect(manager.createAiCandidate(id)).resolves.toMatchObject({
+      candidates: [{ index: 1 }, { index: 2 }, { index: 3 }, { index: 5 }]
+    });
+    expect(detectedSources).toEqual([source, source]);
+    expect(await readFile(await manager.getCandidateFile(id, 3), 'utf8')).toBe('warp-1');
+    await expect(manager.getCandidateFile(id, 4)).rejects.toMatchObject({ status: 404 });
+    await expect(manager.accept(id, 4, 'image_url_es')).rejects.toMatchObject({ status: 404 });
+    expect(await readFile(await manager.getCandidateFile(id, 5), 'utf8')).toBe('warp-3');
+    await expect(manager.accept(id, 5, 'image_url_es')).resolves.toMatchObject({
+      item_id: 77,
+      target_field: 'image_url_es'
+    });
+  });
+
+  it('can start a store-item workflow without running the heuristic and keeps manual selection available', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const source = 'https://store.example/box.jpg';
+    const points = [
+      { x: 0.2, y: 0.2 },
+      { x: 0.8, y: 0.2 },
+      { x: 0.8, y: 0.8 },
+      { x: 0.2, y: 0.8 }
+    ];
+    const database: Database = { query: async () => ({ rows: [{ item_id: 77, source_url: source }] }) };
+    const manager = createCoverFlatteningWorkflowManager(database, fakeDependencies(root, {
+      detectAiCorners: async (url) => {
+        expect(url).toBe(source);
+        return null;
+      },
+      runManualFlattening: async (_sourcePath, outputDir) => manualCandidateMetadata(outputDir, 'manual')
+    }));
+
+    const workflow = await manager.startFromStoreItem(2, { skipAutomatic: true });
+
+    expect(workflow).toMatchObject({ automatic_error: null, candidates: [], source_field: 'store_item_image' });
+    await expect(manager.createAiCandidate(workflow.workflow_id)).rejects.toMatchObject({
+      status: 422,
+      message: 'AI could not identify all four front cover corners.'
+    });
+    await expect(manager.createManualCandidate(workflow.workflow_id, points)).resolves.toMatchObject({
+      candidates: [{ index: 3 }]
+    });
+  });
+
+  it.each(['cancelled', 'expired'] as const)('discards AI output when its workflow was %s during generation', async (end) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
+    temporaryDirectories.push(root);
+    const points = [
+      { x: 0.2, y: 0.2 },
+      { x: 0.8, y: 0.2 },
+      { x: 0.8, y: 0.8 },
+      { x: 0.2, y: 0.8 }
+    ];
+    const database: Database = {
+      query: async () => ({ rows: [{ item_id: 77, image_url: 'https://example.com/box.jpg' }] })
+    };
+    const started = Promise.withResolvers<void>();
+    const result = Promise.withResolvers<typeof points>();
+    let now = 0;
+    let warpCalls = 0;
+    let detectionSignal: AbortSignal | undefined;
+    const manager = createCoverFlatteningWorkflowManager(database, fakeDependencies(root, {
+      detectAiCorners: async (_url, signal) => {
+        detectionSignal = signal;
+        started.resolve();
+        return result.promise;
+      },
+      now: () => new Date(now),
+      runManualFlattening: async (_sourcePath, outputDir) => {
+        warpCalls++;
+        return manualCandidateMetadata(outputDir, 'unexpected');
+      },
+      ttlMs: 100
+    }));
+    const { workflow_id: id } = await manager.startFromItem(77, 'image_url', { skipAutomatic: true });
+    const generation = manager.createAiCandidate(id);
+    const rejected = expect(generation).rejects.toMatchObject({ status: 404 });
+    await started.promise;
+    await expect(manager.createAiCandidate(id)).rejects.toMatchObject({ status: 409 });
+
+    if (end === 'cancelled') {
+      await manager.cancel(id);
+    } else {
+      now = 100;
+    }
+    result.resolve(points);
+    await rejected;
+    expect(detectionSignal?.aborted).toBe(true);
+    expect(warpCalls).toBe(0);
+    await expect(readFile(path.join(root, id, 'source.jpg'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('applies the reviewer-selected aspect ratio before WebP optimization', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'ludora-cover-flattening-'));
     temporaryDirectories.push(root);
@@ -516,6 +649,19 @@ describe('cover flattening workflow', () => {
   });
 });
 
+async function manualCandidateMetadata(outputDir: string, content: string) {
+  const candidate = path.join(outputDir, 'flattened-cover-manual.png');
+  await writeFile(candidate, content);
+  return {
+    flattened_covers: [{
+      candidate_index: 3,
+      construction: 'manual corner selection',
+      geometry: { aspect_ratio: 1.25, height: 400, width: 500 },
+      output_path: candidate
+    }]
+  };
+}
+
 function fakeDependencies(
   root: string,
   overrides: Partial<CoverFlatteningWorkflowDependencies> = {}
@@ -529,6 +675,7 @@ function fakeDependencies(
   };
   return {
     config,
+    detectAiCorners: async () => { throw new Error('Unexpected AI cover request.'); },
     cropImage: async (image) => image,
     createId: () => 'workflow-test',
     downloadImage: async () => Buffer.from('source'),

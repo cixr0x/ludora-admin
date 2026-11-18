@@ -1,17 +1,18 @@
 # Automatic Cover Flattening Workflow
 
-The admin application provides an automatic **Flatten cover** action alongside the existing manual/GIMP cover workflow.
+The admin application's **Flatten cover** dialog offers heuristic detection, AI corner detection, and manual corner selection. The separate manual/GIMP cover workflow is also available.
 
 ## Entry points
 
 - A store item can start flattening only when it has both an image URL and a linked item.
 - An item can start flattening from `image_url` or `image_url_es`. When both exist, the dialog asks which source to use.
+- Store Item Review can offer the store cover and either available catalog cover as sources.
 
 ## Workflow
 
 1. The admin service downloads the source image into an ephemeral workflow directory.
-2. It runs `python -m ludora.box_silhouette`, using the configured discovery Python and package directory.
-3. The authenticated dialog displays the one candidate produced for a two-face perspective or both candidates produced for a three-face perspective. If automatic detection fails, the source remains available for manual four-corner selection.
+2. Heuristic detection runs `python -m ludora.box_silhouette` using the configured discovery Python and package directory. It produces one candidate for a two-face perspective or two for a three-face perspective.
+3. **Generate with AI** sends the selected original public image URL to the private CodexAPI and asks for the four visible front cover corners. The service validates the response and uses the same Python warp as manual corner selection. The AI candidate appears alongside any existing candidates. The source chooser can start with AI directly, and the downloaded source stays available for manual selection if detection fails.
 4. Candidate generation preserves the complete warped cover with no automatic border trim. The administrator can trim all four borders symmetrically in 0.1% steps, starting at 0%, and chooses `image_url` or `image_url_es` as the destination.
 5. The service applies the selected trim and aspect ratio, then converts the candidate to WebP and progressively reduces quality and dimensions until it is strictly smaller than 100 KB.
 6. It uploads the file with an immutable, content-hashed S3 key, updates the selected item image field, and removes the temporary workflow directory.
@@ -41,5 +42,8 @@ It also uses:
 - `GET /admin/cover-flattening-workflows/:workflowId/source`
 - `GET /admin/cover-flattening-workflows/:workflowId/candidates/:candidateIndex`
 - `POST /admin/cover-flattening-workflows/:workflowId/manual-candidate`
+- `POST /admin/cover-flattening-workflows/:workflowId/ai-candidate`
 - `POST /admin/cover-flattening-workflows/:workflowId/accept`
 - `DELETE /admin/cover-flattening-workflows/:workflowId`
+
+The two workflow start endpoints accept the optional boolean `skip_automatic` for starting with the source download alone.
