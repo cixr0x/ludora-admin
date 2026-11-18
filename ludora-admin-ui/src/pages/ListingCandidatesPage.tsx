@@ -2895,12 +2895,21 @@ function CatalogItemSearchResults({
         });
         if (!ignore) {
           const nextPage = page.page + 1;
-          setSearch((current) => ({
-            hasError: false,
-            isLoading: false,
-            nextPage: nextPage > pageNumber && nextPage * page.pageSize < page.total ? nextPage : null,
-            rows: [...current.rows, ...page.rows]
-          }));
+          setSearch((current) => {
+            const rowsById = new Map(current.rows.map((item) => [field(item, ['id'], ''), item]));
+            for (const item of page.rows) {
+              const itemId = field(item, ['id'], '');
+              if (!rowsById.has(itemId)) {
+                rowsById.set(itemId, item);
+              }
+            }
+            return {
+              hasError: false,
+              isLoading: false,
+              nextPage: nextPage > pageNumber && nextPage * page.pageSize < page.total ? nextPage : null,
+              rows: [...rowsById.values()]
+            };
+          });
         }
       } catch {
         if (!ignore) {

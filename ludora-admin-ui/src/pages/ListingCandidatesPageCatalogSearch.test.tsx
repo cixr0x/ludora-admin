@@ -65,10 +65,10 @@ describe('Store Item Review catalog search', () => {
     scrollToBottom(list);
     await waitFor(() => expect(searchRequests.map((params) => params.get('page'))).toEqual(['0', '1']));
     expect(firstButton).toBeEnabled();
-    await act(async () => laterPage.resolve(itemPage([lastItem], 1, 51)));
+    await act(async () => laterPage.resolve(itemPage([firstPage[0], lastItem], 1, 52)));
 
     const laterButton = await dialog.findByRole('button', { name: `${resultAction} Later catalog item` });
-    expect(dialog.getByRole('button', { name: `${resultAction} Catalog item 01` })).toBe(firstButton);
+    expect(dialog.getAllByRole('button', { name: `${resultAction} Catalog item 01` })).toEqual([firstButton]);
     scrollToBottom(list);
     expect(searchRequests.map((params) => Object.fromEntries(params))).toEqual([
       { filter_name: 'Example listing', page: '0', page_size: '50', sort: 'canonical_name', sort_direction: 'asc' },
