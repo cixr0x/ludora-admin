@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { adminApi, setUnauthorizedHandler, type AdminIdentity, type FrontPageCategoryOption, type LoginInput } from './api/client';
 import { AdminLayout, type AdminSection } from './components/AdminLayout';
 import { LoginPage } from './components/LoginPage';
+import { FeedbackPage } from './pages/FeedbackPage';
 import { FrontPageCategoriesPage } from './pages/FrontPageCategoriesPage';
 import { FrontPageCategoryOptionsPage } from './pages/FrontPageCategoryOptionsPage';
 import { FrontPageCategoryProductsPage } from './pages/FrontPageCategoryProductsPage';
@@ -59,7 +60,8 @@ const adminSections: AdminSection[] = [
   'front-page-category-products',
   'front-page-categories',
   'front-page-preview',
-  'offer-reviews'
+  'offer-reviews',
+  'feedback'
 ];
 
 const routeAliases: Partial<Record<string, AdminSection>> = {
@@ -128,6 +130,8 @@ function renderSection(
       );
     case 'reviews':
       return <ReviewTasksPage />;
+    case 'feedback':
+      return <FeedbackPage />;
     case 'operations':
     case 'operations-store-discovery':
       return <OperationsPage operation="store_discovery" />;

@@ -139,6 +139,14 @@ export type AdminIdentity = {
   username: string;
 };
 
+export type FeedbackSubmission = {
+  id: string;
+  created_at: string;
+  name: string;
+  email: string;
+  message: string;
+};
+
 export type LoginInput = {
   password: string;
   username: string;
@@ -605,6 +613,8 @@ export const adminApi = {
     fetchData<{ ok: true }>('/admin/auth/logout', {
       method: 'POST'
     }),
+  getFeedbackPage: (query: Pick<TableQuery, 'page' | 'pageSize'>) =>
+    fetchPagedRows<FeedbackSubmission>(pagedPath('/admin/feedback', query), query),
   getStores: () => fetchRows('/stores'),
   getStoresPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/stores', query), query),
   updateStore: (id: string, input: StoreInput) => sendJson<AdminRecord>(`/stores/${encodeURIComponent(id)}`, 'PATCH', input),

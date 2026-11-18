@@ -4,6 +4,7 @@ import AutoAwesomeIcon from '@mui/icons-material/AutoAwesome';
 import BuildIcon from '@mui/icons-material/Build';
 import CategoryIcon from '@mui/icons-material/Category';
 import CloseIcon from '@mui/icons-material/Close';
+import FeedbackOutlinedIcon from '@mui/icons-material/FeedbackOutlined';
 import ImageSearchIcon from '@mui/icons-material/ImageSearch';
 import Inventory2Icon from '@mui/icons-material/Inventory2';
 import LogoutIcon from '@mui/icons-material/Logout';
@@ -49,7 +50,8 @@ export type AdminSection =
   | 'front-page-category-products'
   | 'front-page-preview'
   | 'front-page-categories'
-  | 'offer-reviews';
+  | 'offer-reviews'
+  | 'feedback';
 
 type NavigationItem = {
   id: AdminSection;
@@ -82,7 +84,8 @@ const navigationItems: NavigationItem[] = [
   { id: 'front-page-category-options', label: 'Add Front Page Category', icon: <AddCircleIcon fontSize="small" /> },
   { id: 'front-page-categories', label: 'Front Page Categories', icon: <CategoryIcon fontSize="small" /> },
   { id: 'front-page-preview', label: 'Front Page Preview', icon: <ViewCarouselIcon fontSize="small" /> },
-  { id: 'offer-reviews', label: 'Store Item Review', icon: <ViewListIcon fontSize="small" /> }
+  { id: 'offer-reviews', label: 'Store Item Review', icon: <ViewListIcon fontSize="small" /> },
+  { id: 'feedback', label: 'Feedback', icon: <FeedbackOutlinedIcon fontSize="small" /> }
 ];
 
 function isNavigationItemSelected(item: NavigationItem, activeSection: AdminSection) {

@@ -56,6 +56,74 @@ describe('App', () => {
     expect(screen.queryByRole('link', { name: /Store Candidates/i })).not.toBeInTheDocument();
   });
 
+  it('opens Feedback from the sidebar, shows complete plain-text messages, and navigates to older pages', async () => {
+    const message = 'Initial line\n\nLiteral <strong>markup</strong> and the full ending.';
+    const newest = {
+      id: '9007199254740995', created_at: '2026-11-20T12:00:00.000Z', name: 'Visitor',
+      email: 'visitor@example.com', message
+    };
+    const older = { ...newest, id: '700', message: 'An older submission.' };
+    const firstPage = [newest, ...Array.from({ length: 24 }, (_, index) => ({
+      ...newest, id: String(1000 - index), message: `Submission ${index}`
+    }))];
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') return jsonResponse({ username: 'admin' });
+      if (url.pathname === '/discovery/stores') return jsonResponse([]);
+      if (url.pathname === '/admin/feedback') {
+        const page = Number(url.searchParams.get('page'));
+        return new Response(JSON.stringify({ data: page === 0 ? firstPage : [older], meta: { page, page_size: 25, total: 26 } }), {
+          headers: { 'Content-Type': 'application/json' }
+        });
+      }
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
+    render(<App />);
+    const link = await screen.findByRole('link', { name: 'Feedback' });
+    expect(link).toHaveAttribute('href', '#feedback');
+    fireEvent.click(link);
+    expect(await screen.findByRole('heading', { name: 'Feedback' })).toBeInTheDocument();
+    expect(window.location.hash).toBe('#feedback');
+    const id = await screen.findByRole('cell', { name: newest.id });
+    const row = within(id.closest('tr')!);
+    expect(row.getByRole('cell', { name: 'Visitor' })).toBeInTheDocument();
+    expect(row.getByRole('cell', { name: 'visitor@example.com' })).toBeInTheDocument();
+    expect(row.getByRole('cell', { name: new Date(newest.created_at).toLocaleString() })).toBeInTheDocument();
+    const messageCell = row.getByRole('cell', { name: /Literal/ });
+    expect(messageCell.textContent).toBe(message);
+    expect(messageCell).toHaveStyle({ whiteSpace: 'pre-wrap' });
+    expect(messageCell.querySelector('strong')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Go to next page' }));
+    expect(await screen.findByRole('cell', { name: 'An older submission.' })).toBeInTheDocument();
+    expect(screen.queryByRole('cell', { name: newest.id })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Go to next page' })).toBeDisabled();
+    expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('/admin/feedback?page=1&page_size=25'),
+      expect.objectContaining({ credentials: 'include' }));
+  });
+
+  it.each([
+    [200, 'No feedback submissions yet.'],
+    [500, 'Feedback could not be loaded.']
+  ])('opens the Feedback hash and handles a %s response', async (status, message) => {
+    window.location.hash = '#feedback';
+    let finish: (response: Response) => void = () => undefined;
+    const feedback = new Promise<Response>((resolve) => { finish = resolve; });
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = new URL(String(input));
+      if (url.pathname === '/admin/auth/me') return jsonResponse({ username: 'admin' });
+      if (url.pathname === '/admin/feedback') return feedback;
+      throw new Error(`Unexpected request: ${url.toString()}`);
+    });
+
+    render(<App />);
+    expect(await screen.findByRole('progressbar', { name: 'Loading feedback' })).toBeInTheDocument();
+    finish(status === 200 ? jsonResponse([]) : new Response(null, { status }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.queryByRole('progressbar', { name: 'Loading feedback' })).not.toBeInTheDocument();
+  });
+
   it('logs in and renders the admin shell', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = new URL(String(input));

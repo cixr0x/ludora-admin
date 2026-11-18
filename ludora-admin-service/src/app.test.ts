@@ -102,6 +102,45 @@ describe('ludora admin service', () => {
     expect(response.status).toBe(200);
   });
 
+  it('requires an admin session for feedback even if an internal token is configured', async () => {
+    const query = vi.fn(async () => ({ rows: [] }));
+    const database: Database = { query };
+    const app = createApp({ database, adminAuth: { ...authOptions, internalApiToken: 'internal-test-token' } });
+
+    await request(createApp({ database })).get('/admin/feedback').expect(404);
+    await request(app).get('/admin/feedback').expect(401);
+    await request(app).get('/admin/feedback').set('X-Ludora-Internal-Token', 'internal-test-token').expect(401);
+    expect(query).not.toHaveBeenCalled();
+  });
+
+  it('lists complete feedback in bounded newest-first pages with a numeric ID tie-breaker', async () => {
+    const newest = {
+      id: '9007199254740995', created_at: '2026-11-20T12:00:00.000Z', name: 'Visitor',
+      email: 'visitor@example.com', message: 'First line\n\nComplete <strong>second line</strong>.'
+    };
+    const tied = { ...newest, id: '9007199254740994', message: 'Same timestamp, smaller ID.' };
+    const older = { ...newest, id: '9007199254740993', created_at: '2026-11-19T12:00:00.000Z', message: 'Older.' };
+    const query = vi.fn(async (sql: string, params?: unknown[]) => {
+      if (normalizeSql(sql).startsWith('select count(*)')) return { rows: [{ total: 3 }] };
+      if (params?.[1] === 0) return { rows: [newest, tied] };
+      return { rows: params?.[1] === 2 ? [older] : [] };
+    });
+    const agent = request.agent(createApp({ database: { query }, adminAuth: authOptions }));
+    await agent.post('/admin/auth/login').send({ username: 'admin', password: 'secret-password' }).expect(200);
+
+    const first = await agent.get('/admin/feedback?page=0&page_size=2').expect('Cache-Control', 'no-store').expect(200);
+    const next = await agent.get('/admin/feedback?page=1&page_size=2').expect(200);
+    const capped = await agent.get('/admin/feedback?page=500000&page_size=5000').expect(200);
+    expect(first.body).toEqual({ data: [newest, tied], meta: { page: 0, page_size: 2, total: 3 } });
+    expect(next.body).toEqual({ data: [older], meta: { page: 1, page_size: 2, total: 3 } });
+    expect(capped.body).toEqual({ data: [], meta: { page: 100000, page_size: 200, total: 3 } });
+    const selectionCalls = query.mock.calls.filter(([sql]) => !normalizeSql(sql).startsWith('select count(*)'));
+    expect(selectionCalls.map(([, params]) => params)).toEqual([[2, 0], [2, 2], [200, 20000000]]);
+    for (const [sql] of selectionCalls) {
+      expect(normalizeSql(sql)).toMatch(/^select submission\.id::text as id, submission\.created_at, submission\.name, submission\.email, submission\.message from contact_form_submissions as submission order by submission\.created_at desc, submission\.id desc limit \$1 offset \$2$/);
+    }
+  });
+
   it('sets an HttpOnly session cookie after a successful login', async () => {
     const app = createApp({ database: idleDatabase(), adminAuth: authOptions });
 

@@ -14,6 +14,7 @@ import {
 } from '../productDetailsExtraction/productDetailsExtractionService.js';
 import { createTraceLoggerFromHeaders } from '../trace.js';
 import { storeItemStatisticsAggregateSql, storeItemStatisticsFields } from '../storeItemStatistics.js';
+import { parsePagination } from './pagination.js';
 import { storeSelect } from './stores.js';
 
 const bggCacheRequestTypesSql = `array[${BGG_CACHE_REQUEST_TYPES.map((type) => `'${type}'`).join(', ')}]`;
@@ -2702,25 +2703,9 @@ function likePattern(value: string): string {
   return `%${value.replace(/[\\%_]/g, (match) => `\\${match}`)}%`;
 }
 
-function parsePagination(query: Record<string, unknown>) {
-  return {
-    page: integerQueryField(query.page, 0, 0, 100000),
-    pageSize: integerQueryField(query.page_size, 25, 1, 200)
-  };
-}
-
 function stringQueryField(value: unknown): string {
   const rawValue = Array.isArray(value) ? value[0] : value;
   return typeof rawValue === 'string' || typeof rawValue === 'number' ? String(rawValue) : '';
-}
-
-function integerQueryField(value: unknown, fallback: number, min: number, max: number): number {
-  const rawValue = Array.isArray(value) ? value[0] : value;
-  const parsed = typeof rawValue === 'string' || typeof rawValue === 'number' ? Number(rawValue) : NaN;
-  if (!Number.isInteger(parsed)) {
-    return fallback;
-  }
-  return Math.min(max, Math.max(min, parsed));
 }
 
 function integerPathParam(value: string): number {

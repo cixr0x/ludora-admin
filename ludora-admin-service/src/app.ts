@@ -18,6 +18,7 @@ import { createAuthRouter } from './routes/auth.js';
 import { createDescriptionGenerationRouter } from './routes/descriptionGeneration.js';
 import { createCoverFlatteningWorkflowRouter } from './routes/coverFlatteningWorkflow.js';
 import { createDiscoveryRouter } from './routes/discovery.js';
+import { createFeedbackRouter } from './routes/feedback.js';
 import { createHealthRouter } from './routes/health.js';
 import { createImageSimilarityRouter } from './routes/imageSimilarity.js';
 import { createLocalCoverWorkflowRouter } from './routes/localCoverWorkflow.js';
@@ -96,6 +97,7 @@ export function createApp({
   }
   if (adminAuth) {
     app.use(createAuthRouter(adminAuth));
+    app.use('/admin/feedback', createFeedbackRouter(database, adminAuth));
     app.use(requireAdminAuth(adminAuth));
   }
   app.use(createStoresRouter(database, storeProfileDetectionService));
