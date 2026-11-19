@@ -165,7 +165,7 @@ To enroll a store, compare the sitemap's full URL tree against an independent
 catalog source and verify that it includes current products, including
 out-of-stock products and the source URL forms stored in Ludora. Set the store ID,
 the verified sitemap root, and a conservative coverage floor in the worker
-environment or the discovery operation's env file.
+environment or the discovery operation's env file. Keep the JSON on one line.
 
 ```dotenv
 LUDORA_VERIFIED_UPDATE_SITEMAPS='{"123":{"url":"https://store.example/sitemap.xml","min_urls":100}}'
@@ -189,14 +189,22 @@ The worker caches a fresh snapshot for up to ten minutes and a failed load for
 30 seconds. Reload failures discard expired snapshots. If the collection
 deadline expires while a request is still running, the updater falls back and
 ignores the late result. Each process allows one sitemap load at a time.
-Configuration is read at manual run or continuous worker session start.
+The admin service reads enrollment for scheduling on startup. The manual
+updater and continuous worker read enrollment when their run or session starts.
 
 A confirmed miss skips the product request and marks the offer unavailable and
 hidden with `availability_source=sitemap_missing`. The updater records the reason
-and changed fields in the existing logs. Chocita's continuous lookahead excludes
-confirmed misses from requests and waits for each item's own lease to record the
-outcome. If a store's coverage changes, remove its enrollment and restart the
-continuous worker. Previously hidden rows stay hidden after disabling the check.
+and changed fields in the existing logs. Active unavailable offers at enrolled
+stores stay eligible for manual updates and the daily schedule. The updater
+requests their product pages when a verified snapshot confirms they are still
+listed. If verification is temporarily unavailable, it retries on a later run.
+A page that still reports removal keeps the offer unavailable and eligible for
+the next daily schedule.
+
+Chocita's continuous lookahead excludes confirmed misses and reserves product
+retries for unavailable offers until their own claims. If a store's coverage
+changes, remove its enrollment and restart the admin service and continuous
+worker. Previously hidden rows stay hidden after disabling the check.
 Identify affected offers from the update logs and verify their current state.
 Public visibility is read-only in the admin UI. Restoring availability and
 visibility requires a separately approved data repair.

@@ -259,6 +259,7 @@ def _run_worker_session(
                 poll_seconds=poll_seconds,
                 concurrency=concurrency,
                 stop_event=stop_event,
+                verified_sitemap_store_ids=sitemap_checker.verified_store_ids,
             )
 
         repository.mark_continuous_update_worker_stopped(worker_name=WORKER_NAME, worker_id=worker_id)
@@ -293,6 +294,7 @@ def _dispatch_claims(
     poll_seconds: float,
     concurrency: int,
     stop_event: threading.Event,
+    verified_sitemap_store_ids: tuple[int, ...] = (),
 ) -> None:
     inboxes: list[_SlotInbox] = [Queue() for _ in range(concurrency)]
     slots = []
@@ -328,6 +330,7 @@ def _dispatch_claims(
                     lease_token=str(uuid.uuid4()),
                     lease_seconds=lease_seconds,
                     excluded_store_ids=tuple(claim.record.store_id for claim, _finished in active.values()),
+                    verified_sitemap_store_ids=verified_sitemap_store_ids,
                 )
                 if claim is not None:
                     finished = Future()
@@ -374,14 +377,17 @@ def _process_claim(
 ) -> None:
     store_item_id = claim.record.store_item_id
 
-    def is_sitemap_missing(source_url: str) -> bool:
-        return sitemap_checker is not None and sitemap_checker.is_missing(
+    def sitemap_contains(source_url: str) -> bool | None:
+        if sitemap_checker is None:
+            return None
+        return sitemap_checker.contains(
             claim.record.store_id, source_url, store_url=f"https://{claim.canonical_domain}",
             platform=claim.platform,
         )
 
     try:
-        if is_sitemap_missing(claim.record.source_url):
+        sitemap_membership = sitemap_contains(claim.record.source_url)
+        if sitemap_membership is False:
             changed = repository.mark_item_candidate_sitemap_missing(
                 claim.record, job_id=job_id, run_id=run_id, claim=claim,
                 worker_id=worker_id, worker_name=WORKER_NAME,
@@ -399,10 +405,13 @@ def _process_claim(
                 store_item_id=store_item_id,
             )
             return
+        if claim.record.availability == "unavailable" and sitemap_membership is None:
+            raise RuntimeError("Verified sitemap membership unavailable; will retry the sitemap check")
         try:
             if batch_refresher is not None and batch_refresher.supports(claim):
                 refreshed_record = batch_refresher.refresh(
-                    claim, trace_logger=trace_logger, is_sitemap_missing=is_sitemap_missing,
+                    claim, trace_logger=trace_logger,
+                    is_sitemap_missing=lambda url: sitemap_contains(url) is False,
                     repository=repository,
                 )
             else:
@@ -454,6 +463,7 @@ def _process_claim(
             run_id=run_id,
             worker_id=worker_id,
             worker_name=WORKER_NAME,
+            clear_schedule=sitemap_checker is not None and claim.record.store_id in sitemap_checker.verified_store_ids,
         )
         _log(
             "worker.item.deactivated", attempt_id=claim.attempt_id,

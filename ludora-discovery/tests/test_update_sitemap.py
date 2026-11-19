@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 import tempfile
 import threading
@@ -110,6 +111,23 @@ class UpdateSitemapTests(unittest.TestCase):
             checker = UpdateSitemapChecker.from_environment({ENV_KEY: ""}, dotenv, fetcher=self.fetch)
             self.assertFalse(checker.is_missing(7, MISSING, store_url=ORIGIN))
         self.assertEqual(self.requests, [ROOT])
+
+    def test_enrollment_rejects_store_ids_that_cannot_be_passed_to_postgres(self):
+        store = {"url": ORIGIN + "/sitemap.xml", "min_urls": 1}
+        config = json.dumps({"9223372036854775807": store, "9223372036854775808": store, "017": store})
+        checker = UpdateSitemapChecker.from_environment({ENV_KEY: config}, ".env", fetcher=self.fetch)
+
+        self.assertEqual(checker.verified_store_ids, (9223372036854775807,))
+
+    def test_enrollment_accepts_integer_valued_minimums_across_json_number_formats(self):
+        values = ("1", "1.0", "1e0", "1.5", "true", "1e300", "0")
+        config = "{" + ",".join(
+            f'"{i}":{{"url":"{ROOT}","min_urls":{min_urls}}}'
+            for i, min_urls in enumerate(values, start=1)
+        ) + "}"
+        checker = UpdateSitemapChecker.from_environment({ENV_KEY: config}, ".env", fetcher=self.fetch)
+
+        self.assertEqual(checker.verified_store_ids, (1, 2, 3))
 
     def test_invalid_config_does_not_authorize_a_negative_result(self):
         for config in ("{", "[]", '{"7":{"url":"https://shop.example/sitemap.xml","min_urls":true}}',

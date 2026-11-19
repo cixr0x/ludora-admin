@@ -1,6 +1,11 @@
+import { mkdtempSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { Database, QueryResult, SessionDatabase } from './db.js';
+import { readVerifiedSitemapStoreIds } from './storeItemUpdateEligibility.js';
 import {
   createStoreItemUpdateScheduleService,
   StoreItemUpdateScheduleConflictError
@@ -47,6 +52,71 @@ class FakeSessionDatabase implements SessionDatabase {
 }
 
 describe('store item update schedule service', () => {
+  it('loads valid sitemap enrollment IDs without losing bigint precision', () => {
+    const verifiedStore = { min_urls: 10, url: 'https://example.mx/sitemap.xml' };
+    const scope = readVerifiedSitemapStoreIds('unused.env', {
+      LUDORA_VERIFIED_UPDATE_SITEMAPS: JSON.stringify({
+        '17': verifiedStore,
+        '9223372036854775807': verifiedStore,
+        '9223372036854775808': verifiedStore,
+        '23': { ...verifiedStore, url: 'https://example.mx:8443/sitemap.xml' },
+        '24': { ...verifiedStore, min_urls: 0 },
+        '25': { ...verifiedStore, url: 'https://example.mx/sitemap.xml#fragment' },
+        '026': verifiedStore
+      })
+    });
+
+    expect(scope).toEqual(['17', '9223372036854775807']);
+  });
+
+  it('matches the discovery worker enrollment for integer-valued JSON number formats', () => {
+    const values = ['1', '1.0', '1e0', '1.5', 'true', '1e300', '0'];
+    const entries = values.map((minUrls, index) =>
+      `"${index + 1}":{"url":"https://example.mx/sitemap.xml","min_urls":${minUrls}}`
+    );
+
+    expect(readVerifiedSitemapStoreIds('unused.env', {
+      LUDORA_VERIFIED_UPDATE_SITEMAPS: `{${entries.join(',')}}`
+    })).toEqual(['1', '2', '3']);
+  });
+
+  it('reads quoted and exported discovery env values without changing their contents', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'ludora-sitemap-enrollment-'));
+    const envFile = join(directory, 'discovery.env');
+    try {
+      writeFileSync(envFile, "export LUDORA_VERIFIED_UPDATE_SITEMAPS = '{\"17\":{\"min_urls\":1,\"url\":\"https://example.mx/sitemap.xml?name=o'brien\"}}'\n");
+      expect(readVerifiedSitemapStoreIds(envFile, {})).toEqual(['17']);
+      expect(readVerifiedSitemapStoreIds(envFile, { LUDORA_VERIFIED_UPDATE_SITEMAPS: '' })).toEqual([]);
+
+      writeFileSync(envFile, 'LUDORA_VERIFIED_UPDATE_SITEMAPS={"17":{"min_urls":1,"url":"https://example.mx/sitemap.xml"}} # comment\n');
+      expect(readVerifiedSitemapStoreIds(envFile, {})).toEqual([]);
+    } finally {
+      unlinkSync(envFile);
+      rmdirSync(directory);
+    }
+  });
+
+  it('schedules unavailable listings only for enrolled stores while requiring active listings', async () => {
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [runningRun()],
+      [],
+      [{ scheduled_item_count: '2', scheduled_store_count: '1' }],
+      [completedRun()],
+      [],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createStoreItemUpdateScheduleService(database, { verifiedSitemapStoreIds: ['17'] });
+
+    await service.runManual();
+
+    const distribution = database.queries[3];
+    expect(normalizeSql(distribution.sql)).toContain(
+      "store_items.store_active = true and (store_items.availability <> 'unavailable' or store_items.store_id = any($3::bigint[]))"
+    );
+    expect(distribution.params?.[2]).toEqual(['17']);
+  });
+
   it('spreads deterministically ranked items evenly per store inside one 23-hour window', async () => {
     const database = new FakeSessionDatabase([
       [{ acquired: true }],

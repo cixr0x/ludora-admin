@@ -107,18 +107,27 @@ class UpdateSitemapChecker:
         configuration = {}
         if isinstance(decoded, dict):
             for store_id, value in decoded.items():
-                if not re.fullmatch(r"[1-9][0-9]{0,18}", store_id) or not isinstance(value, dict):
+                if (
+                    not re.fullmatch(r"[1-9][0-9]{0,18}", store_id)
+                    or int(store_id) > 9_223_372_036_854_775_807
+                    or not isinstance(value, dict)
+                ):
                     continue
                 url = value.get("url")
                 min_urls = value.get("min_urls")
                 if (
                     isinstance(url, str)
                     and _document_url(url) is not None
-                    and type(min_urls) is int
+                    and type(min_urls) in (int, float)
                     and 1 <= min_urls <= MAX_PAGE_ENTRIES
+                    and min_urls == int(min_urls)
                 ):
-                    configuration[int(store_id)] = _VerifiedSitemap(url, min_urls)
+                    configuration[int(store_id)] = _VerifiedSitemap(url, int(min_urls))
         return cls(configuration, **kwargs)
+
+    @property
+    def verified_store_ids(self) -> tuple[int, ...]:
+        return tuple(self._configuration)
 
     def is_missing(
         self,
@@ -129,24 +138,38 @@ class UpdateSitemapChecker:
         platform: str = "",
         cancellation_token: CancellationToken | None = None,
     ) -> bool:
+        return self.contains(
+            store_id, source_url, store_url=store_url, platform=platform, cancellation_token=cancellation_token,
+        ) is False
+
+    def contains(
+        self,
+        store_id: int | None,
+        source_url: str,
+        *,
+        store_url: str,
+        platform: str = "",
+        cancellation_token: CancellationToken | None = None,
+    ) -> bool | None:
+        """Return membership only when a complete, verified snapshot can answer."""
         raise_if_cancelled(cancellation_token)
         if store_id is None:
-            return False
+            return None
         config = self._configuration.get(store_id)
         if config is None:
-            return False
+            return None
         store = _http_url(store_url)
         source = _http_url(source_url)
         root = _document_url(config.url)
         if store is None or source is None or root is None:
-            return False
+            return None
         store_host = _store_host(store)
         if _store_host(source) != store_host or _store_host(root) != store_host:
-            return False
+            return None
         shopify = platform == "shopify"
         handle = _shopify_handle(source_url) if shopify else ""
         if shopify and not handle:
-            return False
+            return None
 
         cache_key = (store_id, shopify)
         with self._cache_lock:
@@ -160,7 +183,7 @@ class UpdateSitemapChecker:
             except OperationCancelled:
                 raise
             except _SitemapLoadBusy:
-                return False
+                return None
             except Exception:
                 raise_if_cancelled(cancellation_token)
                 pages = None
@@ -173,11 +196,9 @@ class UpdateSitemapChecker:
                 if len(self._cache) > MAX_CACHED_STORES:
                     self._cache.popitem(last=False)
         raise_if_cancelled(cancellation_token)
-        return (
-            cached.pages is not None
-            and _page_path(source) not in cached.pages.paths
-            and handle not in cached.pages.shopify_handles
-        )
+        if cached.pages is None:
+            return None
+        return _page_path(source) in cached.pages.paths or handle in cached.pages.shopify_handles
 
     def _load_within_budget(
         self,

@@ -5060,6 +5060,34 @@ describe('ludora admin service', () => {
     expect(storeStatisticsSql).not.toContain('limit 12');
   });
 
+  it('uses the same verified sitemap enrollment in all update queue statistics', async () => {
+    const queries: Array<{ sql: string; params?: unknown[] }> = [];
+    const database: Database = {
+      close: async () => {},
+      query: async (sql, params) => {
+        queries.push({ sql: normalizeSql(sql), params });
+        return { rows: [] };
+      }
+    };
+    const app = createApp({
+      database,
+      operationsClient: idleOperationsClient(),
+      verifiedSitemapStoreIds: ['17']
+    });
+
+    const response = await request(app).get('/admin/operations/store-item-update-monitor?hours=72');
+
+    expect(response.status).toBe(200);
+    const eligibleQueries = queries.filter(({ sql }) => sql.includes("store_items.availability <> 'unavailable'"));
+    expect(eligibleQueries).toHaveLength(3);
+    expect(eligibleQueries.map(({ params }) => params)).toEqual([[['17']], [72, null, ['17']], [['17']]]);
+    expect(eligibleQueries.map(({ sql }) => sql)).toEqual([
+      expect.stringContaining('store_items.store_id = any($1::bigint[])'),
+      expect.stringContaining('store_items.store_id = any($3::bigint[])'),
+      expect.stringContaining('store_items.store_id = any($1::bigint[])')
+    ]);
+  });
+
   it('pauses and resumes the continuous automatic update worker', async () => {
     const workerManager = idleContinuousItemUpdateWorkerManager('running');
     vi.mocked(workerManager.pause).mockReturnValue('stopping');

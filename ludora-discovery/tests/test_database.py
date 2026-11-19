@@ -190,6 +190,57 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(params, (17, 501, 501, 100))
         self.assertEqual(connection.commits, 1)
 
+    def test_claim_reserves_the_due_slot_for_an_unavailable_listing_at_an_enrolled_store(self):
+        connection = FakeConnection(fetchone_rows=[None])
+        repository = DiscoveryRepository(connection)
+        repository.claim_due_store_item_update(
+            worker_name="continuous", worker_id="worker-1", lease_token="token", lease_seconds=300,
+            verified_sitemap_store_ids=(17,),
+        )
+
+        query, params = connection.cursor_instance.executions[0]
+        due_sql, remainder = query.split("), scheduled as (", 1)
+        self.assertIn("store_items.availability = 'unavailable'", due_sql)
+        self.assertIn("store_items.store_id = any(%s::bigint[])", due_sql)
+        self.assertIn("scheduled.availability = 'unavailable'", remainder)
+        self.assertIn([17], params)
+
+    def test_claim_rechecks_unavailable_recovery_eligibility_after_locking_the_due_row(self):
+        connection = FakeConnection(fetchone_rows=[None])
+        repository = DiscoveryRepository(connection)
+        repository.claim_due_store_item_update(
+            worker_name="continuous", worker_id="worker-1", lease_token="token", lease_seconds=300,
+            verified_sitemap_store_ids=(17,),
+        )
+
+        query, _ = connection.cursor_instance.executions[0]
+        target_sql = query.split("), target as (", 1)[1].split("union all", 1)[0]
+        for condition in (
+            "scheduled.is_boardgame = true",
+            "scheduled.is_boardgame_confirmed = true",
+            "scheduled.item_id is not null",
+            "scheduled.source_url <> ''",
+            "scheduled.listing_status = 'LISTED'",
+            "scheduled.store_active = true",
+            "scheduled.store_id = any(%s::bigint[])",
+            "scheduled.next_update_at <= now()",
+            "scheduled.update_lease_token is null",
+            "scheduled.update_lease_expires_at <= now()",
+        ):
+            self.assertIn(condition, target_sql)
+
+    def test_woocommerce_batch_admits_unavailable_products_only_for_the_current_verified_claim(self):
+        connection = FakeConnection(fetchall_rows=[[(501, "https://example.mx/products/catan")]])
+        repository = DiscoveryRepository(connection)
+        result = repository.list_store_item_update_batch_targets(
+            store_id=17, claimed_store_item_id=501, include_unavailable_claim=True,
+        )
+
+        query, params = connection.cursor_instance.executions[0]
+        self.assertIn("or store_items.id = %s", query)
+        self.assertEqual(params, (17, 501, 501, 501, 100))
+        self.assertEqual(result, [(501, "https://example.mx/products/catan")])
+
     def test_claim_metadata_includes_current_database_canonical_domain(self):
         connection = FakeConnection(fetchone_rows=[(501,), confirmed_store_item_row(), ("Chocita", "woocommerce", 0, 2, "chocitajuegos.com"), (91,)])
         repository = DiscoveryRepository(connection)
@@ -471,6 +522,19 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads(change_params[4]), "https://cdn.example.mx/catan-old.webp")
         self.assertEqual(json.loads(change_params[5]), "https://cdn.example.mx/catan-current.webp")
         self.assertTrue(result.changed)
+
+    def test_removed_listing_at_enrolled_store_clears_its_consumed_due_slot(self):
+        connection = FakeConnection(fetchone_rows=[("unavailable",)])
+        repository = DiscoveryRepository(connection)
+        repository.deactivate_claimed_store_item_update(
+            confirmed_store_item_record(),
+            attempt_id=91, job_id=17, lease_token="token", run_id="continuous:test",
+            worker_id="worker-1", worker_name="continuous", clear_schedule=True,
+        )
+
+        source_update, _ = connection.cursor_instance.executions[0]
+        self.assertIn("next_update_at = null", source_update)
+        self.assertNotIn("store_active = false", source_update)
 
     def test_deactivate_claimed_store_item_update_completes_claim_lifecycle(self):
         connection = FakeConnection(fetchone_rows=[("out_of_stock",)])
@@ -1566,6 +1630,17 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(records[0].classification_reasons, ["previously confirmed"])
         self.assertEqual(records[0].match_payload, {"source": "local"})
         self.assertEqual(connection.commits, 0)
+
+    def test_manual_candidates_include_unavailable_listings_only_at_enrolled_stores(self):
+        connection = FakeConnection(fetchall_rows=[[]])
+        repository = DiscoveryRepository(connection)
+        repository.list_confirmed_boardgame_item_candidates(
+            limit=50, store_ids=[12, 34], verified_sitemap_store_ids=(34,),
+        )
+
+        sql, params = connection.cursor_instance.executions[0]
+        self.assertIn("store_items.availability <> 'unavailable' or store_items.store_id = any(%s::bigint[])", sql)
+        self.assertEqual(params, ([34], 12, 34, 50))
 
     def test_lists_confirmed_boardgame_item_candidates_filters_selected_stores_before_limit(self):
         connection = FakeConnection(fetchall_rows=[[]])

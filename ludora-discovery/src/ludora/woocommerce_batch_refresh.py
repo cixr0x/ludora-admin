@@ -142,6 +142,7 @@ class ChocitaBatchRefresher:
             store_id=record.store_id,
             claimed_store_item_id=record.store_item_id,
             limit=BATCH_SIZE,
+            include_unavailable_claim=record.availability == "unavailable",
         )
         # Start every snapshot with the current claim. A source excluded by the
         # repository's uniqueness/eligibility check must not be refreshed.
