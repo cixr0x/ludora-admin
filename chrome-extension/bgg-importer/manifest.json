@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Import to Ludoradar",
+  "version": "1.0.0",
+  "description": "Imports BoardGameGeek and RPGGeek items into Ludora and saves Spanish descriptions.",
+  "minimum_chrome_version": "110",
+  "host_permissions": ["https://admin.ludora.bobbycrimson.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://boardgamegeek.com/*",
+        "https://www.boardgamegeek.com/*",
+        "https://rpggeek.com/*",
+        "https://www.rpggeek.com/*"
+      ],
+      "js": ["routes.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
