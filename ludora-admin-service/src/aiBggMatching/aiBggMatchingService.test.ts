@@ -1,3 +1,4 @@
+import OpenAI from 'openai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -190,6 +191,113 @@ describe('Codex AI BGG matching client', () => {
     const sent = responsesCreate.mock.calls[0]?.[0];
     expect(sent).not.toHaveProperty('tools');
     expect(JSON.stringify(sent)).not.toContain('input_image');
+  });
+
+  it.each(['MATCH', 'CONFLICT', 'UNAVAILABLE'])(
+    'compares both image inputs after web research yields an unavailable cover (%s)',
+    async (assessment) => {
+      const identity = decisionFixture({
+        matchFound: true,
+        bggId: 296354,
+        matchedName: 'In a Flash Firefighters',
+        bggUrl: 'https://boardgamegeek.com/boardgame/296354/in-a-flash-firefighters',
+        nameAssessment: 'MATCH',
+        reasoning: 'The item name matches; the store cover could not be opened.'
+      });
+      const storeUrl = 'https://store.mx/bomberos.jpg';
+      const bggCover = 'https://cf.geekdo-images.com/oficial.jpg';
+      const fetchThing = vi.fn().mockResolvedValue({
+        details: {
+          bggId: 296354,
+          name: 'Bomberos en acción',
+          alternateNames: ['In a Flash Firefighters'],
+          image: bggCover
+        }
+      });
+      responsesCreate
+        .mockResolvedValueOnce({ output_text: JSON.stringify(identity) })
+        .mockResolvedValueOnce({ output_text: JSON.stringify({
+          coverAssessment: assessment,
+          reasoning: 'The artwork was inspected.'
+        }) });
+      const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1', bggClient: { fetchThing } });
+
+      const decision = await client.findMatch({ itemName: 'Bomberos en acción', imageUrl: storeUrl }, { model: 'gpt-6.1-terra' });
+
+      expect(decision).toMatchObject({
+        bggId: 296354,
+        nameAssessment: 'MATCH',
+        coverAssessment: assessment,
+        bggImageUrl: assessment === 'UNAVAILABLE' ? null : bggCover
+      });
+      expect(fetchThing).toHaveBeenCalledWith(296354, expect.any(AbortSignal));
+      expect(responsesCreate).toHaveBeenCalledTimes(2);
+      const comparison = responsesCreate.mock.calls[1]?.[0];
+      expect(comparison.model).toBe('gpt-6.1-terra');
+      expect(comparison.input[0].content.filter(({ type }: { type: string }) => type === 'input_image')).toEqual([
+        { type: 'input_image', image_url: storeUrl, detail: 'high' },
+        { type: 'input_image', image_url: bggCover, detail: 'high' }
+      ]);
+      expect(comparison.text.format).toMatchObject({
+        type: 'json_schema',
+        strict: true,
+        schema: { additionalProperties: false, required: ['coverAssessment', 'reasoning'] }
+      });
+    }
+  );
+
+  it.each([
+    [422, 'image_unavailable'],
+    [429, 'rate_limit'],
+    [503, 'service_unavailable'],
+    [504, 'codex_timeout']
+  ])('retains the name-only result if optional comparison fails with HTTP %i', async (status, code) => {
+    const identity = decisionFixture({
+      matchFound: true,
+      bggId: 296354,
+      matchedName: 'In a Flash Firefighters',
+      bggUrl: 'https://boardgamegeek.com/boardgame/296354',
+      nameAssessment: 'MATCH'
+    });
+    const fetchThing = vi.fn().mockResolvedValue({
+      details: { bggId: 296354, name: 'In a Flash Firefighters', alternateNames: [], image: 'https://cf.geekdo-images.com/oficial.jpg' }
+    });
+    responsesCreate
+      .mockResolvedValueOnce({ output_text: JSON.stringify(identity) })
+      .mockRejectedValueOnce(new OpenAI.APIError(status, { code }, undefined, new Headers()));
+    const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1', bggClient: { fetchThing } });
+
+    await expect(client.findMatch({ itemName: 'Bomberos en acción', imageUrl: 'https://store.mx/bomberos.jpg' }, { model: 'gpt-6.1-terra' }))
+      .resolves.toEqual(identity);
+    expect(responsesCreate).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([
+    ['a different ID', 13, 'Catan'],
+    ['an unrelated title with the same ID', 296354, 'Catan']
+  ])('keeps the name-only result when the official BGG response has %s', async (_cause, officialId, officialName) => {
+    const identity = decisionFixture({
+      matchFound: true,
+      bggId: 296354,
+      matchedName: 'In a Flash Firefighters',
+      bggUrl: 'https://boardgamegeek.com/boardgame/296354',
+      nameAssessment: 'MATCH'
+    });
+    const fetchThing = vi.fn().mockResolvedValue({
+      details: { bggId: officialId, name: officialName, alternateNames: [], image: 'https://cf.geekdo-images.com/unrelated.jpg' }
+    });
+    responsesCreate
+      .mockResolvedValueOnce({ output_text: JSON.stringify(identity) })
+      .mockResolvedValueOnce({ output_text: JSON.stringify({
+        coverAssessment: 'CONFLICT',
+        reasoning: 'These covers depict different games.'
+      }) });
+    const client = createCodexAiBggMatchingClient({ baseURL: 'http://127.0.0.1:3001/v1', bggClient: { fetchThing } });
+
+    await expect(client.findMatch({ itemName: 'Bomberos en acción', imageUrl: 'https://store.mx/bomberos.jpg' }, { model: 'gpt-6.1-terra' }))
+      .resolves.toEqual(identity);
+    expect(fetchThing).toHaveBeenCalledWith(296354, expect.any(AbortSignal));
+    expect(responsesCreate).toHaveBeenCalledOnce();
   });
 
   it.each([

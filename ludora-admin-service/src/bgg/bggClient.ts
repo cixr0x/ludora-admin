@@ -13,6 +13,7 @@ export type BggClient = {
 };
 
 export type BggThingXmlClient = BggClient & {
+  fetchThing(bggId: number, signal?: AbortSignal): Promise<BggThingResult | null>;
   fetchThingXml(bggId: number): Promise<string>;
 };
 
@@ -39,24 +40,36 @@ export function createBggClient({
   let requestQueue: Promise<void> = Promise.resolve();
   let lastRequestStartedAt: number | null = null;
 
-  function enqueueRequest<T>(request: () => Promise<T>): Promise<T> {
-    const queuedRequest = requestQueue.then(request);
+  function enqueueRequest<T>(request: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    signal?.throwIfAborted();
+    const queuedRequest = requestQueue.then(() => {
+      signal?.throwIfAborted();
+      return request();
+    });
     requestQueue = queuedRequest.then(
       () => undefined,
       () => undefined
     );
-    return queuedRequest;
+    if (!signal) {
+      return queuedRequest;
+    }
+
+    return new Promise<T>((resolve, reject) => {
+      const abort = () => reject(signal.reason);
+      signal.addEventListener('abort', abort, { once: true });
+      queuedRequest.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+    });
   }
 
-  async function getXml(path: string, params: URLSearchParams): Promise<string> {
-    return enqueueRequest(() => getXmlWithRetry(path, params));
+  async function getXml(path: string, params: URLSearchParams, signal?: AbortSignal): Promise<string> {
+    return enqueueRequest(() => getXmlWithRetry(path, params, signal), signal);
   }
 
-  async function getXmlWithRetry(path: string, params: URLSearchParams): Promise<string> {
+  async function getXmlWithRetry(path: string, params: URLSearchParams, signal?: AbortSignal): Promise<string> {
     while (true) {
-      const response = await sendXmlRequest(path, params);
+      const response = await sendXmlRequest(path, params, signal);
       if (response.status === 429) {
-        await sleep(BGG_429_RETRY_DELAY_MS);
+        await sleep(BGG_429_RETRY_DELAY_MS, signal);
         continue;
       }
 
@@ -68,9 +81,10 @@ export function createBggClient({
     }
   }
 
-  async function sendXmlRequest(path: string, params: URLSearchParams): Promise<Response> {
-    await waitForRequestSlot();
+  async function sendXmlRequest(path: string, params: URLSearchParams, signal?: AbortSignal): Promise<Response> {
+    await waitForRequestSlot(signal);
     return fetch(`${normalizedBaseUrl}/${path}?${params.toString()}`, {
+      signal,
       headers: {
         Authorization: `Bearer ${apiToken}`,
         Accept: 'application/xml,text/xml'
@@ -78,25 +92,27 @@ export function createBggClient({
     });
   }
 
-  async function waitForRequestSlot(): Promise<void> {
+  async function waitForRequestSlot(signal?: AbortSignal): Promise<void> {
     if (lastRequestStartedAt !== null) {
       const nextAllowedStart = lastRequestStartedAt + BGG_REQUEST_INTERVAL_MS;
       const delayMs = Math.max(0, nextAllowedStart - Date.now());
       if (delayMs > 0) {
-        await sleep(delayMs);
+        await sleep(delayMs, signal);
       }
     }
+    signal?.throwIfAborted();
     lastRequestStartedAt = Date.now();
   }
 
-  async function fetchThingXml(bggId: number): Promise<string> {
+  async function fetchThingXml(bggId: number, signal?: AbortSignal): Promise<string> {
     return getXml(
       'thing',
       new URLSearchParams({
         id: String(bggId),
         stats: '1',
         type: BGG_REQUEST_TYPE
-      })
+      }),
+      signal
     );
   }
 
@@ -114,8 +130,8 @@ export function createBggClient({
   return {
     fetchThingXml,
 
-    async fetchThing(bggId: number): Promise<BggThingResult | null> {
-      const xml = await fetchThingXml(bggId);
+    async fetchThing(bggId: number, signal?: AbortSignal): Promise<BggThingResult | null> {
+      const xml = await fetchThingXml(bggId, signal);
       const details = parseBggThingResponse(xml);
       return details ? { details, rawXml: xml } : null;
     },
@@ -125,6 +141,17 @@ export function createBggClient({
   };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    signal?.throwIfAborted();
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', abort);
+      resolve();
+    }, ms);
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal?.reason);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }

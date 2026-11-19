@@ -352,7 +352,7 @@ An ARM64 installation must explicitly use the source
 `/opt/ludora/codexapi/node_modules/@openai/codex-linux-arm64/vendor/aarch64-unknown-linux-musl`
 and verify the same read-only alias identity before startup.
 
-CLI 0.160.0 also requires administrator policy to disable `unified_exec`.
+The pinned CLI also requires administrator policy to disable `unified_exec`.
 The unit binds `/opt/ludora/codexapi/deploy/codex-managed` read-only at
 `/etc/codex` only in the service mount namespace. The checked-in
 `requirements.toml` pins `unified_exec=false`; the adjacent `config.toml`
@@ -531,6 +531,7 @@ git checkout main
 git merge --ff-only "$CODEXAPI_COMMIT"
 test "$(git rev-parse HEAD)" = "$CODEXAPI_COMMIT"
 test -z "$(git status --porcelain)"
+CODEXAPI_CLI_VERSION="$(node -e 'const fs = require("node:fs"); const version = JSON.parse(fs.readFileSync("./package.json", "utf8")).dependencies?.["@openai/codex"]; if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) process.exit(1); process.stdout.write(version);')"
 npm ci
 CODEXAPI_TEST_BINDS="$(sed -n 's/^BindReadOnlyPaths=//p' deploy/codexapi.service)"
 test -n "$CODEXAPI_TEST_BINDS"
@@ -554,7 +555,7 @@ verify_codexapi_startup() {
   for attempt in $(seq 1 40); do
     sudo systemctl is-active --quiet codexapi.service || return 1
     if curl -fsS http://127.0.0.1:3001/health |
-      node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== "0.160.0" || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
+      EXPECTED_CODEXAPI_CLI_VERSION="$CODEXAPI_CLI_VERSION" node -e 'let b=""; process.stdin.on("data", c => b += c).on("end", () => { try { const h = JSON.parse(b); if (h.status !== "ok" || h.capabilityPolicy !== "codexapi-capable-isolated-v2" || !h.codexCli || h.codexCli.version !== process.env.EXPECTED_CODEXAPI_CLI_VERSION || h.codexCli.checked !== true) process.exit(1); } catch { process.exit(1); } });'; then
       test "$(ss -H -ltn 'sport = :3001' | wc -l)" -eq 1 &&
         ss -H -ltn 'sport = :3001' | grep -Eq '127[.]0[.]0[.]1:3001([[:space:]]|$)' || return 1
       return 0
@@ -585,11 +586,11 @@ verify_codexapi_boundary() {
   pid="$(sudo systemctl show codexapi.service --property=MainPID --value)" &&
     test "$pid" -gt 0 &&
     sudo nsenter --target "$pid" --mount -- \
-      cmp -s deploy/codex-managed/requirements.toml /etc/codex/requirements.toml &&
+      cat /etc/codex/requirements.toml | cmp -s deploy/codex-managed/requirements.toml - &&
     sudo nsenter --target "$pid" --mount -- \
       findmnt -rn -T /etc/codex/requirements.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
   sudo nsenter --target "$pid" --mount -- \
-    cmp -s deploy/codex-managed/config.toml /etc/codex/config.toml &&
+    cat /etc/codex/config.toml | cmp -s deploy/codex-managed/config.toml - &&
   sudo nsenter --target "$pid" --mount -- \
     findmnt -rn -T /etc/codex/config.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
   sudo nsenter --target "$pid" --mount -- /bin/sh -c '
@@ -631,7 +632,7 @@ fi
 ```
 
 The verification function requires `status: "ok"`, capability policy
-`codexapi-capable-isolated-v2`, Codex CLI version `0.160.0`, `checked: true`,
+`codexapi-capable-isolated-v2`, the exact Codex CLI pin from the selected commit's `package.json`, `checked: true`,
 and exactly one `127.0.0.1:3001` listener. The boundary verification requires
 the dedicated `codexapi` user/group, strict filesystem protections, the sole
 persistent writable `/var/lib/codexapi` service path, inaccessible admin, home,
@@ -691,9 +692,12 @@ if ! CODEXAPI_ISOLATION_OUTPUT="$(sudo npm run --silent verify:isolation 2>/dev/
 fi
 ```
 
-The canary calls only the loopback AI BGG matcher with the fixed Bomberos En
-Accion regression fixture. It does not import, cache, link, or write store
-items, and it does not use database commands. Acceptance requires BGG ID
+The canary exercises the loopback AI BGG matcher with the fixed Bomberos En
+Accion regression fixture. If the initial cover assessment is unavailable,
+the matcher uses the read-only BGG XML API to find the official candidate
+cover and submits both images to CodexAPI for visual comparison. The canary
+does not import, cache, link, or write store items and does not use database
+commands. Acceptance requires BGG ID
 `296354` and `coverAssessment=MATCH`; `bggImageUrl` may be null because it is
 diagnostic evidence, not the match decision. The CLI output must be exactly
 `{"status":"ok","bggId":296354}` before the second isolation gate runs. If
@@ -1181,12 +1185,12 @@ verify_codexapi_boundary() {
     pid="$(sudo systemctl show codexapi.service --property=MainPID --value)" &&
       test "$pid" -gt 0 &&
       sudo nsenter --target "$pid" --mount -- \
-        cmp -s deploy/codex-managed/requirements.toml /etc/codex/requirements.toml &&
+        cat /etc/codex/requirements.toml | cmp -s deploy/codex-managed/requirements.toml - &&
       sudo nsenter --target "$pid" --mount -- \
         findmnt -rn -T /etc/codex/requirements.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
     if test -f deploy/codex-managed/config.toml; then
       sudo nsenter --target "$pid" --mount -- \
-        cmp -s deploy/codex-managed/config.toml /etc/codex/config.toml &&
+        cat /etc/codex/config.toml | cmp -s deploy/codex-managed/config.toml - &&
       sudo nsenter --target "$pid" --mount -- \
         findmnt -rn -T /etc/codex/config.toml -o OPTIONS | grep -Eq '(^|,)ro(,|$)' || return 1
     fi

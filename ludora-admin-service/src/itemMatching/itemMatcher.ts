@@ -198,6 +198,17 @@ export function normalizeTitleVariants(value: string): string[] {
   return uniqueNormalizedTitles([value, stripLanguageEditionParentheticals(value), stripTrailingLanguageEdition(value)]);
 }
 
+export function bggThingContainsAiMatchedName(
+  aiMatchedName: string,
+  primaryName: string,
+  alternateNames: string[]
+): boolean {
+  const aiNameVariants = new Set(normalizeTitleVariants(aiMatchedName));
+  return [primaryName, ...alternateNames].some((name) =>
+    normalizeTitleVariants(name).some((variant) => aiNameVariants.has(variant))
+  );
+}
+
 const LANGUAGE_TOKENS = new Set([
   'aleman',
   'alemana',

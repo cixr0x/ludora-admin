@@ -94,6 +94,56 @@ describe('BGG client', () => {
     expect(requestedAt[1] - requestedAt[0]).toBeGreaterThanOrEqual(1000);
   });
 
+  it('aborts an optional cover lookup during rate-limit backoff and releases the shared queue', async () => {
+    vi.useFakeTimers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 429 })
+      .mockResolvedValueOnce(xmlResponse('<items />'));
+    vi.stubGlobal('fetch', fetchMock);
+    const bgg = createBggClient({ apiToken: 'test-token' });
+    const controller = new AbortController();
+    const reason = new Error('Cover lookup deadline exceeded');
+    let rejection: unknown;
+    const cover = bgg.fetchThing(296354, controller.signal).catch((error: unknown) => { rejection = error; });
+    const next = bgg.search('Catan');
+    await flushPromises();
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(controller.signal);
+
+    controller.abort(reason);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(rejection).toBe(reason);
+    await cover;
+    await expect(next).resolves.toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects an expired cover lookup while it waits on an occupied queue and skips its fetch', async () => {
+    vi.useFakeTimers();
+    let releaseFirstRequest!: () => void;
+    const firstRequestRelease = new Promise<void>((resolve) => { releaseFirstRequest = resolve; });
+    const fetchMock = vi.fn(async () => {
+      await firstRequestRelease;
+      return xmlResponse('<items />');
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    const bgg = createBggClient({ apiToken: 'test-token' });
+    const first = bgg.search('Catan');
+    const controller = new AbortController();
+    let rejected = false;
+    const cover = bgg.fetchThing(296354, controller.signal).catch(() => { rejected = true; });
+    await flushPromises();
+    controller.abort();
+    await flushPromises();
+    expect(rejected).toBe(true);
+
+    releaseFirstRequest();
+    await first;
+    await cover;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it('waits five seconds before retrying BGG requests that receive 429', async () => {
     vi.useFakeTimers();
 

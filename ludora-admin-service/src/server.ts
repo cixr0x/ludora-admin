@@ -71,7 +71,7 @@ const rawBggClient = config.bggApiToken
   : undefined;
 const bggClient = rawBggClient ? createCachedBggClient(database, rawBggClient, bggMatchCache) : undefined;
 const codexOptions = { baseURL: config.codexApiBaseUrl };
-const aiBggMatchingClient = createCodexAiBggMatchingClient({ baseURL: config.codexApiBaseUrl });
+const aiBggMatchingClient = createCodexAiBggMatchingClient({ ...codexOptions, bggClient: rawBggClient });
 const aiBggMatchingService = createAiBggMatchingService(aiBggMatchingClient, { model: config.codexAiModel });
 const autoListEvaluationClient = createCodexAutoListEvaluationClient(codexOptions);
 const amazonTitleExtractionClient = createOpenAiAmazonTitleExtractionClient(codexOptions);

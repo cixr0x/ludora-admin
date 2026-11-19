@@ -11,6 +11,7 @@ import type { ListingImageQueryHasher, ListingImageQueryVariant } from '../listi
 import { rankLocalCatalogMatches, LOCAL_IMAGE_MATCH_THRESHOLDS, type CatalogItemForMatching } from './localCatalogMatcher.js';
 import { nullTraceLogger, type TraceLogger } from '../trace.js';
 import {
+  bggThingContainsAiMatchedName,
   LOCAL_AUTO_MATCH_SCORE_THRESHOLD,
   localMatchSearchTokens,
   normalizeTitle,
@@ -1078,17 +1079,6 @@ async function generateAiBggMatch(
     });
     throw error;
   }
-}
-
-function bggThingContainsAiMatchedName(
-  aiMatchedName: string,
-  primaryName: string,
-  alternateNames: string[]
-): boolean {
-  const aiNameVariants = new Set(normalizeTitleVariants(aiMatchedName));
-  return [primaryName, ...alternateNames].some((name) =>
-    normalizeTitleVariants(name).some((variant) => aiNameVariants.has(variant))
-  );
 }
 
 function aiDecisionTraceFields(decision: AiBggMatchFound | null | undefined): Record<string, unknown> {

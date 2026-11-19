@@ -137,6 +137,7 @@ unset EXPECTED_CODEXAPI_CAPABILITY_POLICY
 unset EXPECTED_CODEXAPI_CLI_VERSION
 CODEXAPI_PREVIOUS_CAPABILITY_POLICY="$EXPECTED_POLICY"
 CODEXAPI_PREVIOUS_CLI_VERSION="$EXPECTED_VERSION"
+CODEXAPI_CLI_VERSION="$EXPECTED_VERSION"
 if ! verify_codexapi_startup; then
   printf 'READINESS_RESULT=nonzero\n'
 else
@@ -215,7 +216,8 @@ function Get-CodexApiBoundaryFunction {
 function Invoke-CodexApiProfileBoundaryHarness {
     param(
         [Parameter(Mandatory = $true)][string]$Section,
-        [Parameter(Mandatory = $true)][bool]$RuntimeProfilePresent
+        [Parameter(Mandatory = $true)][bool]$RuntimeProfilePresent,
+        [switch]$PolicyMismatch
     )
 
     $gitBash = 'C:\Program Files\Git\bin\bash.exe'
@@ -231,6 +233,10 @@ function Invoke-CodexApiProfileBoundaryHarness {
     $harnessPath = Join-Path $tempRoot 'run-boundary.sh'
     $tracePath = Join-Path $tempRoot 'trace.log'
     [System.IO.File]::WriteAllText($functionPath, (Get-CodexApiBoundaryFunction -Section $Section), $utf8)
+    $policyDirectory = Join-Path $tempRoot 'deploy/codex-managed'
+    [System.IO.Directory]::CreateDirectory($policyDirectory) | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $policyDirectory 'requirements.toml'), '[features]', $utf8)
+    [System.IO.File]::WriteAllText((Join-Path $policyDirectory 'config.toml'), '[profiles]', $utf8)
 
     $stubs = @{
         'sudo' = @'
@@ -240,6 +246,10 @@ AS_SUDO=true "$@"
         'systemctl' = @'
 #!/usr/bin/env bash
 printf 'systemctl %s\n' "$*" >> "$TRACE_FILE"
+if [[ "$*" == *--property=MainPID* ]]; then
+  printf '42\n'
+  exit 0
+fi
 cat <<'UNIT'
 User=codexapi
 Group=codexapi
@@ -248,11 +258,36 @@ ProtectHome=yes
 ReadOnlyPaths=/opt/ludora/codexapi
 ReadWritePaths=/var/lib/codexapi
 InaccessiblePaths=/opt/ludora/ludora-admin /home /root
+BindReadOnlyPaths=/opt/ludora/codexapi/deploy/codex-managed:/etc/codex:rbind /opt/ludora/codexapi/node_modules/@openai/codex-linux-x64/vendor/x86_64-unknown-linux-musl:/usr/local/lib/codexapi-cli:rbind
 UNIT
 '@
         'grep' = @'
 #!/usr/bin/env bash
 exec /usr/bin/grep "$@"
+'@
+        'nsenter' = @'
+#!/usr/bin/env bash
+[ "$AS_SUDO" = true ] && [ "$1 $2 $3 $4" = '--target 42 --mount --' ] || exit 1
+shift 4
+printf 'nsenter %s\n' "$*" >> "$TRACE_FILE"
+case "$1" in
+  cat)
+    case "$2" in
+      /etc/codex/requirements.toml)
+        if [ "$POLICY_MISMATCH" = true ]; then
+          printf '[altered]'
+        else
+          /usr/bin/cat deploy/codex-managed/requirements.toml
+        fi
+        ;;
+      /etc/codex/config.toml) /usr/bin/cat deploy/codex-managed/config.toml ;;
+      *) exit 1 ;;
+    esac
+    ;;
+  findmnt) printf 'ro,relatime\n' ;;
+  /bin/sh) exit 0 ;;
+  *) exit 1 ;;
+esac
 '@
         'cmp' = @'
 #!/usr/bin/env bash
@@ -265,6 +300,10 @@ if [[ "$*" == *codexapi-runtime.config.toml* ]]; then
   exit 0
 fi
 printf 'direct cmp %s\n' "$*" >> "$TRACE_FILE"
+if [[ "$*" == *deploy/codex-managed/* ]]; then
+  [ "$2" != '-' ] && [ "$3" = '-' ] && [ "$AS_SUDO" != true ] || exit 1
+  exec /usr/bin/cmp "$@"
+fi
 exit 0
 '@
         'stat' = @'
@@ -287,8 +326,11 @@ printf 'codexapi:codexapi 400\n'
 #!/usr/bin/env bash
 set -euo pipefail
 PATH="$STUB_DIRECTORY:$PATH"
+cd "$FIXTURE_ROOT"
 source "$BOUNDARY_FUNCTION"
 CODEXAPI_RUNTIME_PROFILE_PRESENT="$RUNTIME_PROFILE_PRESENT"
+CODEXAPI_HOST_CONFIG_BEFORE=''
+CODEXAPI_HOST_REQUIREMENTS_BEFORE=''
 if ! verify_codexapi_boundary; then
   printf 'BOUNDARY_RESULT=nonzero\n'
 else
@@ -299,6 +341,8 @@ printf 'GUARDED_CALLER_REACHED=yes\n'
     $bashHarnessPath = ConvertTo-GitBashPath -Path $harnessPath
     $environment = @{
         'STUB_DIRECTORY' = $bashStubDirectory
+        'FIXTURE_ROOT' = (ConvertTo-GitBashPath -Path $tempRoot)
+        'POLICY_MISMATCH' = $PolicyMismatch.IsPresent.ToString().ToLowerInvariant()
         'BOUNDARY_FUNCTION' = $bashFunctionPath
         'TRACE_FILE' = (ConvertTo-GitBashPath -Path $tracePath)
         'RUNTIME_PROFILE_PRESENT' = $RuntimeProfilePresent.ToString().ToLowerInvariant()
@@ -359,7 +403,9 @@ Describe 'CodexAPI production runbook contract' {
         $routine | Should Match 'verify_codexapi_startup\(\)'
         $routine | Should Match 'codexapi-capable-isolated-v2'
         $routine | Should Match 'codexCli\.version'
-        $routine | Should Match 'codexCli\.version !== "0\.149\.1"'
+        $routine | Should Match 'CODEXAPI_CLI_VERSION="\$\(node -e'
+        $routine | Should Match 'EXPECTED_CODEXAPI_CLI_VERSION="\$CODEXAPI_CLI_VERSION"'
+        $routine | Should Match 'codexCli\.version !== process\.env\.EXPECTED_CODEXAPI_CLI_VERSION'
         $routine | Should Match "ss -H -ltn 'sport = :3001'"
         $routine | Should Match 'systemctl show .*codexapi\.service'
         $routine | Should Match 'User=codexapi'
@@ -393,6 +439,16 @@ Describe 'CodexAPI production runbook contract' {
             $result.Output | Should Not Match '(?i)profile|secret|token'
             ($result.Trace -contains 'sudo cmp -s deploy/codexapi-runtime.config.toml /var/lib/codexapi/home/codexapi-runtime.config.toml') | Should Be $true
             @($result.Trace | Where-Object { $_ -match '^sudo stat -c %U:%G %a /var/lib/codexapi/home/codexapi-runtime\.config\.toml$' }).Count | Should Be 1
+        }
+    }
+
+    It 'rejects different mounted requirements even when the runtime profile and mount options are valid' {
+        foreach ($section in @($routine, $recovery)) {
+            $result = Invoke-CodexApiProfileBoundaryHarness -Section $section -RuntimeProfilePresent $true -PolicyMismatch
+            $result.ExitCode | Should Be 0
+            $result.Output | Should Match 'BOUNDARY_RESULT=nonzero'
+            ($result.Trace -contains 'nsenter cat /etc/codex/requirements.toml') | Should Be $true
+            ($result.Trace -contains 'direct cmp -s deploy/codex-managed/requirements.toml -') | Should Be $true
         }
     }
 
@@ -482,8 +538,8 @@ Describe 'CodexAPI production runbook contract' {
     }
 
     It 'accepts the routine CLI pin and rejects a different CLI version before listener checks' {
-        $matching = Invoke-CodexApiReadinessHarness -Section $routine -Scenario third-success -ExpectedPolicy 'codexapi-capable-isolated-v2'
-        $wrong = Invoke-CodexApiReadinessHarness -Section $routine -Scenario third-success -ExpectedPolicy 'codexapi-capable-isolated-v2' -HealthVersion '0.147.0'
+        $matching = Invoke-CodexApiReadinessHarness -Section $routine -Scenario third-success -ExpectedPolicy 'codexapi-capable-isolated-v2' -ExpectedVersion '0.166.0'
+        $wrong = Invoke-CodexApiReadinessHarness -Section $routine -Scenario third-success -ExpectedPolicy 'codexapi-capable-isolated-v2' -ExpectedVersion '0.166.0' -HealthVersion '0.160.0'
 
         $matching.Output | Should Match 'READINESS_RESULT=zero'
         $wrong.Output | Should Match 'READINESS_RESULT=nonzero'
@@ -567,7 +623,7 @@ Describe 'CodexAPI production runbook contract' {
         $start = $routine.IndexOf('sudo systemctl start codexapi.service', [StringComparison]::Ordinal)
         $startupVerification = $routine.IndexOf('if ! verify_codexapi_startup; then', [StringComparison]::Ordinal)
         $boundaryVerification = $routine.IndexOf('if ! verify_codexapi_boundary; then', [StringComparison]::Ordinal)
-        $adminDeployment = $routine.IndexOf('After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure.', [StringComparison]::Ordinal)
+        $adminDeployment = $routine.IndexOf('if ! sudo systemctl start ludora-admin-service.service; then', [StringComparison]::Ordinal)
         $canary = $routine.IndexOf('npm run --silent verify:ai-bgg', [StringComparison]::Ordinal)
 
         ($stop -ge 0 -and $checkout -gt $stop -and $npmInstall -gt $checkout -and $npmBuild -gt $npmInstall -and
@@ -586,7 +642,7 @@ Describe 'CodexAPI production runbook contract' {
     It 'runs exact-output live isolation gates before admin activation and after the BGG canary' {
         $boundaryVerification = $routine.IndexOf('if ! verify_codexapi_boundary; then', [StringComparison]::Ordinal)
         $firstIsolationCommand = $routine.IndexOf('sudo npm run --silent verify:isolation', [StringComparison]::Ordinal)
-        $adminDeployment = $routine.IndexOf('After CodexAPI verification succeeds, deploy the approved admin-service revision through the existing routine admin deployment procedure.', [StringComparison]::Ordinal)
+        $adminDeployment = $routine.IndexOf('if ! sudo systemctl start ludora-admin-service.service; then', [StringComparison]::Ordinal)
         $bggCommand = $routine.IndexOf('npm run --silent verify:ai-bgg', [StringComparison]::Ordinal)
         $bggComparison = $routine.IndexOf('test "$AI_BGG_OUTPUT" != $''{"status":"ok","bggId":296354}\n\036''', [StringComparison]::Ordinal)
         $secondIsolationCommand = $routine.LastIndexOf('sudo npm run --silent verify:isolation', [StringComparison]::Ordinal)
@@ -646,7 +702,7 @@ Describe 'CodexAPI production runbook contract' {
         $recovery | Should Not Match '(?m)^test -f deploy/codexapi-runtime\.config\.toml$'
 
         $profileIf = $recovery.IndexOf('if test -f deploy/codexapi-runtime.config.toml; then', [StringComparison]::Ordinal)
-        $profileElse = $recovery.IndexOf('else', [StringComparison]::Ordinal)
+        $profileElse = $recovery.IndexOf('else', [Math]::Max(0, $profileIf), [StringComparison]::Ordinal)
         $noProfileReference = $recovery.IndexOf("! grep -Fq 'codexapi-runtime.config.toml' deploy/codexapi.service", [StringComparison]::Ordinal)
         $profileRemove = $recovery.IndexOf('sudo rm -f /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
         $profileAbsent = $recovery.IndexOf('test ! -e /var/lib/codexapi/home/codexapi-runtime.config.toml', [StringComparison]::Ordinal)
@@ -688,7 +744,7 @@ Describe 'CodexAPI production runbook contract' {
     }
 
     It 'runs recovery isolation only when the selected revision owns the script' {
-        $recovery | Should Match 'After restoring the exact selected admin revision'
+        $recovery | Should Match '(?s)if ! sudo systemctl is-active --quiet codexapi\.service \|\|\s*! sudo systemctl start ludora-admin-service\.service \|\|'
         $probe = $recovery.IndexOf('if ! CODEXAPI_ISOLATION_OWNERSHIP="$(node -e', [StringComparison]::Ordinal)
         $present = $recovery.IndexOf('  present)', [StringComparison]::Ordinal)
         $canary = $recovery.IndexOf('sudo npm run --silent verify:isolation', [StringComparison]::Ordinal)
