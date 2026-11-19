@@ -254,6 +254,14 @@ function emptyItemsPage(query: TableQuery): Promise<PagedRows<AdminRecord>> {
   });
 }
 
+function fetchLinkedItemData(itemId: string) {
+  return Promise.all([
+    adminApi.getItemRelationships(itemId),
+    adminApi.getItemStoreItems(itemId),
+    adminApi.getItemTaxonomy(itemId)
+  ]);
+}
+
 const itemColumns: DataTableColumn<AdminRecord>[] = [
   {
     filterValue: (row) => field(row, ['id']),
@@ -666,6 +674,7 @@ export function ItemsPage({
   const [linkedStoreItems, setLinkedStoreItems] = useState<AdminRecord[]>([]);
   const [relatedState, setRelatedState] = useState<LoadState>('ready');
   const [selectedItem, setSelectedItem] = useState<AdminRecord | null>(null);
+  const [tableItemId, setTableItemId] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [isAddingRelationship, setIsAddingRelationship] = useState(false);
   const [deletingRelationshipId, setDeletingRelationshipId] = useState('');
@@ -689,34 +698,15 @@ export function ItemsPage({
     table,
     detailOnly ? emptyItemsPage : adminApi.getItemsPage
   );
+  const activeItemId = selectedItemId || tableItemId;
 
   useEffect(() => {
-    if (!selectedItemId) {
-      setDetailState('ready');
-      setItemTaxonomy(emptyItemTaxonomy);
-      setItemRelationships([]);
-      setLinkedStoreItems([]);
-      setRelatedState('ready');
-      setRelationshipError('');
-      setDeletingRelationshipId('');
-      setLocalCoverWorkflow(null);
-      setLocalCoverWorkflowError('');
-      setIsDeleting(false);
-      setSaveError('');
-      setSaveMessage('');
-      setStartingCoverWorkflowId('');
-      setStartingItemCoverWorkflowId('');
-      setSelectedItem(null);
-      setViewMode('table');
-      return;
-    }
-
-    let ignore = false;
-    setDetailState('loading');
+    setSelectedItem(null);
+    setDetailState(activeItemId ? 'loading' : 'ready');
     setItemTaxonomy(emptyItemTaxonomy);
     setItemRelationships([]);
     setLinkedStoreItems([]);
-    setRelatedState('loading');
+    setRelatedState(activeItemId ? 'loading' : 'ready');
     setRelationshipError('');
     setDeletingRelationshipId('');
     setLocalCoverWorkflow(null);
@@ -726,36 +716,74 @@ export function ItemsPage({
     setSaveMessage('');
     setStartingCoverWorkflowId('');
     setStartingItemCoverWorkflowId('');
-    setViewMode('form');
+    setViewMode(activeItemId ? 'form' : 'table');
+    if (!activeItemId) {
+      return;
+    }
+    if (selectedItemId) {
+      setTableItemId('');
+    }
 
-    Promise.all([
-      adminApi.getItem(selectedItemId),
-      adminApi.getItemRelationships(selectedItemId),
-      adminApi.getItemStoreItems(selectedItemId),
-      adminApi.getItemTaxonomy(selectedItemId)
-    ])
-      .then(([item, relationships, storeItems, taxonomy]) => {
+    let ignore = false;
+    const itemRequest = adminApi.getItem(activeItemId);
+    const linkedDataRequest = fetchLinkedItemData(activeItemId)
+      .then(([relationships, storeItems, taxonomy]) => {
         if (!ignore) {
-          setSelectedItem(item);
           setItemRelationships(relationships);
           setLinkedStoreItems(storeItems);
           setItemTaxonomy(taxonomy);
           setRelatedState('ready');
-          setViewMode('form');
+        }
+      })
+      .catch((error) => {
+        if (!ignore) {
+          setRelatedState('error');
+        }
+        if (selectedItemId) {
+          throw error;
+        }
+      });
+
+    const detailRequest = selectedItemId
+      ? Promise.all([itemRequest, linkedDataRequest]).then(([item]) => item)
+      : itemRequest;
+    detailRequest
+      .then((item) => {
+        if (!ignore) {
+          setSelectedItem(item);
           setDetailState('ready');
         }
       })
       .catch(() => {
         if (!ignore) {
           setDetailState('error');
-          setRelatedState('error');
         }
       });
 
     return () => {
       ignore = true;
     };
-  }, [refreshToken, selectedItemId]);
+  }, [activeItemId, refreshToken, selectedItemId]);
+
+  function handleBackToItems() {
+    setTableItemId('');
+    setSelectedItem(null);
+    setDetailState('ready');
+    setItemTaxonomy(emptyItemTaxonomy);
+    setItemRelationships([]);
+    setLinkedStoreItems([]);
+    setRelatedState('ready');
+    setRelationshipError('');
+    setDeletingRelationshipId('');
+    setLocalCoverWorkflow(null);
+    setLocalCoverWorkflowError('');
+    setSaveError('');
+    setSaveMessage('');
+    setStartingCoverWorkflowId('');
+    setStartingItemCoverWorkflowId('');
+    setViewMode('table');
+    onClearSelectedItemId?.();
+  }
 
   async function handleSaveItem(input: AdminRecord) {
     if (!selectedItem) {
@@ -830,11 +858,7 @@ export function ItemsPage({
     setRelatedState('loading');
 
     try {
-      const [relationships, storeItems, taxonomy] = await Promise.all([
-        adminApi.getItemRelationships(itemId),
-        adminApi.getItemStoreItems(itemId),
-        adminApi.getItemTaxonomy(itemId)
-      ]);
+      const [relationships, storeItems, taxonomy] = await fetchLinkedItemData(itemId);
       setItemRelationships(relationships);
       setLinkedStoreItems(storeItems);
       setItemTaxonomy(taxonomy);
@@ -961,20 +985,7 @@ export function ItemsPage({
     try {
       await adminApi.deleteItem(itemId);
       setRows((currentRows) => currentRows.filter((row, index) => field(row, ['id'], String(index)) !== itemId));
-      setSelectedItem(null);
-      setDetailState('ready');
-      setItemTaxonomy(emptyItemTaxonomy);
-      setItemRelationships([]);
-      setLinkedStoreItems([]);
-      setRelatedState('ready');
-      setRelationshipError('');
-      setDeletingRelationshipId('');
-      setLocalCoverWorkflow(null);
-      setLocalCoverWorkflowError('');
-      setStartingCoverWorkflowId('');
-      setStartingItemCoverWorkflowId('');
-      setViewMode('table');
-      onClearSelectedItemId?.();
+      handleBackToItems();
       table.refresh();
       return true;
     } catch {
@@ -1078,6 +1089,11 @@ export function ItemsPage({
               }}
             >
               {isImportingBggItem ? 'Importing...' : 'Import item from BGG'}
+            </Button>
+          ) : null}
+          {viewMode === 'form' && detailState !== 'ready' ? (
+            <Button onClick={handleBackToItems} startIcon={<ArrowBackIcon />} type="button" variant="outlined">
+              Back to Items
             </Button>
           ) : null}
         </Stack>
@@ -1186,24 +1202,7 @@ export function ItemsPage({
           linkedStoreItems={linkedStoreItems}
           localCoverWorkflow={localCoverWorkflow}
           localCoverWorkflowError={localCoverWorkflowError}
-          onBack={() => {
-            setSelectedItem(null);
-            setDetailState('ready');
-            setItemTaxonomy(emptyItemTaxonomy);
-            setItemRelationships([]);
-            setLinkedStoreItems([]);
-            setRelatedState('ready');
-            setRelationshipError('');
-            setDeletingRelationshipId('');
-            setLocalCoverWorkflow(null);
-            setLocalCoverWorkflowError('');
-            setSaveError('');
-            setSaveMessage('');
-            setStartingCoverWorkflowId('');
-            setStartingItemCoverWorkflowId('');
-            setViewMode('table');
-            onClearSelectedItemId?.();
-          }}
+          onBack={handleBackToItems}
           onCreateRelationship={handleCreateRelationship}
           onDelete={handleDeleteItem}
           onDeleteRelationship={handleDeleteRelationship}
@@ -1228,21 +1227,7 @@ export function ItemsPage({
           getRowKey={(row, index) => field(row, ['id'], String(index))}
           mobileActionLabel={(row) => `Open ${field(row, ['canonical_name'], 'item')}`}
           minWidth={1410}
-          onRowDoubleClick={(row) => {
-            setDetailState('ready');
-            setLocalCoverWorkflow(null);
-            setLocalCoverWorkflowError('');
-            setSaveError('');
-            setSaveMessage('');
-            setStartingCoverWorkflowId('');
-            setStartingItemCoverWorkflowId('');
-            setSelectedItem(row);
-            setItemTaxonomy(emptyItemTaxonomy);
-            setItemRelationships([]);
-            setRelationshipError('');
-            setViewMode('form');
-            void loadLinkedItemData(field(row, ['id'], ''));
-          }}
+          onRowDoubleClick={(row) => setTableItemId(field(row, ['id'], ''))}
           serverSide
           tableState={table.tableState}
           onTableStateChange={table.handleTableStateChange}

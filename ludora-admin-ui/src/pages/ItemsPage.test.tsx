@@ -137,10 +137,9 @@ describe('ItemsPage', () => {
     expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({ bgg_id: '377061' });
   });
 
-  it('opens a form view from the item table and saves changes', async () => {
+  it('loads cached BGG alternate names when opening an item from the table and saves changes', async () => {
     const user = userEvent.setup();
     const item = {
-      bgg_alternate_names: ['Cafe Barista', 'Cafe Barista Actualizado'],
       bgg_id: 377061,
       bgg_last_sync_at: '2026-05-29T09:53:38.466Z',
       bgg_url: 'https://boardgamegeek.com/boardgame/377061/coffee-rush',
@@ -167,10 +166,14 @@ describe('ItemsPage', () => {
       updated_at: '2026-05-29T09:53:38.466Z',
       year_published: 2023
     };
+    const itemDetails = { ...item, bgg_alternate_names: ['Cafe Barista', 'Cafe Barista Actualizado'] };
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
       const url = String(input);
       if (pathOf(url) === '/items' && !init?.method) {
         return jsonResponse([item]);
+      }
+      if (pathOf(url) === '/items/1' && !init?.method) {
+        return jsonResponse(itemDetails);
       }
       if (pathOf(url) === '/items/1/store-items') {
         return jsonResponse([]);
@@ -187,7 +190,7 @@ describe('ItemsPage', () => {
       }
       if (pathOf(url) === '/items/1' && init?.method === 'PATCH') {
         return jsonResponse({
-          ...item,
+          ...itemDetails,
           canonical_name: 'Coffee Rush Updated',
           canonical_name_es: 'Nombre manual',
           description: 'Updated description',
@@ -204,7 +207,7 @@ describe('ItemsPage', () => {
     const titleCells = await screen.findAllByText('Coffee Rush');
     await user.dblClick(titleCells[0]);
 
-    expect(screen.getByRole('heading', { name: 'Item Details' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Item Details' })).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://boardgamegeek.com/boardgame/377061/coffee-rush')).toBeInTheDocument();
     expect(screen.getByLabelText('Rating')).toHaveValue('7.37125');
     expect(screen.getByRole('img', { name: 'Coffee Rush item image' })).toHaveAttribute(
@@ -261,6 +264,39 @@ describe('ItemsPage', () => {
 
     expect(await screen.findByText('Coffee Rush Updated')).toBeInTheDocument();
   }, 60000);
+
+  it('returns to the table after an item load fails and reopens the item even if linked data fails', async () => {
+    const user = userEvent.setup();
+    const item = { id: '77', canonical_name: 'Coffee Rush' };
+    let detailStatus = 500;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = pathOf(String(input));
+      if (path === '/items') {
+        return jsonResponse([item]);
+      }
+      if (path === '/items/77') {
+        return jsonResponse(item, detailStatus);
+      }
+      if (path === '/items/77/store-items' || path === '/items/77/relationships') {
+        return jsonResponse([]);
+      }
+      if (path === '/items/77/taxonomy') {
+        return jsonResponse(null, 500);
+      }
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    render(<ItemsPage />);
+
+    await user.dblClick(await screen.findByText('Coffee Rush'));
+    expect(await screen.findByText('Item could not be loaded.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Back to Items' }));
+
+    detailStatus = 200;
+    await user.dblClick(await screen.findByText('Coffee Rush'));
+    expect(await screen.findByRole('heading', { name: 'Item Details' })).toBeInTheDocument();
+    expect(await screen.findByText('Linked item data could not be loaded.')).toBeInTheDocument();
+  });
 
   it('generates the Spanish normalized name from the Spanish canonical name', async () => {
     const user = userEvent.setup();
