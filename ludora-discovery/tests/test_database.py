@@ -1072,8 +1072,86 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(update_params, ("failed", "update failed", completed_at, 99))
         self.assertEqual(connection.commits, 1)
 
-    def test_updates_item_candidate_and_logs_image_title_price_and_availability_refresh_fields(self):
+    def test_refreshes_write_history_from_locked_and_persisted_prices(self):
+        lease_token = "00000000-0000-0000-0000-000000000123"
+        existing = replace(confirmed_store_item_record(), price="799.00")
+        for method, kwargs in (
+            ("update_item_candidate_price_availability", {}),
+            ("update_item_candidate_with_change_log", {"job_id": 99, "run_id": "run-123"}),
+            ("complete_claimed_store_item_update", {
+                "attempt_id": 91, "job_id": 99, "lease_token": lease_token,
+                "run_id": "run-123", "worker_id": "worker-1", "worker_name": "worker",
+            }),
+        ):
+            with self.subTest(method=method):
+                connection = FakeConnection(fetchone_rows=[(501,)])
+                repository = DiscoveryRepository(connection)
+                result = getattr(repository, method)(existing, replace(existing), **kwargs)
+
+                # Under a fake connection, verify the SQL contract that history uses the
+                # persisted prices instead of the two identical in-memory snapshots.
+                refresh_sql, refresh_params = connection.cursor_instance.executions[0]
+                sql = " ".join(refresh_sql.casefold().split())
+                self.assertIn("insert into store_item_price_history (store_item_id, price)", sql)
+                self.assertRegex(sql, r"select id, price from store_items where id = %s.*for no key update")
+                self.assertIn("from previous", sql)
+                self.assertIn("returning si.id, si.price, previous.price as previous_price", sql)
+                self.assertIn("select id, price from refreshed", sql)
+                self.assertIn("where price is not null and price is distinct from previous_price", sql)
+                self.assertEqual(refresh_params[0], 501)
+                if method == "complete_claimed_store_item_update":
+                    self.assertIn("and update_lease_token = %s::uuid for no key update", sql)
+                    self.assertEqual(refresh_params[1], lease_token)
+                    self.assertIn("update_lease_token = null", sql)
+                    self.assertIn("last_update_attempt_at = clock_timestamp()", sql)
+                self.assertEqual(connection.commits, 1)
+                self.assertFalse(result.changed)
+
+    def test_claimed_refresh_records_lease_loss_without_success_writes(self):
+        connection = FakeConnection(fetchone_rows=[None])
+        repository = DiscoveryRepository(connection)
+        stale_token = "00000000-0000-0000-0000-000000000123"
+        existing = replace(confirmed_store_item_record(), price="799.00")
+
+        with self.assertRaisesRegex(RuntimeError, "Store item 501 update lease was lost"):
+            repository.complete_claimed_store_item_update(
+                existing,
+                replace(existing, price="699.00"),
+                attempt_id=91,
+                job_id=99,
+                lease_token=stale_token,
+                run_id="run-123",
+                worker_id="worker-1",
+                worker_name="worker",
+            )
+
+        statements = connection.cursor_instance.executions
+        self.assertEqual(len(statements), 3)
+        (refresh_sql, refresh_params), (attempt_sql, attempt_params), (worker_sql, worker_params) = statements
+        self.assertIn("select id from refreshed", refresh_sql)
+        self.assertEqual(refresh_params[:2], (501, stale_token))
+        self.assertIn("update store_item_update_attempt_log", attempt_sql)
+        self.assertIn("set status = 'lease_lost'", attempt_sql)
+        self.assertEqual(attempt_params, (91,))
+        self.assertIn("update store_item_update_worker_state", worker_sql)
+        self.assertIn("set last_failure_at = now()", worker_sql)
+        self.assertEqual(worker_params, ("worker", "worker-1"))
+        self.assertEqual(connection.commits, 1)
+
+    def test_failed_refresh_write_rolls_back_before_the_connection_is_reused(self):
         connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        existing = confirmed_store_item_record()
+
+        with patch.object(connection.cursor_instance, "execute", side_effect=RuntimeError("write failed")):
+            with self.assertRaisesRegex(RuntimeError, "write failed"):
+                repository.update_item_candidate_price_availability(existing, replace(existing, price="799.00"))
+
+        self.assertEqual(connection.rollbacks, 1)
+        self.assertEqual(connection.commits, 0)
+
+    def test_updates_item_candidate_and_logs_image_title_price_and_availability_refresh_fields(self):
+        connection = FakeConnection(fetchone_rows=[(56,)])
         repository = DiscoveryRepository(connection)
         existing_record = DiscoveryItemCandidateRecord(
             store_item_id=56,
@@ -1123,7 +1201,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("refreshed_date = now()", update_sql.casefold())
         self.assertNotIn("last_updated = now()", update_sql.casefold())
         self.assertIn("next_update_at = null", update_sql.casefold())
-        self.assertEqual(update_params[-1], 56)
+        self.assertEqual(update_params[0], 56)
         self.assertEqual(len(change_entries), 9)
         self.assertEqual(connection.commits, 1)
         self.assertTrue(result.changed)
@@ -1159,7 +1237,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertEqual(json.loads(change_entries[4][1][5]), "799.00")
 
     def test_update_change_log_compares_price_numerically(self):
-        connection = FakeConnection()
+        connection = FakeConnection(fetchone_rows=[(56,)])
         repository = DiscoveryRepository(connection)
         existing_record = DiscoveryItemCandidateRecord(
             store_item_id=56,
@@ -1189,11 +1267,11 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertIn("update store_items", update_sql.casefold())
         self.assertIn("refreshed_date = now()", update_sql.casefold())
         self.assertNotIn("last_updated = now()", update_sql.casefold())
-        self.assertEqual(update_params[-1], 56)
+        self.assertEqual(update_params[0], 56)
         self.assertEqual(connection.commits, 1)
 
     def test_update_item_candidate_excludes_title_when_disabled(self):
-        connection = FakeConnection()
+        connection = FakeConnection(fetchone_rows=[(56,)])
         repository = DiscoveryRepository(connection)
         existing_record = DiscoveryItemCandidateRecord(
             store_item_id=56,
@@ -1230,9 +1308,7 @@ class DatabaseRepositoryTests(unittest.TestCase):
         self.assertNotIn("original_title = %s", update_sql.casefold())
         self.assertNotIn("Amazon merchandising title", update_params)
         self.assertNotIn("Amazon source title", update_params)
-        self.assertEqual(update_params[0], "")
-        self.assertEqual(update_params[1], "$799")
-        self.assertEqual(update_params[-1], 56)
+        self.assertEqual(update_params[:3], (56, "", "$799"))
         self.assertEqual(
             [params[3] for _sql, params in change_entries],
             ["raw_price", "price", "price_source"],

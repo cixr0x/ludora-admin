@@ -960,38 +960,9 @@ class DiscoveryRepository:
         changes = _item_update_changes(existing_record, refreshed_record)
 
         with self.connection.cursor() as cursor:
-            cursor.execute(
-                """
-                update store_items
-                set original_title = %s,
-                    title = %s,
-                    image_url = %s,
-                    raw_price = %s,
-                    price = %s,
-                    price_source = %s,
-                    currency = %s,
-                    availability = %s,
-                    availability_source = %s,
-                    last_seen_at = now(),
-                    refreshed_date = now(),
-                    next_update_at = null,
-                    last_update_attempt_at = clock_timestamp(),
-                    update_lease_token = null,
-                    update_lease_expires_at = null,
-                    consecutive_update_failures = 0,
-                    last_update_error = ''
-                where id = %s
-                  and update_lease_token = %s::uuid
-                returning id
-                """,
-                (
-                    *self._item_candidate_price_availability_params(data, include_title=True),
-                    store_item_id,
-                    lease_token,
-                ),
-            )
-            claimed_row = cursor.fetchone()
-            if not claimed_row:
+            if lease_token is None or not self._persist_store_item_refresh(
+                cursor, data, store_item_id=store_item_id, lease_token=lease_token,
+            ):
                 self._mark_attempt_lease_lost(cursor, attempt_id, worker_name, worker_id)
                 self.connection.commit()
                 raise RuntimeError(f"Store item {store_item_id} update lease was lost")
@@ -1565,13 +1536,7 @@ class DiscoveryRepository:
         changes = _item_update_changes(existing_record, refreshed_record, include_title=include_title)
 
         with self.connection.cursor() as cursor:
-            cursor.execute(
-                _update_item_candidate_price_availability_sql(include_title=include_title),
-                (
-                    *self._item_candidate_price_availability_params(data, include_title=include_title),
-                    store_item_id,
-                ),
-            )
+            self._persist_store_item_refresh(cursor, data, store_item_id=store_item_id, include_title=include_title)
             for field_name, old_value, new_value in changes:
                 cursor.execute(
                     """
@@ -1620,13 +1585,7 @@ class DiscoveryRepository:
         changes = _item_update_changes(existing_record, refreshed_record, include_title=include_title)
 
         with self.connection.cursor() as cursor:
-            cursor.execute(
-                _update_item_candidate_price_availability_sql(include_title=include_title),
-                (
-                    *self._item_candidate_price_availability_params(data, include_title=include_title),
-                    store_item_id,
-                ),
-            )
+            self._persist_store_item_refresh(cursor, data, store_item_id=store_item_id, include_title=include_title)
         self.connection.commit()
         return ItemCandidateUpsertResult(
             candidate_id=store_item_id,
@@ -2177,13 +2136,27 @@ class DiscoveryRepository:
             data["source_url_origin"],
         )
 
-    def _item_candidate_price_availability_params(
+    def _persist_store_item_refresh(
         self,
+        cursor: Any,
         data: dict[str, object],
         *,
+        store_item_id: int,
         include_title: bool = True,
-    ) -> tuple[object, ...]:
-        return tuple(data[field_name] for field_name in _store_item_refresh_fields(include_title=include_title))
+        lease_token: str | None = None,
+    ) -> bool:
+        claimed = lease_token is not None
+        params = (store_item_id, lease_token) if claimed else (store_item_id,)
+        fields = _store_item_refresh_fields(include_title=include_title)
+        try:
+            cursor.execute(
+                _update_item_candidate_price_availability_sql(fields, claimed=claimed),
+                (*params, *(data[field_name] for field_name in fields)),
+            )
+            return cursor.fetchone() is not None
+        except Exception:
+            self.connection.rollback()
+            raise
 
     def mark_item_candidate_not_boardgame(self, candidate_id: int, reasons: list[str]) -> None:
         self._mark_item_candidate_no_match(candidate_id, reasons)
@@ -2319,23 +2292,39 @@ def _update_item_candidate_sql(*, refresh_from_source: bool = False) -> str:
     """
 
 
-def _update_item_candidate_price_availability_sql(*, include_title: bool = True) -> str:
-    title_assignment = "original_title = %s,\n        title = %s,\n        " if include_title else ""
+def _update_item_candidate_price_availability_sql(fields: tuple[str, ...], *, claimed: bool) -> str:
+    assignments = ",\n            ".join(f"{field_name} = %s" for field_name in fields)
+    lease_filter = " and update_lease_token = %s::uuid" if claimed else ""
+    lease_assignments = (
+        """,
+            last_update_attempt_at = clock_timestamp(),
+            update_lease_token = null,
+            update_lease_expires_at = null"""
+        if claimed else ""
+    )
     return f"""
-    update store_items
-    set {title_assignment}image_url = %s,
-        raw_price = %s,
-        price = %s,
-        price_source = %s,
-        currency = %s,
-        availability = %s,
-        availability_source = %s,
-        last_seen_at = now(),
-        refreshed_date = now(),
-        next_update_at = null,
-        consecutive_update_failures = 0,
-        last_update_error = ''
-    where id = %s
+    with previous as materialized (
+        select id, price
+        from store_items
+        where id = %s{lease_filter}
+        for no key update
+    ), refreshed as (
+        update store_items si
+        set {assignments},
+            last_seen_at = now(),
+            refreshed_date = now(),
+            next_update_at = null,
+            consecutive_update_failures = 0,
+            last_update_error = ''{lease_assignments}
+        from previous
+        where si.id = previous.id
+        returning si.id, si.price, previous.price as previous_price
+    ), price_history as (
+        insert into store_item_price_history (store_item_id, price)
+        select id, price from refreshed
+        where price is not null and price is distinct from previous_price
+    )
+    select id from refreshed
     """
 
 

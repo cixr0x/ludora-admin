@@ -376,7 +376,7 @@ class WooCommerceBatchRefreshTests(unittest.TestCase):
             self.assertIn("next_update_at = null", sql)
             self.assertIn("update_lease_token = null", sql)
             self.assertIn("consecutive_update_failures = 0", sql)
-            self.assertEqual(params[-2:], (501 + index, self.first.lease_token))
+            self.assertEqual(params[:2], (501 + index, self.first.lease_token))
             self.assertIn("770", params)
         changes = [params for sql, params in connection.cursor_instance.executions if "insert into store_item_update_change_log" in sql]
         self.assertEqual({params[2] for params in changes}, {501, 502})
