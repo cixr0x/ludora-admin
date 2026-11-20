@@ -63,7 +63,6 @@ type CreateAppOptions = {
   storeProfileDetectionService?: StoreProfileDetectionService;
   storeItemUpdateScheduleManager?: StoreItemUpdateScheduleManager;
   translationService?: TranslationService;
-  verifiedSitemapStoreIds?: readonly string[];
   webBotAuthService?: WebBotAuthService;
 };
 
@@ -86,7 +85,6 @@ export function createApp({
   storeProfileDetectionService,
   storeItemUpdateScheduleManager,
   translationService,
-  verifiedSitemapStoreIds,
   webBotAuthService
 }: CreateAppOptions): Express {
   const app = express();
@@ -138,8 +136,7 @@ export function createApp({
         database,
         externalCoverImageOptimizer,
         continuousItemUpdateWorkerManager,
-        storeItemUpdateScheduleManager,
-        verifiedSitemapStoreIds
+        storeItemUpdateScheduleManager
       )
     );
   }

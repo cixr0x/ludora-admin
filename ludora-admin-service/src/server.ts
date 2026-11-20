@@ -41,7 +41,6 @@ import {
 import { createRuntimeManagerLifecycle } from './runtimeManagerLifecycle.js';
 import { createOpenAiStoreProfileDetectionClient } from './storeProfileDetection/openAiStoreProfileDetectionClient.js';
 import { createStoreProfileDetectionService } from './storeProfileDetection/storeProfileDetectionService.js';
-import { readVerifiedSitemapStoreIds } from './storeItemUpdateEligibility.js';
 import { createStoreItemUpdateScheduleManager } from './storeItemUpdateScheduleManager.js';
 import { createStoreItemUpdateScheduleService } from './storeItemUpdateScheduleService.js';
 import { createOpenAiTranslationClient } from './translation/openAiTranslationClient.js';
@@ -134,10 +133,9 @@ const continuousItemUpdateWorkerManager =
         pythonExecutable: config.discoveryRunner.pythonExecutable
       })
     : undefined;
-const verifiedSitemapStoreIds = readVerifiedSitemapStoreIds(config.discoveryRunner.envFile);
 const storeItemUpdateScheduleManager = config.continuousItemUpdateWorker.enabled
   ? createStoreItemUpdateScheduleManager({
-      scheduleService: createStoreItemUpdateScheduleService(database, { verifiedSitemapStoreIds })
+      scheduleService: createStoreItemUpdateScheduleService(database)
     })
   : undefined;
 const runtimeManagerLifecycle = createRuntimeManagerLifecycle({
@@ -206,7 +204,6 @@ const app = createApp({
   storeProfileDetectionService,
   storeItemUpdateScheduleManager,
   translationService,
-  verifiedSitemapStoreIds,
   webBotAuthService
 });
 

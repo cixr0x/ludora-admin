@@ -189,22 +189,21 @@ The worker caches a fresh snapshot for up to ten minutes and a failed load for
 30 seconds. Reload failures discard expired snapshots. If the collection
 deadline expires while a request is still running, the updater falls back and
 ignores the late result. Each process allows one sitemap load at a time.
-The admin service reads enrollment for scheduling on startup. The manual
-updater and continuous worker read enrollment when their run or session starts.
+The manual updater and continuous worker read enrollment when their run or
+session starts.
 
 A confirmed miss skips the product request and marks the offer unavailable and
 hidden with `availability_source=sitemap_missing`. The updater records the reason
-and changed fields in the existing logs. Active unavailable offers at enrolled
-stores stay eligible for manual updates and the daily schedule. The updater
-requests their product pages when a verified snapshot confirms they are still
-listed. If verification is temporarily unavailable, it retries on a later run.
-A page that still reports removal keeps the offer unavailable and eligible for
-the next daily schedule.
+and changed fields in the existing logs. Active unavailable offers at any
+update-enabled store stay eligible for manual updates and the daily schedule.
+If there is no verified snapshot, the updater requests the product page as
+usual. A page that still reports removal keeps the offer unavailable and
+eligible for the next daily schedule.
 
 Chocita's continuous lookahead excludes confirmed misses and reserves product
 retries for unavailable offers until their own claims. If a store's coverage
-changes, remove its enrollment and restart the admin service and continuous
-worker. Previously hidden rows stay hidden after disabling the check.
+changes, remove its enrollment and restart the continuous worker. Previously
+hidden rows stay hidden after disabling the check.
 Identify affected offers from the update logs and verify their current state.
 Public visibility is read-only in the admin UI. Restoring availability and
 visibility requires a separately approved data repair.

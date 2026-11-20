@@ -189,6 +189,17 @@ where is_boardgame = true
   and store_active = true
   and availability <> 'unavailable';
 
+create index if not exists store_items_unavailable_next_update_at_idx
+on store_items (next_update_at, id)
+where is_boardgame = true
+  and is_boardgame_confirmed = true
+  and item_id is not null
+  and source_url <> ''
+  and listing_status = 'LISTED'
+  and store_active = true
+  and availability = 'unavailable'
+  and next_update_at is not null;
+
 create index if not exists store_items_update_lease_expires_at_idx
 on store_items (update_lease_expires_at)
 where update_lease_token is not null;
@@ -1254,4 +1265,4 @@ create index store_items_discovered_url_idx on store_items (store_id, coalesce(s
 
 -- store_active controls public visibility; availability remains independent.
 comment on column store_items.store_active is 'Public visibility; false hides this offer without changing product availability';
-comment on column store_items.availability is 'Product availability independent of public visibility; unavailable is terminal until manually recovered';
+comment on column store_items.availability is 'Product availability. Unavailable offers are hidden publicly and can be retried while store_active is true';
