@@ -51,7 +51,7 @@ class PairRepository:
     def list_confirmed_boardgame_item_candidates(self, **kwargs):
         return [self.original]
 
-    def list_store_item_update_sources(self, **kwargs):
+    def list_store_item_discovery_sources(self, **kwargs):
         return [SimpleNamespace(store_id=12, platform="custom", store_name="Example")]
 
     def get_completed_discovery_pair_id(self, store_id, discovered_url, target_url):

@@ -133,7 +133,7 @@ class FakeRepository:
         self.confirmed_items_store_ids = store_ids
         return self.confirmed_items
 
-    def list_store_item_update_sources(self, *, store_ids=None):
+    def list_store_item_discovery_sources(self, *, store_ids=None):
         self.discovery_source_store_ids = store_ids
         selected_store_ids = store_ids if store_ids is not None else self.store_platforms
         return [

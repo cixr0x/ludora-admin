@@ -5,7 +5,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, Sequence
+from typing import Any, Sequence
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from ludora.models import DiscoveryItemCandidateRecord, StoreRecord
@@ -324,17 +324,6 @@ class DiscoveryRepository:
         return updated
 
     def list_store_item_discovery_sources(self, *, store_ids: list[int] | None = None) -> list[StoreItemDiscoverySource]:
-        return self._list_store_item_sources(store_ids=store_ids, activity_flag="discovery_active")
-
-    def list_store_item_update_sources(self, *, store_ids: list[int] | None = None) -> list[StoreItemDiscoverySource]:
-        return self._list_store_item_sources(store_ids=store_ids, activity_flag="update_active")
-
-    def _list_store_item_sources(
-        self,
-        *,
-        store_ids: list[int] | None,
-        activity_flag: Literal["discovery_active", "update_active"],
-    ) -> list[StoreItemDiscoverySource]:
         sql = """
             select
                 stores.id,
@@ -359,7 +348,7 @@ class DiscoveryRepository:
             sql += f"\n            where stores.id in ({placeholders})"
             params.extend(store_ids)
         else:
-            sql += f"\n            where stores.{activity_flag} = true"
+            sql += "\n            where stores.discovery_active = true"
         sql += "\n            order by stores.canonical_domain asc"
 
         with self.connection.cursor() as cursor:
@@ -652,9 +641,10 @@ class DiscoveryRepository:
         lease_token: str,
         lease_seconds: int,
         excluded_store_ids: Sequence[int] = (),
+        verified_sitemap_store_ids: Sequence[int] = (),
     ) -> ClaimedStoreItemUpdate | None:
         due_items = """
-            select store_items.id, store_items.store_id, store_items.next_update_at
+            select store_items.id, store_items.next_update_at
             from store_items
             join stores on stores.id = store_items.store_id
             where stores.update_active = true
@@ -681,23 +671,24 @@ class DiscoveryRepository:
             order by store_items.next_update_at, store_items.id
             limit 256
         """
-        ordinary_due_items = due_items.format(availability="store_items.availability <> 'unavailable'")
-        unavailable_due_items = due_items.format(availability="store_items.availability = 'unavailable'")
+        due_window = due_items.format(availability="store_items.availability <> 'unavailable'")
         window_params = (list(excluded_store_ids), worker_name)
-
-        with self.connection.cursor() as cursor:
-            cursor.execute(
-                f"""
-                with due_window as materialized (
-                    select id, store_id
-                    from (({ordinary_due_items}) union all ({unavailable_due_items})) due
-                    order by next_update_at, id
-                    limit 256
-                ), scheduled as (
-                    select
-                        store_items.id,
-                        store_items.store_id,
-                        store_items.next_update_at,
+        due_params: tuple[object, ...] = window_params
+        scheduled_columns = ""
+        verified_target = ""
+        available_target_filter = ""
+        target_params: tuple[object, ...] = ()
+        if verified_sitemap_store_ids:
+            recovery_window = due_items.format(
+                availability="store_items.availability = 'unavailable' and store_items.store_id = any(%s::bigint[])",
+            )
+            due_window = f"""
+                select id from (({due_window}) union all ({recovery_window})) due
+                order by next_update_at, id limit 256
+            """
+            enrolled_store_ids = list(verified_sitemap_store_ids)
+            due_params = (*window_params, enrolled_store_ids, *window_params)
+            scheduled_columns = """,
                         store_items.availability,
                         store_items.is_boardgame,
                         store_items.is_boardgame_confirmed,
@@ -707,14 +698,10 @@ class DiscoveryRepository:
                         store_items.store_active,
                         store_items.update_lease_token,
                         store_items.update_lease_expires_at
-                    from store_items
-                    join due_window on due_window.id = store_items.id
-                                   and due_window.store_id = store_items.store_id
-                    order by random()
-                    for update of store_items skip locked
-                    limit 1
-                ), target as (
-                    -- Unavailable listings can use only their own due slot.
+            """
+            # An unavailable listing needs its own due slot so it cannot consume
+            # another item's slot early or lose its slot to a stale available item.
+            verified_target = """
                     select scheduled.id, scheduled.next_update_at
                     from scheduled
                     where scheduled.availability = 'unavailable'
@@ -724,14 +711,34 @@ class DiscoveryRepository:
                       and scheduled.source_url <> ''
                       and scheduled.listing_status = 'LISTED'
                       and scheduled.store_active = true
+                      and scheduled.store_id = any(%s::bigint[])
                       and scheduled.next_update_at <= now()
                       and (
                         scheduled.update_lease_token is null
                         or scheduled.update_lease_expires_at <= now()
                       )
-
                     union all
+            """
+            available_target_filter = "and scheduled.availability <> 'unavailable'"
+            target_params = (enrolled_store_ids,)
 
+        with self.connection.cursor() as cursor:
+            cursor.execute(
+                f"""
+                with due_window as materialized (
+                    {due_window}
+                ), scheduled as (
+                    select
+                        store_items.id,
+                        store_items.store_id,
+                        store_items.next_update_at{scheduled_columns}
+                    from store_items
+                    join due_window on due_window.id = store_items.id
+                    order by random()
+                    for update of store_items skip locked
+                    limit 1
+                ), target as (
+                    {verified_target}
                     select
                         candidate.id,
                         candidate.next_update_at
@@ -743,7 +750,7 @@ class DiscoveryRepository:
                         from store_items
                         join stores on stores.id = store_items.store_id
                         where store_items.store_id = scheduled.store_id
-                          and scheduled.availability <> 'unavailable'
+                          {available_target_filter}
                           and stores.update_active = true
                           and store_items.is_boardgame = true
                           and store_items.is_boardgame_confirmed = true
@@ -792,7 +799,7 @@ class DiscoveryRepository:
                 from updated
                 where id = target_id
                 """,
-                (*window_params, *window_params, lease_token, lease_seconds),
+                (*due_params, *target_params, lease_token, lease_seconds),
             )
             claimed_row = cursor.fetchone()
             if not claimed_row:
@@ -1038,13 +1045,15 @@ class DiscoveryRepository:
         run_id: str,
         worker_id: str,
         worker_name: str,
+        clear_schedule: bool = False,
     ) -> None:
         store_item_id = existing_record.store_item_id
         if store_item_id is None:
             raise ValueError("store item id is required to deactivate a claimed update")
+        schedule_update = "next_update_at = null," if clear_schedule else ""
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 with previous as (
                     select id, availability from store_items
                     where id = %s and update_lease_token = %s::uuid
@@ -1054,7 +1063,7 @@ class DiscoveryRepository:
                 set availability = 'unavailable',
                     availability_source = 'product_page_unavailable',
                     refreshed_date = now(),
-                    next_update_at = null,
+                    {schedule_update}
                     update_lease_token = null,
                     update_lease_expires_at = null,
                     consecutive_update_failures = 0,
@@ -1772,8 +1781,7 @@ class DiscoveryRepository:
                 update store_items si
                 set availability = 'unavailable',
                     availability_source = 'product_page_unavailable',
-                    refreshed_date = now(),
-                    next_update_at = null
+                    refreshed_date = now()
                 from previous
                 where si.id = previous.id
                 returning previous.availability
@@ -1941,8 +1949,14 @@ class DiscoveryRepository:
         self,
         limit: int | None = None,
         store_ids: list[int] | None = None,
+        *,
+        verified_sitemap_store_ids: Sequence[int] = (),
     ) -> list[DiscoveryItemCandidateRecord]:
+        availability = "store_items.availability <> 'unavailable'"
         params: list[object] = []
+        if verified_sitemap_store_ids:
+            availability = f"({availability} or store_items.store_id = any(%s::bigint[]))"
+            params.append(list(verified_sitemap_store_ids))
         sql = f"""
             select {_qualified_item_candidate_select_columns('store_items')}
             from store_items
@@ -1954,6 +1968,7 @@ class DiscoveryRepository:
               and store_items.source_url <> ''
               and store_items.listing_status = 'LISTED'
               and store_items.store_active = true
+              and {availability}
               and (
                 store_items.update_lease_token is null
                 or store_items.update_lease_expires_at <= now()

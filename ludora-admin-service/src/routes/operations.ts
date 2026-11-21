@@ -1,3 +1,4 @@
+import { storeItemUpdateAvailabilitySql } from '../storeItemUpdateEligibility.js';
 import { randomUUID } from 'node:crypto';
 
 import { Router } from 'express';
@@ -148,7 +149,8 @@ export function createOperationsRouter(
   database: Database,
   externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner,
   continuousItemUpdateWorkerManager?: ContinuousItemUpdateWorkerManager,
-  storeItemUpdateScheduleManager?: StoreItemUpdateScheduleManager
+  storeItemUpdateScheduleManager?: StoreItemUpdateScheduleManager,
+  verifiedSitemapStoreIds: readonly string[] = []
 ): Router {
   const router = Router();
   let latestExternalCoverImageOptimizationRun: ExternalCoverImageOptimizationRun | null = null;
@@ -311,7 +313,8 @@ export function createOperationsRouter(
           database,
           rangeHours,
           histogramStoreId,
-          continuousItemUpdateWorkerManager?.getStatus() ?? 'unavailable'
+          continuousItemUpdateWorkerManager?.getStatus() ?? 'unavailable',
+          verifiedSitemapStoreIds
         )
       });
     } catch (error) {
@@ -530,7 +533,8 @@ async function loadStoreItemUpdateMonitor(
   database: Database,
   rangeHours: number,
   histogramStoreId: number | null,
-  controlStatus: ContinuousItemUpdateWorkerControlStatus | 'unavailable'
+  controlStatus: ContinuousItemUpdateWorkerControlStatus | 'unavailable',
+  verifiedSitemapStoreIds: readonly string[]
 ) {
   const workerResult = await database.query(
     `select
@@ -560,6 +564,9 @@ async function loadStoreItemUpdateMonitor(
      order by stores.name, cooldown.store_id`
   );
 
+  const includeRecovery = verifiedSitemapStoreIds.length > 0;
+  const availability = storeItemUpdateAvailabilitySql(includeRecovery ? 1 : undefined);
+  const availabilityParams = includeRecovery ? [verifiedSitemapStoreIds] : undefined;
   const summaryResult = await database.query(
     `with eligible as (
        select store_items.*
@@ -572,6 +579,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and ${availability}
      )
      select
        count(*)::int as eligible_items,
@@ -603,7 +611,8 @@ async function loadStoreItemUpdateMonitor(
         from store_item_update_attempt_log
         where started_at >= now() - interval '24 hours'
           and http_status = 429) as rate_limited_24h
-     from eligible`
+     from eligible`,
+    availabilityParams
   );
   const summaryRow = (summaryResult.rows[0] ?? {}) as Record<string, unknown>;
   const eligibleItems = numberField(summaryRow, 'eligible_items');
@@ -651,6 +660,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and ${storeItemUpdateAvailabilitySql(includeRecovery ? 3 : undefined)}
      ), hourly as (
        select staleness_hour, count(*)::int as item_count
        from eligible
@@ -665,7 +675,7 @@ async function loadStoreItemUpdateMonitor(
      from eligible
      where staleness_hour >= $1
      order by staleness_hour`,
-    [rangeHours, histogramStoreId]
+    includeRecovery ? [rangeHours, histogramStoreId, verifiedSitemapStoreIds] : [rangeHours, histogramStoreId]
   );
 
   const storeStatisticsResult = await database.query(
@@ -688,6 +698,7 @@ async function loadStoreItemUpdateMonitor(
          and store_items.source_url <> ''
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
+         and ${availability}
        group by store_items.store_id
      )
      select
@@ -727,7 +738,8 @@ async function loadStoreItemUpdateMonitor(
        on attempts.store_id = stores.id
       and attempts.started_at >= now() - interval '24 hours'
      group by stores.id, stores.name, stores.platform, eligible_items.item_count, eligible_items.stale_items
-     order by failures desc, attempts desc, stores.name asc`
+     order by failures desc, attempts desc, stores.name asc`,
+    availabilityParams
   );
 
   const recentAttemptsResult = await database.query(
