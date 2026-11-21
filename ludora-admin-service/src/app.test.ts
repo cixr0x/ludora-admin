@@ -5047,7 +5047,7 @@ describe('ludora admin service', () => {
     expect(eligibleItemsSql).toContain("store_items.source_url <> ''");
     expect(eligibleItemsSql).toContain("store_items.listing_status = 'listed'");
     expect(eligibleItemsSql).toContain('store_items.store_active = true');
-    expect(eligibleItemsSql).toContain("store_items.availability <> 'unavailable'");
+    expect(eligibleItemsSql).not.toContain("store_items.availability");
     expect(eligibleItemsSql).toContain('group by store_items.store_id');
     expect(storeStatisticsSql).toContain('coalesce(eligible_items.stale_items, 0)::int as stale_items');
     expect(storeStatisticsSql).toContain('left join eligible_items on eligible_items.store_id = stores.id');
@@ -5060,7 +5060,7 @@ describe('ludora admin service', () => {
     expect(storeStatisticsSql).not.toContain('limit 12');
   });
 
-  it('uses the same verified sitemap enrollment in all update queue statistics', async () => {
+  it('includes active unavailable listings in all update queue statistics', async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const database: Database = {
       close: async () => {},
@@ -5071,21 +5071,16 @@ describe('ludora admin service', () => {
     };
     const app = createApp({
       database,
-      operationsClient: idleOperationsClient(),
-      verifiedSitemapStoreIds: ['17']
+      operationsClient: idleOperationsClient()
     });
 
     const response = await request(app).get('/admin/operations/store-item-update-monitor?hours=72');
 
     expect(response.status).toBe(200);
-    const eligibleQueries = queries.filter(({ sql }) => sql.includes("store_items.availability <> 'unavailable'"));
+    const eligibleQueries = queries.filter(({ sql }) => sql.includes('store_items.store_active = true'));
     expect(eligibleQueries).toHaveLength(3);
-    expect(eligibleQueries.map(({ params }) => params)).toEqual([[['17']], [72, null, ['17']], [['17']]]);
-    expect(eligibleQueries.map(({ sql }) => sql)).toEqual([
-      expect.stringContaining('store_items.store_id = any($1::bigint[])'),
-      expect.stringContaining('store_items.store_id = any($3::bigint[])'),
-      expect.stringContaining('store_items.store_id = any($1::bigint[])')
-    ]);
+    expect(eligibleQueries.map(({ params }) => params)).toEqual([undefined, [72, null], undefined]);
+    expect(eligibleQueries.every(({ sql }) => !sql.includes('store_items.availability'))).toBe(true);
   });
 
   it('pauses and resumes the continuous automatic update worker', async () => {

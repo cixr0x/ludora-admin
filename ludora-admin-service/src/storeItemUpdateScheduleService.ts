@@ -1,5 +1,4 @@
 import type { Database, QueryResult, SessionDatabase } from './db.js';
-import { storeItemUpdateAvailabilitySql } from './storeItemUpdateEligibility.js';
 
 export type StoreItemUpdateScheduleTrigger = 'AUTOMATIC' | 'MANUAL';
 export type StoreItemUpdateScheduleStatus = 'RUNNING' | 'COMPLETED' | 'FAILED';
@@ -58,7 +57,7 @@ const RUN_COLUMNS = `
   error_detail
 `;
 
-const distributeStoreItemsSql = (includeRecovery: boolean) => `
+const DISTRIBUTE_STORE_ITEMS_SQL = `
 with eligible as materialized (
   select
     store_items.id,
@@ -67,7 +66,6 @@ with eligible as materialized (
   join stores on stores.id = store_items.store_id
   where stores.update_active = true
     and store_items.store_active = true
-    and ${storeItemUpdateAvailabilitySql(includeRecovery ? 3 : undefined)}
     and store_items.is_boardgame = true
     and store_items.is_boardgame_confirmed = true
     and store_items.item_id is not null
@@ -118,15 +116,11 @@ export function createStoreItemUpdateScheduleService(
     advisoryLockKey?: number;
     now?: () => Date;
     windowHours?: number;
-    verifiedSitemapStoreIds?: readonly string[];
   } = {}
 ): StoreItemUpdateScheduleService {
   const advisoryLockKey = options.advisoryLockKey ?? DEFAULT_ADVISORY_LOCK_KEY;
   const now = options.now ?? (() => new Date());
   const windowHours = options.windowHours ?? STORE_ITEM_UPDATE_SCHEDULE_WINDOW_HOURS;
-  const verifiedSitemapStoreIds = options.verifiedSitemapStoreIds ?? [];
-  const includeRecovery = verifiedSitemapStoreIds.length > 0;
-  const distributionSql = distributeStoreItemsSql(includeRecovery);
 
   const run = async (
     trigger: StoreItemUpdateScheduleTrigger
@@ -172,10 +166,7 @@ export function createStoreItemUpdateScheduleService(
 
         try {
           await session.query('begin');
-          const distribution = await session.query(
-            distributionSql,
-            includeRecovery ? [windowStart, windowEnd, verifiedSitemapStoreIds] : [windowStart, windowEnd]
-          );
+          const distribution = await session.query(DISTRIBUTE_STORE_ITEMS_SQL, [windowStart, windowEnd]);
           const counts = asRecord(distribution.rows[0]);
           const completed = await session.query(
             `update store_item_update_schedule_runs

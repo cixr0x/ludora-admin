@@ -3,7 +3,7 @@ import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -86,7 +86,6 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
         ):
             run_continuous_update_worker(env=self.env, stop_event=stop_event)
         self.assertEqual(self.sitemap_requests, [self.sitemap_url])
-        self.assertEqual(repository.claim_due_store_item_update.call_args.kwargs["verified_sitemap_store_ids"], (17,))
         repository.mark_item_candidate_sitemap_missing.assert_called_once()
         repository.list_store_item_update_batch_targets.assert_not_called()
         refresh.assert_not_called()
@@ -122,31 +121,35 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
         self.assertEqual(len(transport.urls), 1)
         self.assertEqual(self.sitemap_requests, [self.sitemap_url])
 
-    def test_continuous_unavailable_listing_recovers_only_with_verified_membership(self):
-        for sitemap_is_readable in (True, False):
-            with self.subTest(sitemap_is_readable=sitemap_is_readable):
-                self.snapshot = replace(self.snapshot, status_code=200 if sitemap_is_readable else 503)
+    def test_continuous_unavailable_listing_is_retried_without_verified_membership(self):
+        for config, status in ((self.env[ENV_KEY], 200), (self.env[ENV_KEY], 503), ("{}", 200)):
+            with self.subTest(config=config, status=status):
+                self.snapshot = replace(self.snapshot, status_code=status)
+                checker = UpdateSitemapChecker.from_environment(
+                    {**self.env, ENV_KEY: config}, ".env", fetcher=self.fetch_sitemap,
+                )
                 target = replace(self.present, record=replace(self.present.record, availability="unavailable"))
                 repository = Mock()
                 with patch("ludora.continuous_update_worker.refresh_confirmed_store_item_candidate") as refresh:
-                    self.process(target, repository, Mock())
-                self.assertEqual(refresh.call_count, int(sitemap_is_readable))
-                self.assertEqual(repository.complete_claimed_store_item_update.call_count, int(sitemap_is_readable))
-                self.assertEqual(repository.fail_claimed_store_item_update.call_count, int(not sitemap_is_readable))
+                    self.process(target, repository, Mock(), checker=checker)
+                refresh.assert_called_once()
+                repository.complete_claimed_store_item_update.assert_called_once()
+                repository.fail_claimed_store_item_update.assert_not_called()
                 repository.mark_item_candidate_sitemap_missing.assert_not_called()
 
-    def test_continuous_removed_listing_in_verified_sitemap_waits_for_the_next_schedule(self):
+    def test_continuous_removed_listing_at_an_unenrolled_store_consumes_its_due_slot(self):
         from ludora.product_crawler import ProductPageRemovedError
 
         repository = Mock()
+        checker = UpdateSitemapChecker.from_environment({ENV_KEY: "{}"}, ".env")
         target = replace(self.present, record=replace(self.present.record, availability="unavailable"))
         with patch(
             "ludora.continuous_update_worker.refresh_confirmed_store_item_candidate",
             side_effect=ProductPageRemovedError("Removed product"),
-        ):
-            self.process(target, repository, Mock())
+        ) as refresh:
+            self.process(target, repository, Mock(), checker=checker)
+        refresh.assert_called_once()
         repository.deactivate_claimed_store_item_update.assert_called_once()
-        self.assertTrue(repository.deactivate_claimed_store_item_update.call_args.kwargs["clear_schedule"])
         repository.mark_item_candidate_sitemap_missing.assert_not_called()
 
     def test_woocommerce_recovery_passes_only_its_verified_current_claim_to_batch_selection(self):
@@ -187,12 +190,10 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
         self.assertEqual(event.args[0], "worker.item.failed")
         self.assertEqual(event.kwargs["reason"], "sitemap_ownership_lost")
 
-    def run_manual(self, repository, trace, env=None, *, platform="woocommerce", store_ids=(17,), discovery_active=True):
+    def run_manual(self, repository, trace, env=None, *, platform="woocommerce", store_ids=(17,)):
         repository.start_store_item_update_log.return_value = 17
         sources = [StoreItemDiscoverySource(17, "Chocita Juegos", ORIGIN, platform)]
-        repository.list_store_item_discovery_sources.side_effect = lambda *, store_ids: (
-            sources if store_ids or discovery_active else []
-        )
+        repository.list_store_item_update_sources.return_value = sources
         with (
             patch("ludora.operations.connect_database"),
             patch("ludora.operations.DiscoveryRepository", return_value=repository),
@@ -244,10 +245,6 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
 
         _, fetch = self.run_manual(repository, Mock())
 
-        self.assertEqual(
-            repository.list_confirmed_boardgame_item_candidates.call_args.kwargs["verified_sitemap_store_ids"],
-            (17,),
-        )
         fetch.assert_called_once()
         self.assertIs(fetch.call_args.kwargs["listing_candidate"], present)
         repository.mark_item_candidate_sitemap_missing.assert_called_once_with(absent, job_id=17, run_id="manual:test")
@@ -258,15 +255,13 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
             replace(self.present.record, availability="unavailable")
         ]
 
-        _, fetch = self.run_manual(repository, Mock(), store_ids=None, discovery_active=False)
+        _, fetch = self.run_manual(repository, Mock(), store_ids=None)
 
-        self.assertEqual(
-            repository.list_store_item_discovery_sources.call_args_list,
-            [call(store_ids=None), call(store_ids=[17])],
-        )
+        repository.list_store_item_update_sources.assert_called_once_with(store_ids=None)
+        repository.list_store_item_discovery_sources.assert_not_called()
         fetch.assert_called_once()
 
-    def test_manual_unavailable_listing_is_skipped_while_sitemap_is_unreadable(self):
+    def test_manual_unavailable_listing_is_retried_while_sitemap_is_unreadable(self):
         self.snapshot = replace(self.snapshot, status_code=503)
         repository = Mock()
         repository.list_confirmed_boardgame_item_candidates.return_value = [
@@ -275,7 +270,7 @@ class UpdateSitemapIntegrationTests(unittest.TestCase):
 
         _, fetch = self.run_manual(repository, Mock())
 
-        fetch.assert_not_called()
+        fetch.assert_called_once()
         repository.mark_item_candidate_sitemap_missing.assert_not_called()
         self.assertEqual(repository.complete_store_item_update_log.call_args.kwargs["scanned_items"], 1)
 

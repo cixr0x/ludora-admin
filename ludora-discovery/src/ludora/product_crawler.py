@@ -129,12 +129,10 @@ class ItemCandidateRepository(Protocol):
         self,
         limit: int | None = None,
         store_ids: list[int] | None = None,
-        *,
-        verified_sitemap_store_ids: tuple[int, ...] = (),
     ) -> list[DiscoveryItemCandidateRecord]:
         ...
 
-    def list_store_item_discovery_sources(
+    def list_store_item_update_sources(
         self,
         *,
         store_ids: list[int] | None = None,
@@ -786,13 +784,7 @@ def update_confirmed_store_item_details(
 ) -> StoreItemUpdateRecords:
     raise_if_cancelled(cancellation_token)
     trace = trace_logger or NullTraceLogger()
-    verified_store_ids = sitemap_checker.verified_store_ids if sitemap_checker is not None else ()
-    store_sources = repository.list_store_item_discovery_sources(store_ids=store_ids)
-    if not store_ids and verified_store_ids:
-        loaded_store_ids = {source.store_id for source in store_sources}
-        missing_store_ids = [store_id for store_id in verified_store_ids if store_id not in loaded_store_ids]
-        if missing_store_ids:
-            store_sources = [*store_sources, *repository.list_store_item_discovery_sources(store_ids=missing_store_ids)]
+    store_sources = repository.list_store_item_update_sources(store_ids=store_ids)
     store_platforms = {
         source.store_id: source.platform.strip().casefold()
         for source in store_sources
@@ -819,9 +811,8 @@ def update_confirmed_store_item_details(
 
     try:
         records = StoreItemUpdateRecords()
-        recovery_options = {"verified_sitemap_store_ids": verified_store_ids} if verified_store_ids else {}
         update_candidates = list(repository.list_confirmed_boardgame_item_candidates(
-            limit=limit, store_ids=store_ids, **recovery_options,
+            limit=limit, store_ids=store_ids,
         ))
         trace.log(
             "item_update.candidates.loaded",
@@ -908,16 +899,6 @@ def update_confirmed_store_item_details(
                     trace.log(
                         "item_update.item.sitemap_missing", **item_trace_fields,
                         reason=SITEMAP_MISSING, applied=changed is not None, changed=bool(changed),
-                        scanned_items=len(records), updated_items=records.updated_items,
-                    )
-                    continue
-                if existing_record.availability == "unavailable" and sitemap_membership is None:
-                    records.append(existing_record)
-                    _persist_store_item_update_progress(repository, job_id, records)
-                    trace.log(
-                        "item_update.item.skipped", **item_trace_fields,
-                        reason="sitemap_unverified",
-                        message="Skipped product request while verified sitemap membership is unavailable",
                         scanned_items=len(records), updated_items=records.updated_items,
                     )
                     continue
