@@ -3034,7 +3034,7 @@ describe('ludora admin service', () => {
     expect(normalizeSql(queries[0].sql)).toContain('(source_url_origin is null and store_active = true) or (store_id is not distinct from $1 and source_url = $2)');
   });
 
-  it('selects the next pending review with server exclusions and one minimal query', async () => {
+  it('skips hidden items when selecting the next pending review with server exclusions', async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -3051,13 +3051,14 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: { candidate_id: '9223372036854775807' } });
     expect(queries).toHaveLength(1);
     const sql = normalizeSql(queries[0].sql);
-    expect(sql).toMatch(/^select id from store_items where /);
+    expect(sql).toMatch(/^select dic\.id from store_items dic where /);
     expect(sql).toContain('is_boardgame = true');
     expect(sql).toContain('is_boardgame_confirmed = true');
+    expect(sql).toContain('store_active is not false');
     expect(sql).toContain("listing_status = 'pending'");
-    expect(sql).toContain('not (id = any($1::bigint[]))');
-    expect(sql).toContain('order by title asc, id asc limit 1');
-    expect(sql).not.toMatch(/join|count\(|description|ilike|store_active|availability|visibility/);
+    expect(sql).toContain('not (dic.id = any($1::bigint[]))');
+    expect(sql).toContain('order by dic.title asc, dic.id asc limit 1');
+    expect(sql).not.toMatch(/join|count\(|description|ilike|availability|visibility/);
     expect(queries[0].params).toEqual([['920', '921', '9007199254740993']]);
   });
 
@@ -3123,7 +3124,7 @@ describe('ludora admin service', () => {
         item_image_url_es: 'https://bgg.example/cafe-barista.jpg',
         item_name: 'Coffee Rush',
         item_name_es: 'Cafe Barista',
-        store_active: false,
+        store_active: true,
         store_item_id: 920
       }
     ];
@@ -3145,6 +3146,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('left join stores s on s.id = dic.store_id');
     expect(sql).toContain('dic.is_boardgame = true');
     expect(sql).toContain('dic.is_boardgame_confirmed = true');
+    expect(sql).toContain('dic.store_active is not false');
     expect(sql).not.toContain("dic.status = 'listed'");
     expect(sql).not.toContain('dic.item_id is not null');
     expect(sql).toContain('candidate_image_url');
@@ -3160,7 +3162,7 @@ describe('ludora admin service', () => {
   });
 
   it('filters and paginates store item reviews before returning comparison rows', async () => {
-    const rows = [{ candidate_id: 3365, candidate_name: 'Kitchen Rush', item_name: 'Kitchen Rush' }];
+    const rows = [{ candidate_id: 3365, candidate_name: 'Kitchen Rush', item_name: 'Kitchen Rush', store_active: null }];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const database: Database = {
       query: async (sql, params) => {
@@ -3173,7 +3175,7 @@ describe('ludora admin service', () => {
     };
 
     const response = await request(createApp({ database })).get(
-      '/admin/discovery/offer-reviews?page=0&page_size=25&sort=item_name&sort_direction=asc&filter_item_name=kitchen&filter_store_active=hidden'
+      '/admin/discovery/offer-reviews?page=0&page_size=25&sort=item_name&sort_direction=asc&filter_item_name=kitchen&filter_store_active=unknown'
     );
 
     expect(response.status).toBe(200);
@@ -3186,16 +3188,19 @@ describe('ludora admin service', () => {
       }
     });
     const rowQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select dic.id as candidate_id'));
+    const countQuery = queries.find((query) => normalizeSql(query.sql).startsWith('select count(*)'));
     const sql = normalizeSql(rowQuery?.sql ?? '');
     expect(sql).toContain('left join items i on i.id = dic.item_id');
     expect(sql).toContain('dic.is_boardgame = true');
     expect(sql).toContain('dic.is_boardgame_confirmed = true');
+    expect(sql).toContain('dic.store_active is not false');
+    expect(normalizeSql(countQuery?.sql ?? '')).toContain('dic.store_active is not false');
     expect(sql).not.toContain("dic.status = 'listed'");
     expect(sql).not.toContain('dic.item_id is not null');
     expect(sql).toContain("coalesce((concat_ws(' ', i.canonical_name, i.canonical_name_es))::text, '') ilike $1 escape '\\'");
     expect(sql).toContain("case dic.store_active when true then 'visible' when false then 'hidden' else 'unknown' end ilike $2");
     expect(sql).toContain('order by i.canonical_name asc');
-    expect(rowQuery?.params).toEqual(['%kitchen%', '%hidden%', 25, 0]);
+    expect(rowQuery?.params).toEqual(['%kitchen%', '%unknown%', 25, 0]);
   });
 
   it('filters and sorts store item reviews by listing status', async () => {

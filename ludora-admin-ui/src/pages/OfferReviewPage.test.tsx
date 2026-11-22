@@ -31,7 +31,7 @@ describe('OfferReviewPage', () => {
               item_type: 'base_game',
               match_score: '0.9400',
               match_source: 'BGG',
-              store_active: false,
+              store_active: null,
               store_domain: 'store.mx',
               store_item_listing_status: 'PENDING',
               store_name: 'Store MX'
@@ -51,7 +51,7 @@ describe('OfferReviewPage', () => {
     expect(screen.getByRole('link', { name: 'Coffee Rush (Cafe Barista)' })).toHaveAttribute('href', '#items?id=77');
     expect(screen.getByText('Store MX')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Item visibility' })).toBeInTheDocument();
-    expect(screen.getByRole('cell', { name: 'Hidden' })).toBeInTheDocument();
+    expect(screen.getByRole('cell', { name: 'Unknown' })).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Listing status' })).toBeInTheDocument();
     expect(screen.getByText('PENDING')).toBeInTheDocument();
     expect(screen.queryByRole('columnheader', { name: 'Admin links' })).not.toBeInTheDocument();

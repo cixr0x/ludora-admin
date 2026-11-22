@@ -542,6 +542,12 @@ const frontPagePreviewSql = `
   order by fpc."order" asc, fpc.id asc
 `;
 
+const offerReviewEligibility = `
+  dic.is_boardgame = true
+  and dic.is_boardgame_confirmed = true
+  and dic.store_active is not false
+`;
+
 const offerReviewSelect = `
   dic.id as candidate_id,
   dic.title as candidate_name,
@@ -843,7 +849,7 @@ const offerReviewsTableConfig: TableQueryConfig = {
     left join stores s on s.id = dic.store_id
   `,
   selectSql: offerReviewSelect,
-  whereSql: 'dic.is_boardgame = true and dic.is_boardgame_confirmed = true'
+  whereSql: offerReviewEligibility
 };
 
 const reviewTasksTableConfig: TableQueryConfig = {
@@ -2486,13 +2492,12 @@ export function createDiscoveryRouter(
     try {
       const excludedIds = parseReviewExclusions(request.query);
       const result = await database.query(
-        `select id
-         from store_items
-         where is_boardgame = true
-           and is_boardgame_confirmed = true
-           and listing_status = 'PENDING'
-           and not (id = any($1::bigint[]))
-         order by title asc, id asc
+        `select dic.id
+         from store_items dic
+         where ${offerReviewEligibility}
+           and dic.listing_status = 'PENDING'
+           and not (dic.id = any($1::bigint[]))
+         order by dic.title asc, dic.id asc
          limit 1`,
         [excludedIds]
       );
@@ -2515,8 +2520,7 @@ export function createDiscoveryRouter(
          from store_items dic
          left join items i on i.id = dic.item_id
          left join stores s on s.id = dic.store_id
-         where dic.is_boardgame = true
-           and dic.is_boardgame_confirmed = true
+         where ${offerReviewEligibility}
          order by dic.last_updated desc`
       );
       response.json({ data: result.rows });
