@@ -154,6 +154,11 @@ export function createOperationsRouter(
 ): Router {
   const router = Router();
   let latestExternalCoverImageOptimizationRun: ExternalCoverImageOptimizationRun | null = null;
+  let pendingMonitor: {
+    rangeHours: number;
+    histogramStoreId: number | null;
+    report: ReturnType<typeof loadStoreItemUpdateMonitor>;
+  } | null = null;
 
   router.post('/admin/operations/store-discovery-runs', async (_request, response, next) => {
     try {
@@ -308,15 +313,22 @@ export function createOperationsRouter(
       const histogramStoreId = Object.hasOwn(request.query, 'histogram_store_id')
         ? positiveIntegerQueryField(request.query.histogram_store_id, 'histogram_store_id')
         : null;
-      response.json({
-        data: await loadStoreItemUpdateMonitor(
+      if (pendingMonitor && (pendingMonitor.rangeHours !== rangeHours || pendingMonitor.histogramStoreId !== histogramStoreId)) {
+        throw httpError(409, 'An update monitor report is already running. Try again when it finishes.');
+      }
+      if (!pendingMonitor) {
+        const report = loadStoreItemUpdateMonitor(
           database,
           rangeHours,
           histogramStoreId,
           continuousItemUpdateWorkerManager?.getStatus() ?? 'unavailable',
           verifiedSitemapStoreIds
-        )
-      });
+        ).finally(() => {
+          pendingMonitor = null;
+        });
+        pendingMonitor = { rangeHours, histogramStoreId, report };
+      }
+      response.json({ data: await pendingMonitor.report });
     } catch (error) {
       next(error);
     }

@@ -41,6 +41,8 @@ const scheduleTimeFormatter = new Intl.DateTimeFormat('en-US', {
   hour12: true
 });
 
+type MonitorRequest = { promise: Promise<void>; refreshQueued: boolean };
+
 export function StoreItemUpdateMonitorPage() {
   const [hours, setHours] = useState(48);
   const [histogramStoreId, setHistogramStoreId] = useState<number | ''>('');
@@ -56,31 +58,54 @@ export function StoreItemUpdateMonitorPage() {
   const [scheduleError, setScheduleError] = useState('');
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [scheduleSuccess, setScheduleSuccess] = useState('');
-  const monitorRequestId = useRef(0);
+  const monitorMounted = useRef(false);
+  const monitorFilters = useRef({ hours, histogramStoreId });
+  const monitorRequest = useRef<MonitorRequest | null>(null);
 
-  const loadMonitor = useCallback(async (showLoading = false) => {
-    const requestId = ++monitorRequestId.current;
+  const loadMonitor = useCallback((showLoading = false, queueIfPending = true) => {
+    if (!monitorMounted.current) {
+      return;
+    }
+    if (monitorRequest.current) {
+      if (queueIfPending) {
+        monitorRequest.current.refreshQueued = true;
+        if (showLoading) setLoading(true);
+      }
+      return monitorRequest.current.promise;
+    }
     if (showLoading) {
       setLoading(true);
     }
-    try {
-      const nextMonitor = await adminApi.getStoreItemUpdateMonitor(hours, histogramStoreId || undefined);
-      if (requestId !== monitorRequestId.current) {
-        return;
-      }
-      setMonitor(nextMonitor);
-      setError('');
-    } catch (loadError) {
-      if (requestId !== monitorRequestId.current) {
-        return;
-      }
-      setError(loadError instanceof Error ? loadError.message : String(loadError));
-    } finally {
-      if (requestId === monitorRequestId.current) {
-        setLoading(false);
-      }
-    }
-  }, [histogramStoreId, hours]);
+
+    const request: MonitorRequest = {
+      refreshQueued: false,
+      promise: Promise.resolve().then(async () => {
+        try {
+          while (monitorMounted.current) {
+            request.refreshQueued = false;
+            const filters = monitorFilters.current;
+            try {
+              const nextMonitor = await adminApi.getStoreItemUpdateMonitor(filters.hours, filters.histogramStoreId || undefined);
+              if (monitorMounted.current && !request.refreshQueued) {
+                setMonitor(nextMonitor);
+                setError('');
+              }
+            } catch (loadError) {
+              if (monitorMounted.current && !request.refreshQueued) {
+                setError(loadError instanceof Error ? loadError.message : String(loadError));
+              }
+            }
+            if (!request.refreshQueued) break;
+          }
+        } finally {
+          monitorRequest.current = null;
+          if (monitorMounted.current) setLoading(false);
+        }
+      })
+    };
+    monitorRequest.current = request;
+    return request.promise;
+  }, []);
 
   const updateWorkerControl = useCallback(async (action: 'pause' | 'resume') => {
     setControlLoading(true);
@@ -117,10 +142,18 @@ export function StoreItemUpdateMonitorPage() {
   }, [loadMonitor]);
 
   useEffect(() => {
-    void loadMonitor(true);
-    const timer = window.setInterval(() => void loadMonitor(), REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(timer);
+    monitorMounted.current = true;
+    const timer = window.setInterval(() => void loadMonitor(false, false), REFRESH_INTERVAL_MS);
+    return () => {
+      monitorMounted.current = false;
+      window.clearInterval(timer);
+    };
   }, [loadMonitor]);
+
+  useEffect(() => {
+    monitorFilters.current = { hours, histogramStoreId };
+    void loadMonitor(true);
+  }, [histogramStoreId, hours, loadMonitor]);
 
   useEffect(() => {
     if (!failureGroup) {

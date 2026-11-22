@@ -4683,6 +4683,57 @@ describe('ludora admin service', () => {
     });
   });
 
+  it('shares a pending update monitor report and rejects overlapping requests for different filters', async () => {
+    let finishQuery!: (result: { rows: unknown[] }) => void;
+    const pendingQuery = new Promise<{ rows: unknown[] }>((resolve) => {
+      finishQuery = resolve;
+    });
+    const query = vi.fn<Database['query']>()
+      .mockReturnValueOnce(pendingQuery)
+      .mockResolvedValue({ rows: [] });
+    const app = createApp({ database: { query }, operationsClient: idleOperationsClient() });
+    const route = '/admin/operations/store-item-update-monitor';
+
+    const first = request(app).get(route).then((response) => response);
+    await vi.waitFor(() => expect(query).toHaveBeenCalledOnce());
+    const sameFilters = request(app).get(`${route}?hours=48`).then((response) => response);
+    const otherStore = request(app).get(`${route}?hours=48&histogram_store_id=12`);
+    const otherRange = request(app).get(`${route}?hours=72`);
+    try {
+      const conflicts = await Promise.all([otherStore, otherRange]);
+      expect(conflicts.map((response) => response.status)).toEqual([409, 409]);
+      expect(query).toHaveBeenCalledOnce();
+    } finally {
+      finishQuery({ rows: [] });
+      await Promise.all([first, sameFilters]);
+    }
+
+    const [original, shared] = await Promise.all([first, sameFilters]);
+    expect(original.status).toBe(200);
+    expect(shared.status).toBe(200);
+    expect(shared.body).toEqual(original.body);
+    expect(query.mock.calls.filter(([sql]) => sql.includes('from store_item_update_worker_state worker'))).toHaveLength(1);
+
+    const retry = await request(app).get(`${route}?hours=72`);
+    expect(retry.status).toBe(200);
+    expect(retry.body.data.range_hours).toBe(72);
+  });
+
+  it('allows another update monitor report after a pending report fails', async () => {
+    const query = vi.fn<Database['query']>()
+      .mockRejectedValueOnce(new Error('Report failed'))
+      .mockResolvedValue({ rows: [] });
+    const app = createApp({ database: { query }, operationsClient: idleOperationsClient() });
+    const route = '/admin/operations/store-item-update-monitor';
+
+    const failure = await request(app).get(route);
+    expect(failure.status).toBe(500);
+    expect(failure.body.error.message).toBe('Report failed');
+
+    const retry = await request(app).get(route);
+    expect(retry.status).toBe(200);
+  });
+
   it.each(['FAILED', 'RUNNING'] as const)(
     'keeps the completed manual schedule as the applied window when the latest attempt is %s',
     async (attemptStatus) => {

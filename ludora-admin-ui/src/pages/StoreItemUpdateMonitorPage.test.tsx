@@ -148,7 +148,72 @@ const monitor: StoreItemUpdateMonitor = {
 };
 
 describe('StoreItemUpdateMonitorPage', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('skips polling while a report is pending and resumes after a failure', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    const firstReport = deferred<StoreItemUpdateMonitor>();
+    const getMonitor = vi.spyOn(adminApi, 'getStoreItemUpdateMonitor')
+      .mockReturnValueOnce(firstReport.promise)
+      .mockResolvedValue(monitor);
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    await act(async () => vi.advanceTimersByTime(45_000));
+    expect(getMonitor).toHaveBeenCalledOnce();
+
+    await act(async () => firstReport.reject(new Error('Report failed')));
+    expect(screen.getByText('Report failed')).toBeInTheDocument();
+    expect(getMonitor).toHaveBeenCalledOnce();
+
+    await act(async () => vi.advanceTimersByTime(15_000));
+    expect(getMonitor).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText('Report failed')).not.toBeInTheDocument();
+  });
+
+  it('loads only the latest filters once the pending report settles', async () => {
+    const pendingReport = deferred<StoreItemUpdateMonitor>();
+    const getMonitor = vi.spyOn(adminApi, 'getStoreItemUpdateMonitor')
+      .mockResolvedValueOnce(monitor)
+      .mockReturnValueOnce(pendingReport.promise)
+      .mockResolvedValue({ ...monitor, range_hours: 72, histogram_store_id: 12 });
+    const user = userEvent.setup();
+
+    render(<StoreItemUpdateMonitorPage />);
+    await user.click(await screen.findByRole('button', { name: 'Refresh' }));
+    await user.click(screen.getByRole('combobox', { name: 'Histogram' }));
+    await user.click(screen.getByRole('option', { name: '72 hours' }));
+    await user.click(screen.getByLabelText('Histogram store'));
+    await user.click(screen.getByRole('option', { name: 'Alpha' }));
+    expect(getMonitor).toHaveBeenCalledTimes(2);
+
+    await act(async () => pendingReport.reject(new Error('Stale report failed')));
+
+    expect(getMonitor).toHaveBeenCalledTimes(3);
+    expect(getMonitor).toHaveBeenLastCalledWith(72, 12);
+    expect(screen.queryByText('Stale report failed')).not.toBeInTheDocument();
+  });
+
+  it('drops a queued refresh when leaving the page', async () => {
+    const pendingReport = deferred<StoreItemUpdateMonitor>();
+    const getMonitor = vi.spyOn(adminApi, 'getStoreItemUpdateMonitor')
+      .mockResolvedValueOnce(monitor)
+      .mockReturnValueOnce(pendingReport.promise)
+      .mockResolvedValue(monitor);
+    const user = userEvent.setup();
+
+    const { unmount } = render(<StoreItemUpdateMonitorPage />);
+    await user.click(await screen.findByRole('button', { name: 'Refresh' }));
+    await user.click(screen.getByRole('combobox', { name: 'Histogram' }));
+    await user.click(screen.getByRole('option', { name: '72 hours' }));
+    unmount();
+    await act(async () => pendingReport.resolve(monitor));
+
+    expect(getMonitor).toHaveBeenCalledTimes(2);
+  });
 
   it('renders worker health, cadence metrics, hourly staleness, and every active store', async () => {
     vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue(monitor);
@@ -413,13 +478,13 @@ describe('StoreItemUpdateMonitorPage', () => {
     await waitFor(() => expect(within(dialog).getByRole('alert')).toHaveTextContent('A store item update schedule run is already in progress'));
   });
 
-  it('does not restore an older monitor response after a schedule refresh succeeds', async () => {
+  it('queues the post-schedule refresh behind a pending report', async () => {
     const oldRefresh = deferred<StoreItemUpdateMonitor>();
     const freshMonitor: StoreItemUpdateMonitor = {
       ...monitor,
       store_statistics: [{ ...monitor.store_statistics[0], store_name: 'Fresh Store' }]
     };
-    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor')
+    const getMonitor = vi.spyOn(adminApi, 'getStoreItemUpdateMonitor')
       .mockResolvedValueOnce(monitor)
       .mockReturnValueOnce(oldRefresh.promise)
       .mockResolvedValueOnce(freshMonitor);
@@ -432,12 +497,14 @@ describe('StoreItemUpdateMonitorPage', () => {
     await user.click(await screen.findByRole('button', { name: 'Refresh' }));
     await user.click(screen.getByRole('button', { name: 'Redistribute update schedule' }));
     await user.click(screen.getByRole('button', { name: 'Confirm redistribution' }));
-    expect(await screen.findByText('Fresh Store')).toBeInTheDocument();
+    expect(await screen.findByText(/Scheduled 100 items across 4 stores/i)).toBeInTheDocument();
+    expect(getMonitor).toHaveBeenCalledTimes(2);
 
     await act(async () => {
       oldRefresh.resolve(monitor);
       await oldRefresh.promise;
     });
-    await waitFor(() => expect(screen.getByText('Fresh Store')).toBeInTheDocument());
+    expect(await screen.findByText('Fresh Store')).toBeInTheDocument();
+    expect(getMonitor).toHaveBeenCalledTimes(3);
   });
 });
