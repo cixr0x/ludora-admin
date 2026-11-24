@@ -54,6 +54,7 @@ import { ReviewImageSimilarity } from '../components/ReviewImageSimilarity';
 type LoadState = 'loading' | 'ready' | 'error';
 type ViewMode = 'form' | 'table';
 type DetailMode = 'standard' | 'review';
+type ReviewSelection = { id: string };
 type ItemCandidateDetailField = {
   fieldType?: 'boolean';
   gridColumn?: { md?: string; xs?: string };
@@ -69,6 +70,36 @@ type BatchSelectionOptions = {
   onToggle: (record: AdminRecord, checked: boolean, selectRange: boolean) => void;
   selectedIds: Set<string>;
 };
+
+const offerReviewSleepStorageKey = 'ludora.admin.offerReviewSleeps';
+const offerReviewSleepDurationMs = 60 * 60 * 1000;
+
+function readOfferReviewSleeps() {
+  const sleeps = new Map<string, number>();
+  try {
+    const stored: unknown = JSON.parse(window.sessionStorage.getItem(offerReviewSleepStorageKey) ?? '[]');
+    if (Array.isArray(stored)) {
+      for (const entry of stored) {
+        if (!Array.isArray(entry)) {
+          continue;
+        }
+        const [id, expiresAt]: unknown[] = entry;
+        if (
+          typeof id === 'string' &&
+          /^[1-9]\d{0,18}$/.test(id) &&
+          (id.length < 19 || id <= '9223372036854775807') &&
+          typeof expiresAt === 'number' &&
+          Number.isSafeInteger(expiresAt)
+        ) {
+          sleeps.set(id, expiresAt);
+        }
+      }
+    }
+  } catch {
+    // Keep the current review flow usable when storage is blocked or unreadable.
+  }
+  return sleeps;
+}
 
 function field(record: AdminRecord, keys: string[], fallback = '-') {
   const value = keys.map((key) => record[key]).find((candidate) => candidate !== undefined && candidate !== null && candidate !== '');
@@ -781,9 +812,14 @@ export function ListingCandidatesPage({
   const [saveMessage, setSaveMessage] = useState('');
   const [selectedBatchCandidateIds, setSelectedBatchCandidateIds] = useState<Set<string>>(() => new Set());
   const batchSelectionAnchorId = useRef<string | null>(null);
+  const activeReview = useRef<ReviewSelection | null>(null);
+  const reviewActionInFlight = useRef<'mutation' | ReviewSelection | null>(null);
+  const sleptOfferReviews = useRef<Map<string, number> | null>(null);
+  const storeItemActionsInFlight = useRef(0);
   const translateAndApproveCandidateIds = useRef<Set<string>>(new Set());
   const [selectedCandidate, setSelectedCandidate] = useState<AdminRecord | null>(null);
   const [preparingCoverFlatteningCandidateId, setPreparingCoverFlatteningCandidateId] = useState('');
+  const [sleepingReviewCandidateId, setSleepingReviewCandidateId] = useState('');
   const [startingCoverWorkflowId, setStartingCoverWorkflowId] = useState('');
   const [startingTranslateAndApproveCandidateId, setStartingTranslateAndApproveCandidateId] = useState('');
   const [updatingListingStatusCandidateId, setUpdatingListingStatusCandidateId] = useState('');
@@ -967,6 +1003,10 @@ export function ListingCandidatesPage({
   );
 
   useEffect(() => {
+    if (reviewActionInFlight.current && reviewActionInFlight.current !== 'mutation') {
+      reviewActionInFlight.current = null;
+      setSleepingReviewCandidateId('');
+    }
     if (!selectedCandidateId) {
       setDetailState('ready');
       setLocalCoverWorkflow(null);
@@ -976,13 +1016,13 @@ export function ListingCandidatesPage({
       setSelectedCandidate(null);
       setLinkedItemRefreshToken(0);
       setPreparingCoverFlatteningCandidateId('');
-      setStartingTranslateAndApproveCandidateId('');
-      setUpdatingListingStatusCandidateId('');
       setViewMode('table');
       return;
     }
 
     let ignore = false;
+    const review = { id: selectedCandidateId };
+    activeReview.current = review;
     setDetailState('loading');
     setLocalCoverWorkflow(null);
     setLocalCoverWorkflowError('');
@@ -990,14 +1030,13 @@ export function ListingCandidatesPage({
     setSaveMessage('');
     setLinkedItemRefreshToken(0);
     setPreparingCoverFlatteningCandidateId('');
-    setStartingTranslateAndApproveCandidateId('');
-    setUpdatingListingStatusCandidateId('');
     setViewMode('form');
 
     adminApi
       .getItemCandidate(selectedCandidateId)
       .then((candidate) => {
         if (!ignore) {
+          review.id = field(candidate, ['id'], selectedCandidateId);
           setSelectedCandidate(candidate);
           setViewMode('form');
           setDetailState('ready');
@@ -1011,11 +1050,20 @@ export function ListingCandidatesPage({
 
     return () => {
       ignore = true;
+      activeReview.current = null;
     };
-  }, [selectedCandidateId]);
+  }, [detailMode, selectedCandidateId]);
+
+  function startStoreItemAction() {
+    if (reviewActionInFlight.current && reviewActionInFlight.current !== 'mutation') {
+      return false;
+    }
+    storeItemActionsInFlight.current += 1;
+    return true;
+  }
 
   async function handleSaveCandidate(input: AdminRecord) {
-    if (!selectedCandidate) {
+    if (!selectedCandidate || !startStoreItemAction()) {
       return;
     }
 
@@ -1034,12 +1082,13 @@ export function ListingCandidatesPage({
     } catch {
       setSaveError('Item candidate could not be saved.');
     } finally {
+      storeItemActionsInFlight.current -= 1;
       setIsSaving(false);
     }
   }
 
   async function handleCreateItemFromCandidate(input: CreateItemFromCandidateInput = {}) {
-    if (!selectedCandidate) {
+    if (!selectedCandidate || !startStoreItemAction()) {
       return;
     }
 
@@ -1062,12 +1111,13 @@ export function ListingCandidatesPage({
     } catch {
       setSaveError('Item could not be created from candidate.');
     } finally {
+      storeItemActionsInFlight.current -= 1;
       setIsCreatingItem(false);
     }
   }
 
   async function handleCreateItemFromBggId(bggId: string) {
-    if (!selectedCandidate) {
+    if (!selectedCandidate || !startStoreItemAction()) {
       return;
     }
 
@@ -1090,6 +1140,7 @@ export function ListingCandidatesPage({
     } catch {
       setSaveError('Item could not be created from BGG ID.');
     } finally {
+      storeItemActionsInFlight.current -= 1;
       setIsCreatingBggItem(false);
     }
   }
@@ -1099,7 +1150,14 @@ export function ListingCandidatesPage({
     setRows((currentRows) =>
       currentRows.map((row, index) => (field(row, ['id'], String(index)) === candidateId ? savedCandidate : row))
     );
-    setSelectedCandidate(savedCandidate);
+    if (detailMode === 'review' && activeReview.current?.id !== candidateId) {
+      return;
+    }
+    setSelectedCandidate((currentCandidate) =>
+      detailMode === 'review' && (!currentCandidate || field(currentCandidate, ['id'], '') !== candidateId)
+        ? currentCandidate
+        : savedCandidate
+    );
     setLinkedItemRefreshToken((currentToken) => currentToken + 1);
     setSaveError('');
     setSaveMessage(`Store item associated with ${catalogItemDisplayName(item)}.`);
@@ -1111,7 +1169,12 @@ export function ListingCandidatesPage({
     setRows((currentRows) =>
       currentRows.map((row, index) => (field(row, ['id'], String(index)) === id ? candidate : row))
     );
-    setSelectedCandidate(candidate);
+    if (activeReview.current?.id !== id) {
+      return;
+    }
+    setSelectedCandidate((currentCandidate) =>
+      currentCandidate && field(currentCandidate, ['id'], '') === id ? candidate : currentCandidate
+    );
     if (result.status === 'matched') {
       setLinkedItemRefreshToken((currentToken) => currentToken + 1);
       setSaveMessage(`AI matched ${result.matched_name}.`);
@@ -1122,15 +1185,43 @@ export function ListingCandidatesPage({
     table.refresh();
   }
 
-  async function openNextPendingReview(currentCandidateId: string) {
-    if (detailMode !== 'review' || !onOpenCandidate) {
+  async function openNextPendingReview(currentCandidateId: string, sleepCurrentOffer = false) {
+    const review = activeReview.current;
+    if (detailMode !== 'review' || !onOpenCandidate || review?.id !== currentCandidateId) {
       return;
     }
 
+    const sleeps = sleptOfferReviews.current ??= readOfferReviewSleeps();
+    const now = Date.now();
+    const sleepUntil = now + offerReviewSleepDurationMs;
+    const oldSleepCount = sleeps.size;
+    for (const [id, expiresAt] of sleeps) {
+      if (expiresAt <= now) {
+        sleeps.delete(id);
+      }
+    }
+    if (sleepCurrentOffer) {
+      sleeps.set(currentCandidateId, sleepUntil);
+    }
+    if (sleepCurrentOffer || sleeps.size !== oldSleepCount) {
+      try {
+        if (sleeps.size) {
+          window.sessionStorage.setItem(offerReviewSleepStorageKey, JSON.stringify([...sleeps]));
+        } else {
+          window.sessionStorage.removeItem(offerReviewSleepStorageKey);
+        }
+      } catch {
+        // The current review flow can still use the in-memory exclusions.
+      }
+    }
+
     const { candidate_id: nextCandidateId } = await adminApi.getNextOfferReview([
-      ...new Set([currentCandidateId, ...translateAndApproveCandidateIds.current])
+      ...new Set([currentCandidateId, ...translateAndApproveCandidateIds.current, ...sleeps.keys()])
     ]);
 
+    if (activeReview.current !== review) {
+      return;
+    }
     if (nextCandidateId) {
       onOpenCandidate(nextCandidateId);
     } else {
@@ -1138,16 +1229,45 @@ export function ListingCandidatesPage({
     }
   }
 
-  async function handleSetListingStatus(candidate: AdminRecord, listingStatus: StoreItemListingStatus) {
+  function startReviewAction(action: 'mutation' | ReviewSelection = 'mutation') {
+    if (reviewActionInFlight.current) {
+      return false;
+    }
+    reviewActionInFlight.current = action;
+    setSaveError('');
+    setSaveMessage('');
+    return true;
+  }
+
+  async function handleSleepReview(candidate: AdminRecord) {
+    const review = activeReview.current;
     const id = field(candidate, ['id'], '');
-    if (!id) {
+    if (review?.id !== id || !onOpenCandidate || storeItemActionsInFlight.current || !startReviewAction(review)) {
       return;
     }
 
-    setSaveError('');
-    setSaveMessage('');
-    setUpdatingListingStatusCandidateId(id);
+    setSleepingReviewCandidateId(id);
+    try {
+      await openNextPendingReview(id, true);
+    } catch {
+      if (activeReview.current === review) {
+        setSaveError('The next review could not be loaded. Click Sleep to retry.');
+      }
+    } finally {
+      if (reviewActionInFlight.current === review) {
+        setSleepingReviewCandidateId('');
+        reviewActionInFlight.current = null;
+      }
+    }
+  }
 
+  async function handleSetListingStatus(candidate: AdminRecord, listingStatus: StoreItemListingStatus) {
+    const id = field(candidate, ['id'], '');
+    if (!id || !startReviewAction()) {
+      return;
+    }
+
+    setUpdatingListingStatusCandidateId(id);
     try {
       const savedStoreItem = await adminApi.updateItemCandidateListingStatus(id, listingStatus);
       const savedListingStatus = field(savedStoreItem, ['listing_status'], listingStatus);
@@ -1182,40 +1302,40 @@ export function ListingCandidatesPage({
       setSaveError('Store item listing status could not be saved.');
     } finally {
       setUpdatingListingStatusCandidateId('');
+      reviewActionInFlight.current = null;
     }
   }
 
   async function handleTranslateAndApprove(candidate: AdminRecord) {
     const id = field(candidate, ['id'], '');
-    if (!id) {
+    if (!id || !startReviewAction()) {
       return;
     }
 
-    setSaveError('');
-    setSaveMessage('');
     setStartingTranslateAndApproveCandidateId(id);
-
     try {
-      await adminApi.translateAndApproveItemCandidate(id);
-      translateAndApproveCandidateIds.current.add(id);
-    } catch {
-      setSaveError('Translation and approval job could not be started.');
-      setStartingTranslateAndApproveCandidateId('');
-      return;
-    }
+      try {
+        await adminApi.translateAndApproveItemCandidate(id);
+        translateAndApproveCandidateIds.current.add(id);
+      } catch {
+        setSaveError('Translation and approval job could not be started.');
+        return;
+      }
 
-    table.refresh();
-    try {
-      await openNextPendingReview(id);
-    } catch {
-      setSaveError('Translation and approval started, but the next review could not be loaded.');
+      table.refresh();
+      try {
+        await openNextPendingReview(id);
+      } catch {
+        setSaveError('Translation and approval started, but the next review could not be loaded.');
+      }
     } finally {
       setStartingTranslateAndApproveCandidateId('');
+      reviewActionInFlight.current = null;
     }
   }
 
   async function handleDeleteCandidate(): Promise<boolean> {
-    if (!selectedCandidate) {
+    if (!selectedCandidate || !startStoreItemAction()) {
       return false;
     }
 
@@ -1240,13 +1360,14 @@ export function ListingCandidatesPage({
       setSaveError('Store item could not be deleted.');
       return false;
     } finally {
+      storeItemActionsInFlight.current -= 1;
       setIsDeleting(false);
     }
   }
 
   async function handleStartLocalCoverWorkflow(candidate: AdminRecord) {
     const candidateId = field(candidate, ['id'], '');
-    if (!candidateId) {
+    if (!candidateId || !startStoreItemAction()) {
       return;
     }
 
@@ -1262,6 +1383,7 @@ export function ListingCandidatesPage({
     } catch {
       setLocalCoverWorkflowError('Cover workflow could not be started.');
     } finally {
+      storeItemActionsInFlight.current -= 1;
       setStartingCoverWorkflowId('');
     }
   }
@@ -1276,6 +1398,9 @@ export function ListingCandidatesPage({
       const itemId = field(candidate, ['item_id'], '');
       if (!itemId) {
         setSaveError('Link a catalog item before flattening a cover.');
+        return;
+      }
+      if (!startStoreItemAction()) {
         return;
       }
 
@@ -1310,6 +1435,7 @@ export function ListingCandidatesPage({
       } catch {
         setSaveError('Cover sources could not be loaded.');
       } finally {
+        storeItemActionsInFlight.current -= 1;
         setPreparingCoverFlatteningCandidateId('');
       }
       return;
@@ -1460,6 +1586,7 @@ export function ListingCandidatesPage({
           localCoverWorkflow={localCoverWorkflow}
           localCoverWorkflowError={localCoverWorkflowError}
           onBack={() => {
+            activeReview.current = null;
             setSelectedCandidate(null);
             setDetailState('ready');
             setLocalCoverWorkflow(null);
@@ -1477,12 +1604,14 @@ export function ListingCandidatesPage({
           onPrimaryItemAssociated={handlePrimaryItemAssociated}
           onSave={handleSaveCandidate}
           onSetListingStatus={handleSetListingStatus}
+          onSleep={onOpenCandidate ? handleSleepReview : undefined}
           onTranslateAndApprove={handleTranslateAndApprove}
           onCreateItem={handleCreateItemFromCandidate}
           onStartCoverFlattening={handleStartCoverFlattening}
           onStartLocalCoverWorkflow={handleStartLocalCoverWorkflow}
           saveError={saveError}
           preparingCoverFlatteningCandidateId={preparingCoverFlatteningCandidateId}
+          sleepingReviewCandidateId={sleepingReviewCandidateId}
           startingCoverWorkflowId={startingCoverWorkflowId}
           startingTranslateAndApproveCandidateId={startingTranslateAndApproveCandidateId}
           updatingListingStatusCandidateId={updatingListingStatusCandidateId}
@@ -1542,11 +1671,13 @@ function ItemCandidateForm({
   onPrimaryItemAssociated,
   onSave,
   onSetListingStatus,
+  onSleep,
   onTranslateAndApprove,
   onStartCoverFlattening,
   onStartLocalCoverWorkflow,
   preparingCoverFlatteningCandidateId,
   saveError,
+  sleepingReviewCandidateId,
   startingCoverWorkflowId,
   startingTranslateAndApproveCandidateId,
   updatingListingStatusCandidateId
@@ -1570,11 +1701,13 @@ function ItemCandidateForm({
   onPrimaryItemAssociated: (candidate: AdminRecord, item: AdminRecord) => void;
   onSave: (input: AdminRecord) => void;
   onSetListingStatus: (candidate: AdminRecord, listingStatus: StoreItemListingStatus) => void;
+  onSleep?: (candidate: AdminRecord) => void;
   onTranslateAndApprove: (candidate: AdminRecord) => void;
   onStartCoverFlattening: (candidate: AdminRecord) => void | Promise<void>;
   onStartLocalCoverWorkflow: (candidate: AdminRecord) => void;
   preparingCoverFlatteningCandidateId: string;
   saveError: string;
+  sleepingReviewCandidateId: string;
   startingCoverWorkflowId: string;
   startingTranslateAndApproveCandidateId: string;
   updatingListingStatusCandidateId: string;
@@ -1619,25 +1752,28 @@ function ItemCandidateForm({
     setTranslationError('');
   }, [itemId]);
 
+  const isSleepingReview = Boolean(sleepingReviewCandidateId);
+  const isWritingStoreItem = isSaving || isCreatingBggItem || isCreatingItem || isDeleting;
+
   function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (isDeleting) {
+    if (isDeleting || isSleepingReview) {
       return;
     }
     onSave(itemCandidateInputFromForm(new FormData(event.currentTarget), detailFields, detailMode === 'review' ? candidate : undefined));
   }
 
   const canConfirmBggDialog =
-    Boolean(bggDialogBggId.trim()) && !isSaving && !isCreatingBggItem && !isCreatingItem && !isDeleting;
+    Boolean(bggDialogBggId.trim()) && !isWritingStoreItem && !isSleepingReview;
   const canConfirmCandidateDialog =
-    !isSaving &&
-    !isCreatingBggItem &&
-    !isCreatingItem &&
-    !isDeleting &&
+    !isWritingStoreItem &&
+    !isSleepingReview &&
     (!candidateImplements || Boolean(candidateDialogBggId.trim())) &&
     (!candidateExtends || Boolean(candidateExtendsItemId.trim()));
   const isStartingCoverWorkflow = Boolean(candidateIdValue && candidateIdValue === startingCoverWorkflowId);
-  const canStartCoverWorkflow = Boolean(candidateIdValue && imageUrl && itemId && !isStartingCoverWorkflow && !isDeleting);
+  const canStartCoverWorkflow = Boolean(
+    candidateIdValue && imageUrl && itemId && !isStartingCoverWorkflow && !isDeleting && !isSleepingReview
+  );
   const isPreparingCoverFlattening =
     Boolean(candidateIdValue) && candidateIdValue === preparingCoverFlatteningCandidateId;
   const canStartCoverFlattening = Boolean(
@@ -1645,12 +1781,15 @@ function ItemCandidateForm({
       itemId &&
       !isPreparingCoverFlattening &&
       !isDeleting &&
+      !isSleepingReview &&
       (detailMode === 'review' || imageUrl)
   );
   const isUpdatingListingStatus =
     Boolean(candidateIdValue) && candidateIdValue === updatingListingStatusCandidateId;
   const isStartingTranslateAndApprove =
     Boolean(candidateIdValue) && candidateIdValue === startingTranslateAndApproveCandidateId;
+  const isReviewActionInFlight =
+    isSleepingReview || Boolean(startingTranslateAndApproveCandidateId || updatingListingStatusCandidateId);
 
   async function handleConfirmBggDialog() {
     await onCreateItemFromBggId(bggDialogBggId);
@@ -1760,7 +1899,7 @@ function ItemCandidateForm({
                 </Button>
               </span>
             </Tooltip>
-            <Button disabled={isSaving || isDeleting} startIcon={<SaveIcon />} type="submit" variant="contained">
+            <Button disabled={isSaving || isDeleting || isSleepingReview} startIcon={<SaveIcon />} type="submit" variant="contained">
               {isSaving ? 'Saving...' : 'Save Store Item'}
             </Button>
             <Button disabled={isDeleting} startIcon={<ArrowBackIcon />} type="button" variant="outlined" onClick={onBack}>
@@ -1768,7 +1907,7 @@ function ItemCandidateForm({
             </Button>
             <Button
               color="error"
-              disabled={isDeleting || isSaving || isCreatingBggItem || isCreatingItem}
+              disabled={isWritingStoreItem || isSleepingReview}
               startIcon={isDeleting ? <CircularProgress color="inherit" size={18} /> : <DeleteIcon />}
               type="button"
               variant="outlined"
@@ -1787,7 +1926,7 @@ function ItemCandidateForm({
                 disabled={
                   !candidateIdValue ||
                   !hasGeneratedTranslation ||
-                  isUpdatingListingStatus ||
+                  isReviewActionInFlight ||
                   listingStatus === 'LISTED'
                 }
                 startIcon={
@@ -1813,8 +1952,7 @@ function ItemCandidateForm({
                       disabled={
                         !candidateIdValue ||
                         !canGenerateTranslation ||
-                        isStartingTranslateAndApprove ||
-                        isUpdatingListingStatus ||
+                        isReviewActionInFlight ||
                         listingStatus !== 'PENDING'
                       }
                       startIcon={
@@ -1835,7 +1973,7 @@ function ItemCandidateForm({
               ) : null}
               <Button
                 color="error"
-                disabled={!candidateIdValue || isUpdatingListingStatus || listingStatus === 'REJECTED'}
+                disabled={!candidateIdValue || isReviewActionInFlight || listingStatus === 'REJECTED'}
                 startIcon={
                   isUpdatingListingStatus ? <CircularProgress color="inherit" size={18} /> : <CancelIcon />
                 }
@@ -1845,13 +1983,34 @@ function ItemCandidateForm({
               >
                 Reject listing
               </Button>
+              {listingStatus === 'PENDING' && onSleep ? (
+                <Tooltip title="Skip this offer in automatic review for one hour">
+                  <span>
+                    <Button
+                      disabled={
+                        !candidateIdValue ||
+                        isReviewActionInFlight ||
+                        isWritingStoreItem ||
+                        Boolean(preparingCoverFlatteningCandidateId || startingCoverWorkflowId)
+                      }
+                      loading={Boolean(candidateIdValue) && candidateIdValue === sleepingReviewCandidateId}
+                      sx={{ width: { md: 'auto', xs: '100%' } }}
+                      type="button"
+                      variant="outlined"
+                      onClick={() => onSleep(candidate)}
+                    >
+                      Sleep
+                    </Button>
+                  </span>
+                </Tooltip>
+              ) : null}
               <Typography color="text.secondary" variant="body2">
                 Listing status: {listingStatus || 'Unknown'}
               </Typography>
             </>
           ) : null}
           <Button
-            disabled={isSaving || isCreatingBggItem || isCreatingItem || isDeleting}
+            disabled={isWritingStoreItem || isSleepingReview}
             sx={{ minHeight: 40, minWidth: { md: 190 }, textTransform: 'none', whiteSpace: 'nowrap' }}
             type="button"
             variant="outlined"
@@ -1863,7 +2022,7 @@ function ItemCandidateForm({
             {isCreatingBggItem ? 'Creating BGG item...' : 'Create item from BGG ID'}
           </Button>
           <Button
-            disabled={isSaving || isCreatingItem || isCreatingBggItem || isDeleting}
+            disabled={isWritingStoreItem || isSleepingReview}
             startIcon={<AddCircleIcon />}
             sx={{ minHeight: 40, minWidth: { md: 230 }, textTransform: 'none', whiteSpace: 'nowrap' }}
             type="button"
@@ -2053,7 +2212,7 @@ function ItemCandidateForm({
           <Button disabled={isDeleting} type="button" onClick={() => setIsDeleteDialogOpen(false)}>
             Cancel
           </Button>
-          <Button color="error" disabled={isDeleting} type="button" variant="contained" onClick={handleConfirmDelete}>
+          <Button color="error" disabled={isDeleting || isSleepingReview} type="button" variant="contained" onClick={handleConfirmDelete}>
             {isDeleting ? 'Deleting...' : 'Delete Store Item'}
           </Button>
         </DialogActions>
