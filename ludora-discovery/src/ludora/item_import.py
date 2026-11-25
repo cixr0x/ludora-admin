@@ -83,7 +83,7 @@ class BggItemImporter:
 
     def _existing_item_id(self, bgg_id: int) -> int | None:
         with self.connection.cursor() as cursor:
-            cursor.execute("select id from items where bgg_id = %s", (bgg_id,))
+            cursor.execute("select id from items where bgg_id = %s and not is_version", (bgg_id,))
             row = cursor.fetchone()
         return int(row[0]) if row else None
 
@@ -97,7 +97,7 @@ class BggItemImporter:
         return self.import_thing(linked_thing, linked_xml, visited)
 
     def _upsert_item(self, cursor: Any, thing: BggThing) -> int:
-        cursor.execute("select id from items where bgg_id = %s", (thing.bgg_id,))
+        cursor.execute("select id from items where bgg_id = %s and not is_version", (thing.bgg_id,))
         existing = cursor.fetchone()
         item_type = _bgg_type_to_item_type(thing.item_type)
         image_url = thing.image or thing.thumbnail

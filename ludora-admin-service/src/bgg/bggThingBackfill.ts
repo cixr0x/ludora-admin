@@ -45,7 +45,7 @@ async function uncachedItemBggIds(database: Database): Promise<number[]> {
     `
     select distinct i.bgg_id
     from items i
-    where i.bgg_id is not null
+    where i.bgg_id is not null and not i.is_version
       and not exists (
         select 1
         from bgg_thing_cache btc

@@ -1158,6 +1158,27 @@ describe('ItemsPage', () => {
     });
   });
 
+  it('imports a selected BGG edition from item details using the shared endpoint', async () => {
+    const user = userEvent.setup();
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = pathOf(String(input));
+      if (path === '/items/77') return jsonResponse({ id: '77', bgg_id: 220368, canonical_name: 'Sword of Fellows', item_type: 'base_game', is_version: false });
+      if (path === '/items/77/bgg-versions') return jsonResponse([{ bgg_id: 350656, name: 'Sword of Fellows Deluxe Edition', nickname: 'English deluxe edition', thumbnail_url: 'https://cf.geekdo-images.com/cover.jpg', item_id: null }]);
+      if (path === '/items/import-bgg-version') return jsonResponse({ id: '99', is_version: true });
+      if (path === '/items/77/taxonomy') return jsonResponse({ categories: [], families: [], mechanics: [] });
+      return jsonResponse([]);
+    });
+    render(<ItemsPage selectedItemId="77" />);
+    await user.click(await screen.findByRole('combobox', { name: 'Versions' }));
+    const option = await screen.findByRole('option', { name: /Sword of Fellows Deluxe Edition/ });
+    expect(option.querySelector('img')).toHaveAttribute('src', 'https://cf.geekdo-images.com/cover.jpg');
+    await user.click(option);
+    await user.click(screen.getByRole('button', { name: 'Import' }));
+    expect(await screen.findByRole('link', { name: 'Open item' })).toHaveAttribute('href', '#items?id=99');
+    expect(fetchMock.mock.calls.find(([input]) => pathOf(String(input)) === '/items/import-bgg-version')?.[1]?.body)
+      .toBe(JSON.stringify({ parent_bgg_id: 220368, version_bgg_id: 350656 }));
+  });
+
   it('opens the item form directly from a selected item id', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);

@@ -1,6 +1,14 @@
 import { XMLParser } from 'fast-xml-parser';
 import * as HtmlEntities from '@nodable/entities';
 
+export type BggVersion = {
+  bggId: number;
+  name: string;
+  nickname: string;
+  image: string;
+  thumbnail: string;
+};
+
 export type BggSearchItem = {
   bggId: number;
   name: string;
@@ -111,6 +119,38 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
   };
 }
 
+export function parseBggVersionsResponse(xml: string, parentBggId: number): BggVersion[] | null {
+  const parsed = parser.parse(xml) as BggXmlRoot;
+  const parent = asArray(parsed.items?.item).find((item) =>
+    numberValue(item.id) === parentBggId &&
+    ['boardgame', 'boardgameexpansion', 'boardgameaccessory'].includes(stringValue(item.type))
+  );
+  if (!parent) return null;
+
+  const versions = new Map<number, BggVersion>();
+  for (const edition of asArray(parent.versions?.item)) {
+    const bggId = numberValue(edition.id);
+    if (edition.type !== 'boardgameversion' || bggId === null || !Number.isSafeInteger(bggId) || bggId <= 0) continue;
+
+    const parentLinks = asArray(edition.link).filter((link) =>
+      link.type === 'boardgameversion' && stringValue(link.inbound).toLowerCase() === 'true'
+    );
+    if (!parentLinks.some((link) => numberValue(link.id) === parentBggId)) continue;
+
+    const nickname = primaryName(edition);
+    const name = nameValue(edition.canonicalname?.value) || nickname;
+    if (!name) continue;
+    versions.set(bggId, {
+      bggId,
+      name,
+      nickname,
+      image: stringValue(edition.image),
+      thumbnail: stringValue(edition.thumbnail)
+    });
+  }
+  return [...versions.values()];
+}
+
 function primaryName(item: BggXmlItem): string {
   const primary = asArray(item.name).find((name) => name.type === 'primary');
   return nameValue(primary?.value);
@@ -193,6 +233,8 @@ type BggXmlRoot = {
 };
 
 type BggXmlItem = {
+  canonicalname?: BggXmlValue;
+  versions?: { item?: BggXmlItem | BggXmlItem[] };
   description?: string;
   id?: string;
   image?: string;

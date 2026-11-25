@@ -17,6 +17,15 @@ type ErrorResponse = {
 
 export type AdminRecord = Record<string, unknown>;
 
+export type BggVersion = {
+  bgg_id: number;
+  name: string;
+  nickname: string;
+  image_url: string;
+  thumbnail_url: string;
+  item_id: number | string | null;
+};
+
 export type ManualAiBggMatchResult =
   | {
       status: 'matched';
@@ -728,6 +737,12 @@ export const adminApi = {
   updateItemCandidate: (id: string, input: ItemCandidateInput) =>
     sendJson<AdminRecord>(`/discovery/listings/${encodeURIComponent(id)}`, 'PATCH', input),
   getItem: (id: string) => fetchData<AdminRecord>(`/items/${encodeURIComponent(id)}`),
+  getBggVersions: (itemId: string) => fetchData<BggVersion[]>(`/items/${encodeURIComponent(itemId)}/bgg-versions`),
+  importBggVersion: (parentBggId: number, versionBggId: number) =>
+    sendJson<AdminRecord>('/items/import-bgg-version', 'POST', {
+      parent_bgg_id: parentBggId,
+      version_bgg_id: versionBggId
+    }),
   estimateImageSimilarity: (referenceImageUrl: string, candidateImageUrl: string, options?: { includeHashSimilarity?: boolean }) =>
     sendJson<ImageSimilarityResult>('/admin/image-similarity', 'POST', {
       reference_image_url: referenceImageUrl,

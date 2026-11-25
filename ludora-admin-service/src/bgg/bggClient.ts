@@ -1,4 +1,4 @@
-import { parseBggSearchResponse, parseBggThingResponse, type BggSearchItem, type BggThingDetails } from './bggParser.js';
+import { parseBggSearchResponse, parseBggThingResponse, parseBggVersionsResponse, type BggSearchItem, type BggThingDetails, type BggVersion } from './bggParser.js';
 import { BGG_REQUEST_TYPE } from './bggTypes.js';
 
 export type BggThingResult = {
@@ -10,6 +10,7 @@ export type BggClient = {
   fetchThing(bggId: number): Promise<BggThingResult | null>;
   search(query: string): Promise<BggSearchItem[]>;
   searchFresh?(query: string): Promise<BggSearchItem[]>;
+  fetchVersions?(parentBggId: number): Promise<BggVersion[] | null>;
 };
 
 export type BggThingXmlClient = BggClient & {
@@ -134,6 +135,15 @@ export function createBggClient({
       const xml = await fetchThingXml(bggId, signal);
       const details = parseBggThingResponse(xml);
       return details ? { details, rawXml: xml } : null;
+    },
+
+    async fetchVersions(parentBggId: number): Promise<BggVersion[] | null> {
+      const xml = await getXml(
+        'thing',
+        new URLSearchParams({ id: String(parentBggId), versions: '1' }),
+        AbortSignal.timeout(15_000)
+      );
+      return parseBggVersionsResponse(xml, parentBggId);
     },
 
     search,

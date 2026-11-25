@@ -56,7 +56,7 @@ test('a partial authentication failure supplies the sign-in link and enables ret
   assert.match(harness.button.textContent, /retry/i);
 });
 
-function createHarness(url) {
+function createHarness(url, main = null) {
   const body = new Element();
   const navigation = new EventTarget();
   const location = { href: url };
@@ -66,7 +66,7 @@ function createHarness(url) {
     URL,
     navigation,
     location,
-    document: { documentElement: body, createElement: () => new Element() },
+    document: { documentElement: body, createElement: () => new Element(), querySelector: () => main },
     CSSStyleSheet: class { replaceSync() {} },
     chrome: {
       runtime: {
@@ -124,3 +124,38 @@ class Element {
 
   setAttribute() {}
 }
+
+test('an edition route with a missing parent keeps the import from being sent', async () => {
+  const editionPage = 'https://boardgamegeek.com/boardgameversion/13/example-edition';
+  const harness = createHarness(itemPage);
+  const itemButton = harness.button;
+  harness.navigate(editionPage);
+  assert.notEqual(harness.button, itemButton);
+  await harness.click(true);
+  assert.deepEqual(harness.messages, []);
+  assert.match(harness.status.textContent, /parent game could not be identified/i);
+});
+
+test('extracts the parent and edition text from the BGG version module', () => {
+  const descriptionAnchor = (innerText) => ({
+    pathname: '/wiki/edit/version:350656',
+    closest: () => ({
+      closest: () => ({ parentElement: { closest: () => ({ rows: [{}, { cells: [{
+        querySelector: () => ({ innerText })
+      }] }] }) } })
+    })
+  });
+  const edit = descriptionAnchor('Foil cards and special box.');
+  const parent = { href: 'https://boardgamegeek.com/boardgame/220368/sword-of-fellows' };
+  const row = { cells: [{ textContent: 'Board Game' }, { querySelectorAll: () => [parent] }] };
+  const main = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [edit] };
+  const context = vm.createContext({ URL });
+  vm.runInContext(routes, context);
+  const version = context.readGeekVersionDetails(main, 350656);
+  assert.deepEqual(JSON.parse(JSON.stringify(version)), { parentBggId: 220368, description: 'Foil cards and special box.' });
+  const noParent = { querySelectorAll: (selector) => selector === 'tr' ? [] : [edit] };
+  assert.equal(context.readGeekVersionDetails(noParent, 350656), null);
+  const placeholder = descriptionAnchor('This page does not exist. You can edit this page to create it.');
+  const noDescription = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [placeholder] };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.readGeekVersionDetails(noDescription, 350656))), { parentBggId: 220368, description: '' });
+});

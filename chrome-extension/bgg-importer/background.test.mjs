@@ -310,3 +310,22 @@ function createHarness(responses) {
 function data(value) {
   return Response.json({ data: value });
 }
+
+test('version imports route through the version endpoint with parent and description', async () => {
+  const url = 'https://boardgamegeek.com/boardgameversion/350656/english-deluxe-edition';
+  const versionSender = { ...sender, url, tab: { ...sender.tab, url } };
+  const harness = createHarness([data({ ...item, description_es: 'Traducido.' })]);
+  const message = { type: 'import-bgg-version', bggId: 350656, parentBggId: 220368, description: 'Foil cards.' };
+  assert.deepEqual(await harness.send(versionSender, message), { status: 'already-translated', itemId: '91' });
+  assert.deepEqual(harness.requests, [{
+    method: 'POST',
+    url: api + '/items/import-bgg-version',
+    body: { parent_bgg_id: 220368, version_bgg_id: 350656, description: 'Foil cards.' }
+  }]);
+});
+
+test('a normal item page cannot send a version import even with the same numeric ID', async () => {
+  const harness = createHarness([]);
+  assert.deepEqual(await harness.send(sender, { type: 'import-bgg-version', bggId: 13, parentBggId: 42 }), { status: 'unsupported' });
+  assert.deepEqual(harness.requests, []);
+});

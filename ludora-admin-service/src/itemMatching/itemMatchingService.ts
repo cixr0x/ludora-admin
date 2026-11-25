@@ -654,7 +654,7 @@ async function findLocalCatalogNameItems(database: Database, candidate: Discover
       i.normalized_name,
       i.normalized_name_es,
       i.item_type,
-      i.bgg_id,
+      case when i.is_version then null else i.bgg_id end as bgg_id,
       i.image_url, i.image_url_es, i.image_phash, i.image_phash_es,
       coalesce((
         select json_agg(distinct ia.alias)
@@ -709,7 +709,7 @@ async function findNearestCatalogImageItems(database: Database, variants: Listin
        order by viable_distance, item_id limit ${MAX_NEAREST_IMAGE_ITEMS})
     )
     select i.id, i.canonical_name, i.canonical_name_es, i.normalized_name, i.normalized_name_es,
-      i.item_type, i.bgg_id, i.image_url, i.image_url_es, i.image_phash, i.image_phash_es,
+      i.item_type, case when i.is_version then null else i.bgg_id end as bgg_id, i.image_url, i.image_url_es, i.image_phash, i.image_phash_es,
       coalesce((select json_agg(distinct ia.alias) from item_aliases ia where ia.item_id = i.id), '[]'::json) as aliases,
       coalesce((
         select json_agg(distinct publisher_name) from (

@@ -24,7 +24,8 @@ function bggThingMetadataJoin(itemAlias: 'item_record' | 'updated_item'): string
     left join lateral (
       select raw_xml, parsed_json
       from bgg_thing_cache
-      where bgg_id = ${itemAlias}.bgg_id
+      where not ${itemAlias}.is_version
+        and bgg_id = ${itemAlias}.bgg_id
         and request_type = any(${bggCacheRequestTypesSql})
         and (parsed_json ? 'alternateNames' or raw_xml ~ '<item[[:space:]>]')
       order by array_position(${bggCacheRequestTypesSql}, request_type)
@@ -186,7 +187,7 @@ const itemCandidateSelect = `
 
 const itemSelect = `
   id, canonical_name, normalized_name, canonical_name_es, normalized_name_es,
-  item_type, is_accessory, is_rpg, parent_item_id, bgg_id, bgg_url, bgg_last_sync_at,
+  item_type, is_accessory, is_rpg, parent_item_id, bgg_id, bgg_url, is_version, version_of, bgg_last_sync_at,
   year_published, rating, weight, description, description_es, min_players, max_players,
   min_minutes, max_minutes, complexity, min_age, image_url, image_url_es, status,
   created_at, updated_at
@@ -1166,6 +1167,48 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.post('/items/import-bgg-version', async (request, response, next) => {
+    try {
+      if (!bggItemImporter?.importBggVersion) {
+        throw httpError(503, 'BGG edition importer is not configured');
+      }
+      const parentBggId = positiveIntegerBodyField(request.body, 'parent_bgg_id');
+      const versionBggId = positiveIntegerBodyField(request.body, 'version_bgg_id');
+      if (!Number.isSafeInteger(parentBggId) || !Number.isSafeInteger(versionBggId)) {
+        throw httpError(400, 'BGG IDs must be safe integers');
+      }
+
+      const description: unknown = request.body?.description;
+      if (description !== undefined && (typeof description !== 'string' || description.length > 20_000 || description.includes('\u0000'))) {
+        throw httpError(400, 'Edition description must be text up to 20,000 characters');
+      }
+      const itemId = await bggItemImporter.importBggVersion(parentBggId, versionBggId, description?.trim());
+      if (!itemId) throw httpError(404, 'BGG edition or parent not found');
+
+      const result = await database.query(`select ${itemSelect} from items where id = $1`, [itemId]);
+      if (!result.rows[0]) throw httpError(404, 'Imported item not found');
+
+      response.status(201).json({ data: itemDetailResponse(result.rows[0] as Record<string, unknown>) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  router.get('/items/:id/bgg-versions', async (request, response, next) => {
+    try {
+      if (!bggItemImporter?.listBggVersions) {
+        throw httpError(503, 'BGG edition importer is not configured');
+      }
+      const itemId = integerPathParam(request.params.id);
+      const versions = await bggItemImporter.listBggVersions(itemId);
+      if (versions === null) throw httpError(404, 'BGG parent item not found');
+
+      response.json({ data: versions });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/items/:id', async (request, response, next) => {
     try {
       const result = await database.query(
@@ -1512,8 +1555,8 @@ export function createDiscoveryRouter(
               normalized_name_es = $4,
               item_type = $5,
               parent_item_id = $6,
-              bgg_id = $7,
-              bgg_url = $8,
+              bgg_id = case when is_version then bgg_id else $7 end,
+              bgg_url = case when is_version then bgg_url else $8 end,
               year_published = $9,
               description = $10,
               description_es = $11,
@@ -2276,7 +2319,7 @@ export function createDiscoveryRouter(
       const result = await database.query(
         `
         with linked_item as (
-          select id, bgg_id, canonical_name
+          select id, case when is_version then null else bgg_id end as bgg_id, canonical_name
           from items
           where id = $2
         ),
@@ -2350,7 +2393,7 @@ export function createDiscoveryRouter(
             and nullif(trim(source.image_url), '') is not null
           returning
             i.id, i.canonical_name, i.normalized_name, i.canonical_name_es, i.normalized_name_es,
-            i.item_type, i.is_accessory, i.is_rpg, i.parent_item_id, i.bgg_id, i.bgg_url, i.bgg_last_sync_at,
+            i.item_type, i.is_accessory, i.is_rpg, i.parent_item_id, i.bgg_id, i.bgg_url, i.is_version, i.version_of, i.bgg_last_sync_at,
             i.year_published, i.rating, i.weight, i.description, i.description_es,
             i.min_players, i.max_players, i.min_minutes, i.max_minutes, i.complexity,
             i.min_age, i.image_url, i.image_url_es, i.status, i.created_at, i.updated_at

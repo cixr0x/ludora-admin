@@ -34,6 +34,7 @@ import {
   type PagedRows,
   type TableQuery
 } from '../api/client';
+import { BggVersionPicker } from '../components/BggVersionPicker';
 import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
 import { DataTable, type DataTableColumn } from '../components/DataTable';
 import { FloatingSuccessAlert } from '../components/FloatingSuccessAlert';
@@ -1310,7 +1311,11 @@ function ItemForm({
   const bggUrl = field(item, ['bgg_url'], '') || (bggId ? `https://boardgamegeek.com/boardgame/${encodeURIComponent(bggId)}` : '');
   const bggAlternateNames = stringListValue(item, 'bgg_alternate_names');
   const canonicalNameEs = detailValue(item, 'canonical_name_es');
-  const detailFields = detailVariant === 'review' ? itemReviewDetailFields : itemDetailFields;
+  const editableDetailFields = detailVariant === 'review' ? itemReviewDetailFields : itemDetailFields;
+  const detailFields = item.is_version === true
+    ? editableDetailFields.map((field) =>
+        field.key === 'bgg_id' || field.key === 'bgg_url' ? { ...field, readOnly: true } : field)
+    : editableDetailFields;
   const formKey = [...detailFields.map((detailField) => detailValue(item, detailField.key)), ...bggAlternateNames].join('\u001f');
   const formRef = useRef<HTMLFormElement>(null);
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -1325,7 +1330,7 @@ function ItemForm({
     if (isDeleting) {
       return;
     }
-    onSave(inputFromForm(new FormData(event.currentTarget), detailFields, detailVariant === 'review' ? item : undefined));
+    onSave(inputFromForm(new FormData(event.currentTarget), detailFields, item));
   }
 
   async function handleConfirmDelete() {
@@ -1340,7 +1345,7 @@ function ItemForm({
       return;
     }
 
-    onGenerateSpanishDescription(inputFromForm(new FormData(form), detailFields, detailVariant === 'review' ? item : undefined));
+    onGenerateSpanishDescription(inputFromForm(new FormData(form), detailFields, item));
   }
 
   function handleGenerateSpanishNormalizedName(event: MouseEvent<HTMLButtonElement>) {
@@ -1497,6 +1502,9 @@ function ItemForm({
                   Open BGG page
                 </Link>
               ) : null}
+              {item.is_version === false && item.is_rpg !== true && /^\d+$/.test(bggId) && Number(bggId) > 0 ? (
+                <BggVersionPicker key={`${item.id}:${bggId}`} itemId={String(item.id)} parentBggId={Number(bggId)} />
+              ) : null}
               {imageUrl ? (
                 <Link href={imageUrl} rel="noreferrer" target="_blank">
                   Open image
@@ -1544,7 +1552,7 @@ function ItemForm({
                       gridColumn: detailField.gridColumn
                     }}
                   >
-                    {bggId ? (
+                    {bggId && item.is_version !== true ? (
                       <Autocomplete
                         clearOnBlur={false}
                         defaultValue={canonicalNameEs}
@@ -1890,7 +1898,7 @@ function isReciprocalRelationship(record: AdminRecord, nextRecord: AdminRecord) 
 }
 
 function inputFromForm(formData: FormData, detailFields = itemDetailFields, baseRecord?: AdminRecord): AdminRecord {
-  const displayedFieldKeys = new Set(detailFields.map((detailField) => detailField.key));
+  const displayedFieldKeys = new Set(detailFields.filter((detailField) => !detailField.readOnly).map((detailField) => detailField.key));
   return Object.fromEntries(
     itemDetailFields
       .filter((detailField) => !detailField.readOnly)

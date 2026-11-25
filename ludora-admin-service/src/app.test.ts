@@ -3364,7 +3364,7 @@ describe('ludora admin service', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ data: row });
     const sql = normalizeSql(queries[0].sql);
-    expect(sql).toContain('select id, bgg_id, canonical_name from items where id = $2');
+    expect(sql).toContain('select id, case when is_version then null else bgg_id end as bgg_id, canonical_name from items where id = $2');
     expect(sql).toContain('update store_items set item_id = linked_item.id');
     expect(sql).toContain('is_boardgame = true');
     expect(sql).toContain("match_source = 'manual'");
