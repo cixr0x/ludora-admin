@@ -3339,13 +3339,16 @@ class OdooStockUpdateTests(unittest.TestCase):
 
     def test_modern_route_accepts_older_stock_fields_and_combo_only_limits(self):
         result = {"product_id": 4105, "product_template_id": 4107, "is_combination_possible": True}
-        for stock in (
-            {"product_type": "product", "free_qty": 0, "cart_qty": 0, "allow_out_of_stock_order": False},
-            {"max_combo_quantity": 0},
+        for html, stock in (
+            (
+                self.product_html.replace("js_main_product", "main_product"),
+                {"product_type": "product", "free_qty": 0, "cart_qty": 0, "allow_out_of_stock_order": False},
+            ),
+            (self.product_html, {"max_combo_quantity": 0}),
         ):
             with (
                 self.subTest(stock=stock),
-                patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
+                patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, html)),
                 patch("ludora.product_crawler.fetch_json", return_value=FetchResult(
                     self.endpoint, json.dumps({"result": {**result, **stock}}),
                 )),

@@ -125,7 +125,7 @@ class _ProductFormParser(HTMLParser):
         if tag == "div":
             if self.main_product_depth:
                 self.main_product_depth += 1
-            elif "js_main_product" in classes:
+            elif {"js_main_product", "main_product"}.intersection(classes):
                 self.main_product_depth = 1
                 self.product_inputs = {}
                 self.variant_values = []
