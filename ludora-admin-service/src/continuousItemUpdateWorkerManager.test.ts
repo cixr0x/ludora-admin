@@ -55,6 +55,7 @@ describe('continuous item update worker manager', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('starts the persistent Python worker with cadence, lease, and internal auth configuration', async () => {
@@ -106,6 +107,20 @@ describe('continuous item update worker manager', () => {
 
     await manager.shutdown();
     expect(spawned[0].child.killSignals).toEqual(['SIGTERM']);
+  });
+
+  it.each([
+    ['the configured background URL', 'postgresql://background@localhost/ludora_dev'],
+    ['the inherited URL when the background URL is unset', undefined]
+  ])('launches the worker with %s', async (_label, databaseUrl) => {
+    const inheritedUrl = 'postgresql://admin@localhost/ludora_dev';
+    vi.stubEnv('LUDORA_DATABASE_URL', inheritedUrl);
+    const spawnProcess = vi.fn<SpawnContinuousItemUpdateWorker>(() => new FakeChildProcess() as never);
+    const { manager } = createManager({ databaseUrl, spawnProcess });
+
+    manager.start();
+    expect(spawnProcess.mock.calls[0][2].env?.LUDORA_DATABASE_URL).toBe(databaseUrl ?? inheritedUrl);
+    await manager.shutdown();
   });
 
   it('terminates the dedicated POSIX worker process group', () => {

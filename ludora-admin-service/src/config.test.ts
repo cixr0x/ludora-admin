@@ -39,6 +39,21 @@ describe('loadConfig', () => {
     expect(loadConfig().host).toBe('0.0.0.0');
   });
 
+  it('loads a separate background database URL and leaves it unset for a blank value', () => {
+    vi.stubEnv('LUDORA_DATABASE_URL', 'postgresql://admin@localhost/ludora_dev');
+    vi.stubEnv('LUDORA_BACKGROUND_DATABASE_URL', ' ');
+    expect(loadConfig()).toMatchObject({
+      databaseUrl: 'postgresql://admin@localhost/ludora_dev',
+      backgroundDatabaseUrl: undefined
+    });
+
+    vi.stubEnv('LUDORA_BACKGROUND_DATABASE_URL', ' postgresql://background@localhost/ludora_dev ');
+    expect(loadConfig()).toMatchObject({
+      databaseUrl: 'postgresql://admin@localhost/ludora_dev',
+      backgroundDatabaseUrl: 'postgresql://background@localhost/ludora_dev'
+    });
+  });
+
   it.each(['abc', '0', '-1', '4001.5'])('rejects invalid PORT %s', (port) => {
     vi.stubEnv('PORT', port);
 

@@ -86,6 +86,29 @@ describe('local discovery operations client', () => {
     expect(spawned[0].args.slice(0, 2)).toEqual(['-m', 'ludora.operation_cli']);
   });
 
+  it.each([
+    ['the configured background URL', 'postgresql://background@localhost/ludora_dev'],
+    ['the inherited URL when the background URL is unset', undefined]
+  ])('launches the supervisor and CLI with %s', async (_label, databaseUrl) => {
+    const inheritedUrl = 'postgresql://admin@localhost/ludora_dev';
+    vi.stubEnv('LUDORA_DATABASE_URL', inheritedUrl);
+    const { client, spawned } = createClient({ databaseUrl, platform: 'linux' });
+
+    const started = client.startItemDiscoveryRun({ all_stores: true });
+    spawned[0].child.acceptItemDiscovery();
+    await started;
+    expect(spawned[0].options).toMatchObject({
+      env: { LUDORA_DATABASE_URL: databaseUrl ?? inheritedUrl }
+    });
+    spawned[0].child.succeed({ result: { item_candidates: 0, store_id: null, website_url: '' } });
+
+    await client.startItemUpdateRun();
+    expect(spawned[1].options).toMatchObject({
+      env: { LUDORA_DATABASE_URL: databaseUrl ?? inheritedUrl }
+    });
+    spawned[1].child.succeed({ result: {} });
+  });
+
   it('reports supervisor cleanup failure instead of accepting a successful worker result', async () => {
     const { client, spawned } = createClient();
     const started = client.startItemDiscoveryRun({ all_stores: true });
@@ -98,6 +121,7 @@ describe('local discovery operations client', () => {
   });
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
   });
 
   it('starts store discovery by spawning the colocated Python operation CLI', async () => {

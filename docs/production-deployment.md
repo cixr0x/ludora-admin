@@ -288,6 +288,39 @@ Shopify discovery enumerates product URLs from the sitemap and fetches each prod
 Deployment smoke tests must not start a real discovery run, because a run
 persists candidates and job/trace data.
 
+### Database workload logins
+
+The [workload roles patch](../database/patches/20261124_002_create_database_workload_roles.sql)
+provisions three PostgreSQL `NOLOGIN` roles and grants access in `ludora_dev`.
+Provide the exact patch for approval before applying it. Before cutover,
+separately obtain approval to enable login and provision credentials for those
+same roles. Store them only in the services' protected environment files.
+
+| Service configuration | PostgreSQL role | Connection limit | Default statement timeout |
+| --- | --- | ---: | ---: |
+| Public API `LUDORA_DATABASE_URL` | `ludora_public_api` | 8 | 8s |
+| Admin service `.env` `LUDORA_DATABASE_URL` | `ludora_admin_api` | 6 | 8s |
+| Admin service `.env` `LUDORA_BACKGROUND_DATABASE_URL` | `ludora_background` | 8 | 30s |
+
+Use connection URLs for the same `ludora_dev` database and retain the current
+TLS options. Set both Admin variables together when switching its login.
+`LUDORA_BACKGROUND_DATABASE_URL` supplies the store-item schedule pool and
+overrides `LUDORA_DATABASE_URL` in the local discovery and continuous updater
+child processes. When the background setting is empty, the schedule uses the
+Admin URL and the children keep their existing database URL resolution. Admin
+records supervisor-side discovery watchdog failures through its own pool, so
+it can record failures when the background role reaches its connection limit.
+External or standalone discovery can set `LUDORA_DATABASE_URL` in its own
+environment. The `pg_cron` jobs retain their existing owner and login.
+
+The role defaults apply to new logins. Explicit application timeouts still
+apply, including the 10s continuous updater and 60s Admin schedule
+statement limits. Deploy the Admin code that supports the new setting before
+switching its login. After the approved configuration change, restart the
+affected services and verify the active database usernames and read-only
+health checks. Keep the previous connection configuration available for a
+rollback until the workload logins are verified.
+
 ### Web Bot Auth identity and signing key
 
 Shopify storefront requests are signed with the public bot identity

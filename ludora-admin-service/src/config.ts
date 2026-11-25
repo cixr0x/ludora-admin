@@ -32,6 +32,7 @@ export type Config = {
   internalApiToken?: string;
   port: number;
   databaseUrl?: string;
+  backgroundDatabaseUrl?: string;
   corsOrigin: string[];
   continuousItemUpdateWorker: {
     concurrency: number;
@@ -80,6 +81,7 @@ export function loadConfig(): Config {
     internalApiToken: readOptionalEnv('LUDORA_INTERNAL_API_TOKEN'),
     port,
     databaseUrl: process.env.LUDORA_DATABASE_URL,
+    backgroundDatabaseUrl: readOptionalEnv('LUDORA_BACKGROUND_DATABASE_URL'),
     corsOrigin: readCorsOrigins(),
     continuousItemUpdateWorker: readContinuousItemUpdateWorkerConfig(),
     dailyItemDiscoverySchedule: {

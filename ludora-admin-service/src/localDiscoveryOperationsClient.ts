@@ -30,6 +30,7 @@ type LocalDiscoveryOptions = {
   persistBrowserFailure?: (failure: DiscoveryBrowserFailure) => Promise<void>;
   cancelEscalationMs?: number;
   cancelForceFailMs?: number;
+  databaseUrl?: string;
   envFile: string;
   internalApiToken?: string;
   now?: () => Date;
@@ -77,6 +78,7 @@ export function createLocalDiscoveryOperationsClient({
   persistBrowserFailure,
   cancelEscalationMs = 10_000,
   cancelForceFailMs = 5_000,
+  databaseUrl,
   envFile,
   internalApiToken,
   now = () => new Date(),
@@ -143,6 +145,7 @@ export function createLocalDiscoveryOperationsClient({
     const packagePath = /^[A-Za-z]:[\\/]/.test(packageDir) ? path.win32 : path;
     const childEnv = {
       ...process.env,
+      ...(databaseUrl ? { LUDORA_DATABASE_URL: databaseUrl } : {}),
       LUDORA_DISCOVERY_BROWSER_WATCHDOG: type === 'item_discovery' ? '1' : '0',
       // Reserve at least five seconds for owned-child cleanup at practical watchdog settings.
       // Sub-five-second values are used by watchdog unit tests; their outer fallback stays authoritative.

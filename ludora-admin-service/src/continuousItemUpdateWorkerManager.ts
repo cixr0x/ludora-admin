@@ -53,6 +53,7 @@ export function createContinuousItemUpdateWorkerProcessTreeTerminator({
 type ContinuousItemUpdateWorkerManagerOptions = {
   adminApiUrl: string;
   concurrency: number;
+  databaseUrl?: string;
   envFile: string;
   internalApiToken: string;
   itemTimeoutSeconds: number;
@@ -78,6 +79,7 @@ export type ContinuousItemUpdateWorkerControlStatus = 'paused' | 'running' | 'st
 export function createContinuousItemUpdateWorkerManager({
   adminApiUrl,
   concurrency,
+  databaseUrl,
   envFile,
   internalApiToken,
   itemTimeoutSeconds,
@@ -219,6 +221,7 @@ export function createContinuousItemUpdateWorkerManager({
       cwd: packageDir,
       env: {
         ...process.env,
+        ...(databaseUrl ? { LUDORA_DATABASE_URL: databaseUrl } : {}),
         LUDORA_ADMIN_API_URL: adminApiUrl,
         LUDORA_INTERNAL_API_TOKEN: internalApiToken,
         PYTHONPATH: packagePath.join(packageDir, 'src')

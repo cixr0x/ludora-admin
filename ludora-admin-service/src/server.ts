@@ -106,6 +106,7 @@ const localOperationsClient =
   config.discoveryRunner.mode === 'local'
     ? createLocalDiscoveryOperationsClient({
         browserFetchTimeoutSeconds: config.discoveryRunner.browserFetchTimeoutSeconds,
+        databaseUrl: config.backgroundDatabaseUrl,
         persistBrowserFailure: createDiscoveryBrowserFailureRecorder(database),
         envFile: config.discoveryRunner.envFile,
         internalApiToken,
@@ -125,6 +126,7 @@ const continuousItemUpdateWorkerManager =
     ? createContinuousItemUpdateWorkerManager({
         adminApiUrl: `http://127.0.0.1:${config.port}`,
         concurrency: config.continuousItemUpdateWorker.concurrency,
+        databaseUrl: config.backgroundDatabaseUrl,
         envFile: config.discoveryRunner.envFile,
         internalApiToken,
         itemTimeoutSeconds: config.continuousItemUpdateWorker.itemTimeoutSeconds,
@@ -136,7 +138,7 @@ const continuousItemUpdateWorkerManager =
     : undefined;
 const verifiedSitemapStoreIds = readVerifiedSitemapStoreIds(config.discoveryRunner.envFile);
 const storeItemUpdateScheduleDatabase = config.continuousItemUpdateWorker.enabled
-  ? createDatabase(config.databaseUrl, 'maintenance')
+  ? createDatabase(config.backgroundDatabaseUrl ?? config.databaseUrl, 'maintenance')
   : undefined;
 const storeItemUpdateScheduleManager = storeItemUpdateScheduleDatabase
   ? createStoreItemUpdateScheduleManager({
