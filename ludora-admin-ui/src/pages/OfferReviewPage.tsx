@@ -43,6 +43,8 @@ function numericField(record: AdminRecord, keys: string[]) {
 }
 
 function bggUrl(record: AdminRecord) {
+  const linkedUrl = field(record, ['item_bgg_url'], '');
+  if (/^https:\/\/(?:www\.)?(?:boardgamegeek|rpggeek)\.com\//i.test(linkedUrl)) return linkedUrl;
   const bggId = field(record, ['item_bgg_id'], '');
   return bggId ? `https://boardgamegeek.com/boardgame/${encodeURIComponent(bggId)}` : '';
 }
@@ -518,6 +520,7 @@ export function OfferReviewPage() {
               ? {
                   ...currentRow,
                   item_bgg_id: item.bgg_id ?? null,
+                  item_bgg_url: item.bgg_url ?? '',
                   item_id: item.id,
                   item_image_url: item.image_url ?? '',
                   item_image_url_es: item.image_url_es ?? '',

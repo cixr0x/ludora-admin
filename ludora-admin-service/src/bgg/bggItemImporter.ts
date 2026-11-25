@@ -1,3 +1,5 @@
+import { setTimeout as delay } from 'node:timers/promises';
+
 import type { Database, SessionDatabase } from '../db.js';
 import { prepareCatalogImageHash, type CatalogImageHasher } from '../catalogImageHash.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
@@ -74,21 +76,29 @@ async function persistItemMetadata(database: Database, thing: BggThingDetails, i
   if (!sessionDatabase.withSession) return persist(database);
 
   // An edition can copy this row and its taxonomy as soon as another session sees the parent.
-  return sessionDatabase.withSession(async (session) => {
-    await session.query('begin');
+  for (let attempt = 1; ; attempt += 1) {
     try {
-      const itemId = await persist(session);
-      await session.query('commit');
-      return itemId;
+      return await sessionDatabase.withSession(async (session) => {
+        await session.query('begin');
+        try {
+          const itemId = await persist(session);
+          await session.query('commit');
+          return itemId;
+        } catch (error) {
+          try {
+            await session.query('rollback');
+          } catch {
+            await session.close?.();
+          }
+          throw error;
+        }
+      });
     } catch (error) {
-      try {
-        await session.query('rollback');
-      } catch {
-        await session.close?.();
-      }
-      throw error;
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      if (attempt === 3 || (code !== '55P03' && code !== '40P01')) throw error;
+      await delay(attempt * 50);
     }
-  });
+  }
 }
 
 async function upsertItem(database: Database, thing: BggThingDetails, imageHash: string | null): Promise<number> {

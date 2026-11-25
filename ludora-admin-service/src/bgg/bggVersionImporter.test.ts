@@ -78,6 +78,9 @@ describe('BGG edition imports', () => {
         expect(parentId).toBe(42);
         return { rows: [{ id: 99 }] };
       }
+      if (sql.includes('and not is_version') && parentId !== null) {
+        return { rows: [{ id: parentId, item_type: 'base_game', parent_item_id: null }] };
+      }
       return { rows: [] };
     });
     const sessionQuery = vi.fn(async (sql: string) => {
@@ -96,6 +99,56 @@ describe('BGG edition imports', () => {
     expect(sessionQuery.mock.calls.at(-1)?.[0]).toBe('commit');
     const editionInsert = query.mock.calls.find(([sql]) => sql.includes('with parent as'));
     expect(editionInsert).toBeDefined();
+  });
+
+  it('resolves the base game before copying an expansion with a missing local pointer', async () => {
+    const rawXml = '<items><item type="boardgameexpansion" id="220368"><name type="primary" value="Expansion"/><link type="boardgameexpansion" id="13" value="Base game" inbound="true"/></item></items>';
+    const database = { query: vi.fn(async (sql: string, params?: unknown[]) => {
+      if (sql.includes('with parent as')) return { rows: [{ id: 99 }] };
+      if (sql.includes('and not is_version') && params?.[0] === parentBggId) {
+        return { rows: [{ id: 42, item_type: 'expansion', parent_item_id: null }] };
+      }
+      if (sql.includes('and not is_version') && params?.[0] === 13) {
+        return { rows: [{ id: 18, item_type: 'base_game', parent_item_id: null }] };
+      }
+      return { rows: [] };
+    }) };
+    const fetchThing = vi.fn().mockResolvedValue({ rawXml, details: parseBggThingResponse(rawXml) });
+    const importer = createBggItemImporter(database, {
+      fetchThing, fetchVersions: vi.fn().mockResolvedValue([edition]), search: vi.fn()
+    });
+
+    expect(await importer.importBggVersion!(parentBggId, versionBggId)).toBe(99);
+    expect(fetchThing).toHaveBeenCalledWith(parentBggId);
+    expect(database.query.mock.calls.find(([sql]) => sql.includes('with parent as'))).toEqual([
+      expect.stringContaining('coalesce(parent.parent_item_id, $10)'), expect.arrayContaining([18])
+    ]);
+  });
+
+  it.each(['55P03', '40P01'])('rolls back and retries a regular item metadata transaction after %s', async (code) => {
+    const rawXml = '<items><item type="boardgame" id="220368"><name type="primary" value="Parent"/></item></items>';
+    const transactionLog: string[] = [];
+    let insertAttempts = 0;
+    const database = {
+      query: vi.fn().mockResolvedValue({ rows: [] }),
+      withSession: async <T>(operation: (session: { query: (sql: string) => Promise<{ rows: unknown[] }> }) => Promise<T>) =>
+        operation({ query: async (sql) => {
+          if (sql.includes('insert into items')) {
+            insertAttempts += 1;
+            if (insertAttempts === 1) throw Object.assign(new Error('Contention'), { code });
+            return { rows: [{ id: 42 }] };
+          }
+          transactionLog.push(sql);
+          return { rows: [] };
+        } })
+    };
+    const importer = createBggItemImporter(database, {
+      fetchThing: vi.fn().mockResolvedValue({ rawXml, details: parseBggThingResponse(rawXml) }), search: vi.fn()
+    });
+
+    expect(await importer.importBggId(parentBggId)).toBe(42);
+    expect(transactionLog.filter((sql) => ['begin', 'rollback', 'commit'].includes(sql)))
+      .toEqual(['begin', 'rollback', 'begin', 'commit']);
   });
 
   it('rejects an existing edition paired with a different parent', async () => {

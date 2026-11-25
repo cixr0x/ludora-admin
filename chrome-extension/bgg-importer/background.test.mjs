@@ -329,3 +329,14 @@ test('a normal item page cannot send a version import even with the same numeric
   assert.deepEqual(await harness.send(sender, { type: 'import-bgg-version', bggId: 13, parentBggId: 42 }), { status: 'unsupported' });
   assert.deepEqual(harness.requests, []);
 });
+
+test('conflicting parents for the same edition reach the server independently', async () => {
+  const url = 'https://boardgamegeek.com/boardgameversion/350656/english-deluxe-edition';
+  const versionSender = { ...sender, url, tab: { ...sender.tab, url } };
+  const harness = createHarness([new Response(null, { status: 409 }), data({ ...item, description_es: 'Traducido.' })]);
+  const first = harness.send(versionSender, { type: 'import-bgg-version', bggId: 350656, parentBggId: 42 });
+  const second = harness.send(versionSender, { type: 'import-bgg-version', bggId: 350656, parentBggId: 220368 });
+  const results = await Promise.all([first, second]);
+  assert.deepEqual(results.map((result) => result.status), ['import-failed', 'already-translated']);
+  assert.deepEqual(harness.requests.map(({ body }) => body.parent_bgg_id), [42, 220368]);
+});

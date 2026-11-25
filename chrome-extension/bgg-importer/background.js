@@ -26,7 +26,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return false;
   }
 
-  const importKey = isVersion ? `version:${route.bggId}` : `item:${route.bggId}`;
+  const importKey = isVersion ? `version:${route.bggId}:${message.parentBggId}` : `item:${route.bggId}`;
   const path = isVersion ? '/items/import-bgg-version' : '/items/import-from-bgg';
   const body = isVersion
     ? { parent_bgg_id: message.parentBggId, version_bgg_id: route.bggId, description: cleanText(message.description) }

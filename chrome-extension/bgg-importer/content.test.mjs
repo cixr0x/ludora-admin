@@ -155,6 +155,10 @@ test('extracts the parent and edition text from the BGG version module', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(version)), { parentBggId: 220368, description: 'Foil cards and special box.' });
   const noParent = { querySelectorAll: (selector) => selector === 'tr' ? [] : [edit] };
   assert.equal(context.readGeekVersionDetails(noParent, 350656), null);
+  const stale = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [{ pathname: '/item/correction/boardgameversion/42' }] };
+  assert.equal(context.readGeekVersionDetails(stale, 350656), null);
+  const noWiki = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [{ pathname: '/item/correction/boardgameversion/350656' }] };
+  assert.deepEqual(JSON.parse(JSON.stringify(context.readGeekVersionDetails(noWiki, 350656))), { parentBggId: 220368, description: '' });
   const placeholder = descriptionAnchor('This page does not exist. You can edit this page to create it.');
   const noDescription = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [placeholder] };
   assert.deepEqual(JSON.parse(JSON.stringify(context.readGeekVersionDetails(noDescription, 350656))), { parentBggId: 220368, description: '' });

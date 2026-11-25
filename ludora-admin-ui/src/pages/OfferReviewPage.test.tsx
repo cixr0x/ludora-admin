@@ -89,6 +89,7 @@ describe('OfferReviewPage', () => {
     const user = userEvent.setup();
     const catalogItem = {
       bgg_id: 377061,
+      bgg_url: 'https://boardgamegeek.com/boardgameversion/377061/deluxe-edition',
       canonical_name: 'Eternal',
       canonical_name_es: 'Aeterna: Edicion en Espanol',
       id: 77,
@@ -111,6 +112,8 @@ describe('OfferReviewPage', () => {
       candidate_image_url: 'https://www.amigocalavera.mx/aeterna.jpg',
       candidate_name: 'Aeterna',
       candidate_url: 'https://www.amigocalavera.mx/productos/aeterna/',
+      item_bgg_id: catalogItem.bgg_id,
+      item_bgg_url: 'https://boardgamegeek.com/boardgame/377061/original',
       item_id: 11,
       item_name: 'Incorrect Item',
       store_item_listing_status: 'PENDING'
@@ -133,6 +136,7 @@ describe('OfferReviewPage', () => {
         currentReview = {
           ...currentReview,
           item_bgg_id: catalogItem.bgg_id,
+          item_bgg_url: catalogItem.bgg_url,
           item_id: catalogItem.id,
           item_image_url: catalogItem.image_url,
           item_image_url_es: catalogItem.image_url_es,
@@ -183,6 +187,7 @@ describe('OfferReviewPage', () => {
       'href',
       '#items?id=77'
     );
+    expect(await screen.findByRole('link', { name: 'BGG 377061' })).toHaveAttribute('href', catalogItem.bgg_url);
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Associate Store Item' })).not.toBeInTheDocument());
   });
 

@@ -3160,6 +3160,7 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ data: rows });
     const sql = normalizeSql(queries[0] ?? '');
     expect(sql).toContain('from store_items dic');
+    expect(sql).toContain('i.bgg_url as item_bgg_url');
     expect(sql).toContain('left join items i on i.id = dic.item_id');
     expect(sql).toContain('left join stores s on s.id = dic.store_id');
     expect(sql).toContain('dic.is_boardgame = true');

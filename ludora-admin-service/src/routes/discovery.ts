@@ -577,6 +577,7 @@ const offerReviewSelect = `
   i.image_url as item_image_url,
   i.image_url_es as item_image_url_es,
   i.bgg_id as item_bgg_id,
+  i.bgg_url as item_bgg_url,
   i.item_type,
   i.year_published as item_year_published,
   s.name as store_name,

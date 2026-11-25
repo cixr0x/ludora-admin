@@ -10,6 +10,12 @@ type ImportedVersion = {
   version_of: string | number;
 };
 
+type RegularItem = {
+  id: number;
+  itemType: string;
+  parentItemId: number | null;
+};
+
 type ListedVersion = {
   bgg_id: number;
   name: string;
@@ -40,14 +46,21 @@ export function createBggVersionImports(
       const edition = versions?.find((version) => version.bggId === versionBggId);
       if (!edition) return null;
 
-      const localParent = await existingParent(database, parentBggId);
+      let parent = await existingRegularItem(database, parentBggId);
       const pendingParent = pendingImports.get(parentBggId);
-      const parentId = (pendingParent ? await pendingParent : localParent) ?? await importBggId(parentBggId);
-      if (parentId === null) return null;
+      if (pendingParent || !parent) {
+        const importedParentId = await (pendingParent ?? importBggId(parentBggId));
+        if (importedParentId === null) return null;
+        parent = await existingRegularItem(database, parentBggId);
+      }
+      if (!parent) return null;
 
+      const baseItemId = parent.itemType === 'expansion' && parent.parentItemId === null
+        ? await resolveExpansionBase(database, bggClient, importBggId, parentBggId)
+        : null;
       const image = edition.image || edition.thumbnail;
       const imageHash = await prepareCatalogImageHash(catalogImageHasher, image);
-      const inserted = await createVersion(database, parentId, parentBggId, edition, image, imageHash, description.trim());
+      const inserted = await createVersion(database, parent.id, parentBggId, edition, image, imageHash, description.trim(), baseItemId);
       return inserted ?? await existingVersion(database, parentBggId, versionBggId);
     },
 
@@ -90,9 +103,45 @@ async function fetchVersions(bggClient: BggClient | undefined, parentBggId: numb
   }
 }
 
-async function existingParent(database: Database, bggId: number): Promise<number | null> {
-  const result = await database.query('select id from items where bgg_id = $1 and not is_version', [bggId]);
-  return rowId(result.rows[0]);
+async function existingRegularItem(database: Database, bggId: number): Promise<RegularItem | null> {
+  const result = await database.query(
+    'select id, item_type, parent_item_id from items where bgg_id = $1 and not is_version',
+    [bggId]
+  );
+  const row = result.rows[0] as { id: unknown; item_type: string; parent_item_id: unknown } | undefined;
+  const id = rowId(row);
+  return row && id !== null
+    ? { id, itemType: row.item_type, parentItemId: rowId({ id: row.parent_item_id }) }
+    : null;
+}
+
+async function resolveExpansionBase(
+  database: Database,
+  bggClient: BggClient | undefined,
+  importBggId: (bggId: number) => Promise<number | null>,
+  parentBggId: number
+): Promise<number | null> {
+  let parent;
+  try {
+    parent = await bggClient?.fetchThing(parentBggId);
+  } catch (error) {
+    throw Object.assign(new Error('The BGG expansion could not be loaded'), { status: 502, cause: error });
+  }
+  if (parent?.details.bggId !== parentBggId) {
+    throw Object.assign(new Error('The BGG expansion could not be loaded'), { status: 502 });
+  }
+
+  // The regular importer retains the last resolvable inbound link for expansions with several bases.
+  const baseLinks = parent.details.parentLinks.filter((link) => link.bggId !== parentBggId);
+  for (const { bggId } of baseLinks.reverse()) {
+    const existingBase = await existingRegularItem(database, bggId);
+    const baseItemId = existingBase?.id ?? await importBggId(bggId);
+    if (baseItemId !== null) return baseItemId;
+  }
+  if (baseLinks.length) {
+    throw Object.assign(new Error('The base item for the BGG expansion could not be loaded'), { status: 502 });
+  }
+  return null;
 }
 
 async function existingVersion(database: Database, parentBggId: number, versionBggId: number): Promise<number | null> {
@@ -111,7 +160,8 @@ async function createVersion(
   version: BggVersion,
   image: string,
   imageHash: string | null,
-  description: string
+  description: string,
+  baseItemId: number | null
 ): Promise<number | null> {
   const result = await database.query(
     `
@@ -127,7 +177,7 @@ async function createVersion(
         image_url, image_phash, status
       )
       select
-        $3, $4, parent.item_type, parent.is_accessory, parent.is_rpg, parent.parent_item_id,
+        $3, $4, parent.item_type, parent.is_accessory, parent.is_rpg, coalesce(parent.parent_item_id, $10),
         $2, $5, true, parent.bgg_id, now(),
         parent.year_published, parent.rating, parent.weight,
         coalesce(nullif($7, ''), parent.description),
@@ -157,7 +207,7 @@ async function createVersion(
     select id from edition
     `,
     [parentId, version.bggId, version.name, normalizeTitle(version.name),
-     `https://boardgamegeek.com/boardgameversion/${version.bggId}`, image, description, imageHash, parentBggId]
+     `https://boardgamegeek.com/boardgameversion/${version.bggId}`, image, description, imageHash, parentBggId, baseItemId]
   );
   return rowId(result.rows[0]);
 }

@@ -29,6 +29,16 @@ function getGeekRoute(address, expectedOrigin) {
 
 function readGeekVersionDetails(main, versionBggId) {
   if (!main) return null;
+
+  const editionMarkers = [...main.querySelectorAll('a[href]')].map((link) => ({
+    link,
+    wikiId: link.pathname.match(/^\/wiki\/(?:edit|history)\/version:(\d+)\/?$/)?.[1],
+    correctionId: link.pathname.match(/^\/item\/correction\/boardgameversion\/(\d+)\/?$/)?.[1]
+  })).filter(({ wikiId, correctionId }) => wikiId || correctionId);
+  if (!editionMarkers.length || editionMarkers.some(({ wikiId, correctionId }) =>
+    Number(wikiId || correctionId) !== versionBggId
+  )) return null;
+
   const parents = new Set();
   for (const row of main.querySelectorAll('tr')) {
     if (row.cells.length !== 2 || row.cells[0].textContent.trim() !== 'Board Game') continue;
@@ -41,10 +51,7 @@ function readGeekVersionDetails(main, versionBggId) {
   }
   if (parents.size !== 1) return null;
 
-  const descriptionHeading = [...main.querySelectorAll('a[href]')].find(
-    (link) => link.pathname === `/wiki/edit/version:${versionBggId}` ||
-      link.pathname === `/wiki/history/version:${versionBggId}`
-  );
+  const descriptionHeading = editionMarkers.find(({ wikiId }) => wikiId)?.link;
   const headingTable = descriptionHeading?.closest('tr')?.closest('table');
   const moduleTable = headingTable?.parentElement?.closest('table');
   const descriptionCell = moduleTable?.rows[1]?.cells[0];
