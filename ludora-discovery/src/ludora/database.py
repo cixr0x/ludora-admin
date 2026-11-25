@@ -13,20 +13,22 @@ from ludora.discovery_pairs import DiscoveryPairState, discovery_url_pair, recon
 from ludora.update_sitemap import SITEMAP_MISSING
 
 
-def connect_database(database_url: str):
+def connect_database(database_url: str, *, statement_timeout_ms: int = 30_000):
     import psycopg
+    from psycopg.conninfo import conninfo_to_dict
 
-    normalized_url, connect_kwargs = _psycopg_connection_args(database_url)
-    return psycopg.connect(normalized_url, **connect_kwargs)
-
-
-def _psycopg_connection_args(database_url: str) -> tuple[str, dict[str, str]]:
     normalized_url = _normalize_url_sslmode(database_url)
-    if _url_has_sslmode(normalized_url):
-        return normalized_url, {}
-    if os.environ.get("PGSSLMODE", "").strip().casefold() == "no-verify":
-        return normalized_url, {"sslmode": "require"}
-    return normalized_url, {}
+    configured = conninfo_to_dict(normalized_url)
+    options = configured.get("options", os.environ.get("PGOPTIONS", ""))
+    connect_kwargs = {}
+    if "sslmode" not in configured and os.environ.get("PGSSLMODE", "").strip().casefold() == "no-verify":
+        connect_kwargs["sslmode"] = "require"
+    return psycopg.connect(
+        normalized_url,
+        connect_timeout=2,
+        options=f"{options} -c statement_timeout={statement_timeout_ms}".lstrip(),
+        **connect_kwargs,
+    )
 
 
 def _normalize_url_sslmode(database_url: str) -> str:
@@ -46,11 +48,6 @@ def _normalize_url_sslmode(database_url: str) -> str:
     if not changed:
         return database_url
     return urlunparse(parsed._replace(query=urlencode(normalized_pairs)))
-
-
-def _url_has_sslmode(database_url: str) -> bool:
-    parsed = urlparse(database_url)
-    return any(key.casefold() == "sslmode" for key, _value in parse_qsl(parsed.query, keep_blank_values=True))
 
 
 @dataclass(frozen=True)

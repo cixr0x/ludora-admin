@@ -90,7 +90,8 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
         browser_threads = {}
         active = []
 
-        def connect(_url):
+        def connect(_url, *, statement_timeout_ms=None):
+            self.assertEqual(statement_timeout_ms, 10_000)
             connection = Mock()
             connection_owners[connection] = threading.get_ident()
             return connection

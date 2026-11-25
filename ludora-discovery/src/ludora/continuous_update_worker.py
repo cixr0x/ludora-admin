@@ -40,6 +40,7 @@ from ludora.woocommerce_batch_refresh import ChocitaBatchRefresher
 
 WORKER_NAME = "continuous"
 MAX_CONCURRENCY = 3
+STATEMENT_TIMEOUT_MS = 10_000
 BROWSER_RECYCLE_MAX_FETCHES = 250
 BROWSER_RECYCLE_MAX_AGE_SECONDS = 6 * 60 * 60
 ITEM_FAILURE_BACKOFF_MINUTES = (15, 60, 360, 1_440)
@@ -146,7 +147,7 @@ def _run_worker_session(
         current_env, env_file, load_budget_seconds=min(LOAD_BUDGET_SECONDS, lease_seconds / 4),
     )
 
-    connection = connect_database(database_url)
+    connection = connect_database(database_url, statement_timeout_ms=STATEMENT_TIMEOUT_MS)
     repository = DiscoveryRepository(connection)
     batch_refresher = ChocitaBatchRefresher()
     from ludora.operations import create_item_update_redirect_handler
@@ -181,7 +182,7 @@ def _run_worker_session(
                             store_name=claim.store_name,
                         )
                         if slot_repository is None:
-                            slot_connection = connect_database(database_url)
+                            slot_connection = connect_database(database_url, statement_timeout_ms=STATEMENT_TIMEOUT_MS)
                             resources.callback(slot_connection.close)
                             slot_repository = DiscoveryRepository(slot_connection)
                             if not slot_repository.try_acquire_store_item_update_shared_lock():

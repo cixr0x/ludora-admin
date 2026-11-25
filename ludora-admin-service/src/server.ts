@@ -62,7 +62,7 @@ if (!config.databaseUrl) {
   throw new Error('LUDORA_DATABASE_URL is required');
 }
 
-const database = createDatabase(config.databaseUrl);
+const database = createDatabase(config.databaseUrl, 'interactive');
 const bggMatchCache = createBggMatchCache(database);
 const rawBggClient = config.bggApiToken
   ? createBggClient({

@@ -6,7 +6,7 @@ import type { AdminAuthOptions } from './auth/adminAuth.js';
 import { requireAdminAuth, requireInternalApiAuth } from './auth/adminAuth.js';
 import type { BggItemImporter } from './bgg/bggItemImporter.js';
 import type { DescriptionGenerationService } from './descriptionGeneration/descriptionGenerationService.js';
-import type { Database } from './db.js';
+import { isDatabaseUnavailable, type Database } from './db.js';
 import type { CatalogImageHasher } from './catalogImageHash.js';
 import type { DiscoveryOperationsClient } from './discoveryOperations.js';
 import type { CoverFlatteningWorkflowManager } from './coverFlatteningWorkflow.js';
@@ -163,6 +163,11 @@ const jsonErrorHandler: ErrorRequestHandler = (error, _request, response, _next)
     response.status(409).json({ error: { message: 'Another active record already represents this target URL in this store. Disable it before activating this record.' } });
     return;
   }
+  if (isDatabaseUnavailable(error)) {
+    response.status(503).json({ error: { message: 'Database temporarily unavailable' } });
+    return;
+  }
+
   const message = error instanceof Error ? error.message : 'Internal server error';
   const httpError = error as HttpError;
   const status = typeof httpError.status === 'number' ? httpError.status : 500;

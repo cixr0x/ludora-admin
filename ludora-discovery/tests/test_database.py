@@ -5,7 +5,6 @@ import unittest
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 
@@ -665,22 +664,41 @@ class DatabaseRepositoryTests(unittest.TestCase):
         )
 
     def test_connect_database_maps_pgsslmode_no_verify_to_psycopg_require(self):
-        fake_psycopg = SimpleNamespace(connect=Mock(return_value="connection"))
-
-        with patch.dict(sys.modules, {"psycopg": fake_psycopg}), patch.dict(os.environ, {"PGSSLMODE": "no-verify"}):
+        with (
+            patch("psycopg.connect", return_value="connection") as connect,
+            patch.dict(os.environ, {"PGSSLMODE": "no-verify", "PGOPTIONS": ""}),
+        ):
             connection = connect_database("postgresql://ludora")
 
         self.assertEqual(connection, "connection")
-        fake_psycopg.connect.assert_called_once_with("postgresql://ludora", sslmode="require")
+        connect.assert_called_once_with(
+            "postgresql://ludora", sslmode="require", connect_timeout=2, options="-c statement_timeout=30000"
+        )
 
     def test_connect_database_rewrites_url_sslmode_no_verify(self):
-        fake_psycopg = SimpleNamespace(connect=Mock(return_value="connection"))
-
-        with patch.dict(sys.modules, {"psycopg": fake_psycopg}), patch.dict(os.environ, {"PGSSLMODE": "no-verify"}):
+        with (
+            patch("psycopg.connect") as connect,
+            patch.dict(os.environ, {"PGSSLMODE": "no-verify", "PGOPTIONS": "-c search_path=existing"}),
+        ):
             connect_database("postgresql://ludora.example/db?sslmode=no-verify&application_name=ludora")
 
-        fake_psycopg.connect.assert_called_once_with(
-            "postgresql://ludora.example/db?sslmode=require&application_name=ludora"
+        connect.assert_called_once_with(
+            "postgresql://ludora.example/db?sslmode=require&application_name=ludora",
+            connect_timeout=2,
+            options="-c search_path=existing -c statement_timeout=30000",
+        )
+
+    def test_connect_database_applies_the_worker_deadline_without_losing_url_options(self):
+        database_url = "postgresql://ludora/db?options=-c%20search_path%3Dcustom%20-c%20statement_timeout%3D0"
+
+        with (
+            patch("psycopg.connect") as connect,
+            patch.dict(os.environ, {"PGSSLMODE": "", "PGOPTIONS": "-c search_path=outside"}),
+        ):
+            connect_database(database_url, statement_timeout_ms=10_000)
+
+        connect.assert_called_once_with(
+            database_url, connect_timeout=2, options="-c search_path=custom -c statement_timeout=0 -c statement_timeout=10000"
         )
 
     def test_upsert_store_candidate_writes_dirty_store_record(self):

@@ -24,6 +24,24 @@ import { StoreItemUpdateScheduleConflictError } from './storeItemUpdateScheduleS
 
 describe('ludora admin service', () => {
   it.each([
+    ['57014', 'canceling statement due to statement timeout'],
+    ['55P03', 'canceling statement due to lock timeout'],
+    ['25P03', 'terminating connection due to idle-in-transaction timeout'],
+    ['LUDORA_DB_BUSY', 'database pool is busy'],
+    [undefined, 'timeout exceeded when trying to connect'],
+    [undefined, 'Connection terminated due to connection timeout']
+  ])('returns 503 for a database timeout or overload (%s, %s)', async (code, message) => {
+    const database: Database = {
+      query: async () => { throw Object.assign(new Error(message), { code }); }
+    };
+
+    const response = await request(createApp({ database })).get('/stores');
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({ error: { message: 'Database temporarily unavailable' } });
+  });
+
+  it.each([
     ['23505', 'store_items_active_target_uidx', 'Another active record already represents this target URL in this store. Disable it before activating this record.'],
   ])('reports discovery identity conflict %s %s clearly', async (code, constraint, message) => {
     const database: Database = {
