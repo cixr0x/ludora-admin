@@ -55,21 +55,27 @@ class BggItemImporter:
             self._upsert_publishers(cursor, item_id, thing.publishers)
         self.connection.commit()
 
+        last_parent_id = None
         for parent_link in thing.parent_links:
             parent_id = self._import_linked_thing(parent_link, current_visited)
             if parent_id:
                 with self.connection.cursor() as cursor:
                     self._upsert_item_relationship(cursor, item_id, "extension", parent_id, str(parent_link.bgg_id))
-                    cursor.execute(
-                        """
-                        update items
-                        set parent_item_id = %s,
-                            updated_at = now()
-                        where id = %s
-                        """,
-                        (parent_id, item_id),
-                    )
                 self.connection.commit()
+                last_parent_id = parent_id
+
+        if last_parent_id is not None:
+            with self.connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    update items
+                    set parent_item_id = %s,
+                        updated_at = now()
+                    where id = %s
+                    """,
+                    (last_parent_id, item_id),
+                )
+            self.connection.commit()
 
         for implementation_link in thing.implementation_links:
             linked_id = self._import_linked_thing(implementation_link, current_visited)

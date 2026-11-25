@@ -207,6 +207,7 @@ async function upsertRelatedItems(
   visited: Set<number>,
   catalogImageHasher?: CatalogImageHasher
 ) {
+  let lastParentId: number | null = null;
   for (const parentLink of thing.parentLinks) {
     const parentId = await importLinkedThing(database, bggClient, parentLink, visited, catalogImageHasher);
     if (!parentId) {
@@ -214,7 +215,10 @@ async function upsertRelatedItems(
     }
     const [itemAId, itemBId] = bggRelationshipItemIds(itemId, parentId, parentLink);
     await upsertItemRelationship(database, itemAId, 'extension', itemBId, String(parentLink.bggId));
-    await updateParentItem(database, itemId, parentId);
+    lastParentId = parentId;
+  }
+  if (lastParentId !== null) {
+    await updateParentItem(database, itemId, lastParentId);
   }
 
   for (const implementationLink of thing.implementationLinks) {
