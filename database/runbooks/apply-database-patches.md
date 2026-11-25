@@ -84,7 +84,7 @@ if (!patchPath) {
 }
 
 if (!process.env.LUDORA_DATABASE_URL) {
-  throw new Error('LUDORA_DATABASE_URL is required in ludora-admin-service/.env');
+  throw new Error('Set LUDORA_DATABASE_URL for this process to the approved migration connection');
 }
 
 const sql = fs.readFileSync(patchPath, 'utf8');
@@ -170,7 +170,8 @@ required and forbidden access. Use `has_database_privilege`,
 `has_schema_privilege`, `has_table_privilege`, `has_column_privilege`, and
 `has_sequence_privilege` as appropriate.
 `has_any_column_privilege` detects access from either table or column grants
-when checking whether a role must have zero access for a given operation.
+for `SELECT`, `INSERT`, `UPDATE`, and `REFERENCES`. Use `has_table_privilege`
+for `DELETE`.
 These checks account for effective access, including inherited privileges and
 grants to `PUBLIC`. [PostgreSQL privilege inquiry functions](https://www.postgresql.org/docs/16/functions-info.html).
 
@@ -191,13 +192,14 @@ SELECT
 ```
 
 Check the affected workflow as the workload role, including conflict, locking,
-and error paths where applicable. Use an approved test environment for
-workflow checks that write data. Use read-only production checks unless the
-exact write commands have explicit approval.
+and error paths where applicable. Prefer read-only production checks and use
+an approved test environment for write checks when possible. For every write
+check in any environment, including test, provide the exact SQL and wait for
+explicit approval before executing it.
 
 ## Failure Handling
 
-- If `LUDORA_DATABASE_URL` is missing, stop and load or fix `ludora-admin/ludora-admin-service/.env`. Do not scan unrelated env files unless the user asks.
+- If `LUDORA_DATABASE_URL` is missing, stop and supply the approved migration URL to the patch process. Keep the saved service credentials intact.
 - If `psql` is missing, use the preferred Node `pg` path. Do not spend time searching for another local PostgreSQL client.
 - If a patch partially fails, capture the error output, stop, and inspect database state with read-only queries before proposing a corrective incremental patch.
 - Do not apply `database/schema.sql` as a recovery step.
