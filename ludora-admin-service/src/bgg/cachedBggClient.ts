@@ -28,6 +28,7 @@ export function createCachedBggClient(
       return details ? { details, rawXml } : null;
     },
 
+    fetchVersions: upstreamClient.fetchVersions?.bind(upstreamClient),
     search: (query) => cachedSearch(matchCache, upstreamClient, query),
     searchFresh: (query) => freshSearch(matchCache, upstreamClient, query)
   };

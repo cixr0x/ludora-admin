@@ -1,7 +1,7 @@
 (() => {
   const adminUrl = 'https://admin.ludora.bobbycrimson.com/';
   const defaultLabel = 'Import to Ludoradar';
-  let activeId = null;
+  let activeKey = null;
   let activeControl = null;
 
   const styles = new CSSStyleSheet();
@@ -49,17 +49,22 @@
     a { color: #145d72; }
   `);
 
+  function routeKey(route) {
+    return route ? `${route.isVersion ? 'version' : 'item'}:${route.bggId}` : null;
+  }
+
   function updateRoute() {
-    const itemId = getGeekItemId(location.href);
-    if (itemId === activeId) return;
+    const route = getGeekRoute(location.href);
+    const key = routeKey(route);
+    if (key === activeKey) return;
 
     activeControl?.remove();
-    activeId = itemId;
-    activeControl = itemId === null ? null : createControl(itemId);
+    activeKey = key;
+    activeControl = route ? createControl(route, key) : null;
     if (activeControl) document.documentElement.append(activeControl);
   }
 
-  function createControl(bggId) {
+  function createControl(route, key) {
     const control = document.createElement('div');
     control.id = 'ludoradar-bgg-importer';
     const shadow = control.attachShadow({ mode: 'closed' });
@@ -74,8 +79,20 @@
     shadow.append(button, status);
 
     button.addEventListener('click', async (event) => {
-      if (!event.isTrusted || button.disabled || getGeekItemId(location.href) !== bggId) return;
+      if (!event.isTrusted || button.disabled || routeKey(getGeekRoute(location.href)) !== key) return;
       event.stopPropagation();
+
+      const message = { type: route.isVersion ? 'import-bgg-version' : 'import-bgg-item', bggId: route.bggId };
+      if (route.isVersion) {
+        const details = readGeekVersionDetails(document.querySelector('#maincontent'), route.bggId);
+        if (!details) {
+          status.hidden = false;
+          status.textContent = 'The parent game could not be identified on this BGG page.';
+          return;
+        }
+        Object.assign(message, details);
+      }
+
       button.disabled = true;
       button.textContent = 'Importing…';
       status.hidden = false;
@@ -83,11 +100,11 @@
 
       let result;
       try {
-        result = await chrome.runtime.sendMessage({ type: 'import-bgg-item', bggId });
+        result = await chrome.runtime.sendMessage(message);
       } catch {
         // Reloads and extension worker shutdowns can interrupt the response.
       }
-      if (activeControl !== control || getGeekItemId(location.href) !== bggId) return;
+      if (activeControl !== control || routeKey(getGeekRoute(location.href)) !== key) return;
       showOutcome(button, status, result);
     });
     return control;

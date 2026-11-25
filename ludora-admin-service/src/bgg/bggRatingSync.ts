@@ -54,7 +54,7 @@ export async function loadBggRatingSyncPlan(database: Database): Promise<BggRati
     `
     select id, bgg_id, rating
     from items
-    where bgg_id is not null
+    where bgg_id is not null and not is_version
     order by bgg_id asc
     `
   );

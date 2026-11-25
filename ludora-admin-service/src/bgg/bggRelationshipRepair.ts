@@ -104,7 +104,7 @@ export async function loadBggRelationshipRepairPlan(database: Database): Promise
     `
     select id, bgg_id, parent_item_id
     from items
-    where bgg_id is not null
+    where bgg_id is not null and not is_version
     `
   );
   const cachedThings = await database.query(

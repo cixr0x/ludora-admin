@@ -1,35 +1,43 @@
-import type { Database } from '../db.js';
+import { setTimeout as delay } from 'node:timers/promises';
+
+import type { Database, SessionDatabase } from '../db.js';
 import { prepareCatalogImageHash, type CatalogImageHasher } from '../catalogImageHash.js';
 import { normalizeTitle } from '../itemMatching/itemMatcher.js';
 import type { BggClient } from './bggClient.js';
 import type { BggNamedLink, BggRelatedLink, BggThingDetails } from './bggParser.js';
 import { bggTypeToItemType, isBggAccessory } from './bggTypes.js';
+import { createBggVersionImports, type BggVersionImports } from './bggVersionImporter.js';
 
 const BGG_IMPORT_REFRESH_AFTER_MS = 180 * 24 * 60 * 60 * 1000;
 
 export type BggItemImporter = {
   importBggId(bggId: number): Promise<number | null>;
-};
+} & Partial<BggVersionImports>;
 
 export function createBggItemImporter(database: Database, bggClient?: BggClient, catalogImageHasher?: CatalogImageHasher): BggItemImporter {
+  const pendingImports = new Map<number, Promise<number | null>>();
+
+  function importBggId(bggId: number): Promise<number | null> {
+    const pending = pendingImports.get(bggId);
+    if (pending) return pending;
+
+    const operation = importRegularItem(bggId).finally(() => pendingImports.delete(bggId));
+    pendingImports.set(bggId, operation);
+    return operation;
+  }
+
+  async function importRegularItem(bggId: number): Promise<number | null> {
+    const cachedItemId = await freshExistingItemId(database, bggId);
+    if (cachedItemId !== null) return cachedItemId;
+    if (!bggClient) return null;
+
+    const fetched = await bggClient.fetchThing(bggId);
+    return fetched ? importThing(database, bggClient, fetched.details, new Set(), catalogImageHasher) : null;
+  }
+
   return {
-    async importBggId(bggId: number): Promise<number | null> {
-      const cachedItemId = await freshExistingItemId(database, bggId);
-      if (cachedItemId !== null) {
-        return cachedItemId;
-      }
-
-      if (!bggClient) {
-        return null;
-      }
-
-      const fetched = await bggClient.fetchThing(bggId);
-      if (!fetched) {
-        return null;
-      }
-
-      return importThing(database, bggClient, fetched.details, new Set(), catalogImageHasher);
-    }
+    importBggId,
+    ...createBggVersionImports(database, bggClient, importBggId, pendingImports, catalogImageHasher)
   };
 }
 
@@ -45,22 +53,57 @@ async function importThing(
   }
   visited.add(thing.bggId);
 
-  const itemId = await upsertItem(database, thing, catalogImageHasher);
-  await upsertAliases(database, itemId, thing.alternateNames);
-  await upsertTaxonomyLinks(database, itemId, 'boardgame_categories', 'item_categories', 'category_id', thing.categories);
-  await upsertTaxonomyLinks(database, itemId, 'boardgame_mechanics', 'item_mechanics', 'mechanic_id', thing.mechanics);
-  await upsertTaxonomyLinks(database, itemId, 'boardgame_families', 'item_families', 'family_id', thing.families);
-  await upsertContributors(database, itemId, thing.designers, 'designer');
-  await upsertContributors(database, itemId, thing.artists, 'artist');
-  await upsertPublishers(database, itemId, thing.publishers);
+  const imageHash = await prepareCatalogImageHash(catalogImageHasher, thing.image || thing.thumbnail);
+  const itemId = await persistItemMetadata(database, thing, imageHash);
   await upsertRelatedItems(database, bggClient, itemId, thing, visited, catalogImageHasher);
   return itemId;
 }
 
-async function upsertItem(database: Database, thing: BggThingDetails, catalogImageHasher?: CatalogImageHasher): Promise<number> {
+async function persistItemMetadata(database: Database, thing: BggThingDetails, imageHash: string | null): Promise<number> {
+  const persist = async (session: Database) => {
+    const itemId = await upsertItem(session, thing, imageHash);
+    await upsertAliases(session, itemId, thing.alternateNames);
+    await upsertTaxonomyLinks(session, itemId, 'boardgame_categories', 'item_categories', 'category_id', thing.categories);
+    await upsertTaxonomyLinks(session, itemId, 'boardgame_mechanics', 'item_mechanics', 'mechanic_id', thing.mechanics);
+    await upsertTaxonomyLinks(session, itemId, 'boardgame_families', 'item_families', 'family_id', thing.families);
+    await upsertContributors(session, itemId, thing.designers, 'designer');
+    await upsertContributors(session, itemId, thing.artists, 'artist');
+    await upsertPublishers(session, itemId, thing.publishers);
+    return itemId;
+  };
+
+  const sessionDatabase = database as Partial<SessionDatabase>;
+  if (!sessionDatabase.withSession) return persist(database);
+
+  // An edition can copy this row and its taxonomy as soon as another session sees the parent.
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await sessionDatabase.withSession(async (session) => {
+        await session.query('begin');
+        try {
+          const itemId = await persist(session);
+          await session.query('commit');
+          return itemId;
+        } catch (error) {
+          try {
+            await session.query('rollback');
+          } catch {
+            await session.close?.();
+          }
+          throw error;
+        }
+      });
+    } catch (error) {
+      const code = error instanceof Error && 'code' in error ? error.code : undefined;
+      if (attempt === 3 || (code !== '55P03' && code !== '40P01')) throw error;
+      await delay(attempt * 50);
+    }
+  }
+}
+
+async function upsertItem(database: Database, thing: BggThingDetails, imageHash: string | null): Promise<number> {
   const existingId = await existingItemId(database, thing.bggId);
   const imageUrl = thing.image || thing.thumbnail;
-  const imageHash = await prepareCatalogImageHash(catalogImageHasher, imageUrl);
   const params = [
     thing.name,
     normalizeTitle(thing.name),
@@ -144,11 +187,12 @@ async function upsertItem(database: Database, thing: BggThingDetails, catalogIma
       updated_at
     )
     values ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'active', now())
+    on conflict (is_version, bgg_id) where bgg_id is not null do nothing
     returning id
     `,
     params
   );
-  const itemId = idFromRows(result.rows);
+  const itemId = idFromRows(result.rows) ?? await existingItemId(database, thing.bggId);
   if (itemId === null) {
     throw new Error('Failed to import BGG item');
   }
@@ -163,6 +207,7 @@ async function upsertRelatedItems(
   visited: Set<number>,
   catalogImageHasher?: CatalogImageHasher
 ) {
+  let lastParentId: number | null = null;
   for (const parentLink of thing.parentLinks) {
     const parentId = await importLinkedThing(database, bggClient, parentLink, visited, catalogImageHasher);
     if (!parentId) {
@@ -170,7 +215,10 @@ async function upsertRelatedItems(
     }
     const [itemAId, itemBId] = bggRelationshipItemIds(itemId, parentId, parentLink);
     await upsertItemRelationship(database, itemAId, 'extension', itemBId, String(parentLink.bggId));
-    await updateParentItem(database, itemId, parentId);
+    lastParentId = parentId;
+  }
+  if (lastParentId !== null) {
+    await updateParentItem(database, itemId, lastParentId);
   }
 
   for (const implementationLink of thing.implementationLinks) {
@@ -417,12 +465,12 @@ function dedupeByNormalizedName(values: string[]) {
 }
 
 async function existingItemId(database: Database, bggId: number): Promise<number | null> {
-  const existing = await database.query('select id from items where bgg_id = $1', [bggId]);
+  const existing = await database.query('select id from items where bgg_id = $1 and not is_version', [bggId]);
   return idFromRows(existing.rows);
 }
 
 async function freshExistingItemId(database: Database, bggId: number): Promise<number | null> {
-  const existing = await database.query('select id, bgg_last_sync_at from items where bgg_id = $1', [bggId]);
+  const existing = await database.query('select id, bgg_last_sync_at from items where bgg_id = $1 and not is_version', [bggId]);
   const row = existing.rows[0] as Record<string, unknown> | undefined;
   if (!row || !isFreshBggSync(row.bgg_last_sync_at)) {
     return null;

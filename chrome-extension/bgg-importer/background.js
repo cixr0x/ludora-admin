@@ -13,36 +13,43 @@ const editableItemFields = [
 ];
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== 'import-bgg-item') return false;
+  const isVersion = message?.type === 'import-bgg-version';
+  if (!isVersion && message?.type !== 'import-bgg-item') return false;
   // Chrome can retain the original sender.url after a same-document navigation.
-  const bggId = sender.id === chrome.runtime.id && sender.frameId === 0
+  const route = sender.id === chrome.runtime.id && sender.frameId === 0
     && Number.isInteger(sender.tab?.id) && typeof sender.origin === 'string'
-    ? getGeekItemId(sender.tab.url, sender.origin)
+    ? getGeekRoute(sender.tab.url, sender.origin)
     : null;
-  if (bggId === null || bggId !== message.bggId) {
+  if (!route || route.bggId !== message.bggId || route.isVersion !== isVersion ||
+      (isVersion && (!Number.isSafeInteger(message.parentBggId) || message.parentBggId <= 0))) {
     sendResponse({ status: 'unsupported' });
     return false;
   }
 
-  let operation = importsInProgress.get(bggId);
+  const importKey = isVersion ? `version:${route.bggId}:${message.parentBggId}` : `item:${route.bggId}`;
+  const path = isVersion ? '/items/import-bgg-version' : '/items/import-from-bgg';
+  const body = isVersion
+    ? { parent_bgg_id: message.parentBggId, version_bgg_id: route.bggId, description: cleanText(message.description) }
+    : { bgg_id: route.bggId };
+  let operation = importsInProgress.get(importKey);
   if (!operation) {
     // Reset the Manifest V3 worker's idle timer only during the active import.
     const keepAlive = setInterval(() => void chrome.runtime.getPlatformInfo().catch(() => {}), 20_000);
-    operation = importItem(bggId).finally(() => {
+    operation = importItem(path, body).finally(() => {
       clearInterval(keepAlive);
-      importsInProgress.delete(bggId);
+      importsInProgress.delete(importKey);
     });
-    importsInProgress.set(bggId, operation);
+    importsInProgress.set(importKey, operation);
   }
   operation.then(sendResponse);
   return true;
 });
 
-async function importItem(bggId) {
+async function importItem(path, body) {
   const signal = AbortSignal.timeout(240_000);
   let itemId;
   try {
-    const item = await request('/items/import-from-bgg', signal, { method: 'POST', body: { bgg_id: bggId } });
+    const item = await request(path, signal, { method: 'POST', body });
     itemId = internalItemId(item?.id);
     if (!itemId) throw new Error('Invalid imported item ID');
     if (cleanText(item.description_es)) return { status: 'already-translated', itemId };

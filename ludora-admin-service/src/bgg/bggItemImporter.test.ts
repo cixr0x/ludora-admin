@@ -334,12 +334,13 @@ describe('BGG item importer', () => {
     expect(queries.some((query) => normalizeSql(query.sql).startsWith('insert into item_publishers'))).toBe(true);
   });
 
-  it('imports BGG accessory 337190 as an expansion with its inbound parent relationship', async () => {
+  it('imports BGG accessory 337190 as an expansion with both inbound parent relationships and the final parent pointer', async () => {
     const fetchedBggIds: number[] = [];
     const queries: Array<{ params?: unknown[]; sql: string }> = [];
     const itemIdsByBggId = new Map<number, number>([
       [337190, 77],
       [311988, 78],
+      [311989, 80],
       [999001, 79]
     ]);
     const database: Database = {
@@ -374,6 +375,7 @@ describe('BGG item importer', () => {
     const bggClient: BggClient = {
       fetchThing: async (bggId) => {
         fetchedBggIds.push(bggId);
+        if (bggId === 311990) return null;
         const details = {
           alternateNames: [],
           artists: [],
@@ -397,7 +399,11 @@ describe('BGG item importer', () => {
             }[bggId] ?? `BGG ${bggId}`
           ),
           parentLinks:
-            bggId === 337190 ? [{ bggId: 311988, inbound: true, name: 'Catan' }] : [],
+            bggId === 337190 ? [
+              { bggId: 311988, inbound: true, name: 'Catan' },
+              { bggId: 311989, inbound: true, name: 'Catan Second Edition' },
+              { bggId: 311990, inbound: true, name: 'Unavailable parent' }
+            ] : [],
           playingTime: null,
           publishers: [],
           rating: null,
@@ -416,16 +422,18 @@ describe('BGG item importer', () => {
     const itemId = await createBggItemImporter(database, bggClient).importBggId(337190);
 
     expect(itemId).toBe(77);
-    expect(fetchedBggIds).toEqual([337190, 311988, 999001]);
+    expect(fetchedBggIds).toEqual([337190, 311988, 311989, 311990, 999001]);
     const relationshipQueries = queries.filter((query) => normalizeSql(query.sql).includes('insert into item_relationships'));
     expect(relationshipQueries.map((query) => query.params)).toEqual([
       [77, 'extension', 78, '311988'],
+      [77, 'extension', 80, '311989'],
       [79, 'implementation', 77, '999001']
     ]);
     const extensionRelationshipQuery = relationshipQueries.find((query) => query.params?.[1] === 'extension');
     expect(normalizeSql(extensionRelationshipQuery?.sql ?? '')).toContain("relationship_input.link_type in ('extension', 'implementation')");
-    const parentUpdate = queries.find((query) => normalizeSql(query.sql).startsWith('update items set parent_item_id'));
-    expect(parentUpdate?.params).toEqual([78, 77]);
+    const parentUpdates = queries.filter((query) => normalizeSql(query.sql).startsWith('update items set parent_item_id'));
+    expect(parentUpdates.map((query) => query.params)).toEqual([[80, 77]]);
+    expect(queries.indexOf(parentUpdates[0])).toBeGreaterThan(queries.indexOf(relationshipQueries[1]));
     const accessoryInsert = queries.find((query) => normalizeSql(query.sql).startsWith('insert into items') && query.params?.[5] === 337190);
     expect(accessoryInsert?.params?.slice(2, 7)).toEqual([
       'expansion',

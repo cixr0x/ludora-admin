@@ -660,6 +660,8 @@ create table if not exists items (
     parent_item_id bigint references items(id) on delete set null,
     bgg_id bigint,
     bgg_url text,
+    is_version boolean not null default false,
+    version_of bigint,
     bgg_last_sync_at timestamptz,
     year_published integer,
     description text not null default '',
@@ -676,7 +678,11 @@ create table if not exists items (
     image_phash_es text constraint items_image_phash_es_format_check check (image_phash_es is null or image_phash_es ~ '^[0-9a-f]{64}$'),
     status text not null default 'draft',
     created_at timestamptz not null default now(),
-    updated_at timestamptz not null default now()
+    updated_at timestamptz not null default now(),
+    constraint items_bgg_version_identity_check check (
+        (not is_version and version_of is null) or
+        (is_version and bgg_id is not null and bgg_id > 0 and version_of is not null and version_of > 0)
+    )
 );
 
 alter table if exists items add column if not exists canonical_name_es text not null default '';
@@ -756,8 +762,8 @@ on translation_jobs (source_text_hash, source_language, target_language, purpose
 create index if not exists translation_jobs_source_idx
 on translation_jobs (source_type, source_id, source_field);
 
-create unique index if not exists items_bgg_id_unique
-on items (bgg_id)
+create unique index if not exists items_bgg_identity_unique
+on items (is_version, bgg_id)
 where bgg_id is not null;
 
 create table if not exists boardgame_categories (
