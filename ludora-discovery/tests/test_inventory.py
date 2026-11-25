@@ -3366,19 +3366,24 @@ class OdooStockUpdateTests(unittest.TestCase):
         """
         basic_result = {"product_id": 4105, "product_template_id": 4107, "is_combination_possible": True}
         response = FetchResult(self.endpoint, json.dumps({"result": basic_result}))
-        for page_html, expected_calls in (
-            (html, 1),
-            (html.replace('name="product_template_id" value="4107"', ""), 0),
+        legacy = "https://juegamas.mx/sale/get_combination_info_website"
+        for scenario, page_html, responses in (
+            ("stockless result", html, [response]),
+            ("missing selection", html.replace('name="product_template_id" value="4107"', ""), []),
+            ("unsupported routes", html, [
+                FetchResult(self.endpoint, "", status_code=404),
+                FetchResult(legacy, "", status_code=405),
+            ]),
         ):
             with (
-                self.subTest(expected_calls=expected_calls),
+                self.subTest(scenario=scenario),
                 patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, page_html)),
-                patch("ludora.product_crawler.fetch_json", return_value=response) as fetch_stock,
+                patch("ludora.product_crawler.fetch_json", side_effect=responses) as fetch_stock,
             ):
                 refreshed = refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
                 self.assertEqual(refreshed.availability, "out_of_stock")
                 self.assertEqual(refreshed.availability_source, "json_ld_offer")
-                self.assertEqual(fetch_stock.call_count, expected_calls)
+                self.assertEqual(fetch_stock.call_count, len(responses))
 
     def test_stockless_response_cannot_fall_back_to_cart_text_when_stock_is_advertised(self):
         basic_result = {"product_id": 4105, "product_template_id": 4107, "is_combination_possible": True}

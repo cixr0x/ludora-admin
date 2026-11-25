@@ -2179,7 +2179,7 @@ def _fetch_odoo_availability(
             raise TransientProductFetchError(f"Odoo stock response omitted advertised stock: {product_page.url}")
         return availability
 
-    if page.advertises_stock:
+    if requires_stock_response:
         raise TransientProductFetchError(
             f"Odoo stock lookup found no supported route for advertised stock: {product_page.url}"
         )
