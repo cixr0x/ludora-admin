@@ -1,8 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { buildBggRelationshipRepairPlan } from './bggRelationshipRepair.js';
+import type { Database } from '../db.js';
+import { buildBggRelationshipRepairPlan, loadBggRelationshipRepairPlan } from './bggRelationshipRepair.js';
 
 describe('BGG relationship repair', () => {
+  it('loads planning reads sequentially on a one-connection pool', async () => {
+    let active = false;
+    const query = vi.fn<Database['query']>().mockImplementation(async () => {
+      expect(active).toBe(false);
+      active = true;
+      await Promise.resolve();
+      active = false;
+      return { rows: [] };
+    });
+
+    await loadBggRelationshipRepairPlan({ query });
+
+    expect(query).toHaveBeenCalledTimes(3);
+  });
+
   it('builds implementation directions from cached BGG inbound semantics', () => {
     const plan = buildBggRelationshipRepairPlan({
       cachedThings: [

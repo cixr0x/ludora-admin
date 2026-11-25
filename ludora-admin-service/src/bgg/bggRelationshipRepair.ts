@@ -100,31 +100,29 @@ type ParentCandidate = BggParentUpdate & {
 };
 
 export async function loadBggRelationshipRepairPlan(database: Database): Promise<BggRelationshipRepairPlan> {
-  const [items, cachedThings, relationships] = await Promise.all([
-    database.query(
-      `
-      select id, bgg_id, parent_item_id
-      from items
-      where bgg_id is not null
-      `
-    ),
-    database.query(
-      `
-      select bgg_id, raw_xml
-      from bgg_thing_cache
-      where request_type = $1
-      order by bgg_id asc
-      `,
-      [BGG_THING_REQUEST_TYPE]
-    ),
-    database.query(
-      `
-      select id, item_a_id, link_type, item_b_id, source, source_ref
-      from item_relationships
-      where link_type in ('extension', 'expansion', 'implementation')
-      `
-    )
-  ]);
+  const items = await database.query(
+    `
+    select id, bgg_id, parent_item_id
+    from items
+    where bgg_id is not null
+    `
+  );
+  const cachedThings = await database.query(
+    `
+    select bgg_id, raw_xml
+    from bgg_thing_cache
+    where request_type = $1
+    order by bgg_id asc
+    `,
+    [BGG_THING_REQUEST_TYPE]
+  );
+  const relationships = await database.query(
+    `
+    select id, item_a_id, link_type, item_b_id, source, source_ref
+    from item_relationships
+    where link_type in ('extension', 'expansion', 'implementation')
+    `
+  );
 
   return buildBggRelationshipRepairPlan({
     cachedThings: cachedThings.rows as CachedThingRow[],

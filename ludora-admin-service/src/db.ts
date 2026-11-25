@@ -41,6 +41,10 @@ export function createDatabase(databaseUrl: string, profile: keyof typeof profil
       assertQueueHasCapacity();
       const client = await pool.connect();
       let discardClient = false;
+      const discardOnError = () => {
+        discardClient = true;
+      };
+      client.on('error', discardOnError);
       try {
         return await operation({
           close: async () => {
@@ -49,6 +53,7 @@ export function createDatabase(databaseUrl: string, profile: keyof typeof profil
           query: async (text, params) => toQueryResult(await client.query(text, params))
         });
       } finally {
+        client.off('error', discardOnError);
         if (discardClient) {
           client.release(true);
         } else {

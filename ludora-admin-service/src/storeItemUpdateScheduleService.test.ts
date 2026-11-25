@@ -232,6 +232,44 @@ describe('store item update schedule service', () => {
     expect(database.queries.every((query) => query.params?.[0] === 9988)).toBe(true);
   });
 
+  it('rejects an overlapping manual run during automatic checkout and recovers after checkout fails', async () => {
+    const checkoutError = new Error('database connection timed out');
+    const checkout = Promise.withResolvers<void>();
+    const fakeDatabase = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [runningRun()],
+      [],
+      [{ scheduled_item_count: '2', scheduled_store_count: '1' }],
+      [completedRun()],
+      [],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    let checkouts = 0;
+    const database: SessionDatabase = {
+      query: () => fakeDatabase.query(),
+      async withSession(operation) {
+        checkouts += 1;
+        if (checkouts === 1) {
+          await checkout.promise;
+        }
+        return fakeDatabase.withSession(operation);
+      }
+    };
+    const service = createScheduleService(database);
+    const automatic = service.runAutomatic();
+
+    try {
+      await expect(service.runManual()).rejects.toBeInstanceOf(StoreItemUpdateScheduleConflictError);
+      expect(checkouts).toBe(1);
+    } finally {
+      checkout.reject(checkoutError);
+      await expect(automatic).rejects.toBe(checkoutError);
+    }
+
+    await expect(service.runManual()).resolves.toMatchObject({ status: 'COMPLETED' });
+    expect(checkouts).toBe(2);
+  });
+
   it('rolls back schedule changes and records a bounded failure', async () => {
     const distributionError = new Error(`distribution failed ${'x'.repeat(2100)}`);
     const database = new FakeSessionDatabase([

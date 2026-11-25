@@ -1,8 +1,10 @@
+import { EventEmitter } from 'node:events';
+
 import type { PoolConfig } from 'pg';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const mockPool = (waitingCount = 0) => {
-  const client = { query: vi.fn(), release: vi.fn() };
+  const client = Object.assign(new EventEmitter(), { query: vi.fn(), release: vi.fn() });
   const pool = {
     connect: vi.fn().mockResolvedValue(client),
     end: vi.fn(),
@@ -105,6 +107,19 @@ describe('createDatabase', () => {
       await session.close?.();
     });
 
+    expect(client.release).toHaveBeenCalledWith(true);
+  });
+
+  it('handles a checked-out client error and discards the connection on release', async () => {
+    const { client } = mockPool();
+    const { createDatabase } = await import('./db.js');
+    const database = createDatabase('postgresql://example');
+
+    await database.withSession(async () => {
+      client.emit('error', Object.assign(new Error('idle in transaction timeout'), { code: '25P03' }));
+    });
+
+    expect(client.listenerCount('error')).toBe(0);
     expect(client.release).toHaveBeenCalledWith(true);
   });
 });

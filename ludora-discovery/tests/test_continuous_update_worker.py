@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from psycopg.errors import QueryCanceled
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -443,6 +445,53 @@ class ContinuousUpdateWorkerTests(unittest.TestCase):
 
         self.assertEqual(log.call_args.args, ("worker.item.deactivated",))
         self.assertEqual(log.call_args.kwargs.get("attempt_id"), 91)
+
+    def test_query_timeout_rolls_back_before_recording_a_claim_failure(self):
+        for persistence, fetch_error in (
+            ("complete_claimed_store_item_update", None),
+            ("deactivate_claimed_store_item_update", ProductPageRemovedError("gone")),
+        ):
+            with self.subTest(persistence=persistence):
+                repository = Mock()
+                getattr(repository, persistence).side_effect = QueryCanceled("statement timeout")
+
+                with (
+                    patch(
+                        "ludora.continuous_update_worker.refresh_confirmed_store_item_candidate",
+                        return_value=self.record,
+                        side_effect=fetch_error,
+                    ),
+                    patch("ludora.continuous_update_worker._log"),
+                ):
+                    _process_claim(
+                        browser_fetcher=None, claim=self.claim, item_title_extractor=None,
+                        job_id=17, repository=repository, request_headers_provider=None,
+                        run_id="continuous:test", throttle=Mock(), worker_id="worker-1",
+                    )
+
+                self.assertEqual([entry[0] for entry in repository.mock_calls], [
+                    persistence, "connection.rollback", "fail_claimed_store_item_update",
+                ])
+                failure = repository.fail_claimed_store_item_update.call_args.kwargs
+                self.assertEqual(failure["lease_token"], self.claim.lease_token)
+                self.assertEqual(failure["attempt_id"], self.claim.attempt_id)
+
+    def test_query_timeout_sends_a_failed_rollback_to_session_recovery(self):
+        repository = Mock()
+        repository.complete_claimed_store_item_update.side_effect = QueryCanceled("statement timeout")
+        repository.connection.rollback.side_effect = RuntimeError("connection lost during rollback")
+
+        with (
+            patch("ludora.continuous_update_worker.refresh_confirmed_store_item_candidate", return_value=self.record),
+            self.assertRaisesRegex(RuntimeError, "connection lost during rollback"),
+        ):
+            _process_claim(
+                browser_fetcher=None, claim=self.claim, item_title_extractor=None,
+                job_id=17, repository=repository, request_headers_provider=None,
+                run_id="continuous:test", throttle=Mock(), worker_id="worker-1",
+            )
+
+        repository.fail_claimed_store_item_update.assert_not_called()
 
     def test_amazon_exact_invalid_browser_attempt_retries_and_completes(self):
         source_url = "https://www.amazon.com.mx/dp/B0D36CJG5N"

@@ -135,9 +135,12 @@ const continuousItemUpdateWorkerManager =
       })
     : undefined;
 const verifiedSitemapStoreIds = readVerifiedSitemapStoreIds(config.discoveryRunner.envFile);
-const storeItemUpdateScheduleManager = config.continuousItemUpdateWorker.enabled
+const storeItemUpdateScheduleDatabase = config.continuousItemUpdateWorker.enabled
+  ? createDatabase(config.databaseUrl, 'maintenance')
+  : undefined;
+const storeItemUpdateScheduleManager = storeItemUpdateScheduleDatabase
   ? createStoreItemUpdateScheduleManager({
-      scheduleService: createStoreItemUpdateScheduleService(database, { verifiedSitemapStoreIds })
+      scheduleService: createStoreItemUpdateScheduleService(storeItemUpdateScheduleDatabase, { verifiedSitemapStoreIds })
     })
   : undefined;
 const runtimeManagerLifecycle = createRuntimeManagerLifecycle({
@@ -235,6 +238,7 @@ async function shutdown(): Promise<void> {
     await runtimeManagerLifecycle.shutdown();
     await shutdownOperationsClient();
     await closeServer;
+    await storeItemUpdateScheduleDatabase?.close?.();
     process.exit(0);
   } catch (error) {
     console.error(error);

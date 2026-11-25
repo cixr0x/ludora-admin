@@ -127,8 +127,9 @@ export function createStoreItemUpdateScheduleService(
   const verifiedSitemapStoreIds = options.verifiedSitemapStoreIds ?? [];
   const includeRecovery = verifiedSitemapStoreIds.length > 0;
   const distributionSql = distributeStoreItemsSql(includeRecovery);
+  let running = false;
 
-  const run = async (
+  const runWithAdvisoryLock = async (
     trigger: StoreItemUpdateScheduleTrigger
   ): Promise<StoreItemUpdateScheduleRun | null> =>
     database.withSession(async (session) => {
@@ -199,6 +200,18 @@ export function createStoreItemUpdateScheduleService(
         await unlockWithoutMasking(session, advisoryLockKey);
       }
     });
+
+  const run = async (trigger: StoreItemUpdateScheduleTrigger): Promise<StoreItemUpdateScheduleRun | null> => {
+    if (running) {
+      throw new StoreItemUpdateScheduleConflictError();
+    }
+    running = true;
+    try {
+      return await runWithAdvisoryLock(trigger);
+    } finally {
+      running = false;
+    }
+  };
 
   return {
     runAutomatic: () => run('AUTOMATIC'),

@@ -14,6 +14,8 @@ from datetime import datetime, timedelta, timezone
 from queue import Queue
 from typing import Callable, Mapping
 
+from psycopg.errors import QueryCanceled
+
 from ludora.admin_title_extraction import AdminAmazonTitleExtractor
 from ludora.admin_web_bot_auth import AdminWebBotAuthHeadersProvider
 from ludora.browser_fetch import BrowserTextFetcher
@@ -386,6 +388,43 @@ def _process_claim(
             platform=claim.platform,
         )
 
+    def record_failure(exc: Exception) -> None:
+        if isinstance(exc, QueryCanceled):
+            # PostgreSQL leaves the slot transaction aborted after a cancellation.
+            repository.connection.rollback()
+        status_code = exc.status_code if isinstance(exc, TransientProductFetchError) else None
+        retry_after_seconds = exc.retry_after_seconds if isinstance(exc, TransientProductFetchError) else None
+        next_update_at = _item_failure_retry_at(claim.consecutive_failures + 1)
+        store_blocked_until = None
+        if claim.platform in RATE_LIMITED_PLATFORMS and status_code == 429:
+            store_blocked_until = _store_retry_at(
+                claim.store_consecutive_429s + 1,
+                retry_after_seconds=retry_after_seconds,
+            )
+            next_update_at = max(next_update_at, store_blocked_until)
+        repository.fail_claimed_store_item_update(
+            claim.record,
+            attempt_id=claim.attempt_id,
+            error=str(exc),
+            http_status=status_code,
+            lease_token=claim.lease_token,
+            next_update_at=next_update_at,
+            store_blocked_until=store_blocked_until,
+            worker_id=worker_id,
+            worker_name=WORKER_NAME,
+            job_id=job_id,
+            platform=claim.platform,
+        )
+        _log(
+            "worker.item.failed",
+            attempt_id=claim.attempt_id,
+            error=str(exc),
+            http_status=status_code,
+            next_update_at=next_update_at.isoformat(),
+            store_blocked_until=(store_blocked_until.isoformat() if store_blocked_until else None),
+            store_item_id=store_item_id,
+        )
+
     try:
         sitemap_membership = sitemap_contains(claim.record.source_url)
         if sitemap_membership is False:
@@ -456,54 +495,27 @@ def _process_claim(
             store_item_id=store_item_id,
         )
     except ProductPageRemovedError as exc:
-        repository.deactivate_claimed_store_item_update(
-            claim.record,
-            attempt_id=claim.attempt_id,
-            job_id=job_id,
-            lease_token=claim.lease_token,
-            run_id=run_id,
-            worker_id=worker_id,
-            worker_name=WORKER_NAME,
-            clear_schedule=sitemap_checker is not None and claim.record.store_id in sitemap_checker.verified_store_ids,
-        )
+        try:
+            repository.deactivate_claimed_store_item_update(
+                claim.record,
+                attempt_id=claim.attempt_id,
+                job_id=job_id,
+                lease_token=claim.lease_token,
+                run_id=run_id,
+                worker_id=worker_id,
+                worker_name=WORKER_NAME,
+                clear_schedule=sitemap_checker is not None and claim.record.store_id in sitemap_checker.verified_store_ids,
+            )
+        except QueryCanceled as cancelled:
+            record_failure(cancelled)
+            return
         _log(
             "worker.item.deactivated", attempt_id=claim.attempt_id,
             message="Store item marked unavailable after removed product",
             availability="unavailable", error=str(exc), store_item_id=store_item_id,
         )
     except Exception as exc:
-        status_code = exc.status_code if isinstance(exc, TransientProductFetchError) else None
-        retry_after_seconds = exc.retry_after_seconds if isinstance(exc, TransientProductFetchError) else None
-        next_update_at = _item_failure_retry_at(claim.consecutive_failures + 1)
-        store_blocked_until = None
-        if claim.platform in RATE_LIMITED_PLATFORMS and status_code == 429:
-            store_blocked_until = _store_retry_at(
-                claim.store_consecutive_429s + 1,
-                retry_after_seconds=retry_after_seconds,
-            )
-            next_update_at = max(next_update_at, store_blocked_until)
-        repository.fail_claimed_store_item_update(
-            claim.record,
-            attempt_id=claim.attempt_id,
-            error=str(exc),
-            http_status=status_code,
-            lease_token=claim.lease_token,
-            next_update_at=next_update_at,
-            store_blocked_until=store_blocked_until,
-            worker_id=worker_id,
-            worker_name=WORKER_NAME,
-            job_id=job_id,
-            platform=claim.platform,
-        )
-        _log(
-            "worker.item.failed",
-            attempt_id=claim.attempt_id,
-            error=str(exc),
-            http_status=status_code,
-            next_update_at=next_update_at.isoformat(),
-            store_blocked_until=(store_blocked_until.isoformat() if store_blocked_until else None),
-            store_item_id=store_item_id,
-        )
+        record_failure(exc)
 
 
 def _item_failure_retry_at(consecutive_failures: int) -> datetime:

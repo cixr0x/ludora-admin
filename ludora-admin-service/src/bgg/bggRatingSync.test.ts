@@ -1,9 +1,24 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { Database } from '../db.js';
-import { applyBggRatingSync, buildBggRatingSyncPlan } from './bggRatingSync.js';
+import { applyBggRatingSync, buildBggRatingSyncPlan, loadBggRatingSyncPlan } from './bggRatingSync.js';
 
 describe('BGG rating sync', () => {
+  it('loads planning reads sequentially on a one-connection pool', async () => {
+    let active = false;
+    const query = vi.fn<Database['query']>().mockImplementation(async () => {
+      expect(active).toBe(false);
+      active = true;
+      await Promise.resolve();
+      active = false;
+      return { rows: [] };
+    });
+
+    await loadBggRatingSyncPlan({ query });
+
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
   it('builds rating updates from cached BGG thing payloads', () => {
     const plan = buildBggRatingSyncPlan({
       cachedThings: [
