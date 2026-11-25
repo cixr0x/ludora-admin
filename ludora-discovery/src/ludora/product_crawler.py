@@ -17,16 +17,12 @@ from ludora.hidralistico_discovery import (
     is_hidralistico_store_url,
 )
 from ludora.item_classification import apply_item_classification
-from ludora.juegamas_stock import (
-    JUEGAMAS_STOCK_PATH,
-    extract_juegamas_product_selection,
-    is_juegamas_product_url,
-)
 from ludora.listing_extraction import extract_listing_candidates
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.nalua_discovery import NALUA_CATALOG_PATH, discover_nalua_product_urls, is_nalua_store_url
 from ludora.revilo_discovery import REVILO_CATALOG_PATH, discover_revilo_product_urls, is_revilo_store_url
 from ludora.moonlight_discovery import MoonlightDiscoveryProfile, is_moonlight_store_url
+from ludora.odoo_stock import LEGACY_ODOO_COMBINATION_PATH, inspect_odoo_stock_page
 from ludora.discovery_pairs import discovery_url_pair
 from ludora.product_detail_extraction import extract_product_detail_candidate
 from ludora.product_discovery_throttle import wait_for_discovery_delay
@@ -1823,7 +1819,7 @@ def _fetch_detail_candidate(
     trace = trace_logger or NullTraceLogger()
     amazon_detail_request = platform.strip().casefold() in AMAZON_STORE_PLATFORMS
     store_item_update_request = detect_removed
-    juegamas_update = store_item_update_request and is_juegamas_product_url(listing_candidate.source_url)
+    odoo_update = store_item_update_request and platform.strip().casefold() == "odoo"
     amazon_detail_validation_failed = False
     amazon_browser_failure: dict[str, object] | None = None
     browser_failure: dict[str, object] | None = None
@@ -2073,7 +2069,7 @@ def _fetch_detail_candidate(
         )
 
     if detail_candidate is None:
-        if juegamas_update:
+        if odoo_update and detail_page is not None and inspect_odoo_stock_page(detail_page.text).advertises_stock:
             raise TransientProductFetchError(f"No Odoo product details were extracted: {listing_candidate.source_url}")
         if not detect_removed and fetched_detail is not None and _is_redirected_product_url(listing_candidate.source_url, fetched_detail.url):
             raise ProductDetailRejectedError(f"No product details were extracted from redirect target: {fetched_detail.url}")
@@ -2110,13 +2106,16 @@ def _fetch_detail_candidate(
             f"Parsed product detail rejected ({rejection_reason}): {listing_candidate.source_url}"
         )
 
-    if juegamas_update and detail_page is not None:
-        detail_candidate.availability = _fetch_juegamas_availability(
+    if odoo_update and detail_page is not None:
+        availability = _fetch_odoo_availability(
             detail_page,
+            has_structured_availability=detail_candidate.availability_source == "json_ld_offer",
             before_request=before_request,
             cancellation_token=cancellation_token,
         )
-        detail_candidate.availability_source = "odoo_combination_info"
+        if availability is not None:
+            detail_candidate.availability = availability
+            detail_candidate.availability_source = "odoo_combination_info"
     detail_candidate = _apply_listing_fallbacks(detail_candidate, listing_candidate)
     if not detect_removed and fetched_detail is not None:
         detail_candidate.source_url_origin, detail_candidate.source_url = discovery_url_pair(listing_candidate.source_url, fetched_detail.url)
@@ -2125,47 +2124,66 @@ def _fetch_detail_candidate(
     return detail_candidate
 
 
-def _fetch_juegamas_availability(
+def _fetch_odoo_availability(
     product_page: FetchResult,
     *,
+    has_structured_availability: bool,
     before_request: Callable[[str], None] | None,
     cancellation_token: CancellationToken | None,
-) -> str:
-    try:
-        selection = extract_juegamas_product_selection(product_page.text)
-    except ValueError as exc:
-        raise TransientProductFetchError(f"{exc}: {product_page.url}") from exc
+) -> str | None:
+    page = inspect_odoo_stock_page(product_page.text)
+    requires_stock_response = page.advertises_stock and not has_structured_availability
+    if page.selection is None:
+        if requires_stock_response:
+            raise TransientProductFetchError(
+                f"Odoo product page did not expose a default product selection: {product_page.url}"
+            )
+        return None
 
-    endpoint = urljoin(product_page.url, JUEGAMAS_STOCK_PATH)
-    raise_if_cancelled(cancellation_token)
-    if before_request is not None:
-        before_request(endpoint)
-    response = fetch_json(
-        endpoint,
-        data=selection.request_data(),
-        headers={"Referer": product_page.url},
-        include_http_error_status=True,
-    )
-    raise_if_cancelled(cancellation_token)
-    if response is None:
-        raise TransientProductFetchError(f"Odoo stock lookup returned no JSON response: {product_page.url}")
-    if not 200 <= response.status_code < 300:
-        failure = response.error_type or "network error"
-        if response.status_code:
-            failure = f"HTTP {response.status_code}"
-        raise TransientProductFetchError(
-            f"Odoo stock lookup failed ({failure}): {product_page.url}",
-            error_type=response.error_type,
-            status_code=response.status_code or None,
-            retry_after_seconds=response.retry_after_seconds,
+    for path in page.combination_paths:
+        endpoint = urljoin(product_page.url, path)
+        legacy = path == LEGACY_ODOO_COMBINATION_PATH
+        raise_if_cancelled(cancellation_token)
+        if before_request is not None:
+            before_request(endpoint)
+        response = fetch_json(
+            endpoint,
+            data=page.selection.request_data(legacy=legacy),
+            headers={"Referer": product_page.url},
+            include_http_error_status=True,
         )
-    if response.url != endpoint:
-        raise TransientProductFetchError(f"Odoo stock lookup redirected away from the endpoint: {product_page.url}")
+        raise_if_cancelled(cancellation_token)
+        if response is None:
+            raise TransientProductFetchError(f"Odoo stock lookup returned no JSON response: {product_page.url}")
+        if response.url != endpoint:
+            raise TransientProductFetchError(
+                f"Odoo stock lookup redirected away from the endpoint: {product_page.url}"
+            )
+        if response.status_code in {404, 405}:
+            continue
+        if not 200 <= response.status_code < 300:
+            failure = response.error_type or "network error"
+            if response.status_code:
+                failure = f"HTTP {response.status_code}"
+            raise TransientProductFetchError(
+                f"Odoo stock lookup failed ({failure}): {product_page.url}",
+                error_type=response.error_type,
+                status_code=response.status_code or None,
+                retry_after_seconds=response.retry_after_seconds,
+            )
+        try:
+            availability = page.selection.availability_from_response(response.text)
+        except ValueError as exc:
+            raise TransientProductFetchError(f"{exc}: {product_page.url}") from exc
+        if availability is None and requires_stock_response:
+            raise TransientProductFetchError(f"Odoo stock response omitted advertised stock: {product_page.url}")
+        return availability
 
-    try:
-        return selection.availability_from_response(response.text)
-    except ValueError as exc:
-        raise TransientProductFetchError(f"{exc}: {product_page.url}") from exc
+    if page.advertises_stock:
+        raise TransientProductFetchError(
+            f"Odoo stock lookup found no supported route for advertised stock: {product_page.url}"
+        )
+    return None
 
 
 def _validate_amazon_detail_fetch(

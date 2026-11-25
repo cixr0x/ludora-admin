@@ -4,44 +4,38 @@ import json
 import math
 from dataclasses import dataclass
 from html.parser import HTMLParser
-from urllib.parse import urlparse
 
 
-JUEGAMAS_STOCK_PATH = "/website_sale/get_combination_info"
-
-
-def is_juegamas_product_url(url: str) -> bool:
-    parsed = urlparse(url)
-    return (
-        parsed.scheme in {"http", "https"}
-        and parsed.hostname in {"juegamas.mx", "www.juegamas.mx"}
-        and parsed.path.startswith("/shop/")
-    )
+ODOO_COMBINATION_PATH = "/website_sale/get_combination_info"
+LEGACY_ODOO_COMBINATION_PATH = "/sale/get_combination_info_website"
+INVENTORY_FIELDS = frozenset({
+    "allow_out_of_stock_order", "free_qty", "cart_qty",
+    "show_availability", "available_threshold", "out_of_stock_message",
+})
+LEGACY_STORABLE_TYPES = {"product": True, "consu": False, "service": False, "combo": False}
 
 
 @dataclass(frozen=True)
-class JuegaMasProductSelection:
+class OdooProductSelection:
     product_id: int
     product_template_id: int
     combination: tuple[int, ...]
     quantity: int
 
-    def request_data(self) -> bytes:
-        return json.dumps({
-            "jsonrpc": "2.0",
-            "method": "call",
-            "params": {
-                "product_id": self.product_id,
-                "product_template_id": self.product_template_id,
-                "combination": self.combination,
-                "add_qty": self.quantity,
-                "parent_combination": [],
-                "context": {},
-            },
-            "id": 1,
-        }).encode("utf-8")
+    def request_data(self, *, legacy: bool) -> bytes:
+        params = {
+            "product_id": self.product_id,
+            "product_template_id": self.product_template_id,
+            "combination": self.combination,
+            "add_qty": self.quantity,
+            "parent_combination": [],
+            "context": {},
+        }
+        if legacy:
+            params["pricelist_id"] = False
+        return json.dumps({"jsonrpc": "2.0", "method": "call", "params": params, "id": 1}).encode("utf-8")
 
-    def availability_from_response(self, text: str) -> str:
+    def availability_from_response(self, text: str) -> str | None:
         try:
             payload = json.loads(text)
         except ValueError as exc:
@@ -58,7 +52,14 @@ class JuegaMasProductSelection:
         if possible is not True:
             raise ValueError("Odoo stock response did not identify a purchasable combination")
 
+        if "max_combo_quantity" in result:
+            return "out_of_stock" if _number(result["max_combo_quantity"]) < 1 else "available"
+        if not INVENTORY_FIELDS.intersection(result):
+            return None
+
         storable = result.get("is_storable")
+        if "is_storable" not in result:
+            storable = LEGACY_STORABLE_TYPES.get(str(result.get("product_type")))
         backorders = result.get("allow_out_of_stock_order")
         if type(storable) is not bool or type(backorders) is not bool:
             raise ValueError("Odoo stock response did not contain the stock policy")
@@ -66,8 +67,6 @@ class JuegaMasProductSelection:
             free_qty = _number(result.get("free_qty"))
             cart_qty = _number(result.get("cart_qty"))
             return "out_of_stock" if free_qty - cart_qty < 1 else "available"
-        if result.get("product_type") == "combo" and "max_combo_quantity" in result:
-            return "out_of_stock" if _number(result["max_combo_quantity"]) < 1 else "available"
         return "available"
 
 
@@ -77,20 +76,32 @@ def _number(value: object) -> int | float:
     raise ValueError("Odoo stock response did not contain valid stock quantities")
 
 
-def extract_juegamas_product_selection(html: str) -> JuegaMasProductSelection:
+@dataclass(frozen=True)
+class OdooStockPage:
+    selection: OdooProductSelection | None
+    advertises_stock: bool
+    legacy_frontend: bool
+
+    @property
+    def combination_paths(self) -> tuple[str, str]:
+        if self.legacy_frontend:
+            return LEGACY_ODOO_COMBINATION_PATH, ODOO_COMBINATION_PATH
+        return ODOO_COMBINATION_PATH, LEGACY_ODOO_COMBINATION_PATH
+
+
+def inspect_odoo_stock_page(html: str) -> OdooStockPage:
     parser = _ProductFormParser()
     parser.feed(html)
     parser.close()
-    if parser.selection is None:
-        raise ValueError("Odoo product page did not expose a default product selection")
-    return parser.selection
+    return OdooStockPage(parser.selection, parser.advertises_stock, parser.legacy_frontend)
 
 
 class _ProductFormParser(HTMLParser):
     def __init__(self) -> None:
         super().__init__()
-        self.selection: JuegaMasProductSelection | None = None
-        self.in_product_form = False
+        self.selection: OdooProductSelection | None = None
+        self.advertises_stock = False
+        self.legacy_frontend = False
         self.main_product_depth = 0
         self.product_inputs: dict[str, str] = {}
         self.variant_values: list[str] = []
@@ -99,21 +110,26 @@ class _ProductFormParser(HTMLParser):
         self.selected_option = ""
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        attributes = dict(attrs)
+        classes = (attributes.get("class") or "").split()
+        if "availability_messages" in classes:
+            self.advertises_stock = True
+        if tag == "script" and (
+            attributes.get("data-asset-bundle") == "web.assets_frontend_lazy"
+            and attributes.get("data-asset-version")
+        ):
+            self.legacy_frontend = True
         if self.selection is not None:
             return
-        attributes = dict(attrs)
-        if tag == "form":
-            self.in_product_form = attributes.get("action") == "/shop/cart/update"
-            self.main_product_depth = 0
-            self.product_inputs = {}
-            self.variant_values = []
-            self.in_variant_select = False
-        if not self.in_product_form:
-            return
 
-        classes = (attributes.get("class") or "").split()
-        if tag == "div" and (self.main_product_depth or "js_main_product" in classes):
-            self.main_product_depth += 1
+        if tag == "div":
+            if self.main_product_depth:
+                self.main_product_depth += 1
+            elif "js_main_product" in classes:
+                self.main_product_depth = 1
+                self.product_inputs = {}
+                self.variant_values = []
+                self.in_variant_select = False
         if not self.main_product_depth:
             return
 
@@ -140,21 +156,24 @@ class _ProductFormParser(HTMLParser):
                 self.selected_option = value
 
     def handle_endtag(self, tag: str) -> None:
-        if not self.in_product_form:
+        if not self.main_product_depth:
             return
-        if tag == "div" and self.main_product_depth:
+        if tag == "div":
             self.main_product_depth -= 1
+            if self.main_product_depth == 0:
+                self.selection = self._product_selection()
         elif tag == "select" and self.in_variant_select:
             self.in_variant_select = False
             self.variant_values.append(self.selected_option or self.first_option)
-        elif tag == "form":
-            self.in_product_form = False
-            try:
-                product_id = int(self.product_inputs["product_id"])
-                template_id = int(self.product_inputs["product_template_id"])
-                quantity = int(self.product_inputs.get("add_qty", "1"))
-                combination = tuple(int(value) for value in self.variant_values)
-            except (KeyError, ValueError):
-                return
-            if min(product_id, template_id, quantity, *combination) > 0:
-                self.selection = JuegaMasProductSelection(product_id, template_id, combination, quantity)
+
+    def _product_selection(self) -> OdooProductSelection | None:
+        try:
+            product_id = int(self.product_inputs["product_id"])
+            template_id = int(self.product_inputs["product_template_id"])
+            quantity = int(self.product_inputs.get("add_qty", "1"))
+            combination = tuple(int(value) for value in self.variant_values)
+        except (KeyError, ValueError):
+            return None
+        if min(product_id, template_id, quantity, *combination) <= 0:
+            return None
+        return OdooProductSelection(product_id, template_id, combination, quantity)

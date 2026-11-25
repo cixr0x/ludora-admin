@@ -3092,7 +3092,7 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(repository.progress_updates, [(99, 1, 1), (99, 2, 1)])
 
 
-class JuegaMasUpdateTests(unittest.TestCase):
+class OdooStockUpdateTests(unittest.TestCase):
     def setUp(self):
         self.url = "https://juegamas.mx/shop/listo-para-imprenta-4107"
         self.endpoint = "https://juegamas.mx/website_sale/get_combination_info"
@@ -3109,6 +3109,7 @@ class JuegaMasUpdateTests(unittest.TestCase):
                 <input name="add_qty" value="1">
                 <span>$1,270.00</span>
                 <a id="add_to_cart">Agregar al carrito</a>
+                <div class="availability_messages o_not_editable"></div>
             </div>
         </form>
         """
@@ -3211,6 +3212,8 @@ class JuegaMasUpdateTests(unittest.TestCase):
     def test_failed_stock_lookups_leave_availability_and_use_normal_retry_handling(self):
         for response, status in (
             (FetchResult(self.endpoint, "", status_code=429, retry_after_seconds=60), 429),
+            (FetchResult(self.endpoint, "", status_code=503), 503),
+            (FetchResult(self.endpoint, "", status_code=0, error_type="TimeoutError"), None),
             (FetchResult(self.endpoint, json.dumps({"error": {"message": "Server error"}})), None),
             (FetchResult(self.endpoint, "{"), None),
             (FetchResult("https://example.mx/stock", self.stock_response().text), None),
@@ -3220,11 +3223,12 @@ class JuegaMasUpdateTests(unittest.TestCase):
             with self.subTest(response=response):
                 with (
                     patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
-                    patch("ludora.product_crawler.fetch_json", return_value=response),
+                    patch("ludora.product_crawler.fetch_json", return_value=response) as fetch_stock,
                 ):
                     with self.assertRaisesRegex(TransientProductFetchError, "Odoo") as raised:
                         refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
 
+                fetch_stock.assert_called_once()
                 self.assertEqual(raised.exception.status_code, status)
                 self.assertEqual(raised.exception.retry_after_seconds, 60 if status == 429 else None)
                 self.assertEqual(self.existing.availability, "available")
@@ -3241,18 +3245,191 @@ class JuegaMasUpdateTests(unittest.TestCase):
         self.assertEqual(self.existing.availability, "available")
         fetch_stock.assert_not_called()
 
-    def test_other_odoo_stores_keep_existing_availability_parsing(self):
+    def test_non_odoo_stores_keep_existing_availability_parsing(self):
         other_url = self.url.replace("juegamas.mx", "example.mx")
         self.existing.source_url = other_url
         with (
             patch("ludora.product_crawler.fetch_html", return_value=FetchResult(other_url, self.product_html)),
             patch("ludora.product_crawler.fetch_json") as fetch_stock,
         ):
-            refreshed = refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+            refreshed = refresh_confirmed_store_item_candidate(self.existing, platform="custom")
 
         self.assertEqual(refreshed.availability, "available")
         self.assertEqual(refreshed.availability_source, "generic_text")
         fetch_stock.assert_not_called()
+
+    def test_ingenioz_legacy_frontend_uses_stock_on_the_first_request(self):
+        url = "https://ingenioz.com.mx/shop/cereal-killer-juego-de-mesa-primigenio-23809"
+        self.existing.source_url = url
+        endpoint = "https://ingenioz.com.mx/sale/get_combination_info_website"
+        html = self.product_html.replace("4105", "17908").replace("4107", "23809") + """
+        <script data-src="/web/assets/14233-a04586a/1/web.assets_frontend_lazy.min.js"
+          data-asset-bundle="web.assets_frontend_lazy" data-asset-version="a04586a"></script>
+        """
+        stock = {**self.stock, "product_id": 17908, "product_template_id": 23809, "product_type": "product"}
+        del stock["is_storable"]
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url, html)),
+            patch("ludora.product_crawler.fetch_json", return_value=FetchResult(
+                endpoint, json.dumps({"result": stock}),
+            )) as fetch_stock,
+        ):
+            refreshed = refresh_confirmed_store_item_candidate(self.existing, platform=" ODOO ")
+
+        self.assertEqual(refreshed.availability, "out_of_stock")
+        self.assertEqual(refreshed.availability_source, "odoo_combination_info")
+        self.assertEqual(fetch_stock.call_count, 1)
+        self.assertEqual(fetch_stock.call_args.args, (endpoint,))
+        params = json.loads(fetch_stock.call_args.kwargs["data"])["params"]
+        self.assertIs(params["pricelist_id"], False)
+        self.assertEqual(params["product_id"], 17908)
+        self.assertEqual(params["product_template_id"], 23809)
+
+    def test_tablerazo_actionless_form_uses_modern_stock_without_product_type(self):
+        url = "https://www.tablerazo.com/shop/blood-bowl-gnome-644"
+        self.existing.source_url = url
+        endpoint = "https://www.tablerazo.com/website_sale/get_combination_info"
+        html = """
+        <div class="js_product js_main_product"><form>
+            <h1>Blood Bowl Gnome</h1>
+            <input type="hidden" name="product_id" value="676">
+            <input type="hidden" name="product_template_id" value="644">
+            <input name="add_qty" value="1">
+            <div class="availability_messages o_not_editable"></div>
+            <a id="add_to_cart">Agregar al carrito</a>
+        </form></div>
+        """
+        stock = {**self.stock, "product_id": 676, "product_template_id": 644, "free_qty": 1}
+        del stock["product_type"]
+        repository = FakeRepository(confirmed_items=[self.existing], store_platforms={42: "odoo"})
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url, html)),
+            patch("ludora.product_crawler.fetch_json", return_value=FetchResult(
+                endpoint, json.dumps({"result": stock}),
+            )) as fetch_stock,
+        ):
+            refreshed = update_confirmed_store_item_details(repository, store_ids=[42])[0]
+
+        self.assertEqual(refreshed.availability, "available")
+        self.assertEqual(refreshed.availability_source, "odoo_combination_info")
+        self.assertEqual(fetch_stock.call_args.args, (endpoint,))
+        self.assertEqual(json.loads(fetch_stock.call_args.kwargs["data"])["params"]["product_id"], 676)
+
+    def test_unsupported_modern_route_tries_legacy_with_existing_throttle(self):
+        legacy = "https://juegamas.mx/sale/get_combination_info_website"
+        before_request = Mock()
+        legacy_stock = {**self.stock, "product_type": "product"}
+        del legacy_stock["is_storable"]
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
+            patch("ludora.product_crawler.fetch_json", side_effect=[
+                FetchResult(self.endpoint, "", status_code=404),
+                FetchResult(legacy, json.dumps({"result": legacy_stock})),
+            ]) as fetch_stock,
+        ):
+            refreshed = refresh_confirmed_store_item_candidate(
+                self.existing, platform="odoo", before_request=before_request,
+            )
+
+        self.assertEqual(refreshed.availability, "out_of_stock")
+        self.assertEqual(before_request.call_args_list, [call(self.url), call(self.endpoint), call(legacy)])
+        self.assertEqual([request.args[0] for request in fetch_stock.call_args_list], [self.endpoint, legacy])
+        self.assertNotIn("pricelist_id", json.loads(fetch_stock.call_args_list[0].kwargs["data"])["params"])
+        self.assertIs(json.loads(fetch_stock.call_args_list[1].kwargs["data"])["params"]["pricelist_id"], False)
+
+    def test_modern_route_accepts_older_stock_fields_and_combo_only_limits(self):
+        result = {"product_id": 4105, "product_template_id": 4107, "is_combination_possible": True}
+        for stock in (
+            {"product_type": "product", "free_qty": 0, "cart_qty": 0, "allow_out_of_stock_order": False},
+            {"max_combo_quantity": 0},
+        ):
+            with (
+                self.subTest(stock=stock),
+                patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
+                patch("ludora.product_crawler.fetch_json", return_value=FetchResult(
+                    self.endpoint, json.dumps({"result": {**result, **stock}}),
+                )),
+            ):
+                refreshed = refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+                self.assertEqual(refreshed.availability, "out_of_stock")
+                self.assertEqual(refreshed.availability_source, "odoo_combination_info")
+
+    def test_missing_stock_on_odoo_page_can_use_structured_availability(self):
+        html = self.product_html + """
+        <script type="application/ld+json">
+            {"@type":"Product","name":"Listo para imprenta",
+             "offers":{"availability":"https://schema.org/OutOfStock"}}
+        </script>
+        """
+        basic_result = {"product_id": 4105, "product_template_id": 4107, "is_combination_possible": True}
+        response = FetchResult(self.endpoint, json.dumps({"result": basic_result}))
+        for page_html, expected_calls in (
+            (html, 1),
+            (html.replace('name="product_template_id" value="4107"', ""), 0),
+        ):
+            with (
+                self.subTest(expected_calls=expected_calls),
+                patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, page_html)),
+                patch("ludora.product_crawler.fetch_json", return_value=response) as fetch_stock,
+            ):
+                refreshed = refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+                self.assertEqual(refreshed.availability, "out_of_stock")
+                self.assertEqual(refreshed.availability_source, "json_ld_offer")
+                self.assertEqual(fetch_stock.call_count, expected_calls)
+
+    def test_stockless_response_cannot_fall_back_to_cart_text_when_stock_is_advertised(self):
+        basic_result = {"product_id": 4105, "product_template_id": 4107, "is_combination_possible": True}
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
+            patch("ludora.product_crawler.fetch_json", return_value=FetchResult(
+                self.endpoint, json.dumps({"result": basic_result}),
+            )) as fetch_stock,
+            self.assertRaisesRegex(TransientProductFetchError, "omitted advertised stock"),
+        ):
+            refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+
+        fetch_stock.assert_called_once()
+
+    def test_advertised_stock_with_two_unsupported_routes_is_retryable(self):
+        legacy = "https://juegamas.mx/sale/get_combination_info_website"
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
+            patch("ludora.product_crawler.fetch_json", side_effect=[
+                FetchResult(self.endpoint, "", status_code=404),
+                FetchResult(legacy, "", status_code=405),
+            ]) as fetch_stock,
+            self.assertRaisesRegex(TransientProductFetchError, "Odoo stock lookup"),
+        ):
+            refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+
+        self.assertEqual(fetch_stock.call_count, 2)
+        self.assertEqual(self.existing.availability, "available")
+
+    def test_no_inventory_capability_preserves_existing_page_availability(self):
+        url = "https://shop.example.com/shop/listo-para-imprenta-4107"
+        endpoint = "https://shop.example.com/website_sale/get_combination_info"
+        legacy = "https://shop.example.com/sale/get_combination_info_website"
+        self.existing.source_url = url
+        html = self.product_html.replace('<div class="availability_messages o_not_editable"></div>', "") + """
+        <script type="application/ld+json">
+            {"@type":"Product","name":"Listo para imprenta",
+             "offers":{"availability":"https://schema.org/OutOfStock"}}
+        </script>
+        """
+        basic_result = {"product_id": 4105, "product_template_id": 4107, "is_combination_possible": True}
+        for responses in (
+            [FetchResult(endpoint, json.dumps({"result": basic_result}))],
+            [FetchResult(endpoint, "", status_code=404), FetchResult(legacy, "", status_code=404)],
+        ):
+            with (
+                self.subTest(responses=responses),
+                patch("ludora.product_crawler.fetch_html", return_value=FetchResult(url, html)),
+                patch("ludora.product_crawler.fetch_json", side_effect=responses) as fetch_stock,
+            ):
+                refreshed = refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+                self.assertEqual(refreshed.availability, "out_of_stock")
+                self.assertEqual(refreshed.availability_source, "json_ld_offer")
+                self.assertEqual(fetch_stock.call_count, len(responses))
 
     def test_removed_or_redirected_product_page_does_not_request_original_product_stock(self):
         for fetched, error in (
