@@ -1,3 +1,4 @@
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -3089,6 +3090,184 @@ class InventoryTests(unittest.TestCase):
         self.assertEqual(len(records), 2)
         self.assertEqual(getattr(records, "updated_items", None), 1)
         self.assertEqual(repository.progress_updates, [(99, 1, 1), (99, 2, 1)])
+
+
+class JuegaMasUpdateTests(unittest.TestCase):
+    def setUp(self):
+        self.url = "https://juegamas.mx/shop/listo-para-imprenta-4107"
+        self.endpoint = "https://juegamas.mx/website_sale/get_combination_info"
+        self.product_html = """
+        <h1>Listo para imprenta</h1>
+        <form action="/shop/cart/update" method="POST">
+            <input type="hidden" name="product_id" value="99">
+            <input type="hidden" name="product_template_id" value="100">
+        </form>
+        <form action="/shop/cart/update" method="POST">
+            <div class="js_product js_main_product">
+                <input type="hidden" name="product_id" value="4105">
+                <input type="hidden" name="product_template_id" value="4107">
+                <input name="add_qty" value="1">
+                <span>$1,270.00</span>
+                <a id="add_to_cart">Agregar al carrito</a>
+            </div>
+        </form>
+        """
+        self.existing = DiscoveryItemCandidateRecord(
+            store_id=42, store_item_id=89662, item_id=1914, source_url=self.url,
+            title="Listo para imprenta", price="1270.00", availability="available",
+            availability_source="generic_text", listing_status="LISTED",
+            is_boardgame=True, is_boardgame_confirmed=True,
+        )
+        self.stock = {
+            "product_id": 4105, "product_template_id": 4107, "is_combination_possible": True,
+            "is_storable": True, "product_type": "consu", "free_qty": 0, "cart_qty": 0,
+            "allow_out_of_stock_order": False,
+        }
+
+    def stock_response(self, **overrides):
+        return FetchResult(self.endpoint, json.dumps({"result": {**self.stock, **overrides}}))
+
+    def test_manual_update_overrides_cart_button_with_actual_odoo_stock(self):
+        repository = FakeRepository(confirmed_items=[self.existing], store_platforms={42: "odoo"})
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
+            patch("ludora.product_crawler.fetch_json", return_value=self.stock_response()) as fetch_stock,
+        ):
+            records = update_confirmed_store_item_details(repository, store_ids=[42])
+
+        self.assertEqual(records[0].availability, "out_of_stock")
+        self.assertEqual(records[0].availability_source, "odoo_combination_info")
+        self.assertEqual(records[0].price, "1270.00")
+        self.assertTrue(records[0].store_active)
+        self.assertEqual(repository.item_records[0].availability, "out_of_stock")
+        self.assertEqual(fetch_stock.call_args.args, (self.endpoint,))
+        self.assertEqual(json.loads(fetch_stock.call_args.kwargs["data"])["params"], {
+            "product_id": 4105, "product_template_id": 4107, "combination": [],
+            "add_qty": 1, "parent_combination": [], "context": {},
+        })
+
+    def test_scheduled_refresh_uses_stock_purchase_rules_and_throttles_both_requests(self):
+        for overrides, availability in (
+            ({"free_qty": 2}, "available"),
+            ({"free_qty": 2, "cart_qty": 2}, "out_of_stock"),
+            ({"free_qty": 0, "allow_out_of_stock_order": True}, "available"),
+            ({"free_qty": 2, "is_combination_possible": False}, "out_of_stock"),
+            ({"free_qty": 0, "is_storable": False}, "available"),
+            ({"product_type": "combo", "is_storable": False, "max_combo_quantity": 0}, "out_of_stock"),
+        ):
+            with self.subTest(overrides=overrides):
+                before_request = Mock()
+                with (
+                    patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
+                    patch("ludora.product_crawler.fetch_json", return_value=self.stock_response(**overrides)),
+                ):
+                    refreshed = refresh_confirmed_store_item_candidate(
+                        self.existing, platform="odoo", before_request=before_request,
+                    )
+
+                self.assertEqual(refreshed.availability, availability)
+                self.assertEqual(refreshed.availability_source, "odoo_combination_info")
+                self.assertEqual(before_request.call_args_list, [call(self.url), call(self.endpoint)])
+
+    def test_scheduled_refresh_submits_the_form_default_variant_selection(self):
+        page_html = self.product_html.replace(
+            '<input name="add_qty" value="1">',
+            """
+            <input class="js_variant_change" type="radio" value="10">
+            <input class="js_variant_change" type="radio" value="11" checked>
+            <select class="js_variant_change">
+                <option value="20">First</option>
+                <option value="21" selected>Second</option>
+            </select>
+            <input name="add_qty" value="2">
+            """,
+        )
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, page_html)),
+            patch("ludora.product_crawler.fetch_json", return_value=self.stock_response(free_qty=2)) as fetch_stock,
+        ):
+            refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+
+        params = json.loads(fetch_stock.call_args.kwargs["data"])["params"]
+        self.assertEqual(params["combination"], [11, 21])
+        self.assertEqual(params["add_qty"], 2)
+
+    def test_refresh_checks_stock_when_an_optional_browser_retry_fails(self):
+        page_html = self.product_html.replace(
+            "<h1>Listo para imprenta</h1>", "<h1>Galaxy Explorer</h1>",
+        )
+        browser_fetcher = Mock(return_value=None)
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, page_html)),
+            patch("ludora.product_crawler.fetch_json", return_value=self.stock_response()),
+        ):
+            refreshed = refresh_confirmed_store_item_candidate(
+                self.existing, platform="odoo", browser_fetcher=browser_fetcher,
+            )
+
+        browser_fetcher.assert_called_once_with(self.url)
+        self.assertEqual(refreshed.availability, "out_of_stock")
+
+    def test_failed_stock_lookups_leave_availability_and_use_normal_retry_handling(self):
+        for response, status in (
+            (FetchResult(self.endpoint, "", status_code=429, retry_after_seconds=60), 429),
+            (FetchResult(self.endpoint, json.dumps({"error": {"message": "Server error"}})), None),
+            (FetchResult(self.endpoint, "{"), None),
+            (FetchResult("https://example.mx/stock", self.stock_response().text), None),
+            (self.stock_response(product_id=99), None),
+            (self.stock_response(free_qty="invalid"), None),
+        ):
+            with self.subTest(response=response):
+                with (
+                    patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, self.product_html)),
+                    patch("ludora.product_crawler.fetch_json", return_value=response),
+                ):
+                    with self.assertRaisesRegex(TransientProductFetchError, "Odoo") as raised:
+                        refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+
+                self.assertEqual(raised.exception.status_code, status)
+                self.assertEqual(raised.exception.retry_after_seconds, 60 if status == 429 else None)
+                self.assertEqual(self.existing.availability, "available")
+
+    def test_missing_primary_product_selection_is_retryable(self):
+        page_html = self.product_html.replace('name="product_template_id" value="4107"', "")
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(self.url, page_html)),
+            patch("ludora.product_crawler.fetch_json") as fetch_stock,
+            self.assertRaisesRegex(TransientProductFetchError, "Odoo product page"),
+        ):
+            refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+
+        self.assertEqual(self.existing.availability, "available")
+        fetch_stock.assert_not_called()
+
+    def test_other_odoo_stores_keep_existing_availability_parsing(self):
+        other_url = self.url.replace("juegamas.mx", "example.mx")
+        self.existing.source_url = other_url
+        with (
+            patch("ludora.product_crawler.fetch_html", return_value=FetchResult(other_url, self.product_html)),
+            patch("ludora.product_crawler.fetch_json") as fetch_stock,
+        ):
+            refreshed = refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+
+        self.assertEqual(refreshed.availability, "available")
+        self.assertEqual(refreshed.availability_source, "generic_text")
+        fetch_stock.assert_not_called()
+
+    def test_removed_or_redirected_product_page_does_not_request_original_product_stock(self):
+        for fetched, error in (
+            (FetchResult(self.url, "", status_code=404), ProductPageRemovedError),
+            (FetchResult("https://juegamas.mx/shop/different-123", self.product_html), ProductDetailRedirect),
+        ):
+            with self.subTest(fetched=fetched):
+                with (
+                    patch("ludora.product_crawler.fetch_html", return_value=fetched),
+                    patch("ludora.product_crawler.fetch_json") as fetch_stock,
+                    self.assertRaises(error),
+                ):
+                    refresh_confirmed_store_item_candidate(self.existing, platform="odoo")
+
+                fetch_stock.assert_not_called()
 
 
 if __name__ == "__main__":

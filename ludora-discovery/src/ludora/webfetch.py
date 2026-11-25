@@ -178,6 +178,7 @@ def fetch_json(
     timeout: int = 20,
     *,
     headers: Mapping[str, str] | None = None,
+    data: bytes | None = None,
     include_http_error_status: bool = False,
 ) -> FetchResult | None:
     request_headers = {
@@ -188,11 +189,13 @@ def fetch_json(
             "(+https://admin.ludora.bobbycrimson.com/crawler)"
         ),
     }
+    if data is not None:
+        request_headers["Content-Type"] = "application/json"
     request_headers.update(headers or {})
     request = Request(
         url,
         headers=request_headers,
-        method="GET",
+        data=data,
     )
     try:
         with urlopen(request, timeout=timeout) as response:
