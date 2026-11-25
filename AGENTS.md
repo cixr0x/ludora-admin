@@ -54,6 +54,8 @@ Do not apply `database/schema.sql` to existing shared or live databases. It is a
 
 Every database change must have a focused incremental SQL patch in `database/patches/`. Apply only the specific patch required for the change, and only after explicit DDL/DML approval.
 
+Follow the [workload role grant checklist](database/runbooks/apply-database-patches.md#workload-role-grants) when schema or application changes affect database access.
+
 ## AI API Flow
 
 Use `docs/ai-api-flow.md` for new AI requests. Admin-service owns prompts, routes, and OpenAI-compatible Responses clients through `ludora-admin-service/src/ai/`. All non-embedding AI requests must use the private CodexAPI service at

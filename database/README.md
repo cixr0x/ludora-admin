@@ -10,11 +10,8 @@ database/patches/YYYYMMDD_NNN_short_description.sql
 
 Each patch should contain only the statements required for that change. Apply only the relevant patch file after explicit approval for DDL or DML.
 
-Use the database patch runbook for the approved execution path:
-
-```text
-database/runbooks/apply-database-patches.md
-```
+Use the [database patch runbook](runbooks/apply-database-patches.md) for
+approval, execution, and [workload role grants](runbooks/apply-database-patches.md#workload-role-grants).
 
 The `active_item` materialized-view conversion has an additional cross-database
 and Lightsail prerequisite runbook:
