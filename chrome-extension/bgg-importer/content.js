@@ -50,7 +50,7 @@
   `);
 
   function routeKey(route) {
-    return route ? `${route.isVersion ? 'version' : 'item'}:${route.bggId}` : null;
+    return route ? `${route.isVersion ? route.type : 'item'}:${route.bggId}` : null;
   }
 
   function updateRoute() {
@@ -84,13 +84,15 @@
 
       const message = { type: route.isVersion ? 'import-bgg-version' : 'import-bgg-item', bggId: route.bggId };
       if (route.isVersion) {
-        const details = readGeekVersionDetails(document.querySelector('#maincontent'), route.bggId);
+        const details = readGeekVersionDetails(document.querySelector('#maincontent'), route.bggId, route.type);
         if (!details) {
           status.hidden = false;
-          status.textContent = 'The parent game could not be identified on this BGG page.';
+          status.textContent = route.type === 'bgaccessoryversion'
+            ? 'The parent accessory could not be identified on this BGG page.'
+            : 'The parent game could not be identified on this BGG page.';
           return;
         }
-        Object.assign(message, details);
+        Object.assign(message, details, { versionType: route.type });
       }
 
       button.disabled = true;

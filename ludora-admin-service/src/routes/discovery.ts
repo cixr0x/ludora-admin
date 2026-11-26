@@ -1183,7 +1183,11 @@ export function createDiscoveryRouter(
       if (description !== undefined && (typeof description !== 'string' || description.length > 20_000 || description.includes('\u0000'))) {
         throw httpError(400, 'Edition description must be text up to 20,000 characters');
       }
-      const itemId = await bggItemImporter.importBggVersion(parentBggId, versionBggId, description?.trim());
+      const nickname: unknown = request.body?.nickname;
+      if (nickname !== undefined && (typeof nickname !== 'string' || nickname.length > 200 || /[\u0000-\u001f\u007f]/.test(nickname))) {
+        throw httpError(400, 'Edition nickname must be plain text up to 200 characters');
+      }
+      const itemId = await bggItemImporter.importBggVersion(parentBggId, versionBggId, description?.trim(), nickname?.trim());
       if (!itemId) throw httpError(404, 'BGG edition or parent not found');
 
       const result = await database.query(`select ${itemSelect} from items where id = $1`, [itemId]);

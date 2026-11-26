@@ -3,6 +3,7 @@ import * as HtmlEntities from '@nodable/entities';
 
 export type BggVersion = {
   bggId: number;
+  type: 'boardgameversion' | 'bgaccessoryversion';
   name: string;
   nickname: string;
   image: string;
@@ -130,18 +131,27 @@ export function parseBggVersionsResponse(xml: string, parentBggId: number): BggV
   const versions = new Map<number, BggVersion>();
   for (const edition of asArray(parent.versions?.item)) {
     const bggId = numberValue(edition.id);
-    if (edition.type !== 'boardgameversion' || bggId === null || !Number.isSafeInteger(bggId) || bggId <= 0) continue;
+    const gameVersion = edition.type === 'boardgameversion';
+    const accessoryVersion = parent.type === 'boardgameaccessory' && edition.type === 'bgaccessoryversion';
+    if ((!gameVersion && !accessoryVersion) || bggId === null || !Number.isSafeInteger(bggId) || bggId <= 0) continue;
 
     const parentLinks = asArray(edition.link).filter((link) =>
-      link.type === 'boardgameversion' && stringValue(link.inbound).toLowerCase() === 'true'
+      stringValue(link.inbound).toLowerCase() === 'true' &&
+      (link.type === 'boardgameversion' ||
+        (accessoryVersion && (link.type === 'bgaccessoryversion' || link.type === 'boardgameaccessory')))
     );
-    if (!parentLinks.some((link) => numberValue(link.id) === parentBggId)) continue;
+    // BGG omits reverse links on accessory editions. The exact parent nesting is authoritative
+    // for that subtype unless an explicit reverse link identifies a different parent.
+    if (accessoryVersion
+      ? parentLinks.some((link) => numberValue(link.id) !== parentBggId)
+      : !parentLinks.some((link) => numberValue(link.id) === parentBggId)) continue;
 
     const nickname = primaryName(edition);
     const name = nameValue(edition.canonicalname?.value) || nickname;
     if (!name) continue;
     versions.set(bggId, {
       bggId,
+      type: accessoryVersion ? 'bgaccessoryversion' : 'boardgameversion',
       name,
       nickname,
       image: stringValue(edition.image),

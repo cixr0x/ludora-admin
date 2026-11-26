@@ -12,7 +12,7 @@ function getGeekRoute(address, expectedOrigin) {
   switch (url.hostname) {
     case 'boardgamegeek.com':
     case 'www.boardgamegeek.com':
-      if (!['boardgame', 'boardgameexpansion', 'boardgameaccessory', 'boardgameversion', 'rpgitem'].includes(type)) return null;
+      if (!['boardgame', 'boardgameexpansion', 'boardgameaccessory', 'boardgameversion', 'bgaccessoryversion', 'rpgitem'].includes(type)) return null;
       break;
     case 'rpggeek.com':
     case 'www.rpggeek.com':
@@ -24,28 +24,41 @@ function getGeekRoute(address, expectedOrigin) {
 
   if (!/^\d+$/.test(id)) return null;
   const bggId = Number(id);
-  return bggId > 0 && Number.isSafeInteger(bggId) ? { bggId, type, isVersion: type === 'boardgameversion' } : null;
+  return bggId > 0 && Number.isSafeInteger(bggId) ? { bggId, type, isVersion: type === 'boardgameversion' || type === 'bgaccessoryversion' } : null;
 }
 
-function readGeekVersionDetails(main, versionBggId) {
+function readGeekVersionDetails(main, versionBggId, versionType = 'boardgameversion') {
   if (!main) return null;
 
   const editionMarkers = [...main.querySelectorAll('a[href]')].map((link) => ({
     link,
     wikiId: link.pathname.match(/^\/wiki\/(?:edit|history)\/version:(\d+)\/?$/)?.[1],
-    correctionId: link.pathname.match(/^\/item\/correction\/boardgameversion\/(\d+)\/?$/)?.[1]
-  })).filter(({ wikiId, correctionId }) => wikiId || correctionId);
-  if (!editionMarkers.length || editionMarkers.some(({ wikiId, correctionId }) =>
-    Number(wikiId || correctionId) !== versionBggId
+    correction: link.pathname.match(/^\/item\/correction\/(boardgameversion|bgaccessoryversion)\/(\d+)\/?$/)
+  })).filter(({ wikiId, correction }) => wikiId || correction);
+  if (!editionMarkers.length || editionMarkers.some(({ wikiId, correction }) =>
+    Number(wikiId || correction?.[2]) !== versionBggId || (correction && correction[1] !== versionType)
   )) return null;
 
+  const isAccessory = versionType === 'bgaccessoryversion';
+  const parentLabel = isAccessory ? 'Accessory' : 'Board Game';
+  const nicknameLabel = isAccessory ? 'Nickname' : 'Version Nickname';
+  const parentTypes = isAccessory ? ['boardgameaccessory'] : ['boardgame', 'boardgameexpansion', 'boardgameaccessory'];
   const parents = new Set();
+  const nicknames = new Set();
   for (const row of main.querySelectorAll('tr')) {
-    if (row.cells.length !== 2 || row.cells[0].textContent.trim() !== 'Board Game') continue;
-    for (const link of row.cells[1].querySelectorAll('a[href]')) {
-      const route = getGeekRoute(link.href);
-      if (route && ['boardgame', 'boardgameexpansion', 'boardgameaccessory'].includes(route.type)) {
-        parents.add(route.bggId);
+    if (row.cells.length !== 2) continue;
+
+    const label = row.cells[0].textContent.trim();
+    const value = row.cells[1];
+    if (label === nicknameLabel) {
+      const field = value.querySelector('#edit_name') ?? value;
+      if (field.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) === false) continue;
+      const nickname = field.innerText?.replace(/\s+/g, ' ').trim();
+      if (nickname) nicknames.add(nickname);
+    } else if (label === parentLabel) {
+      for (const link of value.querySelectorAll('a[href]')) {
+        const route = getGeekRoute(link.href);
+        if (route && parentTypes.includes(route.type)) parents.add(route.bggId);
       }
     }
   }
@@ -57,5 +70,6 @@ function readGeekVersionDetails(main, versionBggId) {
   const descriptionCell = moduleTable?.rows[1]?.cells[0];
   const text = descriptionCell?.querySelector('div')?.innerText?.trim() ?? '';
   const description = /^this page does not exist\b/i.test(text) ? '' : text;
-  return { parentBggId: [...parents][0], description };
+  const [nickname] = nicknames;
+  return { parentBggId: [...parents][0], description, ...(nicknames.size === 1 ? { nickname } : {}) };
 }

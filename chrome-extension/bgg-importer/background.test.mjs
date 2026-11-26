@@ -340,3 +340,16 @@ test('conflicting parents for the same edition reach the server independently', 
   assert.deepEqual(results.map((result) => result.status), ['import-failed', 'already-translated']);
   assert.deepEqual(harness.requests.map(({ body }) => body.parent_bgg_id), [42, 220368]);
 });
+
+test('passes the accessory edition nickname and rejects the same ID with the wrong subtype', async () => {
+  const url = 'https://boardgamegeek.com/bgaccessoryversion/725124/yellow-crane-car';
+  const accessorySender = { ...sender, url, tab: { ...sender.tab, url } };
+  const harness = createHarness([data({ ...item, description_es: 'Traducido.' })]);
+  const message = { type: 'import-bgg-version', bggId: 725124, versionType: 'bgaccessoryversion', parentBggId: 427113, nickname: '  Yellow Crane Car ' };
+  assert.deepEqual(await harness.send(accessorySender, { ...message, versionType: 'boardgameversion' }), { status: 'unsupported' });
+  assert.deepEqual(await harness.send(accessorySender, message), { status: 'already-translated', itemId: '91' });
+  assert.deepEqual(harness.requests, [{
+    method: 'POST', url: api + '/items/import-bgg-version',
+    body: { parent_bgg_id: 427113, version_bgg_id: 725124, description: '', nickname: 'Yellow Crane Car' }
+  }]);
+});

@@ -19,6 +19,7 @@ export type AdminRecord = Record<string, unknown>;
 
 export type BggVersion = {
   bgg_id: number;
+  bgg_type?: 'boardgameversion' | 'bgaccessoryversion';
   name: string;
   nickname: string;
   image_url: string;

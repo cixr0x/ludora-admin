@@ -1,15 +1,26 @@
 import ImageOutlinedIcon from '@mui/icons-material/ImageOutlined';
-import { Alert, Autocomplete, Box, Button, Stack, TextField, Typography } from '@mui/material';
+import { Alert, Autocomplete, Box, Button, Link, Stack, TextField, Typography } from '@mui/material';
 import { useState } from 'react';
 
 import { adminApi, type BggVersion } from '../api/client';
 
 type Props = { itemId: string; parentBggId: number };
 
+function versionSubtitle(version: BggVersion) {
+  if (!version.nickname) return `Edition #${version.bgg_id}`;
+  return version.nickname !== version.name ? version.nickname : '';
+}
+
 function versionLabel(version: BggVersion) {
-  return version.nickname && version.nickname !== version.name
-    ? `${version.name} (${version.nickname})`
-    : version.name;
+  const subtitle = versionSubtitle(version);
+  return subtitle ? `${version.name} (${subtitle})` : version.name;
+}
+
+function editionUrl(version: BggVersion) {
+  const { bgg_id, bgg_type } = version;
+  if (!Number.isSafeInteger(bgg_id) || bgg_id <= 0 ||
+    (bgg_type !== 'boardgameversion' && bgg_type !== 'bgaccessoryversion')) return '';
+  return `https://boardgamegeek.com/${bgg_type}/${bgg_id}`;
 }
 
 export function BggVersionPicker({ itemId, parentBggId }: Props) {
@@ -20,6 +31,7 @@ export function BggVersionPicker({ itemId, parentBggId }: Props) {
   const [error, setError] = useState('');
 
   const selected = versions?.find((version) => version.bgg_id === selectedBggId) ?? null;
+  const selectedEditionUrl = selected && !selected.nickname ? editionUrl(selected) : '';
 
   async function loadVersions() {
     if (versions || loading) return;
@@ -69,26 +81,29 @@ export function BggVersionPicker({ itemId, parentBggId }: Props) {
           onOpen={() => void loadVersions()}
           options={versions ?? []}
           renderInput={(props) => <TextField {...props} label="Versions" size="small" />}
-          renderOption={({ key, ...props }, version) => (
-            <Box component="li" key={key} {...props} sx={{ gap: 1.5 }}>
-              {version.thumbnail_url ? (
-                <Box
-                  alt=""
-                  component="img"
-                  src={version.thumbnail_url}
-                  sx={{ flexShrink: 0, height: 44, objectFit: 'contain', width: 44 }}
-                />
-              ) : <ImageOutlinedIcon aria-hidden sx={{ flexShrink: 0, fontSize: 44 }} />}
-              <Box sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
-                <Typography variant="body2">{version.name}</Typography>
-                {version.nickname && version.nickname !== version.name ? (
-                  <Typography color="text.secondary" display="block" variant="caption">
-                    {version.nickname}
-                  </Typography>
-                ) : null}
+          renderOption={({ key, ...props }, version) => {
+            const subtitle = versionSubtitle(version);
+            return (
+              <Box component="li" key={key} {...props} sx={{ gap: 1.5 }}>
+                {version.thumbnail_url ? (
+                  <Box
+                    alt=""
+                    component="img"
+                    src={version.thumbnail_url}
+                    sx={{ flexShrink: 0, height: 44, objectFit: 'contain', width: 44 }}
+                  />
+                ) : <ImageOutlinedIcon aria-hidden sx={{ flexShrink: 0, fontSize: 44 }} />}
+                <Box sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                  <Typography variant="body2">{version.name}</Typography>
+                  {subtitle ? (
+                    <Typography color="text.secondary" display="block" variant="caption">
+                      {subtitle}
+                    </Typography>
+                  ) : null}
+                </Box>
               </Box>
-            </Box>
-          )}
+            );
+          }}
           slotProps={{
             listbox: { sx: { maxHeight: 'min(24rem, 45vh)', overscrollBehavior: 'contain' } },
             popper: {
@@ -111,6 +126,11 @@ export function BggVersionPicker({ itemId, parentBggId }: Props) {
           </Button>
         )}
       </Stack>
+      {selectedEditionUrl ? (
+        <Link href={selectedEditionUrl} rel="noreferrer" target="_blank" variant="body2" sx={{ alignSelf: 'flex-start' }}>
+          Open edition on BGG
+        </Link>
+      ) : null}
       {error ? <Alert severity="error">{error}</Alert> : null}
     </Stack>
   );

@@ -148,18 +148,46 @@ test('extracts the parent and edition text from the BGG version module', () => {
   const edit = descriptionAnchor('Foil cards and special box.');
   const parent = { href: 'https://boardgamegeek.com/boardgame/220368/sword-of-fellows' };
   const row = { cells: [{ textContent: 'Board Game' }, { querySelectorAll: () => [parent] }] };
-  const main = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [edit] };
+  const nickname = { cells: [{ textContent: 'Version Nickname' }, { querySelector: () => ({ innerText: 'English deluxe edition' }) }] };
+  const main = { querySelectorAll: (selector) => selector === 'tr' ? [row, nickname] : [edit] };
   const context = vm.createContext({ URL });
   vm.runInContext(routes, context);
   const version = context.readGeekVersionDetails(main, 350656);
-  assert.deepEqual(JSON.parse(JSON.stringify(version)), { parentBggId: 220368, description: 'Foil cards and special box.' });
+  assert.deepEqual(JSON.parse(JSON.stringify(version)), {
+    parentBggId: 220368, description: 'Foil cards and special box.', nickname: 'English deluxe edition'
+  });
   const noParent = { querySelectorAll: (selector) => selector === 'tr' ? [] : [edit] };
   assert.equal(context.readGeekVersionDetails(noParent, 350656), null);
   const stale = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [{ pathname: '/item/correction/boardgameversion/42' }] };
   assert.equal(context.readGeekVersionDetails(stale, 350656), null);
+  const wrongSubtype = {
+    querySelectorAll: (selector) => selector === 'tr'
+      ? [row] : [edit, { pathname: '/item/correction/bgaccessoryversion/350656' }]
+  };
+  assert.equal(context.readGeekVersionDetails(wrongSubtype, 350656), null);
   const noWiki = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [{ pathname: '/item/correction/boardgameversion/350656' }] };
   assert.deepEqual(JSON.parse(JSON.stringify(context.readGeekVersionDetails(noWiki, 350656))), { parentBggId: 220368, description: '' });
   const placeholder = descriptionAnchor('This page does not exist. You can edit this page to create it.');
   const noDescription = { querySelectorAll: (selector) => selector === 'tr' ? [row] : [placeholder] };
   assert.deepEqual(JSON.parse(JSON.stringify(context.readGeekVersionDetails(noDescription, 350656))), { parentBggId: 220368, description: '' });
+});
+
+test('sends the visible accessory nickname and parent after recognizing the current edition subtype', async () => {
+  const page = 'https://boardgamegeek.com/bgaccessoryversion/725124/yellow-crane-car';
+  const correction = { pathname: '/item/correction/bgaccessoryversion/725124' };
+  const accessoryLink = { href: 'https://boardgamegeek.com/boardgameaccessory/427113/crane-car' };
+  const nickname = { innerText: '  Yellow Crane Car  ' };
+  const rows = [
+    { cells: [{ textContent: 'Accessory' }, { querySelectorAll: () => [accessoryLink] }] },
+    { cells: [{ textContent: 'Nickname' }, { querySelector: () => nickname }] }
+  ];
+  const main = { querySelectorAll: (selector) => selector === 'tr' ? rows : [correction] };
+  const harness = createHarness(page, main);
+  const clicked = harness.click(true);
+  assert.deepEqual(harness.messages, [{
+    type: 'import-bgg-version', bggId: 725124, versionType: 'bgaccessoryversion', parentBggId: 427113,
+    nickname: 'Yellow Crane Car', description: ''
+  }]);
+  harness.finish({ status: 'already-translated', itemId: '91' });
+  await clicked;
 });

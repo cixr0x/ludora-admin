@@ -18,6 +18,7 @@ type RegularItem = {
 
 type ListedVersion = {
   bgg_id: number;
+  bgg_type: BggVersion['type'];
   name: string;
   nickname: string;
   image_url: string;
@@ -26,7 +27,7 @@ type ListedVersion = {
 };
 
 export type BggVersionImports = {
-  importBggVersion(parentBggId: number, versionBggId: number, description?: string): Promise<number | null>;
+  importBggVersion(parentBggId: number, versionBggId: number, description?: string, nickname?: string): Promise<number | null>;
   listBggVersions(itemId: number): Promise<ListedVersion[] | null>;
 };
 
@@ -38,7 +39,7 @@ export function createBggVersionImports(
   catalogImageHasher?: CatalogImageHasher
 ): BggVersionImports {
   return {
-    async importBggVersion(parentBggId, versionBggId, description = '') {
+    async importBggVersion(parentBggId, versionBggId, description = '', nickname = '') {
       const existing = await existingVersion(database, parentBggId, versionBggId);
       if (existing !== null) return existing;
 
@@ -58,9 +59,10 @@ export function createBggVersionImports(
       const baseItemId = parent.itemType === 'expansion' && parent.parentItemId === null
         ? await resolveExpansionBase(database, bggClient, importBggId, parentBggId)
         : null;
+      const importEdition = { ...edition, nickname: edition.nickname || nickname.trim() };
       const image = edition.image || edition.thumbnail;
       const imageHash = await prepareCatalogImageHash(catalogImageHasher, image);
-      const inserted = await createVersion(database, parent.id, parentBggId, edition, image, imageHash, description.trim(), baseItemId);
+      const inserted = await createVersion(database, parent.id, parentBggId, importEdition, image, imageHash, description.trim(), baseItemId);
       return inserted ?? await existingVersion(database, parentBggId, versionBggId);
     },
 
@@ -82,6 +84,7 @@ export function createBggVersionImports(
       const itemIds = new Map((imported.rows as ImportedVersion[]).map((item) => [Number(item.bgg_id), item.id]));
       return versions.map((edition) => ({
         bgg_id: edition.bggId,
+        bgg_type: edition.type,
         name: edition.name,
         nickname: edition.nickname,
         image_url: edition.image || edition.thumbnail,
@@ -208,7 +211,7 @@ async function createVersion(
     select id from edition
     `,
     [parentId, version.bggId, name, normalizeTitle(name),
-     `https://boardgamegeek.com/boardgameversion/${version.bggId}`, image, description, imageHash, parentBggId, baseItemId]
+     `https://boardgamegeek.com/${version.type}/${version.bggId}`, image, description, imageHash, parentBggId, baseItemId]
   );
   return rowId(result.rows[0]);
 }

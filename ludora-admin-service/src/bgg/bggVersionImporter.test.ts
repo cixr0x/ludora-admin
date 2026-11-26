@@ -20,16 +20,65 @@ const xml = `<items><item type="boardgame" id="220368"><versions>
 </versions></item></items>`;
 const edition = {
   bggId: versionBggId,
+  type: 'boardgameversion' as const,
   name: 'Sword of Fellows Deluxe Edition',
   nickname: 'English deluxe edition',
   thumbnail: 'https://cf.geekdo-images.com/small.jpg',
   image: 'https://cf.geekdo-images.com/large.jpg'
 };
 
+const accessoryBggId = 427113;
+const accessoryVersionBggId = 725124;
+const accessoryXml = `<items><item type="boardgameaccessory" id="427113"><versions>
+  <item type="bgaccessoryversion" id="725124"><canonicalname value="Crane Car"/>
+    <image>https://cf.geekdo-images.com/accessory.jpg</image><thumbnail>https://cf.geekdo-images.com/small.jpg</thumbnail>
+  </item>
+  <item type="bgaccessoryversion" id="725445"><canonicalname value="Crane Car"/>
+    <link type="bgaccessoryversion" id="42" inbound="true"/>
+  </item>
+  <item type="boardgameversion" id="725444"><canonicalname value="Unverified board game version"/>
+  </item>
+  <item type="boardgameversion" id="725399"><canonicalname value="Verified board game version"/>
+    <link type="boardgameversion" id="427113" inbound="true"/>
+  </item>
+</versions></item></items>`;
+const accessoryEdition = {
+  bggId: accessoryVersionBggId, type: 'bgaccessoryversion' as const, name: 'Crane Car', nickname: '',
+  thumbnail: 'https://cf.geekdo-images.com/small.jpg', image: 'https://cf.geekdo-images.com/accessory.jpg'
+};
+
 describe('BGG edition imports', () => {
   it('uses canonical names and rejects editions linked to a different parent', () => {
     expect(parseBggVersionsResponse(xml, parentBggId)).toEqual([edition]);
     expect(parseBggVersionsResponse(xml, 42)).toBeNull();
+  });
+
+  it('accepts accessory editions nested under the exact accessory parent and drops contradictory types and links', () => {
+    expect(parseBggVersionsResponse(accessoryXml, accessoryBggId)).toEqual([
+      accessoryEdition,
+      { bggId: 725399, type: 'boardgameversion', name: 'Verified board game version', nickname: '', image: '', thumbnail: '' }
+    ]);
+    expect(parseBggVersionsResponse(accessoryXml, 42)).toBeNull();
+  });
+
+  it.each([
+    ['', 'Crane Car (Yellow Crane Car)'],
+    ['XML nickname', 'Crane Car (XML nickname)']
+  ])('uses the version-page nickname only when the XML nickname %j is empty', async (xmlNickname, expectedTitle) => {
+    const database = { query: vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes('insert into items')) return { rows: [{ id: 99 }] };
+      if (sql.includes('and not is_version')) return { rows: [{ id: 42, item_type: 'expansion', parent_item_id: 18 }] };
+      return { rows: [] };
+    }) };
+    const importer = createBggItemImporter(database, {
+      fetchThing: vi.fn(),
+      fetchVersions: vi.fn().mockResolvedValue([{ ...accessoryEdition, nickname: xmlNickname }]),
+      search: vi.fn()
+    });
+    expect(await importer.importBggVersion!(accessoryBggId, accessoryVersionBggId, '', 'Yellow Crane Car')).toBe(99);
+    const params = database.query.mock.calls.find(([sql]) => sql.includes('insert into items'))?.[1];
+    expect(params?.[2]).toBe(expectedTitle);
+    expect(params?.[4]).toBe('https://boardgamegeek.com/bgaccessoryversion/725124');
   });
 
   it('uses the regular parent namespace, inherits both parent descriptions, and copies taxonomy', async () => {
@@ -197,8 +246,8 @@ describe('BGG edition imports', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data).toEqual([
-      { bgg_id: versionBggId, item_id: '99', name: edition.name, nickname: edition.nickname, image_url: edition.image, thumbnail_url: edition.thumbnail },
-      { bgg_id: 343409, item_id: null, name: edition.name, nickname: edition.nickname, image_url: edition.image, thumbnail_url: edition.thumbnail }
+      { bgg_id: versionBggId, bgg_type: 'boardgameversion', item_id: '99', name: edition.name, nickname: edition.nickname, image_url: edition.image, thumbnail_url: edition.thumbnail },
+      { bgg_id: 343409, bgg_type: 'boardgameversion', item_id: null, name: edition.name, nickname: edition.nickname, image_url: edition.image, thumbnail_url: edition.thumbnail }
     ]);
     expect(database.query.mock.calls[1]?.[0]).toContain('where is_version and version_of');
   });
@@ -207,10 +256,20 @@ describe('BGG edition imports', () => {
     const database = { query: vi.fn().mockResolvedValue({ rows: [{ id: 99, bgg_id: versionBggId, is_version: true, version_of: parentBggId }] }) };
     const importBggVersion = vi.fn().mockResolvedValue(99);
     const response = await request(createApp({ database, bggItemImporter: { importBggId: vi.fn(), importBggVersion } }))
-      .post('/items/import-bgg-version').send({ parent_bgg_id: parentBggId, version_bgg_id: versionBggId, description: ' Foil cards. ' });
+      .post('/items/import-bgg-version').send({ parent_bgg_id: parentBggId, version_bgg_id: versionBggId, description: ' Foil cards. ', nickname: '  Deluxe  ' });
 
     expect(response.status).toBe(201);
     expect(response.body.data).toMatchObject({ id: 99, is_version: true, version_of: parentBggId });
-    expect(importBggVersion).toHaveBeenCalledWith(parentBggId, versionBggId, 'Foil cards.');
+    expect(importBggVersion).toHaveBeenCalledWith(parentBggId, versionBggId, 'Foil cards.', 'Deluxe');
   });
+  it.each([23, 'x'.repeat(201), 'One\u0000Two'])('rejects an invalid edition nickname', async nickname => {
+    const database = { query: vi.fn() };
+    const importBggVersion = vi.fn();
+    const response = await request(createApp({ database, bggItemImporter: { importBggId: vi.fn(), importBggVersion } }))
+      .post('/items/import-bgg-version').send({ parent_bgg_id: accessoryBggId, version_bgg_id: accessoryVersionBggId, nickname });
+
+    expect(response.status).toBe(400);
+    expect(importBggVersion).not.toHaveBeenCalled();
+  });
+
 });

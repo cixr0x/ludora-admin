@@ -20,16 +20,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     && Number.isInteger(sender.tab?.id) && typeof sender.origin === 'string'
     ? getGeekRoute(sender.tab.url, sender.origin)
     : null;
+  const versionType = message.versionType ?? 'boardgameversion';
   if (!route || route.bggId !== message.bggId || route.isVersion !== isVersion ||
+      (isVersion && route.type !== versionType) ||
       (isVersion && (!Number.isSafeInteger(message.parentBggId) || message.parentBggId <= 0))) {
     sendResponse({ status: 'unsupported' });
     return false;
   }
 
-  const importKey = isVersion ? `version:${route.bggId}:${message.parentBggId}` : `item:${route.bggId}`;
+  const importKey = isVersion ? `${route.type}:${route.bggId}:${message.parentBggId}` : `item:${route.bggId}`;
   const path = isVersion ? '/items/import-bgg-version' : '/items/import-from-bgg';
+  const nickname = isVersion ? cleanText(message.nickname) : '';
   const body = isVersion
-    ? { parent_bgg_id: message.parentBggId, version_bgg_id: route.bggId, description: cleanText(message.description) }
+    ? {
+        parent_bgg_id: message.parentBggId,
+        version_bgg_id: route.bggId,
+        description: cleanText(message.description),
+        ...(nickname && nickname.length <= 200 && !/[\u0000-\u001f\u007f]/.test(nickname) ? { nickname } : {})
+      }
     : { bgg_id: route.bggId };
   let operation = importsInProgress.get(importKey);
   if (!operation) {

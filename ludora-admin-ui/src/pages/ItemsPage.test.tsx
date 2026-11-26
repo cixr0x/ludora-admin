@@ -1198,6 +1198,32 @@ describe('ItemsPage', () => {
       .toBe(JSON.stringify({ parent_bgg_id: 220368, version_bgg_id: 350656 }));
   });
 
+  it('distinguishes accessory editions without nicknames and links the selected edition to BGG', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async input => {
+      const path = pathOf(String(input));
+      if (path === '/items/77') return jsonResponse({
+        id: '77', bgg_id: 427113, canonical_name: 'Crane Car', item_type: 'expansion', is_accessory: true, is_version: false
+      });
+      if (path === '/items/77/bgg-versions') return jsonResponse([
+        { bgg_id: 725124, bgg_type: 'bgaccessoryversion', name: 'Crane Car', nickname: '', item_id: null },
+        { bgg_id: 725445, bgg_type: 'bgaccessoryversion', name: 'Crane Car', nickname: '', item_id: null }
+      ]);
+      if (path === '/items/77/taxonomy') return jsonResponse({ categories: [], families: [], mechanics: [] });
+      return jsonResponse([]);
+    });
+    render(<ItemsPage selectedItemId="77" />);
+
+    await user.click(await screen.findByRole('combobox', { name: 'Versions' }));
+    const option = await screen.findByRole('option', { name: 'Crane Car Edition #725124' });
+    expect(screen.getByRole('option', { name: 'Crane Car Edition #725445' })).toBeInTheDocument();
+    await user.click(option);
+    expect(screen.getByRole('link', { name: 'Open edition on BGG' })).toHaveAttribute(
+      'href', 'https://boardgamegeek.com/bgaccessoryversion/725124'
+    );
+    expect(screen.getByRole('button', { name: 'Import' })).toBeEnabled();
+  });
+
   it('opens the item form directly from a selected item id', async () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const url = String(input);
