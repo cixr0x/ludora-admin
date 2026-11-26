@@ -55,8 +55,8 @@ export function BggVersionPicker({ itemId, parentBggId }: Props) {
   }
 
   return (
-    <Stack spacing={1}>
-      <Stack alignItems="center" direction="row" gap={1}>
+    <Stack spacing={1} sx={{ minWidth: 0, width: '100%' }}>
+      <Stack alignItems={{ xs: 'stretch', sm: 'center' }} direction={{ xs: 'column', sm: 'row' }} gap={1}>
         <Autocomplete
           disabled={importing}
           getOptionKey={(version) => version.bgg_id}
@@ -72,13 +72,35 @@ export function BggVersionPicker({ itemId, parentBggId }: Props) {
           renderOption={({ key, ...props }, version) => (
             <Box component="li" key={key} {...props} sx={{ gap: 1.5 }}>
               {version.thumbnail_url ? (
-                <Box alt="" component="img" src={version.thumbnail_url}
-                  sx={{ height: 44, objectFit: 'contain', width: 44 }} />
-              ) : <ImageOutlinedIcon aria-hidden sx={{ fontSize: 44 }} />}
-              <Typography variant="body2">{versionLabel(version)}</Typography>
+                <Box
+                  alt=""
+                  component="img"
+                  src={version.thumbnail_url}
+                  sx={{ flexShrink: 0, height: 44, objectFit: 'contain', width: 44 }}
+                />
+              ) : <ImageOutlinedIcon aria-hidden sx={{ flexShrink: 0, fontSize: 44 }} />}
+              <Box sx={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                <Typography variant="body2">{version.name}</Typography>
+                {version.nickname && version.nickname !== version.name ? (
+                  <Typography color="text.secondary" display="block" variant="caption">
+                    {version.nickname}
+                  </Typography>
+                ) : null}
+              </Box>
             </Box>
           )}
-          sx={{ flex: 1, minWidth: 160 }}
+          slotProps={{
+            listbox: { sx: { maxHeight: 'min(24rem, 45vh)', overscrollBehavior: 'contain' } },
+            popper: {
+              modifiers: [
+                { name: 'flip', options: { padding: 16 } },
+                { name: 'preventOverflow', options: { padding: 16, tether: false } }
+              ],
+              placement: 'bottom-start',
+              sx: { maxWidth: 'calc(100vw - 32px)', minWidth: 'min(30rem, calc(100vw - 32px))' }
+            }
+          }}
+          sx={{ flex: { sm: 1 }, minWidth: 0 }}
           value={selected}
         />
         {selected?.item_id ? (

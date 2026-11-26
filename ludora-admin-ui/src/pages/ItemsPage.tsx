@@ -1502,9 +1502,6 @@ function ItemForm({
                   Open BGG page
                 </Link>
               ) : null}
-              {item.is_version === false && item.is_rpg !== true && /^\d+$/.test(bggId) && Number(bggId) > 0 ? (
-                <BggVersionPicker key={`${item.id}:${bggId}`} itemId={String(item.id)} parentBggId={Number(bggId)} />
-              ) : null}
               {imageUrl ? (
                 <Link href={imageUrl} rel="noreferrer" target="_blank">
                   Open image
@@ -1517,6 +1514,10 @@ function ItemForm({
               ) : null}
             </Stack>
           </Stack>
+
+          {item.is_version === false && item.is_rpg !== true && /^\d+$/.test(bggId) && Number(bggId) > 0 ? (
+            <BggVersionPicker key={`${item.id}:${bggId}`} itemId={String(item.id)} parentBggId={Number(bggId)} />
+          ) : null}
 
           <Box
             sx={{

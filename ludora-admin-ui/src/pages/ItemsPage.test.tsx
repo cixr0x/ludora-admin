@@ -1158,21 +1158,40 @@ describe('ItemsPage', () => {
     });
   });
 
-  it('imports a selected BGG edition from item details using the shared endpoint', async () => {
+  it('shows full BGG edition titles, filters by nickname, and imports the keyboard selection', async () => {
     const user = userEvent.setup();
+    const editionTitle = 'Sword Art Online Board Game: Sword of Fellows Deluxe Collector Edition with Kickstarter Extras';
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
       const path = pathOf(String(input));
-      if (path === '/items/77') return jsonResponse({ id: '77', bgg_id: 220368, canonical_name: 'Sword of Fellows', item_type: 'base_game', is_version: false });
-      if (path === '/items/77/bgg-versions') return jsonResponse([{ bgg_id: 350656, name: 'Sword of Fellows Deluxe Edition', nickname: 'English deluxe edition', thumbnail_url: 'https://cf.geekdo-images.com/cover.jpg', item_id: null }]);
+      if (path === '/items/77') return jsonResponse({
+        id: '77', bgg_id: 220368, canonical_name: 'Sword of Fellows', item_type: 'base_game', is_version: false,
+        image_url: 'https://cf.geekdo-images.com/base.jpg'
+      });
+      if (path === '/items/77/bgg-versions') return jsonResponse([
+        { bgg_id: 350656, name: editionTitle, nickname: 'English deluxe edition', thumbnail_url: 'https://cf.geekdo-images.com/cover.jpg', item_id: null },
+        { bgg_id: 343409, name: 'Sword of Fellows', nickname: 'Japanese edition', item_id: null }
+      ]);
       if (path === '/items/import-bgg-version') return jsonResponse({ id: '99', is_version: true });
       if (path === '/items/77/taxonomy') return jsonResponse({ categories: [], families: [], mechanics: [] });
       return jsonResponse([]);
     });
     render(<ItemsPage selectedItemId="77" />);
-    await user.click(await screen.findByRole('combobox', { name: 'Versions' }));
-    const option = await screen.findByRole('option', { name: /Sword of Fellows Deluxe Edition/ });
+
+    const picker = await screen.findByRole('combobox', { name: 'Versions' });
+    expect(fetchMock.mock.calls.some(([input]) => pathOf(String(input)) === '/items/77/bgg-versions')).toBe(false);
+    expect(screen.getByRole('link', { name: 'Open image' }).compareDocumentPosition(picker) &
+      Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    await user.click(picker);
+    const option = await screen.findByRole('option', { name: /English deluxe edition/ });
+    expect(within(option).getByText(editionTitle)).toBeInTheDocument();
+    expect(within(option).getByText('English deluxe edition')).toBeInTheDocument();
     expect(option.querySelector('img')).toHaveAttribute('src', 'https://cf.geekdo-images.com/cover.jpg');
-    await user.click(option);
+    expect(screen.getByRole('option', { name: /Japanese edition/ })).toBeInTheDocument();
+
+    await user.type(picker, 'English deluxe');
+    expect(screen.queryByRole('option', { name: /Japanese edition/ })).not.toBeInTheDocument();
+    await user.keyboard('{ArrowDown}{Enter}');
     await user.click(screen.getByRole('button', { name: 'Import' }));
     expect(await screen.findByRole('link', { name: 'Open item' })).toHaveAttribute('href', '#items?id=99');
     expect(fetchMock.mock.calls.find(([input]) => pathOf(String(input)) === '/items/import-bgg-version')?.[1]?.body)
