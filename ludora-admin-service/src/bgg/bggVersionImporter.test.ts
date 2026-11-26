@@ -52,6 +52,29 @@ describe('BGG edition imports', () => {
     expect(insert?.[1]).toContain('');
   });
 
+  it.each([
+    [edition.name, edition.nickname, 'Sword of Fellows Deluxe Edition (English deluxe edition)', 'sword of fellows deluxe edition english deluxe edition'],
+    [edition.name, '', edition.name, 'sword of fellows deluxe edition'],
+    [edition.name, 'Sword of Fellows deluxe edition', edition.name, 'sword of fellows deluxe edition'],
+    ['Sword of Fellows Deluxe Edition (ENGLISH DELUXE EDITION)', edition.nickname,
+      'Sword of Fellows Deluxe Edition (ENGLISH DELUXE EDITION)', 'sword of fellows deluxe edition english deluxe edition']
+  ])('writes and normalizes the import title for %s and nickname %s', async (name, nickname, expectedName, expectedNormalizedName) => {
+    const database = { query: vi.fn(async (sql: string, _params?: unknown[]) => {
+      if (sql.includes('insert into items')) return { rows: [{ id: 99 }] };
+      if (sql.includes('and not is_version')) return { rows: [{ id: 42, item_type: 'base_game' }] };
+      return { rows: [] };
+    }) };
+    const importer = createBggItemImporter(database, {
+      fetchThing: vi.fn(),
+      fetchVersions: vi.fn().mockResolvedValue([{ ...edition, name, nickname }]),
+      search: vi.fn()
+    });
+
+    expect(await importer.importBggVersion!(parentBggId, versionBggId)).toBe(99);
+    const insert = database.query.mock.calls.find(([sql]) => sql.includes('insert into items'));
+    expect(insert?.[1]?.slice(2, 4)).toEqual([expectedName, expectedNormalizedName]);
+  });
+
   it('returns a repeat import without changing the existing edition', async () => {
     const database = { query: vi.fn().mockResolvedValue({ rows: [{ id: '99', version_of: String(parentBggId) }] }) };
     const fetchVersions = vi.fn();

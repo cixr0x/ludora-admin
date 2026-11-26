@@ -163,6 +163,7 @@ async function createVersion(
   description: string,
   baseItemId: number | null
 ): Promise<number | null> {
+  const name = importedVersionName(version);
   const result = await database.query(
     `
     with parent as (
@@ -206,10 +207,21 @@ async function createVersion(
     )
     select id from edition
     `,
-    [parentId, version.bggId, version.name, normalizeTitle(version.name),
+    [parentId, version.bggId, name, normalizeTitle(name),
      `https://boardgamegeek.com/boardgameversion/${version.bggId}`, image, description, imageHash, parentBggId, baseItemId]
   );
   return rowId(result.rows[0]);
+}
+
+function importedVersionName(version: BggVersion): string {
+  const name = version.name.trim();
+  const nickname = version.nickname.trim();
+  const comparableName = name.toLowerCase();
+  const comparableNickname = nickname.toLowerCase();
+  if (!nickname || comparableName === comparableNickname || comparableName.includes(`(${comparableNickname})`)) {
+    return name;
+  }
+  return `${name} (${nickname})`;
 }
 
 function rowId(row: unknown): number | null {
