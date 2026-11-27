@@ -8,6 +8,7 @@ from unittest.mock import Mock, call, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from ludora.inventory import collect_store_inventory
 from ludora.models import DiscoveryItemCandidateRecord
 from ludora.product_crawler import (
     ProductPageRemovedError,
@@ -80,6 +81,17 @@ def _payload(product=None, *, errors=None):
     if errors is not None:
         payload["errors"] = errors
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _yellow_rabbit_listing(*product_hrefs, pagination="", next_href=None):
+    next_link = f'<link rel="next" href="{next_href}">' if next_href else ""
+    cards = "".join(f'<li><a href="{href}">Product</a></li>' for href in product_hrefs)
+    return (
+        f'<html><head>{next_link}</head><body><a href="/products/event-ticket">Event ticket</a>'
+        f'<ul id="main-collection-product-grid">{cards}</ul>'
+        f'<div class="pagination_collection clearfix"><div class="parts">{pagination}</div></div>'
+        '</body></html>'
+    )
 
 
 def _existing_record():
@@ -286,6 +298,131 @@ class ShopifyStorefrontTests(unittest.TestCase):
         fetch_html.assert_not_called()
         browser_fetcher.assert_not_called()
         self.assertEqual(before_product_request.call_args_list, [call(product_url)])
+
+    def test_yellow_rabbit_listings_feed_first_seen_canonical_products_into_signed_discovery(self):
+        store = "https://yellowrabbit.mx"
+        collection = store + "/collections/juegos-de-mesa-1"
+        board_game = store + "/collections/types?q=Board%20Game"
+        board_game_resolved = store + "/collections/types?q=Board+Game"
+        board_game_page_2 = store + "/collections/types?page=2&q=Board+Game"
+        board_game_page_3 = store + "/collections/types?page=3&q=Board+Game"
+        pages = {
+            collection: FetchResult(collection, _yellow_rabbit_listing(
+                "/collections/juegos-de-mesa-1/products/stored?variant=42",
+                "https://www.yellowrabbit.mx/collections/juegos-de-mesa-1/products/first#details",
+                "/products/first",
+                "https://example.com/products/off-store",
+                "/products/data-only.js",
+                next_href="/collections/juegos-de-mesa-1?page=2",
+            )),
+            collection + "?page=2": FetchResult(collection + "?page=2", _yellow_rabbit_listing("/products/second")),
+            board_game: FetchResult(board_game_resolved, _yellow_rabbit_listing(
+                "/collections/types/products/first?variant=17", "/collections/types/products/third",
+                pagination=(
+                    '<a class="item link" href="/collections/types?page=3&amp;q=Board+Game">3</a>'
+                    '<a class="item link" href="/collections/types?page=2&amp;q=Board+Game">2</a>'
+                ),
+            )),
+            board_game_page_2: FetchResult(board_game_page_2, _yellow_rabbit_listing(
+                "/products/second?variant=12", "/collections/types/products/fourth",
+                pagination='<a class="item link" href="/collections/types?page=3&amp;q=Board+Game">3</a>',
+            )),
+            board_game_page_3: FetchResult(board_game_page_3, _yellow_rabbit_listing(
+                "/products/fifth",
+                pagination='<a class="item link" href="/collections/types?page=2&amp;q=Board+Game">2</a>',
+            )),
+        }
+        endpoint = store + "/api/2026-07/graphql.json"
+        repository = DiscoveryRepository(existing_urls={(31, store + "/products/stored")})
+        signer = Mock(return_value={"Signature": "test-signature"})
+        throttle = Mock()
+
+        def storefront_response(request, *, timeout):
+            handle = json.loads(request.data)["variables"]["handle"]
+            self.assertEqual(request.full_url, endpoint)
+            self.assertEqual(request.get_method(), "POST")
+            self.assertEqual(request.get_header("Signature"), "test-signature")
+            response = Mock(status=200)
+            response.__enter__ = Mock(return_value=response)
+            response.__exit__ = Mock(return_value=False)
+            response.headers = Message()
+            response.headers["Content-Type"] = "application/json; charset=utf-8"
+            response.geturl.return_value = endpoint
+            response.read.return_value = _payload(_shopify_product(handle=handle)).encode("utf-8")
+            return response
+
+        with patch("ludora.product_crawler.fetch_html", side_effect=lambda url, **_: pages[url]) as fetch_html, patch(
+            "ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[]
+        ) as sitemap, patch("ludora.shopify_storefront.urlopen", side_effect=storefront_response):
+            records = collect_store_inventory(
+                "https://www.yellowrabbit.mx/", 31, repository, platform="shopify",
+                request_headers_provider=signer, before_product_request=throttle,
+            )
+
+        self.assertEqual([request.args[0] for request in fetch_html.call_args_list], list(pages))
+        sitemap.assert_not_called()
+        self.assertEqual([(record.source_url, record.source_listing_url) for record in records], [
+            (store + "/products/first", collection),
+            (store + "/products/second", collection + "?page=2"),
+            (store + "/products/third", board_game_resolved),
+            (store + "/products/fourth", board_game_page_2),
+            (store + "/products/fifth", board_game_page_3),
+        ])
+        self.assertEqual(signer.call_args_list, [call(endpoint, "POST")] * 5)
+        self.assertEqual(throttle.call_args_list, [call(record.source_url) for record in records])
+        self.assertEqual(repository.records, records)
+        self.assertEqual([record.price_source for record in records], ["shopify_storefront_graphql"] * 5)
+        self.assertTrue(all(record.is_boardgame for record in records))
+
+    def test_yellow_rabbit_fails_before_detail_work_when_a_listing_cannot_be_enumerated(self):
+        store = "https://yellowrabbit.mx"
+        collection = store + "/collections/juegos-de-mesa-1"
+        board_game = store + "/collections/types?q=Board%20Game"
+        page_two = store + "/collections/types?page=2&q=Board+Game"
+        pages = {
+            collection: FetchResult(collection, _yellow_rabbit_listing("/products/from-main")),
+            board_game: FetchResult(board_game, _yellow_rabbit_listing(
+                "/products/from-type",
+                pagination=(
+                    '<a class="item link" href="/collections/types?page=2&amp;q=Board+Game">2</a>'
+                    '<a class="item link" href="/collections/types?page=3&amp;q=Board+Game">3</a>'
+                ),
+            )),
+        }
+        for reason, failure in (
+            ("HTTP 404", FetchResult(page_two, "", status_code=404)),
+            ("page URL", FetchResult(board_game, _yellow_rabbit_listing("/products/from-type"))),
+            ("product grid", FetchResult(page_two, '<html><a href="/products/elsewhere">Other</a></html>')),
+            ("pagination", FetchResult(page_two, _yellow_rabbit_listing("/products/from-page-two"))),
+            ("invalid pagination", FetchResult(page_two, _yellow_rabbit_listing(
+                "/products/from-page-two", next_href="https://[invalid-host/collections/types?page=3",
+            ))),
+        ):
+            with self.subTest(reason=reason), patch(
+                "ludora.product_crawler.fetch_html", side_effect=lambda url, **_: (pages | {page_two: failure})[url]
+            ), patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[]):
+                repository = DiscoveryRepository()
+                signer = Mock(return_value={"Signature": "test-signature"})
+                with self.assertRaisesRegex(RuntimeError, rf"Yellow Rabbit.*{reason}"):
+                    collect_store_inventory(store, 31, repository, limit=1, platform="shopify",
+                                            request_headers_provider=signer)
+                signer.assert_not_called()
+                self.assertEqual(repository.exists_checks, [])
+                self.assertEqual(repository.records, [])
+
+    def test_yellow_rabbit_without_shopify_platform_keeps_sitemap_enumeration(self):
+        store = "https://yellowrabbit.mx"
+        product = store + "/products/stored"
+        repository = DiscoveryRepository(existing_urls={(31, product)})
+        with patch("ludora.product_crawler.discover_product_urls_from_sitemaps", return_value=[product]) as sitemap, patch(
+            "ludora.product_crawler.fetch_html"
+        ) as fetch_html:
+            records = collect_store_inventory(store, 31, repository, platform="custom")
+
+        self.assertEqual(records, [])
+        self.assertEqual(repository.exists_checks, [(31, product)])
+        sitemap.assert_called_once()
+        fetch_html.assert_not_called()
 
     def test_existing_mandrake_shopify_candidate_skips_before_graphql_and_all_product_work(self):
         store_url = "https://mandrakejuegos.com/"

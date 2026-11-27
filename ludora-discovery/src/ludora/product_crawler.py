@@ -52,6 +52,7 @@ from ludora.webfetch import (
     fetch_json,
     fetch_with_transient_retries,
 )
+from ludora.yellow_rabbit_discovery import discover_yellow_rabbit_product_urls, is_yellow_rabbit_store_url
 
 
 AMAZON_STORE_PLATFORMS = {"amazon", "amazon_brand"}
@@ -406,6 +407,33 @@ def crawl_store_product_details(
         store_id=store_id,
         store_url=store_url,
     )
+    if normalized_platform == "shopify" and is_yellow_rabbit_store_url(store_url):
+        products = discover_yellow_rabbit_product_urls(
+            fetcher=lambda url: fetch_html(url, include_http_error_status=True),
+            store_id=store_id,
+            trace_logger=trace,
+            cancellation_token=cancellation_token,
+        )
+        if limit is not None:
+            products = products[:max(0, limit)]
+        listing_candidates = [
+            DiscoveryItemCandidateRecord(
+                store_id=store_id,
+                source_url=product_url,
+                source_listing_url=listing_url,
+                title=_title_from_url(product_url),
+            )
+            for product_url, listing_url in products
+        ]
+        records = crawl_listing_candidates(
+            listing_candidates, repository, source_listing_url=store_url, platform=platform,
+            item_classifier=item_classifier, item_processor=item_processor,
+            request_headers_provider=request_headers_provider, trace_logger=trace,
+            cancellation_token=cancellation_token, before_product_request=before_product_request,
+        )
+        trace.log("inventory.crawl.completed", record_count=len(records), store_id=store_id, store_url=store_url)
+        return records
+
     browser_session = None
     if browser_sitemap_fallback_enabled and browser_fetcher is None:
         from ludora.browser_fetch import create_discovery_browser_fetcher
