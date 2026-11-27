@@ -237,6 +237,44 @@ create table if not exists store_item_click_stats (
     primary key (store_item_id, clicked_hour)
 );
 
+create table if not exists public.events (
+    id bigserial primary key,
+    name text not null,
+    description text not null,
+    starts_at timestamptz not null,
+    ends_at timestamptz not null,
+    min_price numeric(12, 2),
+    max_price numeric(12, 2),
+    country text not null,
+    city text not null,
+    venue text not null,
+    link text not null,
+    time_zone text not null default 'America/Mexico_City',
+    constraint events_dates_check check (ends_at > starts_at),
+    constraint events_prices_check check (
+        (min_price is null or min_price >= 0)
+        and (max_price is null or max_price >= 0)
+        and (min_price is null or max_price is null or min_price <= max_price)
+    ),
+    constraint events_link_check check (link ~* '^https?://[^[:space:]]+$')
+);
+
+create index if not exists events_starts_at_id_idx on public.events (starts_at, id);
+
+create table if not exists public.event_stats (
+    event_id bigint not null references public.events(id) on delete cascade,
+    date date not null,
+    click bigint not null default 0,
+    positive bigint not null default 0,
+    negative bigint not null default 0,
+    dismiss bigint not null default 0,
+    impression bigint not null default 0 constraint event_stats_impression_check check (impression >= 0),
+    primary key (event_id, date),
+    constraint event_stats_counts_check check (
+        click >= 0 and positive >= 0 and negative >= 0 and dismiss >= 0
+    )
+);
+
 create table if not exists job_store_item_discovery_log (
     id bigserial primary key,
     run_id text not null unique,
