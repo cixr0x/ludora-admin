@@ -1641,6 +1641,63 @@ describe('ludora admin service', () => {
     expect(query.params).toEqual([77]);
   });
 
+  it('unlinks all store items in one statement scoped to the exact catalog item ID', async () => {
+    const itemId = '9007199254740993';
+    const row = { id: itemId, reset_store_item_count: 2, deleted_additional_link_count: 1 };
+    const queries: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        queries.push({ params, sql });
+        return { rows: [row] };
+      }
+    };
+
+    const response = await request(createApp({ database })).delete(`/items/${itemId}/store-items`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ data: row });
+    expect(queries).toHaveLength(1);
+    expect(queries[0].params).toEqual([itemId]);
+    const sql = normalizeSql(queries[0].sql);
+    expect(sql).toContain('from items where id = $1');
+    expect(sql).toContain('join target_item on target_item.id = store_item.item_id union');
+    expect(sql).toContain('join target_item on target_item.id = additional_item.item_id');
+    expect(sql).toContain('update store_items store_item');
+    expect(sql).toContain('when store_item.item_id = $1 then null else store_item.item_id end');
+    expect(sql).toContain("auto_list_result = null, listing_status = 'pending'");
+    expect(sql).toContain('where store_item.id in ( select associated_store_items.store_item_id');
+    expect(sql).toContain(
+      'and ( store_item.item_id = $1 or exists ( select 1 from store_item_additional_items additional_item ' +
+      'where additional_item.store_item_id = store_item.id and additional_item.item_id = $1 ) ) returning store_item.id'
+    );
+    expect(sql).toContain('delete from store_item_additional_items additional_item using target_item where additional_item.item_id = target_item.id');
+    expect(sql).not.toMatch(/(?:delete from|update) (?:items|item_relationships)\b|delete from store_items\b/);
+  });
+
+  it('distinguishes an item without store links from a missing item', async () => {
+    const row = { id: '77', reset_store_item_count: 0, deleted_additional_link_count: 0 };
+    const database: Database = {
+      query: async (_sql, params) => ({ rows: params?.[0] === '77' ? [row] : [] })
+    };
+    const app = createApp({ database });
+
+    const existing = await request(app).delete('/items/77/store-items');
+    expect(existing.status).toBe(200);
+    expect(existing.body).toEqual({ data: row });
+
+    const missing = await request(app).delete('/items/88/store-items');
+    expect(missing.status).toBe(404);
+    expect(missing.body).toEqual({ error: { message: 'Item not found' } });
+  });
+
+  it.each(['0', '1e3', '9223372036854775808'])('rejects invalid unlink item ID %s before querying', async (id) => {
+    const query = vi.fn<Database['query']>().mockResolvedValue({ rows: [] });
+    const response = await request(createApp({ database: { query } })).delete(`/items/${id}/store-items`);
+
+    expect(response.status).toBe(400);
+    expect(query).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when deleting an unknown catalog item', async () => {
     const database: Database = {
       query: async () => ({ rows: [] })

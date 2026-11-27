@@ -212,6 +212,55 @@ const itemRelationshipSelect = `
   related_item.bgg_id as related_item_bgg_id
 `;
 
+const unlinkItemStoreItemsCtes = `
+  with target_item as materialized (
+    select id
+    from items
+    where id = $1
+  ),
+  associated_store_items as materialized (
+    select store_item.id as store_item_id
+    from store_items store_item
+    join target_item on target_item.id = store_item.item_id
+    union
+    select additional_item.store_item_id
+    from store_item_additional_items additional_item
+    join target_item on target_item.id = additional_item.item_id
+  ),
+  reset_store_items as (
+    update store_items store_item
+    set item_id = case
+          when store_item.item_id = $1 then null
+          else store_item.item_id
+        end,
+        auto_list_result = null,
+        listing_status = 'PENDING',
+        last_updated = now()
+    where store_item.id in (
+      select associated_store_items.store_item_id
+      from associated_store_items
+    )
+    -- The primary link can change while this update waits for the row lock.
+    and (
+      store_item.item_id = $1
+      or exists (
+        select 1
+        from store_item_additional_items additional_item
+        where additional_item.store_item_id = store_item.id
+          and additional_item.item_id = $1
+      )
+    )
+    returning store_item.id
+  ),
+  deleted_additional_links as (
+    delete from store_item_additional_items additional_item
+    using target_item
+    where additional_item.item_id = target_item.id
+      and (select count(*) from reset_store_items) >= 0
+    returning additional_item.store_item_id
+  )
+`;
+
 const frontPageCategorySelect = `
   fpc.id, fpc.category_type, fpc.category_id, fpc.title, fpc."order",
   coalesce(bc.name, bf.name, bm.name, '') as category_name,
@@ -1274,6 +1323,35 @@ export function createDiscoveryRouter(
     }
   });
 
+  router.delete('/items/:id/store-items', async (request, response, next) => {
+    try {
+      const itemId = request.params.id;
+      if (!isPositiveBigintId(itemId)) {
+        throw httpError(400, 'id must be a positive bigint');
+      }
+
+      const result = await database.query(
+        `
+        ${unlinkItemStoreItemsCtes}
+        select
+          target_item.id,
+          (select count(*)::integer from reset_store_items) as reset_store_item_count,
+          (select count(*)::integer from deleted_additional_links) as deleted_additional_link_count
+        from target_item
+        `,
+        [itemId]
+      );
+
+      if (!result.rows[0]) {
+        throw httpError(404, 'Item not found');
+      }
+
+      response.json({ data: result.rows[0] });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/items/:id/taxonomy', async (request, response, next) => {
     try {
       const [categories, mechanics, families] = await Promise.all([
@@ -1480,42 +1558,7 @@ export function createDiscoveryRouter(
       const itemId = integerPathParam(request.params.id);
       const result = await database.query(
         `
-        with target_item as materialized (
-          select id
-          from items
-          where id = $1
-        ),
-        associated_store_items as materialized (
-          select store_item.id as store_item_id
-          from store_items store_item
-          join target_item on target_item.id = store_item.item_id
-          union
-          select additional_item.store_item_id
-          from store_item_additional_items additional_item
-          join target_item on target_item.id = additional_item.item_id
-        ),
-        reset_store_items as (
-          update store_items store_item
-          set item_id = case
-                when store_item.item_id = $1 then null
-                else store_item.item_id
-              end,
-              auto_list_result = null,
-              listing_status = 'PENDING',
-              last_updated = now()
-          where store_item.id in (
-            select associated_store_items.store_item_id
-            from associated_store_items
-          )
-          returning store_item.id
-        ),
-        deleted_additional_links as (
-          delete from store_item_additional_items additional_item
-          using target_item
-          where additional_item.item_id = target_item.id
-            and (select count(*) from reset_store_items) >= 0
-          returning additional_item.store_item_id
-        ),
+        ${unlinkItemStoreItemsCtes},
         deleted_item as (
           delete from items
           using target_item
@@ -2648,10 +2691,14 @@ function parseReviewExclusions(query: Record<string, unknown>): string[] {
     throw httpError(400, 'exclude_ids must be a comma-separated list of positive bigint IDs');
   }
   const ids = query.exclude_ids.split(',');
-  if (ids.some((id) => !/^[1-9]\d*$/.test(id) || id.length > 19 || BigInt(id) > 9223372036854775807n)) {
+  if (ids.some((id) => !isPositiveBigintId(id))) {
     throw httpError(400, 'exclude_ids must contain only positive bigint IDs');
   }
   return [...new Set(ids)];
+}
+
+function isPositiveBigintId(id: string): boolean {
+  return /^[1-9]\d*$/.test(id) && id.length <= 19 && BigInt(id) <= 9223372036854775807n;
 }
 
 async function queryTable(database: Database, config: TableQueryConfig, query: Record<string, unknown>) {

@@ -32,7 +32,8 @@ import {
   type ItemTaxonomy,
   type LocalCoverWorkflow,
   type PagedRows,
-  type TableQuery
+  type TableQuery,
+  type UnlinkItemStoreItemsResult
 } from '../api/client';
 import { BggVersionPicker } from '../components/BggVersionPicker';
 import { CoverFlatteningDialog, type CoverFlatteningRequest } from '../components/CoverFlatteningDialog';
@@ -997,6 +998,13 @@ export function ItemsPage({
     }
   }
 
+  async function handleUnlinkStoreItems(itemId: string) {
+    const result = await adminApi.unlinkItemStoreItems(itemId);
+    // A completed request must not clear the links loaded for a different item.
+    setLinkedStoreItems((current) => (current === linkedStoreItems ? [] : current));
+    return result;
+  }
+
   function handleStartStoreItemCoverFlattening(record: AdminRecord) {
     const storeItemId = field(record, ['id'], '');
     if (!storeItemId) {
@@ -1213,6 +1221,7 @@ export function ItemsPage({
           onStartItemLocalCoverWorkflow={handleStartItemLocalCoverWorkflow}
           onStartStoreItemCoverFlattening={handleStartStoreItemCoverFlattening}
           onStartLocalCoverWorkflow={handleStartLocalCoverWorkflow}
+          onUnlinkStoreItems={handleUnlinkStoreItems}
           relatedState={relatedState}
           relationshipError={relationshipError}
           saveError={saveError}
@@ -1269,6 +1278,7 @@ function ItemForm({
   onStartItemLocalCoverWorkflow,
   onStartLocalCoverWorkflow,
   onStartStoreItemCoverFlattening,
+  onUnlinkStoreItems,
   relatedState,
   relationshipError,
   saveError,
@@ -1297,6 +1307,7 @@ function ItemForm({
   onStartItemLocalCoverWorkflow: (item: AdminRecord) => void;
   onStartLocalCoverWorkflow: (record: AdminRecord) => void;
   onStartStoreItemCoverFlattening: (record: AdminRecord) => void;
+  onUnlinkStoreItems: (itemId: string) => Promise<UnlinkItemStoreItemsResult>;
   relatedState: LoadState;
   relationshipError: string;
   saveError: string;
@@ -1651,8 +1662,10 @@ function ItemForm({
         deletingRelationshipId={deletingRelationshipId}
         isAddingRelationship={isAddingRelationship}
         itemRelationships={itemRelationships}
+        itemTitle={title}
         onCreateRelationship={onCreateRelationship}
         onDeleteRelationship={onDeleteRelationship}
+        onUnlinkStoreItems={detailVariant === 'standard' && itemId ? () => onUnlinkStoreItems(itemId) : undefined}
         relationshipError={relationshipError}
         state={relatedState}
         storeItems={linkedStoreItems}
@@ -1669,9 +1682,11 @@ function ItemRelations({
   deletingRelationshipId,
   isAddingRelationship,
   itemRelationships,
+  itemTitle,
   onCreateRelationship,
   onDeleteRelationship,
   onStartCoverFlattening,
+  onUnlinkStoreItems,
   relationshipError,
   state,
   storeItems,
@@ -1682,9 +1697,11 @@ function ItemRelations({
   deletingRelationshipId: string;
   isAddingRelationship: boolean;
   itemRelationships: AdminRecord[];
+  itemTitle: string;
   onCreateRelationship: (input: ItemRelationshipInput) => Promise<boolean>;
   onDeleteRelationship: (record: AdminRecord) => void;
   onStartCoverFlattening: (record: AdminRecord) => void;
+  onUnlinkStoreItems?: () => Promise<UnlinkItemStoreItemsResult>;
   relationshipError: string;
   state: LoadState;
   storeItems: AdminRecord[];
@@ -1692,6 +1709,24 @@ function ItemRelations({
   taxonomy: ItemTaxonomy;
   onStartCoverWorkflow: (record: AdminRecord) => void;
 }) {
+  const [unlinkState, setUnlinkState] = useState<'idle' | 'confirm' | 'unlinking' | 'error' | 'unlinked' | 'empty'>('idle');
+  const isUnlinking = unlinkState === 'unlinking';
+
+  async function handleConfirmUnlink() {
+    if (!onUnlinkStoreItems || isUnlinking) {
+      return;
+    }
+
+    setUnlinkState('unlinking');
+    try {
+      const result = await onUnlinkStoreItems();
+      const changed = result.reset_store_item_count > 0 || result.deleted_additional_link_count > 0;
+      setUnlinkState(changed ? 'unlinked' : 'empty');
+    } catch {
+      setUnlinkState('error');
+    }
+  }
+
   if (state === 'loading') {
     return (
       <Stack alignItems="center" direction="row" spacing={1.5}>
@@ -1746,11 +1781,23 @@ function ItemRelations({
         rows={itemRelationships}
       />
 
-      <Box>
+      <Stack
+        alignItems={{ xs: 'flex-start', sm: 'center' }}
+        direction={{ xs: 'column', sm: 'row' }}
+        justifyContent="space-between"
+        spacing={1}
+      >
         <Typography variant="h6" sx={{ fontWeight: 700 }}>
           Linked Store Items
         </Typography>
-      </Box>
+        {onUnlinkStoreItems ? (
+          <Button color="error" type="button" variant="outlined" onClick={() => setUnlinkState('confirm')}>
+            Unlink all store items
+          </Button>
+        ) : null}
+      </Stack>
+      {unlinkState === 'unlinked' ? <Alert severity="success">All store items unlinked.</Alert> : null}
+      {unlinkState === 'empty' ? <Alert severity="info">No linked store items.</Alert> : null}
       <DataTable
         ariaLabel="Linked store items"
         columns={linkedCandidateColumns({ onStartCoverFlattening, onStartCoverWorkflow, startingCoverWorkflowId })}
@@ -1759,6 +1806,33 @@ function ItemRelations({
         minWidth={1190}
         rows={storeItems}
       />
+      {onUnlinkStoreItems ? (
+        <Dialog
+          fullWidth
+          maxWidth="sm"
+          open={unlinkState === 'confirm' || isUnlinking || unlinkState === 'error'}
+          onClose={() => !isUnlinking && setUnlinkState('idle')}
+        >
+          <DialogTitle>Unlink all store items</DialogTitle>
+          <DialogContent>
+            <Stack spacing={2}>
+              <Typography>
+                Unlink every store item from “{itemTitle}”, including additional links? Affected listings will return to
+                PENDING and their auto-list results will be cleared. The catalog item and store listings will be kept.
+              </Typography>
+              {unlinkState === 'error' ? <Alert severity="error">Store items could not be unlinked.</Alert> : null}
+            </Stack>
+          </DialogContent>
+          <DialogActions>
+            <Button disabled={isUnlinking} type="button" onClick={() => setUnlinkState('idle')}>
+              Cancel
+            </Button>
+            <Button color="error" disabled={isUnlinking} type="button" variant="contained" onClick={handleConfirmUnlink}>
+              {isUnlinking ? 'Unlinking...' : 'Unlink all store items'}
+            </Button>
+          </DialogActions>
+        </Dialog>
+      ) : null}
     </Stack>
   );
 }

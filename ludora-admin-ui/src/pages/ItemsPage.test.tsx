@@ -1268,6 +1268,104 @@ describe('ItemsPage', () => {
     expect(await screen.findByRole('table', { name: 'Items' })).toBeInTheDocument();
   });
 
+  it('unlinks store items after confirmation while preserving unsaved item edits', async () => {
+    const user = userEvent.setup();
+    const item = { id: '77', canonical_name: 'Coffee Rush', canonical_name_es: 'Cafe Barista', item_type: 'base_game' };
+    const storeItem = { id: '3365', item_id: '77', title: 'Coffee Rush at the store', listing_status: 'APPROVED' };
+    const relationship = {
+      id: '100', item_a_id: '12', item_b_id: '77', direction: 'incoming', link_type: 'extension',
+      related_item_id: '12', related_item_name: 'Coffee Rush Deluxe', source: 'bgg'
+    };
+    let resolveUnlink!: (response: Response) => void;
+    const unlinkResponse = new Promise<Response>((resolve) => { resolveUnlink = resolve; });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/items/77/store-items' && init?.method === 'DELETE') return unlinkResponse;
+      if (path === '/items/77/store-items') return jsonResponse([storeItem]);
+      if (path === '/items/77') return jsonResponse(item);
+      if (path === '/items/77/relationships') return jsonResponse([relationship]);
+      if (path === '/items/77/taxonomy') return jsonResponse({ categories: [], families: [], mechanics: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    render(<ItemsPage detailOnly selectedItemId="77" />);
+
+    const unlinkButton = await screen.findByRole('button', { name: 'Unlink all store items' });
+    const startUnlink = () => user.click(unlinkButton);
+    const findDialog = () => screen.findByRole('dialog', { name: 'Unlink all store items' });
+    const canonicalNameEs = screen.getByLabelText('Canonical Name ES');
+    fireEvent.change(canonicalNameEs, { target: { value: 'Unsaved Spanish title' } });
+
+    await startUnlink();
+    await user.click(within(await findDialog()).getByRole('button', { name: 'Cancel' }));
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toHaveLength(0);
+    const storeTable = await screen.findByRole('table', { name: 'Linked store items' });
+    expect(within(storeTable).getByText('Coffee Rush at the store')).toBeInTheDocument();
+
+    await startUnlink();
+    const dialog = await findDialog();
+    expect(within(dialog).getByText(/PENDING/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/additional links/i)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink all store items' }));
+    expect(within(dialog).getByRole('button', { name: 'Unlinking...' })).toBeDisabled();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'DELETE')).toEqual([
+      [expect.stringMatching(/\/items\/77\/store-items$/), expect.objectContaining({ method: 'DELETE' })]
+    ]);
+
+    resolveUnlink(jsonResponse({ id: '77', reset_store_item_count: 1, deleted_additional_link_count: 1 }));
+
+    expect(await screen.findByText('All store items unlinked.')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+    expect(within(storeTable).queryByText('Coffee Rush at the store')).not.toBeInTheDocument();
+    expect(screen.getByText('Coffee Rush Deluxe')).toBeInTheDocument();
+    expect(screen.getByLabelText('Canonical Name ES')).toHaveValue('Unsaved Spanish title');
+  });
+
+  it('allows retrying unlink when there are no visible primary store items', async () => {
+    const user = userEvent.setup();
+    const item = { id: '77', canonical_name: 'Coffee Rush', item_type: 'base_game' };
+    let attempts = 0;
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const path = pathOf(String(input));
+      if (path === '/items/77/store-items' && init?.method === 'DELETE') {
+        attempts += 1;
+        if (attempts === 1) return new Response(null, { status: 500 });
+        return jsonResponse({ id: '77', reset_store_item_count: 1, deleted_additional_link_count: 1 });
+      }
+      if (path === '/items/77') return jsonResponse(item);
+      if (path === '/items/77/store-items' || path === '/items/77/relationships') return jsonResponse([]);
+      if (path === '/items/77/taxonomy') return jsonResponse({ categories: [], families: [], mechanics: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    render(<ItemsPage detailOnly selectedItemId="77" />);
+
+    await user.click(await screen.findByRole('button', { name: 'Unlink all store items' }));
+    const dialog = screen.getByRole('dialog', { name: 'Unlink all store items' });
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink all store items' }));
+    expect(await within(dialog).findByText('Store items could not be unlinked.')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Unlink all store items' }));
+    expect(await screen.findByText('All store items unlinked.')).toBeInTheDocument();
+    expect(attempts).toBe(2);
+  });
+
+  it('keeps bulk unlinking out of the embedded item review', async () => {
+    const item = { id: '77', canonical_name: 'Coffee Rush', item_type: 'base_game' };
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const path = pathOf(String(input));
+      if (path === '/items/77') return jsonResponse(item);
+      if (path === '/items/77/store-items' || path === '/items/77/relationships') return jsonResponse([]);
+      if (path === '/items/77/taxonomy') return jsonResponse({ categories: [], families: [], mechanics: [] });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+
+    render(<ItemsPage detailOnly detailVariant="review" selectedItemId="77" />);
+
+    expect(await screen.findByRole('heading', { name: 'Linked Store Items' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Unlink all store items' })).not.toBeInTheDocument();
+  });
+
   it('confirms catalog item deletion and returns to the refreshed items table', async () => {
     const user = userEvent.setup();
     const onClearSelectedItemId = vi.fn();

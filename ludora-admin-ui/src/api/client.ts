@@ -17,6 +17,12 @@ type ErrorResponse = {
 
 export type AdminRecord = Record<string, unknown>;
 
+export type UnlinkItemStoreItemsResult = {
+  id: string;
+  reset_store_item_count: number;
+  deleted_additional_link_count: number;
+};
+
 export type BggVersion = {
   bgg_id: number;
   bgg_type?: 'boardgameversion' | 'bgaccessoryversion';
@@ -753,6 +759,8 @@ export const adminApi = {
   getItemLinkedCandidates: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/candidates`),
   getItemRelationships: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/relationships`),
   getItemStoreItems: (id: string) => fetchRows(`/items/${encodeURIComponent(id)}/store-items`),
+  unlinkItemStoreItems: (id: string) =>
+    fetchData<UnlinkItemStoreItemsResult>(`/items/${encodeURIComponent(id)}/store-items`, { method: 'DELETE' }),
   getItemTaxonomy: (id: string) => fetchData<ItemTaxonomy>(`/items/${encodeURIComponent(id)}/taxonomy`),
   getItemsPage: (query: TableQuery) => fetchPagedRows<AdminRecord>(pagedPath('/items', query), query),
   importItemFromBggId: (bggId: string) =>
