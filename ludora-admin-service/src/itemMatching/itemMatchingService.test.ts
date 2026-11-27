@@ -1461,7 +1461,7 @@ describe('item matching service', () => {
     const importer = itemImporter(88);
     const ai = createAiBggMatchingService(
       { findMatch: vi.fn().mockResolvedValue(decision) },
-      { model: 'gpt-6.1-terra' }
+      { model: 'gpt-6.2-sol' }
     );
     const database = matchingDatabase(
       storeItemCandidate({ title: 'Catan' }),
@@ -1614,7 +1614,7 @@ function autoListService(): AutoListEvaluationService {
       threshold: 95
     },
     item_id: 77,
-    model: 'gpt-6.1-terra',
+    model: 'gpt-6.2-sol',
     reasoning: 'Test result',
     status: 'ERROR',
     store_item_id: 42,

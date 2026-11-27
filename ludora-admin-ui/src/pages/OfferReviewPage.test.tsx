@@ -779,7 +779,7 @@ describe('OfferReviewPage', () => {
             data: {
               description_es: generatedDescription,
               metadata: { sourceBalance: 'single_source', warnings: [] },
-              model: 'gpt-6.1-terra',
+              model: 'gpt-6.2-sol',
               prompt_version: 'description-generator-v1'
             }
           }),

@@ -1452,7 +1452,7 @@ describe('ListingCandidatesPage', () => {
           status: 'COMPLETED',
           threshold: 98
         },
-        model: 'gpt-6.1-terra',
+        model: 'gpt-6.2-sol',
         reasoning: 'All three checks passed.',
         status: 'COMPLETED',
         verdict: 'PASS',
@@ -2120,7 +2120,7 @@ function approvalResult(overrides: Record<string, unknown> = {}) {
       name_match: { pass: true, reasoning: 'The store title matches the catalog title.' }
     },
     evaluated_at: '2026-10-07T00:00:00.000Z',
-    model: 'gpt-6.1-terra',
+    model: 'gpt-6.2-sol',
     reasoning: 'All three checks passed.',
     status: 'COMPLETED',
     verdict: 'PASS',

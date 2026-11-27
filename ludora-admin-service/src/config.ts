@@ -76,7 +76,7 @@ export function loadConfig(): Config {
     codexApiBaseUrl: readCodexApiBaseUrl(),
     codexAiModel: readOptionalEnv('CODEX_AI_MODEL')
       ?? readOptionalEnv('OPENAI_TRANSLATION_MODEL')
-      ?? 'gpt-6.1-terra',
+      ?? 'gpt-6.2-sol',
     localCoverWorkflow: readLocalCoverWorkflowConfig(),
     internalApiToken: readOptionalEnv('LUDORA_INTERNAL_API_TOKEN'),
     port,
