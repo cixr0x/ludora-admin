@@ -131,6 +131,9 @@ class BggItemImporter:
             thing.min_playtime or thing.playing_time,
             thing.max_playtime or thing.playing_time,
             thing.min_age,
+            thing.owned,
+        )
+        image_params = (
             image_url,
             image_hash,
         )
@@ -153,13 +156,21 @@ class BggItemImporter:
                     min_minutes = %s,
                     max_minutes = %s,
                     min_age = %s,
+                    owned = coalesce(%s, owned),
+                    language_dependence = case when %s then %s else language_dependence end,
                     image_url = %s,
                     image_phash = %s,
                     status = 'active',
                     updated_at = now()
                 where id = %s
                 """,
-                (*params, existing[0]),
+                (
+                    *params,
+                    thing.language_dependence_known or thing.language_dependence is not None,
+                    thing.language_dependence,
+                    *image_params,
+                    existing[0],
+                ),
             )
             return int(existing[0])
 
@@ -181,15 +192,17 @@ class BggItemImporter:
                 min_minutes,
                 max_minutes,
                 min_age,
+                owned,
+                language_dependence,
                 image_url,
                 image_phash,
                 status,
                 updated_at
             )
-            values (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', now())
+            values (%s, %s, %s, %s, %s, %s, now(), %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'active', now())
             returning id
             """,
-            params,
+            (*params, thing.language_dependence, *image_params),
         )
         row = cursor.fetchone()
         return int(row[0])

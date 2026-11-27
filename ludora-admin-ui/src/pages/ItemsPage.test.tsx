@@ -224,6 +224,7 @@ describe('ItemsPage', () => {
     const description = screen.getByLabelText('Description');
     const descriptionEs = screen.getByLabelText('Description ES');
     const itemType = screen.getByLabelText('Item Type');
+    const shortDescription = screen.getByLabelText('Short Description');
 
     expect(normalizedNameEs.compareDocumentPosition(generateDescription)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(generateDescription.compareDocumentPosition(description)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
@@ -245,6 +246,9 @@ describe('ItemsPage', () => {
     });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Updated description' } });
     fireEvent.change(screen.getByLabelText('Description ES'), { target: { value: 'Descripcion actualizada' } });
+    fireEvent.change(shortDescription, { target: { value: 'Serve your café customers before time runs out.' } });
+    expect(screen.getByLabelText('BGG Owned')).toHaveAttribute('readonly');
+    expect(screen.getByLabelText('BGG Language Dependence')).toHaveAttribute('readonly');
     await user.click(screen.getByRole('button', { name: 'Save Item' }));
 
     expect(await screen.findByText('Item saved.')).toBeInTheDocument();
@@ -256,9 +260,12 @@ describe('ItemsPage', () => {
       canonical_name_es: 'Nombre manual',
       description: 'Updated description',
       description_es: 'Descripcion actualizada',
+      short_description: 'Serve your café customers before time runs out.',
       image_url_es: 'https://cf.geekdo-images.com/coffee-es-updated.jpg',
       normalized_name_es: 'nombre manual'
     });
+    expect(JSON.parse(String(patchCall?.[1]?.body))).not.toHaveProperty('owned');
+    expect(JSON.parse(String(patchCall?.[1]?.body))).not.toHaveProperty('language_dependence');
 
     await user.click(screen.getByRole('button', { name: 'Back to Items' }));
 

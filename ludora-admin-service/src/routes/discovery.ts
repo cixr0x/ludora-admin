@@ -133,6 +133,7 @@ type ItemInput = {
   normalized_name_es: string;
   parent_item_id: number | null;
   rating: number | null;
+  short_description?: string | null;
   status: string;
   weight: number | null;
   year_published: number | null;
@@ -188,7 +189,8 @@ const itemCandidateSelect = `
 const itemSelect = `
   id, canonical_name, normalized_name, canonical_name_es, normalized_name_es,
   item_type, is_accessory, is_rpg, parent_item_id, bgg_id, bgg_url, is_version, version_of, bgg_last_sync_at,
-  year_published, rating, weight, description, description_es, min_players, max_players,
+  year_published, rating, weight, description, description_es, short_description,
+  owned, language_dependence, min_players, max_players,
   min_minutes, max_minutes, complexity, min_age, image_url, image_url_es, status,
   created_at, updated_at
 `;
@@ -1562,9 +1564,12 @@ export function createDiscoveryRouter(
               parent_item_id = $6,
               bgg_id = case when is_version then bgg_id else $7 end,
               bgg_url = case when is_version then bgg_url else $8 end,
+              owned = case when not is_version and bgg_id is distinct from $7 then null else owned end,
+              language_dependence = case when not is_version and bgg_id is distinct from $7 then null else language_dependence end,
               year_published = $9,
               description = $10,
               description_es = $11,
+              short_description = case when $26 then $27 else short_description end,
               min_players = $12,
               max_players = $13,
               min_minutes = $14,
@@ -1589,7 +1594,8 @@ export function createDiscoveryRouter(
         from updated_item
         ${bggThingMetadataJoin('updated_item')}
         `,
-        [...itemParams(input), request.params.id, imageHash, spanishImageHash]
+        [...itemParams(input), request.params.id, imageHash, spanishImageHash,
+          input.short_description !== undefined, input.short_description ?? null]
       );
 
       if (!result.rows[0]) {
@@ -3051,6 +3057,11 @@ function parseItemInput(body: unknown): ItemInput {
   const normalizedName = stringField(value, 'normalized_name') || normalizeItemName(canonicalName);
   const canonicalNameEs = stringField(value, 'canonical_name_es');
   const normalizedNameEs = stringField(value, 'normalized_name_es') || normalizeItemName(canonicalNameEs);
+  const shortDescription = value.short_description;
+  if (shortDescription !== undefined && shortDescription !== null &&
+      (typeof shortDescription !== 'string' || /[\r\n\u2028\u2029]/.test(shortDescription))) {
+    throw httpError(400, 'short_description must be a single line of text or null');
+  }
   const input: ItemInput = {
     bgg_id: nullableIntegerField(value, 'bgg_id'),
     bgg_url: stringField(value, 'bgg_url'),
@@ -3071,6 +3082,7 @@ function parseItemInput(body: unknown): ItemInput {
     normalized_name_es: normalizedNameEs,
     parent_item_id: nullableIntegerField(value, 'parent_item_id'),
     rating: nullableNumberField(value, 'rating'),
+    short_description: typeof shortDescription === 'string' ? shortDescription.trim() || null : shortDescription,
     status: stringField(value, 'status') || 'draft',
     weight: nullableNumberField(value, 'weight'),
     year_published: nullableIntegerField(value, 'year_published')

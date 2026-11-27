@@ -208,6 +208,7 @@ const itemDetailFields: ItemDetailField[] = [
   { gridColumn: { md: 'span 2' }, key: 'normalized_name', label: 'Normalized Name' },
   { gridColumn: { md: 'span 2' }, key: 'canonical_name_es', label: 'Canonical Name ES' },
   { gridColumn: { md: 'span 2' }, key: 'normalized_name_es', label: 'Normalized Name ES' },
+  { gridColumn: { md: '1 / -1' }, key: 'short_description', label: 'Short Description' },
   { gridColumn: { md: '1 / -1' }, key: 'description', label: 'Description', multiline: true },
   { gridColumn: { md: '1 / -1' }, key: 'description_es', label: 'Description ES', multiline: true },
   { key: 'item_type', label: 'Item Type' },
@@ -219,6 +220,8 @@ const itemDetailFields: ItemDetailField[] = [
   { key: 'bgg_last_sync_at', label: 'BGG Last Sync At', readOnly: true },
   { key: 'year_published', label: 'Year Published' },
   { key: 'rating', label: 'Rating' },
+  { key: 'owned', label: 'BGG Owned', readOnly: true },
+  { key: 'language_dependence', label: 'BGG Language Dependence', readOnly: true },
   { key: 'min_players', label: 'Min Players' },
   { key: 'max_players', label: 'Max Players' },
   { key: 'min_minutes', label: 'Min Minutes' },
@@ -1902,7 +1905,8 @@ function inputFromForm(formData: FormData, detailFields = itemDetailFields, base
   const displayedFieldKeys = new Set(detailFields.filter((detailField) => !detailField.readOnly).map((detailField) => detailField.key));
   return Object.fromEntries(
     itemDetailFields
-      .filter((detailField) => !detailField.readOnly)
+      .filter((detailField) => !detailField.readOnly &&
+        (detailField.key !== 'short_description' || displayedFieldKeys.has(detailField.key)))
       .map((detailField) => [
         detailField.key,
         displayedFieldKeys.has(detailField.key)

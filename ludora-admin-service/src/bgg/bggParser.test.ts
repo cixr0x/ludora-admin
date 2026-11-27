@@ -77,10 +77,17 @@ describe('BGG XML parser', () => {
           <link type="boardgameexpansion" id="411435" value="Coffee Rush: Piece of Cake" inbound="true" />
           <link type="boardgameexpansion" id="440981" value="Coffee Rush: Christmas Promo Cards 2" />
           <link type="boardgameimplementation" id="999001" value="Coffee Rush Dice" />
+          <poll name="language_dependence" totalvotes="12">
+            <results>
+              <result level="1" numvotes="2" />
+              <result level="4" numvotes="10" />
+            </results>
+          </poll>
           <statistics page="1">
             <ratings>
               <average value="7.48231" />
               <averageweight value="1.9234" />
+              <owned value="0" />
             </ratings>
           </statistics>
         </item>
@@ -100,6 +107,7 @@ describe('BGG XML parser', () => {
       ],
       families: [{ bggId: 46953, name: 'Food & Drink: Coffee' }],
       image: 'https://example.com/original.jpg',
+      languageDependence: 4,
       maxPlayers: 4,
       maxPlaytime: 40,
       mechanics: [{ bggId: 2912, name: 'Contracts' }],
@@ -107,6 +115,7 @@ describe('BGG XML parser', () => {
       minPlayers: 2,
       minPlaytime: 20,
       name: 'Coffee Rush',
+      owned: 0,
       parentLinks: [{ bggId: 411435, inbound: true, name: 'Coffee Rush: Piece of Cake' }],
       playingTime: 30,
       publishers: [{ bggId: 8291, name: 'Korea Boardgames' }],
@@ -117,6 +126,26 @@ describe('BGG XML parser', () => {
       weight: 1.9234,
       yearPublished: 2023
     });
+  });
+
+  it.each([
+    ['', undefined],
+    ['<result level="6" numvotes="10" />', undefined],
+    ['<result level="2" numvotes="5.5" />', undefined],
+    ['<result level="2" numvotes="3" /><result level="2" numvotes="2" />', undefined],
+    ['<result level="2" numvotes="0" />', null],
+    ['<result level="2" numvotes="8" /><result level="4" numvotes="8" />', null],
+    ['<result level="5" numvotes="1" />', 5]
+  ])('handles missing, malformed, unrated and tied language polls (%s)', (results, expected) => {
+    const thing = parseBggThingResponse(`
+      <items><item type="boardgame" id="17">
+        <poll name="suggested_playerage"><results><result level="1" numvotes="999" /></results></poll>
+        <poll name="language_dependence"><results>${results}</results></poll>
+        <statistics><ratings><owned value="2147483648" /></ratings></statistics>
+      </item></items>
+    `);
+    expect(thing?.owned).toBeNull();
+    expect(thing?.languageDependence).toBe(expected);
   });
 
   it('parses inbound accessory links as parent relationships', () => {

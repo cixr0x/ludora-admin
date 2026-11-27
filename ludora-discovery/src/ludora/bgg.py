@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -49,6 +50,9 @@ class BggThing:
     publishers: list[BggLink] = field(default_factory=list)
     parent_links: list[BggLink] = field(default_factory=list)
     implementation_links: list[BggLink] = field(default_factory=list)
+    owned: int | None = None
+    language_dependence: int | None = None
+    language_dependence_known: bool = False
 
 
 class BggClient:
@@ -61,7 +65,7 @@ class BggClient:
         return parse_bgg_search_response(xml)
 
     def fetch_thing(self, bgg_id: int) -> tuple[BggThing | None, str]:
-        xml = self._get_xml("thing", {"id": str(bgg_id), "type": BGG_REQUEST_TYPE})
+        xml = self._get_xml("thing", {"id": str(bgg_id), "type": BGG_REQUEST_TYPE, "stats": "1"})
         return parse_bgg_thing_response(xml), xml
 
     def _get_xml(self, path: str, params: dict[str, str]) -> str:
@@ -100,6 +104,8 @@ def parse_bgg_thing_response(xml: str) -> BggThing | None:
         return None
 
     links = [_link_from_element(link) for link in item.findall("link")]
+    owned = item.find("statistics/ratings/owned")
+    language_dependence, language_dependence_known = _language_dependence(item)
     return BggThing(
         bgg_id=_int_attr(item, "id") or 0,
         item_type=item.attrib.get("type", "").strip(),
@@ -127,7 +133,39 @@ def parse_bgg_thing_response(xml: str) -> BggThing | None:
         publishers=_links_by_type(links, "boardgamepublisher"),
         parent_links=[link for link in _links_by_type(links, "boardgameexpansion") if link.inbound],
         implementation_links=_links_by_type(links, "boardgameimplementation"),
+        owned=_nonnegative_integer(owned.get("value") if owned is not None else None),
+        language_dependence=language_dependence,
+        language_dependence_known=language_dependence_known,
     )
+
+
+def _language_dependence(item: ElementTree.Element) -> tuple[int | None, bool]:
+    poll = item.find("poll[@name='language_dependence']")
+    results = poll.findall("results/result") if poll is not None else []
+    if not results:
+        return None, False
+
+    votes_by_level: dict[int, int] = {}
+    for result in results:
+        level_text = result.get("level", "")
+        votes = _nonnegative_integer(result.get("numvotes"))
+        if not re.fullmatch(r"[1-5]", level_text) or votes is None:
+            return None, False
+        level = int(level_text)
+        if level in votes_by_level:
+            return None, False
+        votes_by_level[level] = votes
+
+    highest_votes = max(votes_by_level.values())
+    winners = [level for level, votes in votes_by_level.items() if votes == highest_votes]
+    return (winners[0] if highest_votes > 0 and len(winners) == 1 else None), True
+
+
+def _nonnegative_integer(value: str | None) -> int | None:
+    if value is None or not re.fullmatch(r"[0-9]{1,10}", value):
+        return None
+    number = int(value)
+    return number if number <= 2_147_483_647 else None
 
 
 def _link_from_element(element: ElementTree.Element) -> BggLink:

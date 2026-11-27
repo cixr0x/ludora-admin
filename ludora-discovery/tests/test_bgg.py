@@ -30,9 +30,33 @@ class BggClientTests(unittest.TestCase):
         for url in urls:
             with self.subTest(path=url.path):
                 self.assertEqual(parse_qs(url.query)["type"], ["boardgame,boardgameexpansion,rpgitem"])
+        self.assertNotIn("stats", parse_qs(urls[0].query))
+        self.assertEqual(parse_qs(urls[1].query)["stats"], ["1"])
 
 
 class BggParserTests(unittest.TestCase):
+    def test_communities_use_owned_and_a_unique_language_poll_winner(self):
+        for results, expected, known in [
+            ('<result level="1" numvotes="0"/><result level="4" numvotes="18"/>', 4, True),
+            ('<result level="1" numvotes="12"/><result level="4" numvotes="12"/>', None, True),
+            ('<result level="1" numvotes="0"/>', None, True),
+            ('<result level="7" numvotes="4"/>', None, False),
+            ('<result level="2" numvotes="1.5"/>', None, False),
+            ('<result level="2" numvotes="3"/><result level="2" numvotes="1"/>', None, False),
+            ("", None, False),
+        ]:
+            with self.subTest(results=results):
+                thing = parse_bgg_thing_response(f"""
+                    <items><item id="13" type="boardgame">
+                      <poll name="language_dependence"><results>{results}</results></poll>
+                      <statistics><ratings><owned value="0"/></ratings></statistics>
+                    </item></items>
+                """)
+                self.assertIsNotNone(thing)
+                self.assertEqual(thing.owned, 0)
+                self.assertEqual(thing.language_dependence, expected)
+                self.assertEqual(thing.language_dependence_known, known)
+
     def test_parse_search_response(self):
         xml = """
         <items>

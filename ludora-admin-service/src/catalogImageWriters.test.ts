@@ -43,12 +43,12 @@ describe('catalog image writers', () => {
     const app = createApp({ database, catalogImageHasher: hasher });
     await request(app).patch('/items/77').send({ canonical_name: 'Game', image_url: 'https://example.test/a', image_url_es: '' }).expect(200);
     expect(sqlText(queries[0].sql)).toContain('image_phash = $24');
-    expect(queries[0].params?.slice(-2)).toEqual([HASH, null]);
+    expect(queries[0].params?.slice(23, 25)).toEqual([HASH, null]);
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
       await request(createApp({ database, catalogImageHasher: { ...hasher, hashUrl: async () => { throw new Error('new cover failed'); } } }))
         .patch('/items/77').send({ canonical_name: 'Game', image_url: 'https://example.test/new', image_url_es: '' }).expect(200);
-      expect(queries[1].params?.slice(-2)).toEqual([null, null]);
+      expect(queries[1].params?.slice(23, 25)).toEqual([null, null]);
       expect(warning).toHaveBeenCalledWith('Catalog image hash failed: new cover failed');
     } finally { warning.mockRestore(); }
   });

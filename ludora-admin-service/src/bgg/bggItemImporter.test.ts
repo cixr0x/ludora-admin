@@ -6,6 +6,48 @@ import { parseBggThingResponse } from './bggParser.js';
 import type { Database } from '../db.js';
 
 describe('BGG item importer', () => {
+  it('imports community fields and distinguishes an unrated poll from a missing one', async () => {
+    const itemWrites: Array<{ params?: unknown[]; sql: string }> = [];
+    const database: Database = {
+      query: async (sql, params) => {
+        const normalized = normalizeSql(sql);
+        if (normalized.startsWith('select id') && itemWrites.length) {
+          return { rows: [{ bgg_last_sync_at: null, id: 77 }] };
+        }
+        if (normalized.startsWith('insert into items') || normalized.startsWith('update items')) {
+          itemWrites.push({ params, sql: normalized });
+          return { rows: [{ id: 77 }] };
+        }
+        return { rows: [] };
+      }
+    };
+    const metadata = [
+      '<poll name="language_dependence"><results><result level="4" numvotes="3" /></results></poll><statistics><ratings><owned value="0" /></ratings></statistics>',
+      '<poll name="language_dependence"><results><result level="4" numvotes="0" /></results></poll>',
+      ''
+    ];
+    const bggClient: BggClient = {
+      fetchThing: async () => {
+        const rawXml = `<items><item type="boardgame" id="17"><name type="primary" value="Game" />${metadata.shift()}</item></items>`;
+        return { details: parseBggThingResponse(rawXml)!, rawXml };
+      },
+      search: async () => []
+    };
+    const importer = createBggItemImporter(database, bggClient);
+    await importer.importBggId(17);
+    await importer.importBggId(17);
+    await importer.importBggId(17);
+
+    expect(itemWrites).toHaveLength(3);
+    expect(itemWrites[0].sql).toContain('owned, language_dependence');
+    expect(itemWrites[0].params?.slice(-2)).toEqual([0, 4]);
+    expect(itemWrites[1].sql).toContain('owned = coalesce($21, owned)');
+    expect(itemWrites[1].sql).toContain('language_dependence = case when $23 then $22 else language_dependence end');
+    expect(itemWrites[1].params?.slice(-3)).toEqual([null, null, true]);
+    expect(itemWrites[2].params?.slice(-3)).toEqual([null, null, false]);
+    expect(itemWrites.every(({ sql }) => !sql.includes('short_description'))).toBe(true);
+  });
+
   it.each([
     ['rpgitem', true, 'https://rpggeek.com/rpgitem/123456'],
     ['boardgame', false, 'https://boardgamegeek.com/boardgame/123456']

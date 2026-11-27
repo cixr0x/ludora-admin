@@ -104,6 +104,7 @@ async function persistItemMetadata(database: Database, thing: BggThingDetails, i
 async function upsertItem(database: Database, thing: BggThingDetails, imageHash: string | null): Promise<number> {
   const existingId = await existingItemId(database, thing.bggId);
   const imageUrl = thing.image || thing.thumbnail;
+  const communityParams = [thing.owned ?? null, thing.languageDependence ?? null];
   const params = [
     thing.name,
     normalizeTitle(thing.name),
@@ -150,12 +151,14 @@ async function upsertItem(database: Database, thing: BggThingDetails, imageHash:
           image_url = $17,
           image_phash = $18,
           is_rpg = $19,
+          owned = coalesce($21, owned),
+          language_dependence = case when $23 then $22 else language_dependence end,
           status = 'active',
           updated_at = now()
       where id = $20
       returning id
       `,
-      [...params, existingId]
+      [...params, existingId, ...communityParams, thing.languageDependence !== undefined]
     );
     return idFromRows(result.rows) ?? existingId;
   }
@@ -184,13 +187,15 @@ async function upsertItem(database: Database, thing: BggThingDetails, imageHash:
       image_phash,
       is_rpg,
       status,
-      updated_at
+      updated_at,
+      owned,
+      language_dependence
     )
-    values ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'active', now())
+    values ($1, $2, $3, $4, $5, $6, $7, now(), $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, 'active', now(), $20, $21)
     on conflict (is_version, bgg_id) where bgg_id is not null do nothing
     returning id
     `,
-    params
+    [...params, ...communityParams]
   );
   const itemId = idFromRows(result.rows) ?? await existingItemId(database, thing.bggId);
   if (itemId === null) {

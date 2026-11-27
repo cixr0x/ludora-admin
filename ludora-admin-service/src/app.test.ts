@@ -1736,6 +1736,7 @@ describe('ludora admin service', () => {
     expect(sql).toContain('returning id, canonical_name, normalized_name, canonical_name_es, normalized_name_es');
     expect(sql).toContain('is_rpg');
     expect(sql).toContain('left join lateral ( select raw_xml, parsed_json from bgg_thing_cache');
+    expect(sql).toContain('short_description = case when $26 then $27 else short_description end');
     expect(query.params).toEqual([
       'Coffee Rush Updated',
       'coffee rush updated',
@@ -1761,8 +1762,41 @@ describe('ludora admin service', () => {
       'active',
       '377061',
       null,
+      null,
+      false,
       null
     ]);
+  });
+
+  it('saves and clears the item one-liner without accepting a multiline description', async () => {
+    const writes: unknown[][] = [];
+    const database: Database = {
+      query: async (sql, params = []) => {
+        const normalized = normalizeSql(sql);
+        writes.push(params);
+        expect(normalized).toContain('owned = case when not is_version and bgg_id is distinct from $7 then null else owned end');
+        expect(normalized).toContain('language_dependence = case when not is_version and bgg_id is distinct from $7 then null else language_dependence end');
+        return { rows: [{ id: 12, short_description: params[26] }] };
+      }
+    };
+    const app = createApp({ database });
+    const saved = await request(app).patch('/items/12').send({
+      canonical_name: 'Game',
+      bgg_id: 777,
+      short_description: '  A one-line description.  '
+    });
+    expect(saved.status).toBe(200);
+    expect(saved.body.data.short_description).toBe('A one-line description.');
+    expect(writes[0].slice(-2)).toEqual([true, 'A one-line description.']);
+
+    const cleared = await request(app).patch('/items/12').send({ canonical_name: 'Game', bgg_id: 777, short_description: '' });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.data.short_description).toBeNull();
+    expect(writes[1].slice(-2)).toEqual([true, null]);
+
+    const invalid = await request(app).patch('/items/12').send({ canonical_name: 'Game', short_description: 'First\nSecond' });
+    expect(invalid.status).toBe(400);
+    expect(writes).toHaveLength(2);
   });
 
   it('creates discovery store candidates', async () => {

@@ -36,6 +36,7 @@ export type BggThingDetails = {
   expansionLinks: BggRelatedLink[];
   families: BggNamedLink[];
   image: string;
+  languageDependence?: number | null;
   maxPlayers: number | null;
   maxPlaytime: number | null;
   mechanics: BggNamedLink[];
@@ -43,6 +44,7 @@ export type BggThingDetails = {
   minPlayers: number | null;
   minPlaytime: number | null;
   name: string;
+  owned?: number | null;
   parentLinks: BggRelatedLink[];
   playingTime: number | null;
   publishers: BggNamedLink[];
@@ -101,6 +103,7 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
     expansionLinks,
     families: linksByType(item, 'boardgamefamily'),
     image: stringValue(item.image),
+    languageDependence: languageDependenceLevel(item),
     maxPlayers: numberValue(item.maxplayers?.value),
     maxPlaytime: numberValue(item.maxplaytime?.value),
     mechanics: linksByType(item, 'boardgamemechanic'),
@@ -108,6 +111,7 @@ export function parseBggThingResponse(xml: string): BggThingDetails | null {
     minPlayers: numberValue(item.minplayers?.value),
     minPlaytime: numberValue(item.minplaytime?.value),
     name: primaryName(item),
+    owned: nonnegativeInteger(item.statistics?.ratings?.owned?.value),
     parentLinks: expansionLinks.filter((link) => link.inbound),
     playingTime: numberValue(item.playingtime?.value),
     publishers: linksByType(item, 'boardgamepublisher'),
@@ -213,6 +217,33 @@ function numberValue(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function nonnegativeInteger(value: unknown): number | null {
+  if (typeof value !== 'string' || !/^[0-9]{1,10}$/.test(value)) return null;
+  const number = Number(value);
+  return number <= 2_147_483_647 ? number : null;
+}
+
+// Undefined means the poll was unavailable. Null means it has no unique, positive winner.
+function languageDependenceLevel(item: BggXmlItem): number | null | undefined {
+  const poll = asArray(item.poll).find((entry) => entry.name === 'language_dependence');
+  const results = asArray(poll?.results).flatMap((group) => asArray(group.result));
+  if (results.length === 0) return undefined;
+
+  const votesByLevel = new Map<number, number>();
+  for (const result of results) {
+    const level = /^[1-5]$/.test(result.level ?? '') ? Number(result.level) : null;
+    const votes = nonnegativeInteger(result.numvotes);
+    if (level === null || votes === null || votesByLevel.has(level)) {
+      return undefined;
+    }
+    votesByLevel.set(level, votes);
+  }
+
+  const highestVotes = Math.max(...votesByLevel.values());
+  const winners = [...votesByLevel.entries()].filter(([, votes]) => votes === highestVotes);
+  return highestVotes > 0 && winners.length === 1 ? winners[0][0] : null;
+}
+
 function stringValue(value: unknown): string {
   if (value === null || value === undefined) {
     return '';
@@ -256,15 +287,31 @@ type BggXmlItem = {
   minplaytime?: BggXmlValue;
   name?: BggXmlName | BggXmlName[];
   playingtime?: BggXmlValue;
+  poll?: BggXmlPoll | BggXmlPoll[];
   statistics?: {
     ratings?: {
       average?: BggXmlValue;
       averageweight?: BggXmlValue;
+      owned?: BggXmlValue;
     };
   };
   thumbnail?: string;
   type?: string;
   yearpublished?: BggXmlValue;
+};
+
+type BggXmlPoll = {
+  name?: string;
+  results?: BggXmlPollResults | BggXmlPollResults[];
+};
+
+type BggXmlPollResults = {
+  result?: BggXmlPollResult | BggXmlPollResult[];
+};
+
+type BggXmlPollResult = {
+  level?: string;
+  numvotes?: string;
 };
 
 type BggXmlName = {

@@ -117,6 +117,25 @@ class FakeConnection:
 
 
 class BggImportTests(unittest.TestCase):
+    def test_imports_bgg_community_metadata_without_erasing_unknown_fields(self):
+        connection = FakeConnection()
+        importer = BggItemImporter(connection)
+        thing = BggThing(bgg_id=17, item_type="boardgame", name="Game", owned=0, language_dependence=4)
+        importer.import_thing(thing)
+        importer.import_thing(replace(thing, owned=None, language_dependence=None, language_dependence_known=True))
+        importer.import_thing(replace(thing, owned=None, language_dependence=None))
+        writes = [
+            (" ".join(sql.split()), params) for sql, params in connection.cursor_instance.executions
+            if "insert into items" in sql or "update items" in sql
+        ]
+        self.assertEqual(len(writes), 3)
+        self.assertIn("owned, language_dependence, image_url", writes[0][0])
+        self.assertEqual(writes[0][1][-4:-2], (0, 4))
+        self.assertIn("owned = coalesce(%s, owned)", writes[1][0])
+        self.assertIn("language_dependence = case when %s then %s else language_dependence end", writes[1][0])
+        self.assertEqual(writes[1][1][-6:-3], (None, True, None))
+        self.assertEqual(writes[2][1][-6:-3], (None, False, None))
+
     def test_writes_catalog_rpg_flag_on_insert_and_refresh(self):
         for bgg_type, item_type, is_rpg, url in [
             ("rpgitem", "base_game", True, "https://rpggeek.com/rpgitem/123456"),
