@@ -308,8 +308,8 @@ class ShopifyStorefrontTests(unittest.TestCase):
         board_game_page_3 = store + "/collections/types?page=3&q=Board+Game"
         pages = {
             collection: FetchResult(collection, _yellow_rabbit_listing(
-                "/collections/juegos-de-mesa-1/products/stored?variant=42",
-                "https://www.yellowrabbit.mx/collections/juegos-de-mesa-1/products/first#details",
+                "/collections/juegos-de-mesa-1/products/STORED?variant=42",
+                "https://www.yellowrabbit.mx/collections/juegos-de-mesa-1/products/FIRST#details",
                 "/products/first",
                 "https://example.com/products/off-store",
                 "/products/data-only.js",

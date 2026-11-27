@@ -146,7 +146,7 @@ def _product_url(href: str, page_url: str) -> str | None:
     match = PRODUCT_PATH.fullmatch(parsed.path) if parsed is not None else None
     if match is None:
         return None
-    handle = unquote(match[1])
+    handle = unquote(match[1]).lower()
     if not re.fullmatch(r"[\w-]+", handle):
         return None
     return f"{YELLOW_RABBIT_ORIGIN}/products/{quote(handle)}"
