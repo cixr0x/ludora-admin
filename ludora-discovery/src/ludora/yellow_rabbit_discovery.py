@@ -15,6 +15,7 @@ YELLOW_RABBIT_HOSTS = {"yellowrabbit.mx", "www.yellowrabbit.mx"}
 YELLOW_RABBIT_LISTINGS = ("/collections/juegos-de-mesa-1", "/collections/types?q=Board%20Game")
 MAX_LISTING_PAGES = 500
 PRODUCT_PATH = re.compile(r"/(?:collections/[^/]+/)?products/([^/]+)/?")
+PRODUCT_COUNT = re.compile(r"\s*([0-9]{1,6})\s+artículos?\s*", re.IGNORECASE)
 TRACE_PREFIX = "inventory.yellow_rabbit_listing"
 
 
@@ -23,8 +24,10 @@ class _ListingParser(HTMLParser):
         super().__init__()
         self.product_links: list[str] = []
         self.page_links: list[tuple[str, bool]] = []
+        self.advertised_product_count = 0
         self.grid_depth = 0
         self._pagination_depth = 0
+        self._count_text: list[str] | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attributes = dict(attrs)
@@ -33,6 +36,8 @@ class _ListingParser(HTMLParser):
             self.grid_depth += 1
         if tag == "div" and (self._pagination_depth or "pagination_collection" in classes):
             self._pagination_depth += 1
+        if tag == "p" and "mobile-facets__count" in classes:
+            self._count_text = []
         href = (attributes.get("href") or "").strip()
         explicit_next = tag in {"link", "a"} and "next" in (attributes.get("rel") or "").casefold().split()
         if explicit_next or (tag == "a" and self._pagination_depth and {"item", "link"}.issubset(classes)):
@@ -45,6 +50,15 @@ class _ListingParser(HTMLParser):
             self.grid_depth -= 1
         if tag == "div" and self._pagination_depth:
             self._pagination_depth -= 1
+        if tag == "p" and self._count_text is not None:
+            count = PRODUCT_COUNT.fullmatch("".join(self._count_text))
+            if count is not None:
+                self.advertised_product_count = max(self.advertised_product_count, int(count[1]))
+            self._count_text = None
+
+    def handle_data(self, data: str) -> None:
+        if self._count_text is not None:
+            self._count_text.append(data)
 
 
 def is_yellow_rabbit_store_url(url: str) -> bool:
@@ -66,6 +80,8 @@ def discover_yellow_rabbit_product_urls(
         listing_parts = urlsplit(page_url)
         listing_query = parse_qs(listing_parts.query)
         last_advertised_page = 1
+        advertised_product_count = 0
+        source_products: set[str] = set()
         trace.log(f"{TRACE_PREFIX}.start", source_url=page_url, store_id=store_id)
         for page_number in range(1, MAX_LISTING_PAGES + 1):
             raise_if_cancelled(cancellation_token)
@@ -94,6 +110,8 @@ def discover_yellow_rabbit_product_urls(
             )
             if not page_products or parser.grid_depth:
                 raise RuntimeError(f"Yellow Rabbit listing missing a usable product grid: {fetched.url}")
+            advertised_product_count = max(advertised_product_count, parser.advertised_product_count)
+            source_products.update(page_products)
             for product_url in page_products:
                 products.setdefault(product_url, fetched.url)
 
@@ -111,6 +129,11 @@ def discover_yellow_rabbit_product_urls(
             trace.log(f"{TRACE_PREFIX}.page.completed", source_url=fetched.url, next_url=next_url,
                       page_product_count=len(page_products), product_url_count=len(products), **trace_fields)
             if next_url is None:
+                if len(source_products) < advertised_product_count:
+                    raise RuntimeError(
+                        f"Yellow Rabbit listing advertised {advertised_product_count} products but found "
+                        f"{len(source_products)} unique product URLs: {fetched.url}"
+                    )
                 break
             page_url = next_url
         else:

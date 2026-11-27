@@ -83,12 +83,13 @@ def _payload(product=None, *, errors=None):
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _yellow_rabbit_listing(*product_hrefs, pagination="", next_href=None):
+def _yellow_rabbit_listing(*product_hrefs, pagination="", next_href=None, advertised_count=None):
     next_link = f'<link rel="next" href="{next_href}">' if next_href else ""
     cards = "".join(f'<li><a href="{href}">Product</a></li>' for href in product_hrefs)
+    count_label = f'<p class="mobile-facets__count">{advertised_count} artículos</p>' if advertised_count else ""
     return (
         f'<html><head>{next_link}</head><body><a href="/products/event-ticket">Event ticket</a>'
-        f'<ul id="main-collection-product-grid">{cards}</ul>'
+        f'{count_label}<ul id="main-collection-product-grid">{cards}</ul>'
         f'<div class="pagination_collection clearfix"><div class="parts">{pagination}</div></div>'
         '</body></html>'
     )
@@ -314,6 +315,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                 "https://example.com/products/off-store",
                 "/products/data-only.js",
                 next_href="/collections/juegos-de-mesa-1?page=2",
+                advertised_count=3,
             )),
             collection + "?page=2": FetchResult(collection + "?page=2", _yellow_rabbit_listing("/products/second")),
             board_game: FetchResult(board_game_resolved, _yellow_rabbit_listing(
@@ -322,6 +324,7 @@ class ShopifyStorefrontTests(unittest.TestCase):
                     '<a class="item link" href="/collections/types?page=3&amp;q=Board+Game">3</a>'
                     '<a class="item link" href="/collections/types?page=2&amp;q=Board+Game">2</a>'
                 ),
+                advertised_count=5,
             )),
             board_game_page_2: FetchResult(board_game_page_2, _yellow_rabbit_listing(
                 "/products/second?variant=12", "/collections/types/products/fourth",
@@ -409,6 +412,27 @@ class ShopifyStorefrontTests(unittest.TestCase):
                 signer.assert_not_called()
                 self.assertEqual(repository.exists_checks, [])
                 self.assertEqual(repository.records, [])
+
+    def test_yellow_rabbit_rejects_a_terminal_listing_short_of_its_advertised_product_count(self):
+        store = "https://yellowrabbit.mx"
+        collection = store + "/collections/juegos-de-mesa-1"
+        board_game = store + "/collections/types?q=Board%20Game"
+        pages = {
+            collection: FetchResult(collection, _yellow_rabbit_listing("/products/main-only", "/products/shared")),
+            board_game: FetchResult(board_game, _yellow_rabbit_listing(
+                "/products/shared", "/collections/types/products/SHARED?variant=42", advertised_count=2,
+            )),
+        }
+        repository = DiscoveryRepository(existing_urls={
+            (31, store + "/products/main-only"), (31, store + "/products/shared"),
+        })
+        signer = Mock(return_value={"Signature": "test-signature"})
+        with patch("ludora.product_crawler.fetch_html", side_effect=lambda url, **_: pages[url]):
+            with self.assertRaisesRegex(RuntimeError, r"Yellow Rabbit.*advertised 2 products.*found 1"):
+                collect_store_inventory(store, 31, repository, platform="shopify", request_headers_provider=signer)
+
+        signer.assert_not_called()
+        self.assertEqual(repository.exists_checks, [])
 
     def test_yellow_rabbit_without_shopify_platform_keeps_sitemap_enumeration(self):
         store = "https://yellowrabbit.mx"
