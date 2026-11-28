@@ -304,11 +304,14 @@ export function createOperationsRouter(
       const histogramStoreId = Object.hasOwn(request.query, 'histogram_store_id')
         ? positiveIntegerQueryField(request.query.histogram_store_id, 'histogram_store_id')
         : null;
-      response.json({ data: await readStoreItemUpdateMonitor(
+      const monitor = await readStoreItemUpdateMonitor(
         rangeHours,
         histogramStoreId,
         continuousItemUpdateWorkerManager?.getStatus() ?? 'unavailable'
-      ) });
+      ).catch(() => {
+        throw httpError(503, 'Update Monitor status is temporarily unavailable');
+      });
+      response.json({ data: monitor });
     } catch (error) {
       next(error);
     }

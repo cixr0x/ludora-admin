@@ -4839,6 +4839,27 @@ describe('ludora admin service', () => {
     });
   });
 
+  it.each([
+    ['42P01', 'store_item_update_store_schedules', 'relation "store_item_update_store_schedules" does not exist'],
+    ['42501', 'store_item_update_worker_state', 'permission denied for table store_item_update_worker_state']
+  ])('returns a generic 503 when the monitor live status read fails with %s', async (code, table, message) => {
+    const query = vi.fn<Database['query']>(async (sql) => {
+      if (sql.includes(`from ${table}`)) throw Object.assign(new Error(message), { code });
+      return { rows: [] };
+    });
+    const app = createApp({ database: { query }, operationsClient: idleOperationsClient(), perStoreSchedule: true });
+    const route = '/admin/operations/store-item-update-monitor';
+
+    const invalid = await request(app).get(`${route}?histogram_store_id=0`);
+    expect(invalid.status).toBe(400);
+    expect(invalid.body).toEqual({ error: { message: 'histogram_store_id must be a positive integer' } });
+    expect(query).not.toHaveBeenCalled();
+
+    const unavailable = await request(app).get(route);
+    expect(unavailable.status).toBe(503);
+    expect(unavailable.body).toEqual({ error: { message: 'Update Monitor status is temporarily unavailable' } });
+  });
+
   it('keeps the monitor available after a cold report fails', async () => {
     const reportQuery = vi.fn().mockRejectedValue(new Error('Private database error'));
     const query = vi.fn<Database['query']>((sql) => sql.includes('as staleness_hour')
