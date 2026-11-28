@@ -148,6 +148,54 @@ const monitor: StoreItemUpdateMonitor = {
 };
 
 describe('StoreItemUpdateMonitorPage', () => {
+  it.each(['loading', 'unavailable'] as const)('keeps live status and actions visible with %s totals', async (status) => {
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue({
+      ...monitor,
+      schedule_mode: 'per_store',
+      live_queue: { due_items: 3, scheduled_items: 10, scheduled_later_items: 7, oldest_due_hours: 2, next_due_at: '2026-08-04T18:00:00Z' },
+      report: { status, as_of: null, refreshing: status === 'loading' },
+      summary: null,
+      histogram: [],
+      store_statistics: []
+    });
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    expect(await screen.findByText(/Worker: healthy/)).toBeInTheDocument();
+    expect(screen.getByText(/Beta paused until/)).toBeInTheDocument();
+    expect(screen.getByText(/10 pending store slots.*Earliest pending cursor time/)).toBeInTheDocument();
+    expect(screen.getByText('Due store cursors')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pause automatic updates' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Initialize store schedule' })).toBeEnabled();
+    expect(screen.getByRole('link', { name: 'Catan' })).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(status === 'loading' ? 'Loading totals' : 'Totals are temporarily unavailable');
+    expect(screen.queryByText('Eligible items')).not.toBeInTheDocument();
+    expect(screen.queryByText('No stores with updates enabled')).not.toBeInTheDocument();
+  });
+
+  it('labels stale totals by their observation time and hides the old histogram during filter changes', async () => {
+    const filtered = deferred<StoreItemUpdateMonitor>();
+    const asOf = '2026-08-04T17:55:00Z';
+    const staleMonitor = { ...monitor, report: { status: 'stale' as const, as_of: asOf, refreshing: true } };
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValueOnce(staleMonitor).mockReturnValue(filtered.promise);
+    const user = userEvent.setup();
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    expect(await screen.findByRole('status')).toHaveTextContent('Totals as of');
+    expect(screen.getByRole('status').querySelector('time')).toHaveAttribute('datetime', asOf);
+    expect(screen.getByRole('status')).toHaveTextContent('stale');
+    expect(screen.getByText(/Live status as of/).querySelector('time')).toHaveAttribute('datetime', monitor.generated_at);
+    expect(screen.getByLabelText('24h: 2 items')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('combobox', { name: 'Histogram' }));
+    await user.click(screen.getByRole('option', { name: '72 hours' }));
+    expect(screen.queryByRole('img', { name: 'Store item staleness histogram' })).not.toBeInTheDocument();
+    expect(screen.getByText('Loading the selected histogram…')).toBeInTheDocument();
+    await act(async () => filtered.resolve({ ...staleMonitor, range_hours: 72 }));
+    expect(await screen.findByRole('img', { name: 'Store item staleness histogram' })).toBeInTheDocument();
+  });
+
   it('describes pending per-store cursors and confirms daily initialization without resetting progress', async () => {
     const user = userEvent.setup();
     vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue({ ...monitor, schedule_mode: 'per_store' });
@@ -374,7 +422,7 @@ describe('StoreItemUpdateMonitorPage', () => {
   it('warns when schedule utilization reaches 90 percent', async () => {
     vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue({
       ...monitor,
-      summary: { ...monitor.summary, schedule_utilization_percent: 90 }
+      summary: { ...monitor.summary!, schedule_utilization_percent: 90 }
     });
     vi.spyOn(adminApi, 'getStoreItemUpdateFailureAttempts').mockResolvedValue([]);
 

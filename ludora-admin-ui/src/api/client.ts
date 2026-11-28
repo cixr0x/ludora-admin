@@ -148,7 +148,14 @@ export type StoreItemUpdateMonitor = {
   store_cooldowns: StoreItemUpdateStoreCooldown[];
   range_hours: number;
   recent_attempts: AdminRecord[];
-  summary: StoreItemUpdateMonitorSummary;
+  live_queue?: Pick<StoreItemUpdateMonitorSummary,
+    'due_items' | 'next_due_at' | 'oldest_due_hours' | 'scheduled_items' | 'scheduled_later_items'> | null;
+  report?: {
+    as_of: string | null;
+    refreshing: boolean;
+    status: 'fresh' | 'stale' | 'loading' | 'unavailable';
+  };
+  summary: StoreItemUpdateMonitorSummary | null;
   worker: (AdminRecord & { health: 'healthy' | 'stale' | 'stopped' }) | null;
 };
 

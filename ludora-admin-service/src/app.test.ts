@@ -4754,8 +4754,7 @@ describe('ludora admin service', () => {
         queries.push(normalized);
         if (normalized.includes('from store_item_update_store_schedules')) {
           return { rows: [{
-            eligible_items: 40, scheduled_items: 8, due_items: 2, unscheduled_items: 3,
-            scheduled_later_items: 6, next_due_at: '2026-08-05T11:01:00Z'
+            scheduled_items: 8, due_items: 2, next_due_at: '2026-08-05T11:01:00Z'
           }] };
         }
         if (normalized.includes('as latest_schedule_run')) {
@@ -4779,9 +4778,9 @@ describe('ludora admin service', () => {
     expect(response.body.data).toMatchObject({
       schedule_mode: 'per_store',
       latest_schedule_run: { trigger: 'MANUAL', automatic_schedule_date: null },
-      summary: {
-        due_items: 2, scheduled_items: 8, scheduled_later_items: 6,
-        unscheduled_items: 3, next_due_at: '2026-08-05T11:01:00Z'
+      summary: null,
+      live_queue: {
+        due_items: 2, scheduled_items: 8, scheduled_later_items: 6, next_due_at: '2026-08-05T11:01:00Z'
       }
     });
     const summaryQuery = queries.find((query) => query.includes('from store_item_update_store_schedules'));
@@ -4801,62 +4800,61 @@ describe('ludora admin service', () => {
       latest_automatic_schedule_run: null,
       latest_schedule_attempt: null,
       latest_schedule_run: null,
-      summary: {
-        daily_capacity: 86400,
-        schedule_window_capacity: 82800
-      }
+      summary: null,
+      report: { status: 'loading', as_of: null, refreshing: true }
     });
   });
 
-  it('shares a pending update monitor report and rejects overlapping requests for different filters', async () => {
+  it('serves different filters without waiting for the shared pending update monitor report', async () => {
     let finishQuery!: (result: { rows: unknown[] }) => void;
-    const pendingQuery = new Promise<{ rows: unknown[] }>((resolve) => {
-      finishQuery = resolve;
-    });
-    const query = vi.fn<Database['query']>()
-      .mockReturnValueOnce(pendingQuery)
-      .mockResolvedValue({ rows: [] });
+    const pendingQuery = new Promise<{ rows: unknown[] }>((resolve) => { finishQuery = resolve; });
+    const query = vi.fn<Database['query']>((sql) => sql.includes('as staleness_hour')
+      ? pendingQuery
+      : Promise.resolve({ rows: [] }));
     const app = createApp({ database: { query }, operationsClient: idleOperationsClient() });
     const route = '/admin/operations/store-item-update-monitor';
 
-    const first = request(app).get(route).then((response) => response);
-    await vi.waitFor(() => expect(query).toHaveBeenCalledOnce());
-    const sameFilters = request(app).get(`${route}?hours=48`).then((response) => response);
-    const otherStore = request(app).get(`${route}?hours=48&histogram_store_id=12`);
-    const otherRange = request(app).get(`${route}?hours=72`);
     try {
-      const conflicts = await Promise.all([otherStore, otherRange]);
-      expect(conflicts.map((response) => response.status)).toEqual([409, 409]);
-      expect(query).toHaveBeenCalledOnce();
+      const [original, otherStore, otherRange] = await Promise.all([
+        request(app).get(route),
+        request(app).get(`${route}?hours=48&histogram_store_id=12`),
+        request(app).get(`${route}?hours=72`)
+      ]);
+      expect([original, otherStore, otherRange].map((response) => response.status)).toEqual([200, 200, 200]);
+      expect(original.body.data).toMatchObject({
+        summary: null, report: { status: 'loading', as_of: null, refreshing: true }
+      });
+      expect(otherStore.body.data.histogram_store_id).toBe(12);
+      expect(otherRange.body.data.range_hours).toBe(72);
+      expect(query.mock.calls.filter(([sql]) => sql.includes('as staleness_hour'))).toHaveLength(1);
     } finally {
       finishQuery({ rows: [] });
-      await Promise.all([first, sameFilters]);
     }
 
-    const [original, shared] = await Promise.all([first, sameFilters]);
-    expect(original.status).toBe(200);
-    expect(shared.status).toBe(200);
-    expect(shared.body).toEqual(original.body);
-    expect(query.mock.calls.filter(([sql]) => sql.includes('from store_item_update_worker_state worker'))).toHaveLength(1);
-
-    const retry = await request(app).get(`${route}?hours=72`);
-    expect(retry.status).toBe(200);
-    expect(retry.body.data.range_hours).toBe(72);
+    const next = await request(app).get(route);
+    expect(next.status).toBe(200);
+    expect(next.body.data).toMatchObject({
+      report: { status: 'fresh', as_of: expect.any(String), refreshing: false },
+      summary: { daily_capacity: 86400, schedule_window_capacity: 82800 }
+    });
   });
 
-  it('allows another update monitor report after a pending report fails', async () => {
-    const query = vi.fn<Database['query']>()
-      .mockRejectedValueOnce(new Error('Report failed'))
-      .mockResolvedValue({ rows: [] });
+  it('keeps the monitor available after a cold report fails', async () => {
+    const reportQuery = vi.fn().mockRejectedValue(new Error('Private database error'));
+    const query = vi.fn<Database['query']>((sql) => sql.includes('as staleness_hour')
+      ? reportQuery()
+      : Promise.resolve({ rows: [] }));
     const app = createApp({ database: { query }, operationsClient: idleOperationsClient() });
     const route = '/admin/operations/store-item-update-monitor';
 
+    expect((await request(app).get(route)).status).toBe(200);
     const failure = await request(app).get(route);
-    expect(failure.status).toBe(500);
-    expect(failure.body.error.message).toBe('Report failed');
-
-    const retry = await request(app).get(route);
-    expect(retry.status).toBe(200);
+    expect(failure.status).toBe(200);
+    expect(failure.body.data).toMatchObject({
+      summary: null, report: { status: 'unavailable', as_of: null, refreshing: false }
+    });
+    expect(failure.text).not.toContain('Private database error');
+    expect(reportQuery).toHaveBeenCalledOnce();
   });
 
   it.each(['FAILED', 'RUNNING'] as const)(
@@ -4971,25 +4969,27 @@ describe('ludora admin service', () => {
             }]
           };
         }
-        if (normalizedSql.includes('count(*)::int as eligible_items')) {
-          return {
-            rows: [{
-              attempts_24h: 110,
-              due_items: 12,
-              eligible_items: 100,
-              failures_24h: 10,
-              fresh_items: 92,
-              leased_items: 1,
-              oldest_due_hours: 2.5,
-              oldest_staleness_hours: 29,
-              rate_limited_24h: 3,
-              scheduled_items: 96,
-              scheduled_later_items: 84,
-              stale_items: 8,
-              successes_24h: 100,
-              unscheduled_items: 4
-            }]
-          };
+        if (normalizedSql.includes('as staleness_hour')) {
+          const alpha = { store_id: 12, store_name: 'Alpha', platform: 'shopify' };
+          const beta = { store_id: 13, store_name: 'Beta', platform: 'woocommerce' };
+          return { rows: [
+            {
+              ...alpha, staleness_hour: 0, eligible_items: 9, fresh_items: 9, leased_items: 1,
+              due_items: 12, oldest_due_hours: 2.5, unscheduled_items: 4, scheduled_items: 96,
+              scheduled_later_items: 84
+            },
+            { ...alpha, staleness_hour: 1, eligible_items: 41, fresh_items: 41 },
+            { ...alpha, staleness_hour: 72, eligible_items: 5, stale_items: 5, oldest_staleness_hours: 72 },
+            { ...beta, staleness_hour: 1, eligible_items: 42, fresh_items: 42 },
+            { ...beta, staleness_hour: 28, eligible_items: 3, stale_items: 3, oldest_staleness_hours: 28 },
+            { store_id: 14, store_name: 'Gamma', platform: 'unknown', staleness_hour: 0, eligible_items: 0 }
+          ] };
+        }
+        if (normalizedSql.includes('group by attempts.store_id')) {
+          return { rows: [
+            { store_id: 12, attempts: 40, successes: 37, failures: 3, rate_limited: 3 },
+            { store_id: 16, attempts: 70, successes: 63, failures: 7, rate_limited: 0 }
+          ] };
         }
         if (normalizedSql.includes('from store_item_update_schedule_runs')) {
           return {
@@ -5050,71 +5050,23 @@ describe('ludora admin service', () => {
             ]
           };
         }
-        if (normalizedSql.includes('generate_series')) {
-          return { rows: [{ item_count: 9, overflow: false, staleness_hour: 0 }, { item_count: 8, overflow: true, staleness_hour: 72 }] };
-        }
-        if (normalizedSql.includes('from active_stores stores')) {
-          return {
-            rows: [
-              {
-                attempts: 40,
-                eligible_items: 120,
-                failures: 3,
-                platform: 'shopify',
-                rate_limited: 3,
-                store_id: 12,
-                store_name: 'Alpha',
-                stale_items: 7,
-                success_rate_percent: 92.5,
-                successes: 37
-              },
-              {
-                attempts: 0,
-                eligible_items: 45,
-                failures: 0,
-                platform: 'woocommerce',
-                rate_limited: 0,
-                store_id: 13,
-                store_name: 'Beta',
-                stale_items: 3,
-                success_rate_percent: 0,
-                successes: 0
-              },
-              {
-                attempts: 0,
-                eligible_items: 0,
-                failures: 0,
-                platform: 'unknown',
-                rate_limited: 0,
-                store_id: 14,
-                store_name: 'Gamma',
-                stale_items: 0,
-                success_rate_percent: 0,
-                successes: 0
-              }
-            ]
-          };
-        }
         return { rows: [{ id: 91, status: 'succeeded', store_item_id: 501, store_name: 'Alpha' }] };
       }
     };
 
     const workerManager = idleContinuousItemUpdateWorkerManager('running');
-    const response = await request(createApp({
+    const app = createApp({
       continuousItemUpdateWorkerManager: workerManager,
       database,
       operationsClient: idleOperationsClient()
-    })).get(
-      '/admin/operations/store-item-update-monitor?hours=72&histogram_store_id=12'
-    );
+    });
+    const route = '/admin/operations/store-item-update-monitor?hours=72&histogram_store_id=12';
+    await request(app).get(route);
+    const response = await request(app).get(route);
 
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
       control_status: 'running',
-      histogram: [
-        { item_count: 9, label: '0h', overflow: false, staleness_hour: 0 },
-        { item_count: 8, label: '72h+', overflow: true, staleness_hour: 72 }
-      ],
       histogram_store_id: 12,
       latest_automatic_schedule_run: {
         automatic_schedule_date: '2026-08-04',
@@ -5147,13 +5099,13 @@ describe('ludora admin service', () => {
       store_statistics: [
         {
           attempts: 40,
-          eligible_items: 120,
+          eligible_items: 55,
           failures: 3,
           platform: 'shopify',
           rate_limited: 3,
           store_id: 12,
           store_name: 'Alpha',
-          stale_items: 7,
+          stale_items: 5,
           success_rate_percent: 92.5,
           successes: 37
         },
@@ -5200,43 +5152,41 @@ describe('ludora admin service', () => {
       },
       worker: { health: 'healthy', status: 'idle', worker_id: 'worker-1' }
     });
+    expect(response.body.data.histogram).toHaveLength(73);
+    expect(response.body.data.histogram[0]).toEqual({ item_count: 9, label: '0h', overflow: false, staleness_hour: 0 });
+    expect(response.body.data.histogram[72]).toEqual({ item_count: 5, label: '72h+', overflow: true, staleness_hour: 72 });
     const storeCooldownQuery = normalizeSql(queries.find((query) =>
       normalizeSql(query.sql).includes('from store_item_update_store_cooldown')
     )?.sql ?? '');
     expect(storeCooldownQuery).toContain('join stores on stores.id = cooldown.store_id');
     expect(storeCooldownQuery).toContain("coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform");
-    expect(queries).toHaveLength(7);
-    const histogramQuery = queries.find((query) => normalizeSql(query.sql).includes('generate_series'));
-    expect(histogramQuery?.params).toEqual([72, 12]);
-    expect(normalizeSql(histogramQuery?.sql ?? '')).toContain('store_items.store_id = $2::bigint');
-    const storeStatisticsQuery = queries.find((query) => normalizeSql(query.sql).includes('from active_stores stores'));
-    const storeStatisticsSql = normalizeSql(storeStatisticsQuery?.sql ?? '');
-    expect(storeStatisticsSql).toContain("coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform");
-    expect(storeStatisticsSql).not.toContain('raw_payload');
-    expect(storeStatisticsSql).not.toContain('ilike');
-    expect(storeStatisticsSql).toContain('where stores.update_active = true');
-    const eligibleItemsSql = storeStatisticsSql.match(/eligible_items as \((.*?)\) select stores.id/)?.[1] ?? '';
-    expect(eligibleItemsSql).toContain("count(*) filter (where store_items.refreshed_date < now() - interval '24 hours')::int as stale_items");
-    expect(eligibleItemsSql).toContain('store_items.is_boardgame = true');
-    expect(eligibleItemsSql).toContain('store_items.is_boardgame_confirmed = true');
-    expect(eligibleItemsSql).toContain('store_items.item_id is not null');
-    expect(eligibleItemsSql).toContain("store_items.source_url <> ''");
-    expect(eligibleItemsSql).toContain("store_items.listing_status = 'listed'");
-    expect(eligibleItemsSql).toContain('store_items.store_active = true');
-    expect(eligibleItemsSql).toContain("store_items.availability <> 'unavailable'");
-    expect(eligibleItemsSql).toContain('group by store_items.store_id');
-    expect(storeStatisticsSql).toContain('coalesce(eligible_items.stale_items, 0)::int as stale_items');
-    expect(storeStatisticsSql).toContain('left join eligible_items on eligible_items.store_id = stores.id');
-    expect(storeStatisticsSql).not.toContain('join store_items');
-    expect(storeStatisticsSql).toContain('group by stores.id, stores.name, stores.platform, eligible_items.item_count, eligible_items.stale_items');
-    expect(storeStatisticsSql).toContain('left join store_item_update_attempt_log attempts');
-    expect(storeStatisticsSql).toContain("attempts.started_at >= now() - interval '24 hours'");
-    expect(storeStatisticsSql).toContain('order by failures desc, attempts desc, stores.name asc');
-    expect(storeStatisticsSql).not.toContain('having count(*)');
-    expect(storeStatisticsSql).not.toContain('limit 12');
+    const listingQueries = queries.filter((query) => normalizeSql(query.sql).includes('as staleness_hour'));
+    const attemptQueries = queries.filter((query) => normalizeSql(query.sql).includes('group by attempts.store_id'));
+    expect(listingQueries).toHaveLength(1);
+    expect(attemptQueries).toHaveLength(1);
+    expect(listingQueries[0].params).toEqual([response.body.data.report.as_of]);
+    expect(attemptQueries[0].params).toEqual(listingQueries[0].params);
+    const listingSql = normalizeSql(listingQueries[0].sql);
+    expect(listingSql).toContain("coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform");
+    expect(listingSql).not.toContain('raw_payload');
+    expect(listingSql).not.toContain('ilike');
+    expect(listingSql).toContain('where stores.update_active = true');
+    expect(listingSql).toContain("store_items.refreshed_date < $1::timestamptz - interval '24 hours'");
+    expect(listingSql).toContain('left join store_items on store_items.store_id = stores.id');
+    expect(listingSql).toContain('store_items.is_boardgame = true');
+    expect(listingSql).toContain('store_items.is_boardgame_confirmed = true');
+    expect(listingSql).toContain('store_items.item_id is not null');
+    expect(listingSql).toContain("store_items.source_url <> ''");
+    expect(listingSql).toContain("store_items.listing_status = 'listed'");
+    expect(listingSql).toContain('store_items.store_active = true');
+    expect(listingSql).toContain("store_items.availability <> 'unavailable'");
+    expect(listingSql).toContain('group by stores.id, stores.name, stores.platform, staleness_hour');
+    const attemptSql = normalizeSql(attemptQueries[0].sql);
+    expect(attemptSql).toContain("attempts.started_at >= $1::timestamptz - interval '24 hours'");
+    expect(attemptSql).toContain('order by attempts.completed_at desc');
   });
 
-  it('uses the same verified sitemap enrollment in all update queue statistics', async () => {
+  it('includes verified sitemap recovery in the shared listing totals', async () => {
     const queries: Array<{ sql: string; params?: unknown[] }> = [];
     const database: Database = {
       close: async () => {},
@@ -5255,13 +5205,9 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(200);
     const eligibleQueries = queries.filter(({ sql }) => sql.includes("store_items.availability <> 'unavailable'"));
-    expect(eligibleQueries).toHaveLength(3);
-    expect(eligibleQueries.map(({ params }) => params)).toEqual([[['17']], [72, null, ['17']], [['17']]]);
-    expect(eligibleQueries.map(({ sql }) => sql)).toEqual([
-      expect.stringContaining('store_items.store_id = any($1::bigint[])'),
-      expect.stringContaining('store_items.store_id = any($3::bigint[])'),
-      expect.stringContaining('store_items.store_id = any($1::bigint[])')
-    ]);
+    expect(eligibleQueries).toHaveLength(1);
+    expect(eligibleQueries[0].params).toEqual([expect.any(String), ['17']]);
+    expect(eligibleQueries[0].sql).toContain('store_items.store_id = any($2::bigint[])');
   });
 
   it('pauses and resumes the continuous automatic update worker', async () => {

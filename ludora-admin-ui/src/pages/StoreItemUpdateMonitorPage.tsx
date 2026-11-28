@@ -198,6 +198,10 @@ export function StoreItemUpdateMonitorPage() {
   }
 
   const summary = monitor?.summary;
+  const queue = monitor?.live_queue ?? summary;
+  const report = monitor?.report;
+  const histogramMatchesFilters = monitor?.range_hours === hours && monitor.histogram_store_id === (histogramStoreId || null);
+  const totalsUnavailable = report?.status === 'unavailable';
   const worker = monitor?.worker;
   const workerHealth = worker ? recordText(worker, 'health') : 'not started';
   const controlStatus = monitor?.control_status ?? 'unavailable';
@@ -213,40 +217,46 @@ export function StoreItemUpdateMonitorPage() {
   const latestScheduleRun = monitor?.latest_schedule_run;
   const latestScheduleAttempt = monitor?.latest_schedule_attempt;
   const latestAutomaticScheduleRun = monitor?.latest_automatic_schedule_run;
-  const metrics = summary
-    ? [
-        { label: 'Eligible items', value: formatInteger(summary.eligible_items), note: 'Listed confirmed items at stores with updates enabled' },
-        {
-          label: perStoreSchedule ? 'Due store cursors' : 'Due now',
-          value: formatInteger(summary.due_items),
-          note: `${formatInteger(summary.leased_items)} currently leased`
-        },
-        { label: 'Fresh under 24h', value: `${summary.fresh_percent.toFixed(1)}%`, note: `${formatInteger(summary.stale_items)} stale items` },
-        {
-          label: 'Oldest staleness',
-          value: formatHours(summary.oldest_staleness_hours),
-          note: `${perStoreSchedule ? 'Oldest pending cursor' : 'Oldest overdue'}: ${formatHours(summary.oldest_due_hours)}`
-        },
-        { label: 'Successful / 24h', value: formatInteger(summary.successes_24h), note: `${summary.success_rate_percent.toFixed(1)}% success rate` },
-        { label: 'Failed / 24h', value: formatInteger(summary.failures_24h), note: `${formatInteger(summary.rate_limited_24h)} HTTP 429 responses` },
-        {
-          label: perStoreSchedule ? 'Pending store slots' : 'Scheduled items',
-          value: formatInteger(summary.scheduled_items),
-          note: `Across the ${summary.schedule_window_hours}-hour window`
-        },
-        {
-          label: perStoreSchedule ? 'Other pending slots' : 'Scheduled later',
-          value: formatInteger(summary.scheduled_later_items),
-          note: perStoreSchedule ? 'Pending slots beyond the due store cursors' : 'Scheduled after the current due queue'
-        },
-        {
-          label: perStoreSchedule ? 'Items without a store schedule' : 'Unscheduled items',
-          value: formatInteger(summary.unscheduled_items),
-          note: perStoreSchedule ? 'Eligible items at stores without a cursor' : 'Eligible items without a scheduled refresh'
-        },
-        { label: 'Schedule capacity', value: formatInteger(summary.schedule_window_capacity), note: `${summary.schedule_utilization_percent.toFixed(1)}% schedule utilization` }
-      ]
-    : [];
+  const metrics = [
+    ...(queue ? [
+      {
+        label: perStoreSchedule ? 'Due store cursors' : 'Due now',
+        value: formatInteger(queue.due_items),
+        note: perStoreSchedule
+          ? `Oldest pending cursor: ${formatHours(queue.oldest_due_hours)}`
+          : `${formatInteger(summary?.leased_items ?? 0)} leased in this report`
+      },
+      {
+        label: perStoreSchedule ? 'Pending store slots' : 'Scheduled items',
+        value: formatInteger(queue.scheduled_items),
+        note: perStoreSchedule ? 'In the current window' : `Across the ${summary?.schedule_window_hours}-hour window`
+      },
+      {
+        label: perStoreSchedule ? 'Other pending slots' : 'Scheduled later',
+        value: formatInteger(queue.scheduled_later_items),
+        note: perStoreSchedule ? 'Pending slots beyond the due store cursors' : 'Scheduled after the current due queue'
+      }
+    ] : []),
+    ...(summary ? [
+      { label: 'Eligible items', value: formatInteger(summary.eligible_items), note: 'Listed confirmed items at stores with updates enabled' },
+      { label: 'Fresh under 24h', value: `${summary.fresh_percent.toFixed(1)}%`, note: `${formatInteger(summary.stale_items)} stale items` },
+      {
+        label: 'Oldest staleness',
+        value: formatHours(summary.oldest_staleness_hours),
+        note: perStoreSchedule
+          ? `${formatInteger(summary.leased_items)} leased in this report`
+          : `Oldest overdue: ${formatHours(summary.oldest_due_hours)}`
+      },
+      { label: 'Successful / 24h', value: formatInteger(summary.successes_24h), note: `${summary.success_rate_percent.toFixed(1)}% success rate` },
+      { label: 'Failed / 24h', value: formatInteger(summary.failures_24h), note: `${formatInteger(summary.rate_limited_24h)} HTTP 429 responses` },
+      {
+        label: perStoreSchedule ? 'Items without a store schedule' : 'Unscheduled items',
+        value: formatInteger(summary.unscheduled_items),
+        note: perStoreSchedule ? 'Eligible items at stores without a cursor' : 'Eligible items without a scheduled refresh'
+      },
+      { label: 'Schedule capacity', value: formatInteger(summary.schedule_window_capacity), note: `${summary.schedule_utilization_percent.toFixed(1)}% schedule utilization` }
+    ] : [])
+  ];
 
   return (
     <Stack spacing={3}>
@@ -354,13 +364,16 @@ export function StoreItemUpdateMonitorPage() {
             Latest schedule attempt failed: {latestScheduleAttempt.error_detail.slice(0, 2000)}
           </Alert>
         ) : null}
-        {summary ? (
+        {perStoreSchedule && queue ? (
           <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
-            {perStoreSchedule
-              ? `${formatInteger(summary.scheduled_items)} pending store slots in the current window. `
-                + `Earliest pending cursor time: ${summary.next_due_at ? formatScheduleDate(summary.next_due_at) : 'none'}. `
-                + 'Counts and times include elapsed slots awaiting processing and stores on cooldown.'
-              : <>{formatInteger(summary.scheduled_items)} scheduled items across a {summary.schedule_window_hours}-hour scheduling window; {formatInteger(summary.unscheduled_items)} unscheduled.</>}
+            {`${formatInteger(queue.scheduled_items)} pending store slots in the current window. `
+              + `Earliest pending cursor time: ${queue.next_due_at ? formatScheduleDate(queue.next_due_at) : 'none'}. `
+              + 'Counts and times include elapsed slots awaiting processing and stores on cooldown.'}
+          </Typography>
+        ) : summary ? (
+          <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
+            {formatInteger(summary.scheduled_items)} scheduled items across a {summary.schedule_window_hours}-hour scheduling window
+            {' '}with {formatInteger(summary.unscheduled_items)} unscheduled.
           </Typography>
         ) : null}
       </Paper>
@@ -371,6 +384,22 @@ export function StoreItemUpdateMonitorPage() {
             ? `Schedule capacity is fully utilized or exceeded at ${summary.schedule_utilization_percent.toFixed(1)}% of the ${summary.schedule_window_hours}-hour window.`
             : `Schedule utilization is at ${summary.schedule_utilization_percent.toFixed(1)}% of the ${summary.schedule_window_hours}-hour window.`}
         </Alert>
+      ) : null}
+
+      {monitor ? (
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={{ xs: 0.5, sm: 2 }}>
+          <Typography color="text.secondary" variant="body2">
+            Live status as of <time dateTime={monitor.generated_at}>{formatDate(monitor.generated_at)}</time>
+          </Typography>
+          {report ? (
+            <Typography color="text.secondary" role="status" variant="body2">
+              {report.as_of ? (
+                <>Totals as of <time dateTime={report.as_of}>{formatDate(report.as_of)}</time>
+                  {report.status === 'stale' ? (report.refreshing ? ' (stale, refreshing)' : ' (stale)') : ''}</>
+              ) : totalsUnavailable ? 'Totals are temporarily unavailable.' : 'Loading totals…'}
+            </Typography>
+          ) : null}
+        </Stack>
       ) : null}
 
       <Box sx={{ display: 'grid', gap: 2, gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))' }}>
@@ -411,22 +440,34 @@ export function StoreItemUpdateMonitorPage() {
                 })}
               </Select>
             </FormControl>
-            <Typography color="text.secondary" variant="caption">
-              Updated {monitor ? formatDate(monitor.generated_at) : '-'}
-            </Typography>
+            {!monitor?.report && monitor ? (
+              <Typography color="text.secondary" variant="caption">
+                Updated {formatDate(monitor.generated_at)}
+              </Typography>
+            ) : null}
           </Stack>
         </Stack>
-        <StalenessHistogram buckets={monitor?.histogram ?? []} />
+        {summary && histogramMatchesFilters ? (
+          <StalenessHistogram buckets={monitor.histogram} />
+        ) : (
+          <Typography color="text.secondary" sx={{ mt: 2 }} variant="body2">
+            {summary && loading ? 'Loading the selected histogram…'
+              : summary ? 'The selected histogram is unavailable.'
+              : totalsUnavailable || error ? 'Staleness totals are temporarily unavailable.' : 'Loading staleness totals…'}
+          </Typography>
+        )}
       </Paper>
 
       <Stack spacing={3}>
         <Paper sx={{ overflow: 'hidden' }} variant="outlined">
           <Box sx={{ p: 2 }}>
             <Typography variant="h6">Store update statistics · last 24h</Typography>
-            <Typography color="text.secondary" variant="body2">
-              All {monitor?.store_statistics.length ?? 0} stores with updates enabled, including stores with no attempts or no failures during the period.
-              {' '}Products and stale items reflect current eligible inventory; stale items were last refreshed more than 24h ago.
-            </Typography>
+            {summary ? (
+              <Typography color="text.secondary" variant="body2">
+                All {monitor?.store_statistics.length} stores with updates enabled, including stores with no attempts or no failures during the period.
+                {' '}Stale items were last refreshed more than 24h before the totals were calculated.
+              </Typography>
+            ) : null}
           </Box>
           <TableContainer sx={{ maxHeight: 520 }}>
             <Table size="small" stickyHeader>
@@ -471,7 +512,11 @@ export function StoreItemUpdateMonitorPage() {
                     </TableCell>
                   </TableRow>
                 ))}
-                {!monitor?.store_statistics.length ? <EmptyRow columns={11} label="No stores with updates enabled" /> : null}
+                {!summary ? (
+                  <EmptyRow columns={11} label={totalsUnavailable || error ? 'Store totals are temporarily unavailable.' : 'Loading store totals…'} />
+                ) : !monitor?.store_statistics.length ? (
+                  <EmptyRow columns={11} label="No stores with updates enabled" />
+                ) : null}
               </TableBody>
             </Table>
           </TableContainer>

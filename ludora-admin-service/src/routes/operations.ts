@@ -1,21 +1,14 @@
-import { storeItemUpdateAvailabilitySql } from '../storeItemUpdateEligibility.js';
 import { randomUUID } from 'node:crypto';
 
 import { Router } from 'express';
 
 import type { Database } from '../db.js';
-import type {
-  ContinuousItemUpdateWorkerControlStatus,
-  ContinuousItemUpdateWorkerManager
-} from '../continuousItemUpdateWorkerManager.js';
+import type { ContinuousItemUpdateWorkerManager } from '../continuousItemUpdateWorkerManager.js';
 import type { DiscoveryOperationsClient, ItemDiscoveryRunScope, ItemUpdateRunScope } from '../discoveryOperations.js';
 import type { ExternalCoverImageOptimizerOptions, ExternalCoverImageOptimizerResult } from '../externalCoverImageOptimizer.js';
 import type { StoreItemUpdateScheduleManager } from '../storeItemUpdateScheduleManager.js';
-import {
-  PER_STORE_RUN_PREDICATE,
-  STORE_ITEM_UPDATE_SCHEDULE_WINDOW_HOURS,
-  StoreItemUpdateScheduleConflictError
-} from '../storeItemUpdateScheduleService.js';
+import { createStoreItemUpdateMonitor } from '../storeItemUpdateMonitor.js';
+import { StoreItemUpdateScheduleConflictError } from '../storeItemUpdateScheduleService.js';
 
 type SortDirection = 'asc' | 'desc';
 
@@ -156,11 +149,7 @@ export function createOperationsRouter(
 ): Router {
   const router = Router();
   let latestExternalCoverImageOptimizationRun: ExternalCoverImageOptimizationRun | null = null;
-  let pendingMonitor: {
-    rangeHours: number;
-    histogramStoreId: number | null;
-    report: ReturnType<typeof loadStoreItemUpdateMonitor>;
-  } | null = null;
+  const readStoreItemUpdateMonitor = createStoreItemUpdateMonitor(database, verifiedSitemapStoreIds, perStoreSchedule);
 
   router.post('/admin/operations/store-discovery-runs', async (_request, response, next) => {
     try {
@@ -315,23 +304,11 @@ export function createOperationsRouter(
       const histogramStoreId = Object.hasOwn(request.query, 'histogram_store_id')
         ? positiveIntegerQueryField(request.query.histogram_store_id, 'histogram_store_id')
         : null;
-      if (pendingMonitor && (pendingMonitor.rangeHours !== rangeHours || pendingMonitor.histogramStoreId !== histogramStoreId)) {
-        throw httpError(409, 'An update monitor report is already running. Try again when it finishes.');
-      }
-      if (!pendingMonitor) {
-        const report = loadStoreItemUpdateMonitor(
-          database,
-          rangeHours,
-          histogramStoreId,
-          continuousItemUpdateWorkerManager?.getStatus() ?? 'unavailable',
-          verifiedSitemapStoreIds,
-          perStoreSchedule
-        ).finally(() => {
-          pendingMonitor = null;
-        });
-        pendingMonitor = { rangeHours, histogramStoreId, report };
-      }
-      response.json({ data: await pendingMonitor.report });
+      response.json({ data: await readStoreItemUpdateMonitor(
+        rangeHours,
+        histogramStoreId,
+        continuousItemUpdateWorkerManager?.getStatus() ?? 'unavailable'
+      ) });
     } catch (error) {
       next(error);
     }
@@ -542,350 +519,6 @@ export function createOperationsRouter(
   });
 
   return router;
-}
-
-const PER_STORE_QUEUE_CTE = `, store_cursors as (
-       select schedule.store_id, schedule.next_due_at, schedule.eligible_item_count - schedule.next_slot_index as remaining_slots
-       from store_item_update_store_schedules schedule
-       join stores on stores.id = schedule.store_id
-       where stores.update_active = true and schedule.window_start <= now() and schedule.window_end > now()
-     ), store_queue as (
-       select coalesce(sum(remaining_slots), 0)::int as scheduled_items,
-              count(*) filter (where next_due_at <= now())::int as due_items,
-              coalesce(max(extract(epoch from (now() - next_due_at)) / 3600)
-                filter (where next_due_at <= now()), 0)::float8 as oldest_due_hours,
-              min(next_due_at) as next_due_at
-       from store_cursors
-     )`;
-
-const PER_STORE_QUEUE_SUMMARY = `
-       count(*) filter (where not exists (
-         select 1 from store_cursors where store_cursors.store_id = eligible.store_id
-       ))::int as unscheduled_items,
-       (select scheduled_items from store_queue) as scheduled_items,
-       (select scheduled_items - due_items from store_queue) as scheduled_later_items,
-       (select due_items from store_queue) as due_items,
-       (select oldest_due_hours from store_queue) as oldest_due_hours,
-       (select next_due_at from store_queue) as next_due_at,`;
-
-const LEGACY_QUEUE_SUMMARY = `
-       count(*) filter (where next_update_at is null)::int as unscheduled_items,
-       count(*) filter (where next_update_at is not null)::int as scheduled_items,
-       count(*) filter (where next_update_at > now())::int as scheduled_later_items,
-       count(*) filter (where next_update_at <= now())::int as due_items,
-       coalesce(max(extract(epoch from (now() - next_update_at)) / 3600)
-         filter (where next_update_at <= now()), 0)::float8 as oldest_due_hours,
-       min(next_update_at) as next_due_at,`;
-
-function publicScheduleRun(value: unknown): unknown {
-  if (!value || typeof value !== 'object') {
-    return value ?? null;
-  }
-  const row = value as Record<string, unknown>;
-  if (row.trigger === 'STORE_MANUAL') {
-    return { ...row, trigger: 'MANUAL', automatic_schedule_date: null };
-  }
-  return row.trigger === 'STORE_AUTOMATIC' ? { ...row, trigger: 'AUTOMATIC' } : row;
-}
-
-async function loadStoreItemUpdateMonitor(
-  database: Database,
-  rangeHours: number,
-  histogramStoreId: number | null,
-  controlStatus: ContinuousItemUpdateWorkerControlStatus | 'unavailable',
-  verifiedSitemapStoreIds: readonly string[],
-  perStoreSchedule: boolean
-) {
-  const workerResult = await database.query(
-    `select
-       worker.worker_name, worker.worker_id, worker.status, worker.poll_seconds,
-       worker.heartbeat_at, worker.started_at, worker.current_store_item_id,
-       current_item.update_lease_expires_at as current_lease_expires_at,
-       worker.last_attempt_at, worker.last_success_at, worker.last_failure_at,
-       worker.last_error, worker.updated_at
-     from store_item_update_worker_state worker
-     left join store_items current_item on current_item.id = worker.current_store_item_id
-     where worker.worker_name = 'continuous'`
-  );
-  const workerRow = workerResult.rows[0] as Record<string, unknown> | undefined;
-  const pollSeconds = workerRow ? numberField(workerRow, 'poll_seconds') || 1 : 1;
-
-  const storeCooldownsResult = await database.query(
-    `select
-       cooldown.store_id,
-       stores.name as store_name,
-       coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform,
-       cooldown.blocked_until,
-       cooldown.consecutive_429s,
-       (cooldown.blocked_until > now()) as active
-     from store_item_update_store_cooldown cooldown
-     join stores on stores.id = cooldown.store_id
-     where cooldown.worker_name = 'continuous'
-     order by stores.name, cooldown.store_id`
-  );
-
-  const includeRecovery = verifiedSitemapStoreIds.length > 0;
-  const availability = storeItemUpdateAvailabilitySql(includeRecovery ? 1 : undefined);
-  const availabilityParams = includeRecovery ? [verifiedSitemapStoreIds] : undefined;
-  const summaryResult = await database.query(
-    `with eligible as (
-       select store_items.*
-       from store_items
-       join stores on stores.id = store_items.store_id
-       where stores.update_active = true
-         and store_items.is_boardgame = true
-         and store_items.is_boardgame_confirmed = true
-         and store_items.item_id is not null
-         and store_items.source_url <> ''
-         and store_items.listing_status = 'LISTED'
-         and store_items.store_active = true
-         and ${availability}
-     )${perStoreSchedule ? PER_STORE_QUEUE_CTE : ''}
-     select
-       count(*)::int as eligible_items,
-       ${perStoreSchedule ? PER_STORE_QUEUE_SUMMARY : LEGACY_QUEUE_SUMMARY}
-       count(*) filter (where refreshed_date >= now() - interval '24 hours')::int as fresh_items,
-       count(*) filter (where refreshed_date < now() - interval '24 hours')::int as stale_items,
-       count(*) filter (
-         where update_lease_token is not null and update_lease_expires_at > now()
-       )::int as leased_items,
-       coalesce(max(extract(epoch from (now() - refreshed_date)) / 3600), 0)::float8 as oldest_staleness_hours,
-       (select count(*)::int
-        from store_item_update_attempt_log
-        where started_at >= now() - interval '24 hours') as attempts_24h,
-       (select count(*)::int
-        from store_item_update_attempt_log
-        where started_at >= now() - interval '24 hours'
-          and status in ('succeeded', 'deactivated')) as successes_24h,
-       (select count(*)::int
-        from store_item_update_attempt_log
-        where started_at >= now() - interval '24 hours'
-          and status in ('failed', 'lease_lost')) as failures_24h,
-       (select count(*)::int
-        from store_item_update_attempt_log
-        where started_at >= now() - interval '24 hours'
-          and http_status = 429) as rate_limited_24h
-     from eligible`,
-    availabilityParams
-  );
-  const summaryRow = (summaryResult.rows[0] ?? {}) as Record<string, unknown>;
-  const eligibleItems = numberField(summaryRow, 'eligible_items');
-  const freshItems = numberField(summaryRow, 'fresh_items');
-  const successes24h = numberField(summaryRow, 'successes_24h');
-  const failures24h = numberField(summaryRow, 'failures_24h');
-  const completed24h = successes24h + failures24h;
-  const dailyCapacity = 86_400 / pollSeconds;
-  const projectedDailyDemand = eligibleItems;
-  const scheduleWindowHours = STORE_ITEM_UPDATE_SCHEDULE_WINDOW_HOURS;
-  const scheduleWindowCapacity = Math.floor((scheduleWindowHours * 3_600) / pollSeconds);
-  const scheduleUtilizationPercent = scheduleWindowCapacity > 0
-    ? (eligibleItems / scheduleWindowCapacity) * 100
-    : 0;
-
-  const scheduleRunPredicate = perStoreSchedule ? PER_STORE_RUN_PREDICATE : "trigger in ('AUTOMATIC', 'MANUAL')";
-  const automaticTrigger = perStoreSchedule ? 'STORE_AUTOMATIC' : 'AUTOMATIC';
-  const scheduleRunsResult = await database.query(
-    `select
-       (select row_to_json(latest_run) from (
-         select * from store_item_update_schedule_runs
-         where status = 'COMPLETED' and ${scheduleRunPredicate}
-         order by completed_at desc, id desc limit 1
-       ) latest_run) as latest_schedule_run,
-       (select row_to_json(latest_attempt) from (
-         select * from store_item_update_schedule_runs
-         where ${scheduleRunPredicate}
-         order by started_at desc, id desc limit 1
-       ) latest_attempt) as latest_schedule_attempt,
-       (select row_to_json(latest_automatic) from (
-         select * from store_item_update_schedule_runs
-         where trigger = '${automaticTrigger}' and status = 'COMPLETED'
-         order by automatic_schedule_date desc, id desc limit 1
-       ) latest_automatic) as latest_automatic_schedule_run`
-  );
-  const scheduleRunsRow = (scheduleRunsResult.rows[0] ?? {}) as Record<string, unknown>;
-
-  const histogramResult = await database.query(
-    `with eligible as (
-       select greatest(0, floor(extract(epoch from (now() - store_items.refreshed_date)) / 3600))::int as staleness_hour
-       from store_items
-       join stores on stores.id = store_items.store_id
-       where stores.update_active = true
-         and ($2::bigint is null or store_items.store_id = $2::bigint)
-         and store_items.is_boardgame = true
-         and store_items.is_boardgame_confirmed = true
-         and store_items.item_id is not null
-         and store_items.source_url <> ''
-         and store_items.listing_status = 'LISTED'
-         and store_items.store_active = true
-         and ${storeItemUpdateAvailabilitySql(includeRecovery ? 3 : undefined)}
-     ), hourly as (
-       select staleness_hour, count(*)::int as item_count
-       from eligible
-       where staleness_hour < $1
-       group by staleness_hour
-     )
-     select hours.hour as staleness_hour, coalesce(hourly.item_count, 0)::int as item_count, false as overflow
-     from generate_series(0, $1 - 1) hours(hour)
-     left join hourly on hourly.staleness_hour = hours.hour
-     union all
-     select $1, count(*)::int, true
-     from eligible
-     where staleness_hour >= $1
-     order by staleness_hour`,
-    includeRecovery ? [rangeHours, histogramStoreId, verifiedSitemapStoreIds] : [rangeHours, histogramStoreId]
-  );
-
-  const storeStatisticsResult = await database.query(
-    `with active_stores as (
-       select
-         stores.id,
-         stores.name,
-         coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown') as platform
-       from stores
-       where stores.update_active = true
-     ), eligible_items as (
-       select
-         store_items.store_id,
-         count(*)::int as item_count,
-         count(*) filter (where store_items.refreshed_date < now() - interval '24 hours')::int as stale_items
-       from store_items
-       where store_items.is_boardgame = true
-         and store_items.is_boardgame_confirmed = true
-         and store_items.item_id is not null
-         and store_items.source_url <> ''
-         and store_items.listing_status = 'LISTED'
-         and store_items.store_active = true
-         and ${availability}
-       group by store_items.store_id
-     )
-     select
-       stores.id as store_id,
-       stores.name as store_name,
-       stores.platform,
-       coalesce(eligible_items.item_count, 0)::int as eligible_items,
-       coalesce(eligible_items.stale_items, 0)::int as stale_items,
-       count(attempts.id)::int as attempts,
-       count(attempts.id) filter (
-         where attempts.status in ('succeeded', 'deactivated')
-       )::int as successes,
-       count(attempts.id) filter (
-         where attempts.status in ('failed', 'lease_lost')
-       )::int as failures,
-       count(attempts.id) filter (where attempts.http_status = 429)::int as rate_limited,
-       case when count(attempts.id) filter (
-         where attempts.status in ('succeeded', 'deactivated', 'failed', 'lease_lost')
-       ) > 0 then round(
-         100.0 * count(attempts.id) filter (
-           where attempts.status in ('succeeded', 'deactivated')
-         ) / count(attempts.id) filter (
-           where attempts.status in ('succeeded', 'deactivated', 'failed', 'lease_lost')
-         ),
-         1
-       )::float8 else 0::float8 end as success_rate_percent,
-       max(attempts.started_at) as last_attempt_at,
-       max(attempts.completed_at) filter (
-         where attempts.status in ('failed', 'lease_lost')
-       ) as last_failure_at,
-       (array_agg(attempts.error order by attempts.completed_at desc) filter (
-         where attempts.status in ('failed', 'lease_lost')
-       ))[1] as last_error
-     from active_stores stores
-     left join eligible_items on eligible_items.store_id = stores.id
-     left join store_item_update_attempt_log attempts
-       on attempts.store_id = stores.id
-      and attempts.started_at >= now() - interval '24 hours'
-     group by stores.id, stores.name, stores.platform, eligible_items.item_count, eligible_items.stale_items
-     order by failures desc, attempts desc, stores.name asc`,
-    availabilityParams
-  );
-
-  const recentAttemptsResult = await database.query(
-    `select
-       attempts.id, attempts.store_item_id, attempts.store_id,
-       coalesce(stores.name, 'Unknown store') as store_name,
-       store_items.title as store_item_title, attempts.platform, attempts.status,
-       attempts.changed, attempts.http_status, attempts.error, attempts.started_at,
-       attempts.completed_at, attempts.duration_ms
-     from store_item_update_attempt_log attempts
-     join store_items on store_items.id = attempts.store_item_id
-     left join stores on stores.id = attempts.store_id
-     order by attempts.started_at desc
-     limit 25`
-  );
-
-  return {
-    control_status: controlStatus,
-    ...(perStoreSchedule ? { schedule_mode: 'per_store' } : {}),
-    store_statistics: storeStatisticsResult.rows,
-    generated_at: new Date().toISOString(),
-    histogram: histogramResult.rows.map((row) => {
-      const record = row as Record<string, unknown>;
-      const stalenessHour = numberField(record, 'staleness_hour');
-      return {
-        item_count: numberField(record, 'item_count'),
-        label: record.overflow ? `${stalenessHour}h+` : `${stalenessHour}h`,
-        overflow: Boolean(record.overflow),
-        staleness_hour: stalenessHour
-      };
-    }),
-    histogram_store_id: histogramStoreId,
-    latest_automatic_schedule_run: publicScheduleRun(scheduleRunsRow.latest_automatic_schedule_run),
-    latest_schedule_attempt: publicScheduleRun(scheduleRunsRow.latest_schedule_attempt),
-    latest_schedule_run: publicScheduleRun(scheduleRunsRow.latest_schedule_run),
-    store_cooldowns: storeCooldownsResult.rows.map((row) => {
-      const record = row as Record<string, unknown>;
-      return {
-        ...record,
-        active: record.active === true,
-        store_id: numberField(record, 'store_id')
-      };
-    }),
-    range_hours: rangeHours,
-    recent_attempts: recentAttemptsResult.rows,
-    summary: {
-      attempts_24h: numberField(summaryRow, 'attempts_24h'),
-      daily_capacity: Math.floor(dailyCapacity),
-      due_items: numberField(summaryRow, 'due_items'),
-      eligible_items: eligibleItems,
-      failures_24h: failures24h,
-      fresh_items: freshItems,
-      fresh_percent: eligibleItems > 0 ? (freshItems / eligibleItems) * 100 : 100,
-      leased_items: numberField(summaryRow, 'leased_items'),
-      next_due_at: summaryRow.next_due_at ?? null,
-      oldest_due_hours: numberField(summaryRow, 'oldest_due_hours'),
-      oldest_staleness_hours: numberField(summaryRow, 'oldest_staleness_hours'),
-      projected_daily_demand: projectedDailyDemand,
-      projected_utilization_percent: dailyCapacity > 0 ? (projectedDailyDemand / dailyCapacity) * 100 : 0,
-      rate_limited_24h: numberField(summaryRow, 'rate_limited_24h'),
-      scheduled_items: numberField(summaryRow, 'scheduled_items'),
-      scheduled_later_items: numberField(summaryRow, 'scheduled_later_items'),
-      schedule_utilization_percent: scheduleUtilizationPercent,
-      schedule_window_capacity: scheduleWindowCapacity,
-      schedule_window_hours: scheduleWindowHours,
-      stale_items: numberField(summaryRow, 'stale_items'),
-      success_rate_percent: completed24h > 0 ? (successes24h / completed24h) * 100 : 100,
-      successes_24h: successes24h,
-      unscheduled_items: numberField(summaryRow, 'unscheduled_items')
-    },
-    worker: workerRow
-      ? {
-          ...workerRow,
-          health: workerHealth(workerRow, pollSeconds)
-        }
-      : null
-  };
-}
-
-function workerHealth(worker: Record<string, unknown>, pollSeconds: number): 'healthy' | 'stale' | 'stopped' {
-  if (worker.status === 'stopped') {
-    return 'stopped';
-  }
-  if (worker.status === 'error') {
-    return 'stale';
-  }
-  const heartbeatAt = new Date(String(worker.heartbeat_at ?? '')).getTime();
-  const maximumAgeMs = Math.max(30, pollSeconds * 3) * 1_000;
-  return Number.isFinite(heartbeatAt) && Date.now() - heartbeatAt <= maximumAgeMs ? 'healthy' : 'stale';
 }
 
 function parseEmbeddingRefreshMode(body: unknown): 'full' | 'missing' {
