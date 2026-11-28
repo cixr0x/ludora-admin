@@ -5,6 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadConfig } from './config.js';
 
 describe('loadConfig', () => {
+  it('only opts into the per-store schedule when configured', () => {
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_PER_STORE', undefined);
+    expect(loadConfig().continuousItemUpdateWorker.perStoreSchedule).toBe(false);
+    vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_PER_STORE', 'true');
+    expect(loadConfig().continuousItemUpdateWorker.perStoreSchedule).toBe(true);
+  });
+
+
   it('defaults browser fetch watchdog to 120 seconds and accepts a positive override', () => {
     vi.stubEnv('LUDORA_DISCOVERY_BROWSER_FETCH_TIMEOUT_SECONDS', undefined);
     expect(loadConfig().discoveryRunner.browserFetchTimeoutSeconds).toBe(120);
@@ -252,6 +260,7 @@ describe('loadConfig', () => {
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_LEASE_SECONDS', '300');
     vi.stubEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_ITEM_TIMEOUT_SECONDS', '120');
     expect(loadConfig().continuousItemUpdateWorker).toEqual({
+      perStoreSchedule: false,
       concurrency: 1,
       enabled: true,
       itemTimeoutSeconds: 120,

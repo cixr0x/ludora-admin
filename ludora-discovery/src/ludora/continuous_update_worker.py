@@ -81,6 +81,7 @@ def run_continuous_update_worker(
     poll_seconds: float = 1.0,
     lease_seconds: int = 300,
     concurrency: int = MAX_CONCURRENCY,
+    per_store_schedule: bool = False,
     stop_event: threading.Event | None = None,
 ) -> None:
     current_env = env if env is not None else os.environ
@@ -105,6 +106,7 @@ def run_continuous_update_worker(
                 lease_seconds=lease_seconds,
                 poll_seconds=poll_seconds,
                 concurrency=concurrency,
+                per_store_schedule=per_store_schedule,
                 stop_event=resolved_stop_event,
             )
             return
@@ -124,6 +126,7 @@ def _run_worker_session(
     poll_seconds: float,
     concurrency: int,
     stop_event: threading.Event,
+    per_store_schedule: bool = False,
 ) -> None:
     worker_id = str(uuid.uuid4())
     run_id = f"continuous:{worker_id}"
@@ -263,6 +266,7 @@ def _run_worker_session(
                 concurrency=concurrency,
                 stop_event=stop_event,
                 verified_sitemap_store_ids=sitemap_checker.verified_store_ids,
+                per_store_schedule=per_store_schedule,
             )
 
         repository.mark_continuous_update_worker_stopped(worker_name=WORKER_NAME, worker_id=worker_id)
@@ -298,11 +302,16 @@ def _dispatch_claims(
     concurrency: int,
     stop_event: threading.Event,
     verified_sitemap_store_ids: tuple[int, ...] = (),
+    per_store_schedule: bool = False,
 ) -> None:
     inboxes: list[_SlotInbox] = [Queue() for _ in range(concurrency)]
     slots = []
     # Insertion order lets the existing single-item monitor show the oldest active attempt.
     active: dict[int, tuple[ClaimedStoreItemUpdate, Future[None]]] = {}
+    claim_due_item = (
+        repository.claim_due_per_store_item_update if per_store_schedule
+        else repository.claim_due_store_item_update
+    )
 
     def publish_heartbeat() -> None:
         oldest = next(iter(active.values()), None)
@@ -327,7 +336,7 @@ def _dispatch_claims(
             reap_finished()
             free_slot = next((slot for slot in range(concurrency) if slot not in active), None)
             if free_slot is not None and not stop_event.is_set():
-                claim = repository.claim_due_store_item_update(
+                claim = claim_due_item(
                     worker_name=WORKER_NAME,
                     worker_id=worker_id,
                     lease_token=str(uuid.uuid4()),
@@ -562,6 +571,7 @@ def main() -> None:
     parser.add_argument("--poll-seconds", type=_positive_float, default=1.0)
     parser.add_argument("--lease-seconds", type=_positive_int, default=300)
     parser.add_argument("--concurrency", type=int, choices=range(1, MAX_CONCURRENCY + 1), default=MAX_CONCURRENCY)
+    parser.add_argument("--per-store-schedule", action="store_true")
     args = parser.parse_args()
     stop_event = threading.Event()
 
@@ -575,6 +585,7 @@ def main() -> None:
         poll_seconds=args.poll_seconds,
         lease_seconds=args.lease_seconds,
         concurrency=args.concurrency,
+        per_store_schedule=args.per_store_schedule,
         stop_event=stop_event,
     )
 

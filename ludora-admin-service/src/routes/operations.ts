@@ -12,6 +12,7 @@ import type { DiscoveryOperationsClient, ItemDiscoveryRunScope, ItemUpdateRunSco
 import type { ExternalCoverImageOptimizerOptions, ExternalCoverImageOptimizerResult } from '../externalCoverImageOptimizer.js';
 import type { StoreItemUpdateScheduleManager } from '../storeItemUpdateScheduleManager.js';
 import {
+  PER_STORE_RUN_PREDICATE,
   STORE_ITEM_UPDATE_SCHEDULE_WINDOW_HOURS,
   StoreItemUpdateScheduleConflictError
 } from '../storeItemUpdateScheduleService.js';
@@ -150,7 +151,8 @@ export function createOperationsRouter(
   externalCoverImageOptimizer?: ExternalCoverImageOptimizerRunner,
   continuousItemUpdateWorkerManager?: ContinuousItemUpdateWorkerManager,
   storeItemUpdateScheduleManager?: StoreItemUpdateScheduleManager,
-  verifiedSitemapStoreIds: readonly string[] = []
+  verifiedSitemapStoreIds: readonly string[] = [],
+  perStoreSchedule = false
 ): Router {
   const router = Router();
   let latestExternalCoverImageOptimizationRun: ExternalCoverImageOptimizationRun | null = null;
@@ -301,7 +303,7 @@ export function createOperationsRouter(
     } catch (error) {
       next(
         error instanceof StoreItemUpdateScheduleConflictError
-          ? httpError(409, 'A store item update schedule run is already in progress')
+          ? httpError(409, error.message)
           : error
       );
     }
@@ -322,7 +324,8 @@ export function createOperationsRouter(
           rangeHours,
           histogramStoreId,
           continuousItemUpdateWorkerManager?.getStatus() ?? 'unavailable',
-          verifiedSitemapStoreIds
+          verifiedSitemapStoreIds,
+          perStoreSchedule
         ).finally(() => {
           pendingMonitor = null;
         });
@@ -541,12 +544,57 @@ export function createOperationsRouter(
   return router;
 }
 
+const PER_STORE_QUEUE_CTE = `, store_cursors as (
+       select schedule.store_id, schedule.next_due_at, schedule.eligible_item_count - schedule.next_slot_index as remaining_slots
+       from store_item_update_store_schedules schedule
+       join stores on stores.id = schedule.store_id
+       where stores.update_active = true and schedule.window_start <= now() and schedule.window_end > now()
+     ), store_queue as (
+       select coalesce(sum(remaining_slots), 0)::int as scheduled_items,
+              count(*) filter (where next_due_at <= now())::int as due_items,
+              coalesce(max(extract(epoch from (now() - next_due_at)) / 3600)
+                filter (where next_due_at <= now()), 0)::float8 as oldest_due_hours,
+              min(next_due_at) as next_due_at
+       from store_cursors
+     )`;
+
+const PER_STORE_QUEUE_SUMMARY = `
+       count(*) filter (where not exists (
+         select 1 from store_cursors where store_cursors.store_id = eligible.store_id
+       ))::int as unscheduled_items,
+       (select scheduled_items from store_queue) as scheduled_items,
+       (select scheduled_items - due_items from store_queue) as scheduled_later_items,
+       (select due_items from store_queue) as due_items,
+       (select oldest_due_hours from store_queue) as oldest_due_hours,
+       (select next_due_at from store_queue) as next_due_at,`;
+
+const LEGACY_QUEUE_SUMMARY = `
+       count(*) filter (where next_update_at is null)::int as unscheduled_items,
+       count(*) filter (where next_update_at is not null)::int as scheduled_items,
+       count(*) filter (where next_update_at > now())::int as scheduled_later_items,
+       count(*) filter (where next_update_at <= now())::int as due_items,
+       coalesce(max(extract(epoch from (now() - next_update_at)) / 3600)
+         filter (where next_update_at <= now()), 0)::float8 as oldest_due_hours,
+       min(next_update_at) as next_due_at,`;
+
+function publicScheduleRun(value: unknown): unknown {
+  if (!value || typeof value !== 'object') {
+    return value ?? null;
+  }
+  const row = value as Record<string, unknown>;
+  if (row.trigger === 'STORE_MANUAL') {
+    return { ...row, trigger: 'MANUAL', automatic_schedule_date: null };
+  }
+  return row.trigger === 'STORE_AUTOMATIC' ? { ...row, trigger: 'AUTOMATIC' } : row;
+}
+
 async function loadStoreItemUpdateMonitor(
   database: Database,
   rangeHours: number,
   histogramStoreId: number | null,
   controlStatus: ContinuousItemUpdateWorkerControlStatus | 'unavailable',
-  verifiedSitemapStoreIds: readonly string[]
+  verifiedSitemapStoreIds: readonly string[],
+  perStoreSchedule: boolean
 ) {
   const workerResult = await database.query(
     `select
@@ -592,22 +640,16 @@ async function loadStoreItemUpdateMonitor(
          and store_items.listing_status = 'LISTED'
          and store_items.store_active = true
          and ${availability}
-     )
+     )${perStoreSchedule ? PER_STORE_QUEUE_CTE : ''}
      select
        count(*)::int as eligible_items,
-       count(*) filter (where next_update_at is null)::int as unscheduled_items,
-       count(*) filter (where next_update_at is not null)::int as scheduled_items,
-       count(*) filter (where next_update_at > now())::int as scheduled_later_items,
-       count(*) filter (where next_update_at <= now())::int as due_items,
+       ${perStoreSchedule ? PER_STORE_QUEUE_SUMMARY : LEGACY_QUEUE_SUMMARY}
        count(*) filter (where refreshed_date >= now() - interval '24 hours')::int as fresh_items,
        count(*) filter (where refreshed_date < now() - interval '24 hours')::int as stale_items,
        count(*) filter (
          where update_lease_token is not null and update_lease_expires_at > now()
        )::int as leased_items,
        coalesce(max(extract(epoch from (now() - refreshed_date)) / 3600), 0)::float8 as oldest_staleness_hours,
-       coalesce(max(extract(epoch from (now() - next_update_at)) / 3600)
-         filter (where next_update_at <= now()), 0)::float8 as oldest_due_hours,
-       min(next_update_at) as next_due_at,
        (select count(*)::int
         from store_item_update_attempt_log
         where started_at >= now() - interval '24 hours') as attempts_24h,
@@ -640,20 +682,23 @@ async function loadStoreItemUpdateMonitor(
     ? (eligibleItems / scheduleWindowCapacity) * 100
     : 0;
 
+  const scheduleRunPredicate = perStoreSchedule ? PER_STORE_RUN_PREDICATE : "trigger in ('AUTOMATIC', 'MANUAL')";
+  const automaticTrigger = perStoreSchedule ? 'STORE_AUTOMATIC' : 'AUTOMATIC';
   const scheduleRunsResult = await database.query(
     `select
        (select row_to_json(latest_run) from (
          select * from store_item_update_schedule_runs
-         where status = 'COMPLETED'
+         where status = 'COMPLETED' and ${scheduleRunPredicate}
          order by completed_at desc, id desc limit 1
        ) latest_run) as latest_schedule_run,
        (select row_to_json(latest_attempt) from (
          select * from store_item_update_schedule_runs
+         where ${scheduleRunPredicate}
          order by started_at desc, id desc limit 1
        ) latest_attempt) as latest_schedule_attempt,
        (select row_to_json(latest_automatic) from (
          select * from store_item_update_schedule_runs
-         where trigger = 'AUTOMATIC' and status = 'COMPLETED'
+         where trigger = '${automaticTrigger}' and status = 'COMPLETED'
          order by automatic_schedule_date desc, id desc limit 1
        ) latest_automatic) as latest_automatic_schedule_run`
   );
@@ -783,9 +828,9 @@ async function loadStoreItemUpdateMonitor(
       };
     }),
     histogram_store_id: histogramStoreId,
-    latest_automatic_schedule_run: scheduleRunsRow.latest_automatic_schedule_run ?? null,
-    latest_schedule_attempt: scheduleRunsRow.latest_schedule_attempt ?? null,
-    latest_schedule_run: scheduleRunsRow.latest_schedule_run ?? null,
+    latest_automatic_schedule_run: publicScheduleRun(scheduleRunsRow.latest_automatic_schedule_run),
+    latest_schedule_attempt: publicScheduleRun(scheduleRunsRow.latest_schedule_attempt),
+    latest_schedule_run: publicScheduleRun(scheduleRunsRow.latest_schedule_run),
     store_cooldowns: storeCooldownsResult.rows.map((row) => {
       const record = row as Record<string, unknown>;
       return {

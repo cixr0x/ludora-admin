@@ -121,6 +121,7 @@ const operationsClient =
 const shutdownOperationsClient = localOperationsClient
   ? () => localOperationsClient.shutdown()
   : async () => undefined;
+const perStoreSchedule = config.continuousItemUpdateWorker.perStoreSchedule;
 const continuousItemUpdateWorkerManager =
   config.continuousItemUpdateWorker.enabled && config.discoveryRunner.mode === 'local'
     ? createContinuousItemUpdateWorkerManager({
@@ -132,6 +133,7 @@ const continuousItemUpdateWorkerManager =
         itemTimeoutSeconds: config.continuousItemUpdateWorker.itemTimeoutSeconds,
         leaseSeconds: config.continuousItemUpdateWorker.leaseSeconds,
         packageDir: config.discoveryRunner.packageDir,
+        perStoreSchedule,
         pollSeconds: config.continuousItemUpdateWorker.pollSeconds,
         pythonExecutable: config.discoveryRunner.pythonExecutable
       })
@@ -142,7 +144,11 @@ const storeItemUpdateScheduleDatabase = config.continuousItemUpdateWorker.enable
   : undefined;
 const storeItemUpdateScheduleManager = storeItemUpdateScheduleDatabase
   ? createStoreItemUpdateScheduleManager({
-      scheduleService: createStoreItemUpdateScheduleService(storeItemUpdateScheduleDatabase, { verifiedSitemapStoreIds })
+      perStoreSchedule,
+      scheduleService: createStoreItemUpdateScheduleService(storeItemUpdateScheduleDatabase, {
+        perStoreSchedule,
+        verifiedSitemapStoreIds
+      })
     })
   : undefined;
 const runtimeManagerLifecycle = createRuntimeManagerLifecycle({
@@ -210,6 +216,7 @@ const app = createApp({
   productDetailsEnrichmentService,
   storeProfileDetectionService,
   storeItemUpdateScheduleManager,
+  perStoreSchedule,
   translationService,
   verifiedSitemapStoreIds,
   webBotAuthService

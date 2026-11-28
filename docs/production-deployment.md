@@ -185,6 +185,33 @@ a replacement worker after the child exits. The replacement records all
 interrupted item attempts as `lease_lost`, clears their leases, and delays their
 next update by at least 15 minutes.
 
+### Per-store schedule rollout
+
+The optional per-store mode uses the same store update eligibility and item leases.
+Its daily 23-hour window starts at 03:00 America/Mexico_City and ends at 02:00
+the following day. The scheduler calculates a deterministic cadence from each
+store's eligible item count, writes one cursor for that store, and skips slots
+elapsed before initialization. The worker advances past misses that are at least
+one store interval late. Store cooldowns and failures retain their existing
+backoff. A retry can use a remaining slot after backoff when the store has no
+eligible first attempt waiting.
+
+Apply only the approved incremental schedule patch before setting
+`LUDORA_CONTINUOUS_ITEM_UPDATE_PER_STORE=true` on Admin service, then restart
+that service to enable both the scheduler and the worker together. Confirm the
+Monitor reports a completed generation for the current window and that separate
+stores receive claims. The Monitor's scheduled count is remaining opportunities.
+Due now counts stores with a due cursor. The later count is the remaining
+opportunities after those due stores. Unscheduled counts eligible items at stores
+without a cursor in the active window. The manual schedule action initializes
+the current window if needed and returns its completed run once established.
+Between 02:00 and 03:00, the action returns a conflict.
+
+To return to legacy scheduling, set the mode to false and restart Admin service.
+The two modes use separate schedule-run keys, and the legacy worker uses the
+existing item schedule. The existing manual schedule action can redistribute
+legacy slots if the current day's schedule needs rebuilding.
+
 ### Daily item-discovery schedule
 
 Local manual and scheduled item discovery has a hard browser deadline enforced

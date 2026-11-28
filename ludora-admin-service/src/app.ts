@@ -62,6 +62,7 @@ type CreateAppOptions = {
   productDetailsEnrichmentService?: ProductDetailsEnrichmentService;
   storeProfileDetectionService?: StoreProfileDetectionService;
   storeItemUpdateScheduleManager?: StoreItemUpdateScheduleManager;
+  perStoreSchedule?: boolean;
   translationService?: TranslationService;
   verifiedSitemapStoreIds?: readonly string[];
   webBotAuthService?: WebBotAuthService;
@@ -85,6 +86,7 @@ export function createApp({
   productDetailsEnrichmentService,
   storeProfileDetectionService,
   storeItemUpdateScheduleManager,
+  perStoreSchedule,
   translationService,
   verifiedSitemapStoreIds,
   webBotAuthService
@@ -139,7 +141,8 @@ export function createApp({
         externalCoverImageOptimizer,
         continuousItemUpdateWorkerManager,
         storeItemUpdateScheduleManager,
-        verifiedSitemapStoreIds
+        verifiedSitemapStoreIds,
+        perStoreSchedule
       )
     );
   }

@@ -57,6 +57,19 @@ describe('mexicoCityScheduleDate', () => {
 });
 
 describe('store item update schedule manager', () => {
+  it('caches a per-store window initialized manually when the date has rolled over', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-06T06:30:00.000Z'));
+    const scheduleService = new FakeScheduleService();
+    scheduleService.queueAutomaticResponse(Promise.resolve(completedManualRun()));
+    const manager = createStoreItemUpdateScheduleManager({ scheduleService, perStoreSchedule: true });
+
+    manager.start();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(scheduleService.automaticCalls).toBe(1);
+    await manager.shutdown();
+  });
+
   it('does not run automatically when it starts before 3am in Mexico City', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-08-05T08:59:59.000Z'));

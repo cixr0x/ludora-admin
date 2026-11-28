@@ -803,68 +803,228 @@ class DiscoveryRepository:
                 self.connection.commit()
                 return None
 
-            store_item_id = int(claimed_row[0])
-            cursor.execute(
-                f"""
-                select {_item_candidate_select_columns()}
-                from store_items
-                where id = %s
-                """,
-                (store_item_id,),
+            claim = self._record_store_item_update_claim(
+                cursor, int(claimed_row[0]), worker_name, worker_id, lease_token,
             )
-            record_row = cursor.fetchone()
-            if not record_row:
-                self.connection.rollback()
-                return None
-            record = _item_candidate_from_row(record_row)
-            cursor.execute(
-                """
-                select
-                    coalesce(stores.name, ''),
-                    coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown'),
-                    store_items.consecutive_update_failures,
-                    coalesce(cooldown.consecutive_429s, 0),
-                    coalesce(stores.canonical_domain, '')
-                from store_items
-                join stores on stores.id = store_items.store_id
-                left join store_item_update_store_cooldown cooldown
-                  on cooldown.worker_name = %s
-                 and cooldown.store_id = store_items.store_id
-                where store_items.id = %s
-                """,
-                (worker_name, store_item_id),
-            )
-            store_row = cursor.fetchone()
-            store_name = _text(store_row[0]) if store_row else ""
-            platform = _text(store_row[1]).casefold() if store_row else ""
-            cursor.execute(
-                """
-                insert into store_item_update_attempt_log (
-                    store_item_id,
-                    store_id,
-                    worker_id,
-                    lease_token,
-                    platform,
-                    status
-                )
-                values (%s, %s, %s, %s::uuid, %s, 'running')
-                returning id
-                """,
-                (store_item_id, record.store_id, worker_id, lease_token, platform),
-            )
-            attempt_row = cursor.fetchone()
-            cursor.execute(
-                """
-                update store_item_update_worker_state
-                set last_attempt_at = now(),
-                    last_error = '',
-                    updated_at = now()
-                where worker_name = %s
-                  and worker_id = %s
-                """,
-                (worker_name, worker_id),
-            )
+        if not claim:
+            self.connection.rollback()
+            return None
         self.connection.commit()
+        return claim
+
+    def claim_due_per_store_item_update(
+        self,
+        *,
+        worker_name: str,
+        worker_id: str,
+        lease_token: str,
+        lease_seconds: int,
+        excluded_store_ids: Sequence[int] = (),
+        verified_sitemap_store_ids: Sequence[int] = (),
+    ) -> ClaimedStoreItemUpdate | None:
+        claim = None
+        try:
+            with self.connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    select schedule.store_id, schedule.window_start,
+                           now() >= schedule.next_due_at
+                             + (schedule.window_end - schedule.window_start)
+                               / schedule.eligible_item_count::double precision as missed
+                    from store_item_update_store_schedules schedule
+                    join stores on stores.id = schedule.store_id
+                    where stores.update_active = true
+                      and schedule.window_start <= now()
+                      and schedule.window_end > now()
+                      and schedule.next_due_at <= now()
+                      and schedule.store_id <> all(%s::bigint[])
+                      and not exists (
+                        select 1
+                        from store_item_update_store_cooldown cooldown
+                        where cooldown.worker_name = %s
+                          and cooldown.store_id = schedule.store_id
+                          and cooldown.blocked_until > now()
+                      )
+                    order by schedule.next_due_at, schedule.store_id
+                    for update of schedule skip locked
+                    limit 1
+                    """,
+                    (list(excluded_store_ids), worker_name),
+                )
+                schedule = cursor.fetchone()
+                if schedule:
+                    store_id, window_start, missed = schedule
+                    candidate = None
+                    if not missed:
+                        claim_args = (cursor, store_id, window_start, lease_token, lease_seconds)
+                        include_recovery = store_id in verified_sitemap_store_ids
+                        candidate = self._lease_per_store_update_item(*claim_args, include_recovery=include_recovery)
+                        if candidate is None:
+                            candidate = self._lease_per_store_update_item(
+                                *claim_args, include_recovery=include_recovery, retry=True,
+                            )
+
+                    # Even a missed or empty slot advances, so it cannot block the earliest-due store.
+                    cursor.execute(
+                        """
+                        with advanced as (
+                            select least(eligible_item_count, greatest(next_slot_index + 1,
+                                floor(extract(epoch from (now() - window_start)) * eligible_item_count
+                                    / extract(epoch from (window_end - window_start)) - phase)::int + 1
+                            )) as slot_index
+                            from store_item_update_store_schedules
+                            where store_id = %s
+                        )
+                        update store_item_update_store_schedules schedule
+                        set next_slot_index = advanced.slot_index,
+                            next_due_at = case
+                                when advanced.slot_index < schedule.eligible_item_count
+                                then schedule.window_start + (schedule.window_end - schedule.window_start)
+                                    * ((advanced.slot_index + schedule.phase) / schedule.eligible_item_count)
+                            end
+                        from advanced
+                        where schedule.store_id = %s
+                        """,
+                        (store_id, store_id),
+                    )
+                    if candidate:
+                        claim = self._record_store_item_update_claim(
+                            cursor, int(candidate[0]), worker_name, worker_id, lease_token,
+                        )
+                        if not claim:
+                            self.connection.rollback()
+                            return None
+            self.connection.commit()
+        except Exception:
+            self.connection.rollback()
+            raise
+        return claim
+
+    def _lease_per_store_update_item(
+        self,
+        cursor: Any,
+        store_id: int,
+        window_start: datetime,
+        lease_token: str,
+        lease_seconds: int,
+        *,
+        include_recovery: bool,
+        retry: bool = False,
+    ) -> tuple[int] | None:
+        availability = "" if include_recovery else "and store_items.availability <> 'unavailable'"
+        eligible = f"""
+            store_items.store_id = %s
+            and store_items.is_boardgame = true
+            and store_items.is_boardgame_confirmed = true
+            and store_items.item_id is not null
+            and store_items.source_url <> ''
+            and store_items.listing_status = 'LISTED'
+            and store_items.store_active = true
+            {availability}
+            and (store_items.update_lease_token is null or store_items.update_lease_expires_at <= now())
+        """
+        first_attempt = """
+            (store_items.last_update_attempt_at is null or store_items.last_update_attempt_at < %s)
+            and (store_items.consecutive_update_failures = 0
+              or store_items.next_update_at is null
+              or store_items.next_update_at <= now())
+        """
+        attempt = f"""
+            store_items.last_update_attempt_at >= %s
+            and store_items.consecutive_update_failures > 0
+            and store_items.next_update_at <= now()
+            and not exists (
+                select 1 from store_items where {eligible} and {first_attempt}
+            )
+        """ if retry else first_attempt
+        params = (store_id, window_start)
+        if retry:
+            # An otherwise eligible first attempt may simply be temporarily row-locked.
+            params = (*params, store_id, window_start)
+        cursor.execute(
+            f"""
+            with candidate as (
+                select store_items.id
+                from store_items
+                where {eligible} and ({attempt})
+                order by store_items.refreshed_date, store_items.id
+                for update of store_items skip locked
+                limit 1
+            )
+            update store_items
+            set update_lease_token = %s::uuid,
+                update_lease_expires_at = now() + make_interval(secs => %s),
+                last_update_attempt_at = now()
+            from candidate
+            where store_items.id = candidate.id
+            returning store_items.id
+            """,
+            (*params, lease_token, lease_seconds),
+        )
+        return cursor.fetchone()
+
+    def _record_store_item_update_claim(
+        self, cursor: Any, store_item_id: int, worker_name: str, worker_id: str, lease_token: str,
+    ) -> ClaimedStoreItemUpdate | None:
+        cursor.execute(
+            f"""
+            select {_item_candidate_select_columns()}
+            from store_items
+            where id = %s
+            """,
+            (store_item_id,),
+        )
+        record_row = cursor.fetchone()
+        if not record_row:
+            return None
+        record = _item_candidate_from_row(record_row)
+        cursor.execute(
+            """
+            select
+                coalesce(stores.name, ''),
+                coalesce(nullif(lower(trim(stores.platform)), ''), 'unknown'),
+                store_items.consecutive_update_failures,
+                coalesce(cooldown.consecutive_429s, 0),
+                coalesce(stores.canonical_domain, '')
+            from store_items
+            join stores on stores.id = store_items.store_id
+            left join store_item_update_store_cooldown cooldown
+              on cooldown.worker_name = %s
+             and cooldown.store_id = store_items.store_id
+            where store_items.id = %s
+            """,
+            (worker_name, store_item_id),
+        )
+        store_row = cursor.fetchone()
+        store_name = _text(store_row[0]) if store_row else ""
+        platform = _text(store_row[1]).casefold() if store_row else ""
+        cursor.execute(
+            """
+            insert into store_item_update_attempt_log (
+                store_item_id,
+                store_id,
+                worker_id,
+                lease_token,
+                platform,
+                status
+            )
+            values (%s, %s, %s, %s::uuid, %s, 'running')
+            returning id
+            """,
+            (store_item_id, record.store_id, worker_id, lease_token, platform),
+        )
+        attempt_row = cursor.fetchone()
+        cursor.execute(
+            """
+            update store_item_update_worker_state
+            set last_attempt_at = now(),
+                last_error = '',
+                updated_at = now()
+            where worker_name = %s
+              and worker_id = %s
+            """,
+            (worker_name, worker_id),
+        )
         return ClaimedStoreItemUpdate(
             attempt_id=int(attempt_row[0]) if attempt_row else 0,
             consecutive_failures=int(store_row[2]) if store_row else 0,

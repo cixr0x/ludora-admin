@@ -3,6 +3,7 @@ import type {
   StoreItemUpdateScheduleService
 } from './storeItemUpdateScheduleService.js';
 import {
+  activeStoreUpdateScheduleWindow,
   mexicoCityScheduleDate,
   StoreItemUpdateScheduleConflictError
 } from './storeItemUpdateScheduleService.js';
@@ -19,6 +20,7 @@ export type StoreItemUpdateScheduleManager = {
 
 export function createStoreItemUpdateScheduleManager(options: {
   now?: () => Date;
+  perStoreSchedule?: boolean;
   scheduleService: StoreItemUpdateScheduleService;
   tickMs?: number;
 }): StoreItemUpdateScheduleManager {
@@ -35,7 +37,9 @@ export function createStoreItemUpdateScheduleManager(options: {
     }
 
     const tickNow = now();
-    const localDate = mexicoCityScheduleDate(tickNow);
+    const localDate = options.perStoreSchedule
+      ? activeStoreUpdateScheduleWindow(tickNow)?.date
+      : mexicoCityScheduleDate(tickNow);
     if (!localDate || completedAutomaticDate === localDate) {
       return Promise.resolve();
     }
@@ -43,8 +47,8 @@ export function createStoreItemUpdateScheduleManager(options: {
     const tickPromise = Promise.resolve()
       .then(() => options.scheduleService.runAutomatic())
       .then((result) => {
-        if (result?.status === 'COMPLETED' && result.automatic_schedule_date) {
-          completedAutomaticDate = result.automatic_schedule_date;
+        if (result?.status === 'COMPLETED') {
+          completedAutomaticDate = options.perStoreSchedule ? localDate : result.automatic_schedule_date;
         }
       })
       .catch((error: unknown) => {

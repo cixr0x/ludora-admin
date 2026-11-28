@@ -39,6 +39,7 @@ export type Config = {
     enabled: boolean;
     itemTimeoutSeconds: number;
     leaseSeconds: number;
+    perStoreSchedule: boolean;
     pollSeconds: number;
   };
   dailyItemDiscoverySchedule: {
@@ -119,6 +120,7 @@ function readContinuousItemUpdateWorkerConfig(): Config['continuousItemUpdateWor
     ),
     itemTimeoutSeconds,
     leaseSeconds,
+    perStoreSchedule: readBooleanEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_PER_STORE', false),
     pollSeconds: readPositiveNumberEnv('LUDORA_CONTINUOUS_ITEM_UPDATE_POLL_SECONDS', 1)
   };
 }

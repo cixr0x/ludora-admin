@@ -4746,6 +4746,48 @@ describe('ludora admin service', () => {
     expect(response.body).toEqual({ error: { message: 'Store item update scheduling is not configured' } });
   });
 
+  it('reports per-store slots and public trigger names in opt-in mode', async () => {
+    const queries: string[] = [];
+    const database: Database = {
+      query: async (sql) => {
+        const normalized = normalizeSql(sql);
+        queries.push(normalized);
+        if (normalized.includes('from store_item_update_store_schedules')) {
+          return { rows: [{
+            eligible_items: 40, scheduled_items: 8, due_items: 2, unscheduled_items: 3,
+            scheduled_later_items: 6, next_due_at: '2026-08-05T11:01:00Z'
+          }] };
+        }
+        if (normalized.includes('as latest_schedule_run')) {
+          return { rows: [{
+            latest_schedule_run: {
+              id: 1, trigger: 'STORE_MANUAL', automatic_schedule_date: '2026-08-05', status: 'COMPLETED'
+            }
+          }] };
+        }
+        return { rows: [] };
+      }
+    };
+
+    const response = await request(createApp({
+      database,
+      operationsClient: idleOperationsClient(),
+      perStoreSchedule: true
+    })).get('/admin/operations/store-item-update-monitor');
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toMatchObject({
+      latest_schedule_run: { trigger: 'MANUAL', automatic_schedule_date: null },
+      summary: {
+        due_items: 2, scheduled_items: 8, scheduled_later_items: 6,
+        unscheduled_items: 3, next_due_at: '2026-08-05T11:01:00Z'
+      }
+    });
+    const summaryQuery = queries.find((query) => query.includes('from store_item_update_store_schedules'));
+    expect(summaryQuery).toContain('next_slot_index');
+    expect(summaryQuery).not.toContain('where next_update_at <= now()');
+  });
+
   it('returns null schedule runs when the store item update monitor has no run history', async () => {
     const response = await request(createApp({
       database: idleDatabase(),

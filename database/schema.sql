@@ -206,7 +206,7 @@ where update_lease_token is not null;
 
 create table if not exists store_item_update_schedule_runs (
     id bigserial primary key,
-    trigger text not null check (trigger in ('AUTOMATIC', 'MANUAL')),
+    trigger text not null check (trigger in ('AUTOMATIC', 'MANUAL', 'STORE_AUTOMATIC', 'STORE_MANUAL')),
     automatic_schedule_date date,
     status text not null check (status in ('RUNNING', 'COMPLETED', 'FAILED')),
     window_start timestamptz not null,
@@ -218,7 +218,7 @@ create table if not exists store_item_update_schedule_runs (
     error_detail text not null default '',
     check (window_end > window_start),
     check (
-      (trigger = 'AUTOMATIC' and automatic_schedule_date is not null)
+      (trigger in ('AUTOMATIC', 'STORE_AUTOMATIC', 'STORE_MANUAL') and automatic_schedule_date is not null)
       or (trigger = 'MANUAL' and automatic_schedule_date is null)
     )
 );
@@ -229,6 +229,30 @@ where trigger = 'AUTOMATIC';
 
 create index if not exists store_item_update_schedule_runs_started_at_idx
 on store_item_update_schedule_runs (started_at desc, id desc);
+
+create unique index if not exists store_item_update_schedule_runs_store_date_uidx
+on store_item_update_schedule_runs (automatic_schedule_date)
+where trigger in ('STORE_AUTOMATIC', 'STORE_MANUAL');
+
+create table if not exists store_item_update_store_schedules (
+    store_id bigint primary key references stores(id) on delete cascade,
+    window_start timestamptz not null,
+    window_end timestamptz not null,
+    eligible_item_count integer not null check (eligible_item_count > 0),
+    phase double precision not null check (phase >= 0 and phase < 1),
+    next_slot_index integer not null check (next_slot_index >= 0),
+    next_due_at timestamptz,
+    check (window_end > window_start),
+    check (
+      (next_slot_index < eligible_item_count and next_due_at is not null
+        and next_due_at >= window_start and next_due_at < window_end)
+      or (next_slot_index = eligible_item_count and next_due_at is null)
+    )
+);
+
+create index if not exists store_item_update_store_schedules_next_due_idx
+on store_item_update_store_schedules (next_due_at, store_id)
+where next_due_at is not null;
 
 create table if not exists store_item_click_stats (
     store_item_id bigint not null,

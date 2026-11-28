@@ -52,6 +52,29 @@ function createManager(
 }
 
 describe('continuous item update worker manager', () => {
+  it('passes the per-store schedule mode to the discovery worker only when enabled', async () => {
+    const child = new FakeChildProcess();
+    const spawnProcess = vi.fn((_command: string, _args: string[]) => child as unknown as ChildProcessWithoutNullStreams);
+    const manager = createContinuousItemUpdateWorkerManager({
+      adminApiUrl: 'http://127.0.0.1:4001',
+      concurrency: 1,
+      envFile: 'test.env',
+      internalApiToken: 'token',
+      itemTimeoutSeconds: 120,
+      leaseSeconds: 300,
+      packageDir: 'C:/ludora-discovery',
+      perStoreSchedule: true,
+      pollSeconds: 5,
+      pythonExecutable: 'python',
+      spawnProcess
+    });
+    manager.start();
+    expect(spawnProcess.mock.calls[0]?.[1]).toContain('--per-store-schedule');
+    const shutdown = manager.shutdown();
+    child.emit('close', 0, null);
+    await shutdown;
+  });
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();

@@ -52,6 +52,69 @@ class FakeSessionDatabase implements SessionDatabase {
 }
 
 describe('store item update schedule service', () => {
+  it('anchors deterministic store slots at 3 a.m. and skips slots elapsed by a 5 a.m. start', async () => {
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [],
+      [runningRun({ trigger: 'STORE_AUTOMATIC', automatic_schedule_date: '2026-08-05' })],
+      [],
+      [{ store_id: '17', eligible_item_count: 100 }, { store_id: '19', eligible_item_count: 1000 }],
+      [],
+      [completedRun({ trigger: 'STORE_AUTOMATIC', automatic_schedule_date: '2026-08-05' })],
+      [],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createStoreItemUpdateScheduleService(database, {
+      now: () => new Date('2026-08-05T11:00:00.000Z'),
+      perStoreSchedule: true
+    });
+
+    await expect(service.runAutomatic()).resolves.toMatchObject({ trigger: 'AUTOMATIC' });
+
+    expect(database.queries[1].params).toEqual(['2026-08-05']);
+    expect(database.queries[1].sql).toContain("trigger in ('STORE_AUTOMATIC', 'STORE_MANUAL')");
+    const seed = database.queries[5];
+    expect(seed.params?.slice(0, 2)).toEqual([
+      new Date('2026-08-05T09:00:00.000Z'),
+      new Date('2026-08-06T08:00:00.000Z')
+    ]);
+    expect(JSON.parse(String(seed.params?.[2]))).toEqual([
+      {
+        store_id: '17', eligible_item_count: 100, phase: 0.25, next_slot_index: 9,
+        next_due_at: '2026-08-05T11:07:39.000Z'
+      },
+      {
+        store_id: '19', eligible_item_count: 1000, phase: 0.75, next_slot_index: 87,
+        next_due_at: '2026-08-05T11:01:05.700Z'
+      }
+    ]);
+    expect(normalizeSql(database.queries[4].sql)).toContain('group by store_items.store_id');
+    expect(seed.sql).toContain('insert into store_item_update_store_schedules');
+  });
+
+  it('reuses the previous date between midnight and 2 a.m. and rejects manual work in the gap', async () => {
+    let currentTime = new Date('2026-08-06T07:00:00.000Z');
+    const database = new FakeSessionDatabase([
+      [{ acquired: true }],
+      [completedRun({ trigger: 'STORE_MANUAL', automatic_schedule_date: '2026-08-05' })],
+      [{ pg_advisory_unlock: true }]
+    ]);
+    const service = createStoreItemUpdateScheduleService(database, {
+      now: () => currentTime,
+      perStoreSchedule: true
+    });
+    await expect(service.runManual()).resolves.toMatchObject({
+      trigger: 'MANUAL',
+      automatic_schedule_date: null
+    });
+    expect(database.queries[1].params).toEqual(['2026-08-05']);
+    currentTime = new Date('2026-08-06T08:00:00.000Z');
+    await expect(service.runAutomatic()).resolves.toBeNull();
+    await expect(service.runManual()).rejects.toThrow(/no active/i);
+    expect(database.queries).toHaveLength(3);
+  });
+
+
   it('loads valid sitemap enrollment IDs without losing bigint precision', () => {
     const verifiedStore = { min_urls: 10, url: 'https://example.mx/sitemap.xml' };
     const scope = readVerifiedSitemapStoreIds('unused.env', {

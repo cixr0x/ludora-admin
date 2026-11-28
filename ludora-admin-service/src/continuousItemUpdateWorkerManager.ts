@@ -59,6 +59,7 @@ type ContinuousItemUpdateWorkerManagerOptions = {
   itemTimeoutSeconds: number;
   leaseSeconds: number;
   packageDir: string;
+  perStoreSchedule?: boolean;
   pollSeconds: number;
   pythonExecutable: string;
   restartDelayMs?: number;
@@ -85,6 +86,7 @@ export function createContinuousItemUpdateWorkerManager({
   itemTimeoutSeconds,
   leaseSeconds,
   packageDir,
+  perStoreSchedule = false,
   pollSeconds,
   pythonExecutable,
   restartDelayMs = 15_000,
@@ -215,7 +217,8 @@ export function createContinuousItemUpdateWorkerManager({
       '--lease-seconds',
       String(leaseSeconds),
       '--concurrency',
-      String(concurrency)
+      String(concurrency),
+      ...(perStoreSchedule ? ['--per-store-schedule'] : [])
     ];
     const spawnedChild = spawnProcess(pythonExecutable, args, {
       cwd: packageDir,
