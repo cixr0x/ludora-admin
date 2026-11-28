@@ -14,7 +14,7 @@ export type SessionDatabase = Database & {
 };
 
 const profiles = {
-  interactive: { max: 3, maxWaiting: 6, statementTimeout: 8_000 },
+  interactive: { max: 3, maxWaiting: 6, statementTimeout: 15_000 },
   maintenance: { max: 1, maxWaiting: 2, statementTimeout: 60_000 }
 };
 

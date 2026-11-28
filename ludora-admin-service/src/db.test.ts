@@ -37,7 +37,7 @@ describe('createDatabase', () => {
       connectionString: 'postgresql://example',
       max: 3,
       connectionTimeoutMillis: 2_000,
-      statement_timeout: 8_000,
+      statement_timeout: 15_000,
       lock_timeout: 1_000,
       idle_in_transaction_session_timeout: 60_000,
       ssl: { rejectUnauthorized: false }
@@ -58,12 +58,12 @@ describe('createDatabase', () => {
     const startup = (client as unknown as { getStartupConf(): Record<string, string> }).getStartupConf();
     expect(startup).toMatchObject({
       application_name: 'example',
-      statement_timeout: '8000',
+      statement_timeout: '15000',
       lock_timeout: '1000',
       idle_in_transaction_session_timeout: '60000'
     });
     expect(startup.options).toContain('-c search_path=custom');
-    expect(startup.options).toMatch(/-c statement_timeout=8000 -c lock_timeout=1000 -c idle_in_transaction_session_timeout=60000$/);
+    expect(startup.options).toMatch(/-c statement_timeout=15000 -c lock_timeout=1000 -c idle_in_transaction_session_timeout=60000$/);
     expect(client.ssl).toEqual({ rejectUnauthorized: false });
   });
 

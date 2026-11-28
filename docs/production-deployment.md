@@ -347,9 +347,10 @@ it can record failures when the background role reaches its connection limit.
 External or standalone discovery can set `LUDORA_DATABASE_URL` in its own
 environment. The `pg_cron` jobs retain their existing owner and login.
 
-The role defaults apply to new logins. Explicit application timeouts still
-apply, including the 10s continuous updater and 60s Admin schedule
-statement limits. Deploy the Admin code that supports the new setting before
+The role defaults apply to new logins. The interactive Admin pool sets a 15s
+statement timeout, overriding the Admin role's 8s default for those sessions.
+The continuous updater uses a 10s statement timeout, and the Admin schedule
+pool uses 60s. Deploy the Admin code that supports the new setting before
 switching its login. After the approved configuration change, restart the
 affected services and verify the active database usernames and read-only
 health checks. Keep the previous connection configuration available for a
