@@ -121,6 +121,7 @@ STORE_ITEM_PRICE_AVAILABILITY_REFRESH_FIELDS = (
 )
 STORE_ITEM_UPDATE_RATE_LIMITED_PLATFORMS = {"shopify", "woocommerce"}
 STORE_ITEM_UPDATE_COORDINATOR_KEY = "ludora:store-item-update-coordinator"
+PER_STORE_CURSOR_ADVANCE_LIMIT = 8
 
 
 class DiscoveryRepository:
@@ -824,35 +825,38 @@ class DiscoveryRepository:
     ) -> ClaimedStoreItemUpdate | None:
         claim = None
         try:
-            with self.connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    select schedule.store_id, schedule.window_start,
-                           now() >= schedule.next_due_at
-                             + (schedule.window_end - schedule.window_start)
-                               / schedule.eligible_item_count::double precision as missed
-                    from store_item_update_store_schedules schedule
-                    join stores on stores.id = schedule.store_id
-                    where stores.update_active = true
-                      and schedule.window_start <= now()
-                      and schedule.window_end > now()
-                      and schedule.next_due_at <= now()
-                      and schedule.store_id <> all(%s::bigint[])
-                      and not exists (
-                        select 1
-                        from store_item_update_store_cooldown cooldown
-                        where cooldown.worker_name = %s
-                          and cooldown.store_id = schedule.store_id
-                          and cooldown.blocked_until > now()
-                      )
-                    order by schedule.next_due_at, schedule.store_id
-                    for update of schedule skip locked
-                    limit 1
-                    """,
-                    (list(excluded_store_ids), worker_name),
-                )
-                schedule = cursor.fetchone()
-                if schedule:
+            for _ in range(PER_STORE_CURSOR_ADVANCE_LIMIT):
+                with self.connection.cursor() as cursor:
+                    cursor.execute(
+                        """
+                        select schedule.store_id, schedule.window_start,
+                               now() >= schedule.next_due_at
+                                 + (schedule.window_end - schedule.window_start)
+                                   / schedule.eligible_item_count::double precision as missed
+                        from store_item_update_store_schedules schedule
+                        join stores on stores.id = schedule.store_id
+                        where stores.update_active = true
+                          and schedule.window_start <= now()
+                          and schedule.window_end > now()
+                          and schedule.next_due_at <= now()
+                          and schedule.store_id <> all(%s::bigint[])
+                          and not exists (
+                            select 1
+                            from store_item_update_store_cooldown cooldown
+                            where cooldown.worker_name = %s
+                              and cooldown.store_id = schedule.store_id
+                              and cooldown.blocked_until > now()
+                          )
+                        order by schedule.next_due_at, schedule.store_id
+                        for update of schedule skip locked
+                        limit 1
+                        """,
+                        (list(excluded_store_ids), worker_name),
+                    )
+                    schedule = cursor.fetchone()
+                    if not schedule:
+                        self.connection.commit()
+                        return None
                     store_id, window_start, missed = schedule
                     candidate = None
                     if not missed:
@@ -894,11 +898,14 @@ class DiscoveryRepository:
                         if not claim:
                             self.connection.rollback()
                             return None
-            self.connection.commit()
+                # Release this store's locks before looking for the next overdue cursor.
+                self.connection.commit()
+                if claim:
+                    return claim
         except Exception:
             self.connection.rollback()
             raise
-        return claim
+        return None
 
     def _lease_per_store_update_item(
         self,
@@ -911,8 +918,9 @@ class DiscoveryRepository:
         include_recovery: bool,
         retry: bool = False,
     ) -> tuple[int] | None:
-        availability = "" if include_recovery else "and store_items.availability <> 'unavailable'"
-        eligible = f"""
+        available = "store_items.availability <> 'unavailable'"
+        unavailable = "store_items.availability = 'unavailable'"
+        eligible = """
             store_items.store_id = %s
             and store_items.is_boardgame = true
             and store_items.is_boardgame_confirmed = true
@@ -920,7 +928,6 @@ class DiscoveryRepository:
             and store_items.source_url <> ''
             and store_items.listing_status = 'LISTED'
             and store_items.store_active = true
-            {availability}
             and (store_items.update_lease_token is null or store_items.update_lease_expires_at <= now())
         """
         first_attempt = """
@@ -929,28 +936,59 @@ class DiscoveryRepository:
               or store_items.next_update_at is null
               or store_items.next_update_at <= now())
         """
-        attempt = f"""
+        attempt = """
             store_items.last_update_attempt_at >= %s
             and store_items.consecutive_update_failures > 0
             and store_items.next_update_at <= now()
-            and not exists (
-                select 1 from store_items where {eligible} and {first_attempt}
-            )
+            and not exists (select 1 from first_attempt_waiting)
         """ if retry else first_attempt
-        params = (store_id, window_start)
-        if retry:
-            # An otherwise eligible first attempt may simply be temporarily row-locked.
-            params = (*params, store_id, window_start)
-        cursor.execute(
-            f"""
-            with candidate as (
-                select store_items.id
+
+        def oldest_candidate(availability: str) -> str:
+            return f"""
+                select store_items.id, store_items.refreshed_date
                 from store_items
-                where {eligible} and ({attempt})
+                where {eligible} and {availability} and ({attempt})
                 order by store_items.refreshed_date, store_items.id
                 for update of store_items skip locked
                 limit 1
-            )
+            """
+
+        params = (store_id, window_start)
+        if include_recovery:
+            # Separate ordered seeks can each use a partial index. Both locks apply only to this store.
+            candidates = f"""
+                available as ({oldest_candidate(available)}),
+                recovery as ({oldest_candidate(unavailable)}),
+                candidate as (
+                    select id from (
+                        select id, refreshed_date from available
+                        union all
+                        select id, refreshed_date from recovery
+                    ) lockable
+                    order by refreshed_date, id
+                    limit 1
+                )
+            """
+            params = (*params, store_id, window_start)
+        else:
+            candidates = f"candidate as ({oldest_candidate(available)})"
+
+        first_waiting = ""
+        if retry:
+            # A first attempt blocked by a row lock still gets priority over retries.
+            scope = "" if include_recovery else f"and {available}"
+            first_waiting = f"""
+                first_attempt_waiting as (
+                    select 1 from store_items
+                    where {eligible} and {first_attempt} {scope}
+                    limit 1
+                ),
+            """
+            params = (store_id, window_start, *params)
+
+        cursor.execute(
+            f"""
+            with {first_waiting} {candidates}
             update store_items
             set update_lease_token = %s::uuid,
                 update_lease_expires_at = now() + make_interval(secs => %s),

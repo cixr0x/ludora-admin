@@ -4777,6 +4777,7 @@ describe('ludora admin service', () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data).toMatchObject({
+      schedule_mode: 'per_store',
       latest_schedule_run: { trigger: 'MANUAL', automatic_schedule_date: null },
       summary: {
         due_items: 2, scheduled_items: 8, scheduled_later_items: 6,
@@ -4795,6 +4796,7 @@ describe('ludora admin service', () => {
     })).get('/admin/operations/store-item-update-monitor');
 
     expect(response.status).toBe(200);
+    expect(response.body.data).not.toHaveProperty('schedule_mode');
     expect(response.body.data).toMatchObject({
       latest_automatic_schedule_run: null,
       latest_schedule_attempt: null,

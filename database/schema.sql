@@ -179,6 +179,16 @@ where is_boardgame = true
   and store_active = true
   and availability <> 'unavailable';
 
+create index if not exists store_items_update_store_unavailable_refreshed_idx
+on store_items (store_id, refreshed_date asc, id asc)
+where is_boardgame = true
+  and is_boardgame_confirmed = true
+  and item_id is not null
+  and source_url <> ''
+  and listing_status = 'LISTED'
+  and store_active = true
+  and availability = 'unavailable';
+
 create index if not exists store_items_next_update_at_idx
 on store_items (next_update_at, id)
 where is_boardgame = true
@@ -233,26 +243,6 @@ on store_item_update_schedule_runs (started_at desc, id desc);
 create unique index if not exists store_item_update_schedule_runs_store_date_uidx
 on store_item_update_schedule_runs (automatic_schedule_date)
 where trigger in ('STORE_AUTOMATIC', 'STORE_MANUAL');
-
-create table if not exists store_item_update_store_schedules (
-    store_id bigint primary key references stores(id) on delete cascade,
-    window_start timestamptz not null,
-    window_end timestamptz not null,
-    eligible_item_count integer not null check (eligible_item_count > 0),
-    phase double precision not null check (phase >= 0 and phase < 1),
-    next_slot_index integer not null check (next_slot_index >= 0),
-    next_due_at timestamptz,
-    check (window_end > window_start),
-    check (
-      (next_slot_index < eligible_item_count and next_due_at is not null
-        and next_due_at >= window_start and next_due_at < window_end)
-      or (next_slot_index = eligible_item_count and next_due_at is null)
-    )
-);
-
-create index if not exists store_item_update_store_schedules_next_due_idx
-on store_item_update_store_schedules (next_due_at, store_id)
-where next_due_at is not null;
 
 create table if not exists store_item_click_stats (
     store_item_id bigint not null,
@@ -680,6 +670,26 @@ create table if not exists stores (
     created_at timestamptz not null default now(),
     updated_at timestamptz not null default now()
 );
+
+create table if not exists store_item_update_store_schedules (
+    store_id bigint primary key references stores(id) on delete cascade,
+    window_start timestamptz not null,
+    window_end timestamptz not null,
+    eligible_item_count integer not null check (eligible_item_count > 0),
+    phase double precision not null check (phase >= 0 and phase < 1),
+    next_slot_index integer not null check (next_slot_index >= 0),
+    next_due_at timestamptz,
+    check (window_end > window_start),
+    check (
+      (next_slot_index < eligible_item_count and next_due_at is not null
+        and next_due_at >= window_start and next_due_at < window_end)
+      or (next_slot_index = eligible_item_count and next_due_at is null)
+    )
+);
+
+create index if not exists store_item_update_store_schedules_next_due_idx
+on store_item_update_store_schedules (next_due_at, store_id)
+where next_due_at is not null;
 
 create table if not exists store_item_update_store_cooldown (
     worker_name text not null

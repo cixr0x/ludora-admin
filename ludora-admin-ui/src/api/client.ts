@@ -132,6 +132,7 @@ export type StoreItemUpdateStoreCooldown = {
 
 export type StoreItemUpdateMonitor = {
   control_status: ContinuousItemUpdateControlStatus;
+  schedule_mode?: 'per_store';
   store_statistics: AdminRecord[];
   generated_at: string;
   histogram: Array<{

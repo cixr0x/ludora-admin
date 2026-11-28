@@ -47,6 +47,7 @@ export function StoreItemUpdateMonitorPage() {
   const [hours, setHours] = useState(48);
   const [histogramStoreId, setHistogramStoreId] = useState<number | ''>('');
   const [monitor, setMonitor] = useState<StoreItemUpdateMonitor | null>(null);
+  const perStoreSchedule = monitor?.schedule_mode === 'per_store';
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [failureGroup, setFailureGroup] = useState<AdminRecord | null>(null);
@@ -128,9 +129,11 @@ export function StoreItemUpdateMonitorPage() {
     setScheduleLoading(true);
     try {
       const run = await adminApi.runStoreItemUpdateSchedule();
+      const scheduleReady = perStoreSchedule
+        ? `Daily schedule ready for ${formatInteger(run.scheduled_store_count)} stores.`
+        : `Scheduled ${formatInteger(run.scheduled_item_count)} items across ${formatInteger(run.scheduled_store_count)} stores.`;
       setScheduleSuccess(
-        `Scheduled ${formatInteger(run.scheduled_item_count)} items across ${formatInteger(run.scheduled_store_count)} stores. `
-        + `Applied window ${formatScheduleDate(run.window_start)} to ${formatScheduleDate(run.window_end)}.`
+        `${scheduleReady} Applied window ${formatScheduleDate(run.window_start)} to ${formatScheduleDate(run.window_end)}.`
       );
       setScheduleDialogOpen(false);
       await loadMonitor();
@@ -139,7 +142,7 @@ export function StoreItemUpdateMonitorPage() {
     } finally {
       setScheduleLoading(false);
     }
-  }, [loadMonitor]);
+  }, [loadMonitor, perStoreSchedule]);
 
   useEffect(() => {
     monitorMounted.current = true;
@@ -213,14 +216,34 @@ export function StoreItemUpdateMonitorPage() {
   const metrics = summary
     ? [
         { label: 'Eligible items', value: formatInteger(summary.eligible_items), note: 'Listed confirmed items at stores with updates enabled' },
-        { label: 'Due now', value: formatInteger(summary.due_items), note: `${formatInteger(summary.leased_items)} currently leased` },
+        {
+          label: perStoreSchedule ? 'Due store cursors' : 'Due now',
+          value: formatInteger(summary.due_items),
+          note: `${formatInteger(summary.leased_items)} currently leased`
+        },
         { label: 'Fresh under 24h', value: `${summary.fresh_percent.toFixed(1)}%`, note: `${formatInteger(summary.stale_items)} stale items` },
-        { label: 'Oldest staleness', value: formatHours(summary.oldest_staleness_hours), note: `Oldest overdue: ${formatHours(summary.oldest_due_hours)}` },
+        {
+          label: 'Oldest staleness',
+          value: formatHours(summary.oldest_staleness_hours),
+          note: `${perStoreSchedule ? 'Oldest pending cursor' : 'Oldest overdue'}: ${formatHours(summary.oldest_due_hours)}`
+        },
         { label: 'Successful / 24h', value: formatInteger(summary.successes_24h), note: `${summary.success_rate_percent.toFixed(1)}% success rate` },
         { label: 'Failed / 24h', value: formatInteger(summary.failures_24h), note: `${formatInteger(summary.rate_limited_24h)} HTTP 429 responses` },
-        { label: 'Scheduled items', value: formatInteger(summary.scheduled_items), note: `Across the ${summary.schedule_window_hours}-hour window` },
-        { label: 'Scheduled later', value: formatInteger(summary.scheduled_later_items), note: 'Scheduled after the current due queue' },
-        { label: 'Unscheduled items', value: formatInteger(summary.unscheduled_items), note: 'Eligible items without a scheduled refresh' },
+        {
+          label: perStoreSchedule ? 'Pending store slots' : 'Scheduled items',
+          value: formatInteger(summary.scheduled_items),
+          note: `Across the ${summary.schedule_window_hours}-hour window`
+        },
+        {
+          label: perStoreSchedule ? 'Other pending slots' : 'Scheduled later',
+          value: formatInteger(summary.scheduled_later_items),
+          note: perStoreSchedule ? 'Pending slots beyond the due store cursors' : 'Scheduled after the current due queue'
+        },
+        {
+          label: perStoreSchedule ? 'Items without a store schedule' : 'Unscheduled items',
+          value: formatInteger(summary.unscheduled_items),
+          note: perStoreSchedule ? 'Eligible items at stores without a cursor' : 'Eligible items without a scheduled refresh'
+        },
         { label: 'Schedule capacity', value: formatInteger(summary.schedule_window_capacity), note: `${summary.schedule_utilization_percent.toFixed(1)}% schedule utilization` }
       ]
     : [];
@@ -244,7 +267,7 @@ export function StoreItemUpdateMonitorPage() {
             }}
             variant="contained"
           >
-            Redistribute update schedule
+            {perStoreSchedule ? 'Initialize store schedule' : 'Redistribute update schedule'}
           </Button>
           {controlStatus === 'paused' ? (
             <Button
@@ -333,7 +356,11 @@ export function StoreItemUpdateMonitorPage() {
         ) : null}
         {summary ? (
           <Typography color="text.secondary" sx={{ mt: 0.5 }} variant="body2">
-            {formatInteger(summary.scheduled_items)} scheduled items across a {summary.schedule_window_hours}-hour scheduling window; {formatInteger(summary.unscheduled_items)} unscheduled.
+            {perStoreSchedule
+              ? `${formatInteger(summary.scheduled_items)} pending store slots in the current window. `
+                + `Earliest pending cursor time: ${summary.next_due_at ? formatScheduleDate(summary.next_due_at) : 'none'}. `
+                + 'Counts and times include elapsed slots awaiting processing and stores on cooldown.'
+              : <>{formatInteger(summary.scheduled_items)} scheduled items across a {summary.schedule_window_hours}-hour scheduling window; {formatInteger(summary.unscheduled_items)} unscheduled.</>}
           </Typography>
         ) : null}
       </Paper>
@@ -518,12 +545,14 @@ export function StoreItemUpdateMonitorPage() {
         }}
         open={scheduleDialogOpen}
       >
-        <DialogTitle>Redistribute update schedule?</DialogTitle>
+        <DialogTitle>{perStoreSchedule ? 'Initialize the current store schedule?' : 'Redistribute update schedule?'}</DialogTitle>
         <DialogContent>
           {scheduleError ? <Alert severity="error" sx={{ mb: 2 }}>{scheduleError}</Alert> : null}
           <Typography>
-            This reschedules every eligible item over a new{' '}
-            {summary ? `${summary.schedule_window_hours}-hour` : 'configured'} window, including products already updated today and failures in backoff.
+            {perStoreSchedule
+              ? 'Start the current daily store schedule if needed. An existing schedule keeps its progress.'
+              : <>This reschedules every eligible item over a new{' '}
+                {summary ? `${summary.schedule_window_hours}-hour` : 'configured'} window, including products already updated today and failures in backoff.</>}
           </Typography>
         </DialogContent>
         <DialogActions>
@@ -532,7 +561,9 @@ export function StoreItemUpdateMonitorPage() {
             setScheduleDialogOpen(false);
           }}>Cancel</Button>
           <Button disabled={scheduleLoading} onClick={() => void runSchedule()} variant="contained">
-            {scheduleLoading ? 'Redistributing schedule' : 'Confirm redistribution'}
+            {perStoreSchedule
+              ? (scheduleLoading ? 'Initializing schedule' : 'Confirm initialization')
+              : (scheduleLoading ? 'Redistributing schedule' : 'Confirm redistribution')}
           </Button>
         </DialogActions>
       </Dialog>

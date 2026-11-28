@@ -192,18 +192,25 @@ Its daily 23-hour window starts at 03:00 America/Mexico_City and ends at 02:00
 the following day. The scheduler calculates a deterministic cadence from each
 store's eligible item count, writes one cursor for that store, and skips slots
 elapsed before initialization. The worker advances past misses that are at least
-one store interval late. Store cooldowns and failures retain their existing
+one store interval late. Each poll can advance up to eight missed or empty
+cursors, committing each store separately before looking at the next one.
+Store cooldowns and failures retain their existing
 backoff. A retry can use a remaining slot after backoff when the store has no
 eligible first attempt waiting.
 
-Apply only the approved incremental schedule patch before setting
-`LUDORA_CONTINUOUS_ITEM_UPDATE_PER_STORE=true` on Admin service, then restart
-that service to enable both the scheduler and the worker together. Confirm the
+Apply the approved [cursor patch](../database/patches/20261127_001_add_per_store_update_schedules.sql)
+and [unavailable-listing index patch](../database/patches/20261127_002_index_per_store_unavailable_refresh.sql)
+before enabling the mode. Run the index patch separately in autocommit and verify
+the new index is valid. For enrolled sitemap stores, the worker seeks the oldest
+lockable row from each availability group using separate per-store indexes, then
+leases the oldest of those rows. Set `LUDORA_CONTINUOUS_ITEM_UPDATE_PER_STORE=true`
+on Admin service and restart it to enable both the scheduler and the worker. Confirm the
 Monitor reports a completed generation for the current window and that separate
-stores receive claims. The Monitor's scheduled count is remaining opportunities.
-Due now counts stores with a due cursor. The later count is the remaining
-opportunities after those due stores. Unscheduled counts eligible items at stores
-without a cursor in the active window. The manual schedule action initializes
+stores receive claims. The Monitor shows raw pending slots and the earliest
+persisted due time. These figures include elapsed slots awaiting processing and
+stores on cooldown. Due store cursors counts one per store, and other pending
+slots subtracts those due cursors from all pending slots. The unscheduled count
+includes eligible items at stores without a cursor in the active window. The manual schedule action initializes
 the current window if needed and returns its completed run once established.
 Between 02:00 and 03:00, the action returns a conflict.
 

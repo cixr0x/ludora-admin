@@ -148,6 +148,25 @@ const monitor: StoreItemUpdateMonitor = {
 };
 
 describe('StoreItemUpdateMonitorPage', () => {
+  it('describes pending per-store cursors and confirms daily initialization without resetting progress', async () => {
+    const user = userEvent.setup();
+    vi.spyOn(adminApi, 'getStoreItemUpdateMonitor').mockResolvedValue({ ...monitor, schedule_mode: 'per_store' });
+    const runSchedule = vi.spyOn(adminApi, 'runStoreItemUpdateSchedule').mockResolvedValue(completedManualScheduleRun);
+
+    render(<StoreItemUpdateMonitorPage />);
+
+    expect(await screen.findByText('Due store cursors')).toBeInTheDocument();
+    expect(screen.getByText('Pending store slots')).toBeInTheDocument();
+    expect(screen.getByText(/earliest pending cursor time/i)).toBeInTheDocument();
+    expect(screen.getByText(/elapsed slots awaiting processing and stores on cooldown/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Initialize store schedule' }));
+    expect(within(screen.getByRole('dialog')).getByText(/existing schedule keeps its progress/i)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Confirm initialization' }));
+    expect(await screen.findByText(/daily schedule ready for 4 stores/i)).toBeInTheDocument();
+    expect(runSchedule).toHaveBeenCalledOnce();
+  });
+
+
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();

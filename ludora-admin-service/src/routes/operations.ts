@@ -815,6 +815,7 @@ async function loadStoreItemUpdateMonitor(
 
   return {
     control_status: controlStatus,
+    ...(perStoreSchedule ? { schedule_mode: 'per_store' } : {}),
     store_statistics: storeStatisticsResult.rows,
     generated_at: new Date().toISOString(),
     histogram: histogramResult.rows.map((row) => {

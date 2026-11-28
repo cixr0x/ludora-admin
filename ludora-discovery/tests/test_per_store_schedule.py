@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest import TestCase
 from unittest.mock import Mock, patch
 
@@ -60,6 +61,10 @@ class PerStoreScheduleTests(TestCase):
         self.assertIn("schedule.store_id <> all", commands[0])
         self.assertIn("order by store_items.refreshed_date, store_items.id", commands[1])
         self.assertIn("last_update_attempt_at < %s", commands[1])
+        self.assertIn("store_items.availability <> 'unavailable'", commands[1])
+        self.assertIn("store_items.availability = 'unavailable'", commands[1])
+        self.assertEqual(commands[1].count("order by store_items.refreshed_date, store_items.id for update of store_items skip locked limit 1"), 2)
+        self.assertIn("order by refreshed_date, id limit 1", commands[1])
         self.assertNotIn("order by random()", " ".join(commands))
         self.assertIn("update store_item_update_store_schedules", commands[2])
         self.assertIn("insert into store_item_update_attempt_log", commands[5])
@@ -93,6 +98,65 @@ class PerStoreScheduleTests(TestCase):
         self.assertEqual(connection.commits, 0)
         self.assertEqual(connection.rollbacks, 1)
 
+    def test_no_due_cursor_finishes_the_poll_without_the_listing_query(self):
+        connection = FakeConnection()
+        repository = DiscoveryRepository(connection)
+        self.assertIsNone(repository.claim_due_per_store_item_update(
+            worker_name="continuous", worker_id="worker-1", lease_token=TOKEN, lease_seconds=300
+        ))
+        self.assertEqual(connection.commits, 1)
+        self.assertEqual(len(connection.cursor_instance.executions), 1)
+
+    def test_one_poll_releases_each_missed_or_empty_cursor_before_claiming_a_third_store(self):
+        connection = FakeConnection(fetchone_rows=[
+            (42, WINDOW_START, True),
+            (43, WINDOW_START, False), None, None,
+            (44, WINDOW_START, False), (777,),
+            confirmed_store_item_row(store_item_id=777),
+            ("Example", "woocommerce", 0, 2, "example.mx"),
+            (91,),
+        ])
+        repository = DiscoveryRepository(connection)
+        execute = connection.cursor_instance.execute
+        commit = connection.commit
+        events = []
+
+        def record_execute(sql, params):
+            if "select schedule.store_id" in sql:
+                events.append("scan")
+            elif "update store_item_update_store_schedules" in sql:
+                events.append(params[0])
+            return execute(sql, params)
+
+        def record_commit():
+            events.append("commit")
+            commit()
+
+        with patch.object(connection.cursor_instance, "execute", side_effect=record_execute):
+            with patch.object(connection, "commit", side_effect=record_commit):
+                claim = repository.claim_due_per_store_item_update(
+                    worker_name="continuous", worker_id="worker-1", lease_token=TOKEN, lease_seconds=300
+                )
+        self.assertEqual(claim.attempt_id, 91)
+        self.assertEqual(events, ["scan", 42, "commit", "scan", 43, "commit", "scan", 44, "commit"])
+
+    def test_poll_bounds_the_number_of_missed_cursors_advanced(self):
+        connection = FakeConnection(fetchone_rows=[
+            (store_id, WINDOW_START, True) for store_id in range(1, 10)
+        ])
+        repository = DiscoveryRepository(connection)
+        self.assertIsNone(repository.claim_due_per_store_item_update(
+            worker_name="continuous", worker_id="worker-1", lease_token=TOKEN, lease_seconds=300
+        ))
+        self.assertEqual(connection.commits, 8)
+        self.assertEqual(len(connection.cursor_instance.executions), 16)
+        self.assertEqual(len(connection.cursor_instance.fetchone_rows), 1)
+
+    def test_reference_schema_defines_store_before_its_schedule_cursor(self):
+        schema = (Path(__file__).resolve().parents[2] / "database/schema.sql").read_text(encoding="utf-8")
+        self.assertLess(schema.index("create table if not exists stores ("),
+                        schema.index("create table if not exists store_item_update_store_schedules ("))
+
     def test_missed_slot_advances_only_the_store_schedule(self):
         connection = FakeConnection(fetchone_rows=[(42, WINDOW_START, True)])
         repository = DiscoveryRepository(connection)
@@ -101,9 +165,10 @@ class PerStoreScheduleTests(TestCase):
             worker_name="continuous", worker_id="worker-1", lease_token=TOKEN, lease_seconds=300
         ))
         commands = [" ".join(sql.casefold().split()) for sql, _ in connection.cursor_instance.executions]
-        self.assertEqual(len(commands), 2)
+        self.assertEqual(len(commands), 3)
         self.assertIn("update store_item_update_store_schedules", commands[1])
-        self.assertEqual(connection.commits, 1)
+        self.assertIn("select schedule.store_id", commands[2])
+        self.assertEqual(connection.commits, 2)
 
     def test_empty_slot_checks_due_retries_and_advances_without_leasing(self):
         connection = FakeConnection(fetchone_rows=[(42, WINDOW_START, False), None, None])
@@ -113,11 +178,13 @@ class PerStoreScheduleTests(TestCase):
             worker_name="continuous", worker_id="worker-1", lease_token=TOKEN, lease_seconds=300
         ))
         commands = [" ".join(sql.casefold().split()) for sql, _ in connection.cursor_instance.executions]
-        self.assertEqual(len(commands), 4)
+        self.assertEqual(len(commands), 5)
         self.assertIn("last_update_attempt_at < %s", commands[1])
         self.assertIn("last_update_attempt_at >= %s", commands[2])
         self.assertIn("consecutive_update_failures > 0", commands[2])
-        self.assertIn("and not exists ( select 1 from store_items", commands[2])
+        self.assertIn("first_attempt_waiting as ( select 1 from store_items", commands[2])
+        self.assertIn("and not exists (select 1 from first_attempt_waiting)", commands[2])
         self.assertIn("next_update_at <= now()", commands[2])
         self.assertIn("update store_item_update_store_schedules", commands[3])
-        self.assertEqual(connection.commits, 1)
+        self.assertIn("select schedule.store_id", commands[4])
+        self.assertEqual(connection.commits, 2)
